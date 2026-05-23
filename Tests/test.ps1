@@ -5,6 +5,9 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
+    $global:PSNativeCommandUseErrorActionPreference = $false
+}
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Resolve-Path (Join-Path $scriptDir "..")
@@ -64,24 +67,19 @@ function Invoke-Compiler {
         [string]$TempDir
     )
 
-    $stdoutFile = Join-Path $TempDir "compile_stdout.txt"
-    $stderrFile = Join-Path $TempDir "compile_stderr.txt"
-
-    if (Test-Path -LiteralPath $stdoutFile) { Remove-Item -LiteralPath $stdoutFile -Force }
-    if (Test-Path -LiteralPath $stderrFile) { Remove-Item -LiteralPath $stderrFile -Force }
-
     $args = @($SourcePath, "-o", $OutputPath)
-    $proc = Start-Process -FilePath $CompilerPath -ArgumentList $args -NoNewWindow -Wait -PassThru `
-        -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
-
-    $stdout = ""
-    $stderr = ""
-    if (Test-Path -LiteralPath $stdoutFile) { $stdout = Get-Content -Raw -LiteralPath $stdoutFile }
-    if (Test-Path -LiteralPath $stderrFile) { $stderr = Get-Content -Raw -LiteralPath $stderrFile }
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $CompilerPath @args 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
 
     return @{
-        ExitCode = $proc.ExitCode
-        Output = (Normalize-LineEndings ($stdout + $stderr)).Trim()
+        ExitCode = $exitCode
+        Output = (Normalize-LineEndings (($output | Out-String))).Trim()
     }
 }
 
@@ -117,9 +115,11 @@ New-Item -ItemType Directory -Force -Path $workDir | Out-Null
 $tests = @()
 if (Test-Path -LiteralPath $passDir) {
     $tests += Get-ChildItem -LiteralPath $passDir -Filter test_*.c | Sort-Object Name
+    $tests += Get-ChildItem -LiteralPath $passDir -Filter test_*.cpp | Sort-Object Name
 }
 if (Test-Path -LiteralPath $failDir) {
     $tests += Get-ChildItem -LiteralPath $failDir -Filter test_*.c | Sort-Object Name
+    $tests += Get-ChildItem -LiteralPath $failDir -Filter test_*.cpp | Sort-Object Name
 }
 
 if ($tests.Count -eq 0) {

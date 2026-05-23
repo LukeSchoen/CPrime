@@ -2,5 +2,5 @@
 setlocal
 
 set "SCRIPT_DIR=%~dp0"
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%run.ps1" -Suite "features/Templates" %*
+call "%SCRIPT_DIR%run.cmd" -Suite "features/Templates" %*
 exit /b %ERRORLEVEL%

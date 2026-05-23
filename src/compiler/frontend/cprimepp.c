@@ -4156,6 +4156,25 @@ ST_FUNC void cprimepp_delete(CPRIMEState *s)
   // Free Allocators
   tal_delete(&toksym_alloc);
   tal_delete(&tokstr_alloc);
+
+  // Reset parser globals for the next translation unit.
+  memset(hash_ident, 0, sizeof hash_ident);
+  file = NULL;
+  macro_ptr = NULL;
+  macro_stack = NULL;
+  tok = TOK_EOF;
+  tok_flags = 0;
+  parse_flags = 0;
+  memset(&tokc, 0, sizeof tokc);
+  memset(&tokcstr, 0, sizeof tokcstr);
+  memset(&cstr_buf, 0, sizeof cstr_buf);
+  memset(&tokstr_buf, 0, sizeof tokstr_buf);
+  memset(&unget_buf, 0, sizeof unget_buf);
+  tok_ident = TOK_IDENT;
+  pp_expr = 0;
+  pp_debug_tok = 0;
+  pp_debug_symv = 0;
+  pp_counter = 0;
 }
 
 // -------------------------------------------------------------------------

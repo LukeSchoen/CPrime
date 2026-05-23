@@ -9,10 +9,13 @@ if errorlevel 1 exit /b %ERRORLEVEL%
 call "%SCRIPT_DIR%test_Destructors.cmd" %*
 if errorlevel 1 exit /b %ERRORLEVEL%
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%run.ps1" -Suite "features/InlineLifecycle" %*
+call "%SCRIPT_DIR%run.cmd" -Suite "features/InlineLifecycle" %*
 if errorlevel 1 exit /b %ERRORLEVEL%
 
-powershell -NoProfile -ExecutionPolicy Bypass -File "%SCRIPT_DIR%run.ps1" -Suite "features/All" %*
+call "%SCRIPT_DIR%run.cmd" -Suite "features/All" %*
+if errorlevel 1 exit /b %ERRORLEVEL%
+
+call "%SCRIPT_DIR%test_MultiSource.cmd" %*
 if errorlevel 1 exit /b %ERRORLEVEL%
 
 call "%SCRIPT_DIR%test_MemberFunctions.cmd" %*

@@ -1,10 +1,16 @@
 param(
     [string]$Suite = "c_compat",
     [Alias("TccPath")]
-    [string]$CompilerPath = ""
+    [string]$CompilerPath = "",
+    [switch]$UseSharedBinaries,
+    [string]$SharedOutDir = "",
+    [switch]$RequireSharedHits
 )
 
 $ErrorActionPreference = "Stop"
+if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
+    $global:PSNativeCommandUseErrorActionPreference = $false
+}
 
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $rootDir = Resolve-Path (Join-Path $scriptDir "..")
@@ -62,29 +68,38 @@ function Invoke-Compiler {
         [string]$CompilerPath,
         [string]$SourcePath,
         [string]$OutputPath,
-        [string]$TempDir,
         [string[]]$CompilerArgs
     )
 
-    $stdoutFile = Join-Path $TempDir "compile_stdout.txt"
-    $stderrFile = Join-Path $TempDir "compile_stderr.txt"
-
-    if (Test-Path -LiteralPath $stdoutFile) { Remove-Item -LiteralPath $stdoutFile -Force }
-    if (Test-Path -LiteralPath $stderrFile) { Remove-Item -LiteralPath $stderrFile -Force }
-
     $args = @($CompilerArgs) + @($SourcePath, "-o", $OutputPath)
-    $proc = Start-Process -FilePath $CompilerPath -ArgumentList $args -NoNewWindow -Wait -PassThru `
-        -RedirectStandardOutput $stdoutFile -RedirectStandardError $stderrFile
-
-    $stdout = ""
-    $stderr = ""
-    if (Test-Path -LiteralPath $stdoutFile) { $stdout = Get-Content -Raw -LiteralPath $stdoutFile }
-    if (Test-Path -LiteralPath $stderrFile) { $stderr = Get-Content -Raw -LiteralPath $stderrFile }
+    $savedEap = $ErrorActionPreference
+    $ErrorActionPreference = "Continue"
+    try {
+        $output = & $CompilerPath @args 2>&1
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $savedEap
+    }
 
     return @{
-        ExitCode = $proc.ExitCode
-        Output = (Normalize-LineEndings ($stdout + $stderr)).Trim()
+        ExitCode = $exitCode
+        Output = (Normalize-LineEndings (($output | Out-String))).Trim()
     }
+}
+
+function Resolve-SharedOutDir {
+    param([string]$ExplicitPath)
+
+    if ($ExplicitPath) {
+        $resolvedExplicit = Resolve-Path -LiteralPath $ExplicitPath -ErrorAction SilentlyContinue
+        if ($resolvedExplicit) { return $resolvedExplicit.Path }
+        return $null
+    }
+
+    $default = Join-Path $scriptDir "batch\out"
+    $resolvedDefault = Resolve-Path -LiteralPath $default -ErrorAction SilentlyContinue
+    if ($resolvedDefault) { return $resolvedDefault.Path }
+    return $null
 }
 
 $compiler = Resolve-CompilerPath -ExplicitPath $CompilerPath
@@ -120,9 +135,11 @@ try {
 $tests = @()
 if (Test-Path -LiteralPath $passDir) {
     $tests += Get-ChildItem -LiteralPath $passDir -Filter test_*.c | Sort-Object Name
+    $tests += Get-ChildItem -LiteralPath $passDir -Filter test_*.cpp | Sort-Object Name
 }
 if (Test-Path -LiteralPath $failDir) {
     $tests += Get-ChildItem -LiteralPath $failDir -Filter test_*.c | Sort-Object Name
+    $tests += Get-ChildItem -LiteralPath $failDir -Filter test_*.cpp | Sort-Object Name
 }
 
 if ($tests.Count -eq 0) {
@@ -131,6 +148,12 @@ if ($tests.Count -eq 0) {
 
 $passed = 0
 $failed = 0
+$sharedHits = 0
+$sharedMisses = 0
+$resolvedSharedOutDir = $null
+if ($UseSharedBinaries) {
+    $resolvedSharedOutDir = Resolve-SharedOutDir -ExplicitPath $SharedOutDir
+}
 
 Write-Host "Using compiler: $compiler"
 Write-Host "Running suite: $Suite"
@@ -145,6 +168,7 @@ foreach ($test in $tests) {
     if ($meta.EXPECT_COMPILE_ARGS) {
         $compileArgs = $meta.EXPECT_COMPILE_ARGS -split '\s+' | Where-Object { $_ }
     }
+    $supportsShared = $UseSharedBinaries -and -not $expectCompileFail -and $compileArgs.Count -eq 0 -and $resolvedSharedOutDir
 
     $exeName = [System.IO.Path]::GetFileNameWithoutExtension($test.Name) + ".exe"
     $outExe = Join-Path $workDir $exeName
@@ -153,9 +177,26 @@ foreach ($test in $tests) {
         Remove-Item -Force -LiteralPath $outExe
     }
 
-    $compile = Invoke-Compiler -CompilerPath $compiler -SourcePath $test.FullName -OutputPath $outExe -TempDir $workDir -CompilerArgs $compileArgs
-    $compileOutput = $compile.Output
-    $compileExit = $compile.ExitCode
+    $compileOutput = ""
+    $compileExit = 0
+    $exeToRun = $outExe
+    $sharedExe = $null
+
+    if ($supportsShared) {
+        $sharedExe = Join-Path $resolvedSharedOutDir $exeName
+        if (Test-Path -LiteralPath $sharedExe) {
+            $sharedHits++
+            $exeToRun = $sharedExe
+        } else {
+            $sharedMisses++
+        }
+    }
+
+    if (-not $supportsShared -or -not $sharedExe -or -not (Test-Path -LiteralPath $sharedExe)) {
+        $compile = Invoke-Compiler -CompilerPath $compiler -SourcePath $test.FullName -OutputPath $outExe -CompilerArgs $compileArgs
+        $compileOutput = $compile.Output
+        $compileExit = $compile.ExitCode
+    }
 
     $ok = $true
     $reason = ""
@@ -169,11 +210,11 @@ foreach ($test in $tests) {
         if ($compileExit -ne 0) {
             $ok = $false
             $reason = "compile failed (exit $compileExit): $compileOutput"
-        } elseif (-not (Test-Path -LiteralPath $outExe)) {
+        } elseif (-not (Test-Path -LiteralPath $exeToRun)) {
             $ok = $false
             $reason = "compile succeeded but output executable missing"
         } else {
-            $runOutput = & $outExe 2>&1
+            $runOutput = & $exeToRun 2>&1
             $runExit = $LASTEXITCODE
             $normStdout = Normalize-LineEndings ($runOutput -join "`n")
 
@@ -198,8 +239,16 @@ foreach ($test in $tests) {
 
 Write-Host ""
 Write-Host ("Summary: {0} passed, {1} failed" -f $passed, $failed)
+if ($UseSharedBinaries) {
+    Write-Host ("Shared binaries: {0} hits, {1} misses" -f $sharedHits, $sharedMisses)
+}
 
 if ($failed -gt 0) {
+    exit 1
+}
+
+if ($UseSharedBinaries -and $RequireSharedHits -and $sharedHits -eq 0) {
+    Write-Host "Shared mode failed: no shared binary hits were used."
     exit 1
 }
 

@@ -1541,6 +1541,12 @@ ST_FUNC void asm_global_instr(void)
   nocode_wanted = saved_nocode_wanted;
 }
 
+ST_FUNC void cprime_asm_reset(void)
+{
+  last_text_section = NULL;
+  asmgoto_n = 0;
+}
+
 //******************************************************
 #else
 ST_FUNC int cprime_assemble(CPRIMEState *s1, int do_preprocess)
