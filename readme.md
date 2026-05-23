@@ -250,6 +250,20 @@ Abstractions that only benefits developers at compile time must become free if w
 Thankfully object orientation helps AI's as much as it helps humans so the gains appear for humans and AI agents alike. 
 ---
 
+# Intentionaly Dropped Features
+
+  - friend
+  - = delete
+  - = default
+  - inheritence
+  - in-class member initializers (eg int m_val = 5;)
+
+# Considering Adding These Features
+
+  - references
+
+---
+
 # Final Note
 
 Huge respect to the man, Bjarne Stroustrup  

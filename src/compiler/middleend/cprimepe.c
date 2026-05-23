@@ -654,7 +654,7 @@ static int pe_write(struct pe_info *pe)
     }
   };
 
-  struct pe_header pe_header = pe_template;
+  struct pe_header header = pe_template;
 
   int i;
   DWORD file_offset;
@@ -697,14 +697,14 @@ static int pe_write(struct pe_info *pe)
     switch (si->cls)
     {
     case sec_text:
-      if (!pe_header.opthdr.BaseOfCode)
-        pe_header.opthdr.BaseOfCode = addr;
+      if (!header.opthdr.BaseOfCode)
+        header.opthdr.BaseOfCode = addr;
       break;
 
     case sec_data:
 #ifndef CPRIME_TARGET_X86_64
-      if (!pe_header.opthdr.BaseOfData)
-        pe_header.opthdr.BaseOfData = addr;
+      if (!header.opthdr.BaseOfData)
+        header.opthdr.BaseOfData = addr;
 #endif
       break;
 
@@ -712,28 +712,28 @@ static int pe_write(struct pe_info *pe)
       break;
 
     case sec_reloc:
-      pe_set_datadir(&pe_header, IMAGE_DIRECTORY_ENTRY_BASERELOC, addr, size);
+      pe_set_datadir(&header, IMAGE_DIRECTORY_ENTRY_BASERELOC, addr, size);
       break;
 
     case sec_rsrc:
-      pe_set_datadir(&pe_header, IMAGE_DIRECTORY_ENTRY_RESOURCE, addr, size);
+      pe_set_datadir(&header, IMAGE_DIRECTORY_ENTRY_RESOURCE, addr, size);
       break;
 
     case sec_pdata:
-      pe_set_datadir(&pe_header, IMAGE_DIRECTORY_ENTRY_EXCEPTION, addr, size);
+      pe_set_datadir(&header, IMAGE_DIRECTORY_ENTRY_EXCEPTION, addr, size);
       break;
     }
 
     if (pe->imp_size)
     {
-      pe_set_datadir(&pe_header, IMAGE_DIRECTORY_ENTRY_IMPORT,
+      pe_set_datadir(&header, IMAGE_DIRECTORY_ENTRY_IMPORT,
                      pe->imp_offs, pe->imp_size);
-      pe_set_datadir(&pe_header, IMAGE_DIRECTORY_ENTRY_IAT,
+      pe_set_datadir(&header, IMAGE_DIRECTORY_ENTRY_IAT,
                      pe->iat_offs, pe->iat_size);
     }
     if (pe->exp_size)
     {
-      pe_set_datadir(&pe_header, IMAGE_DIRECTORY_ENTRY_EXPORT,
+      pe_set_datadir(&header, IMAGE_DIRECTORY_ENTRY_EXPORT,
                      pe->exp_offs, pe->exp_size);
     }
 
@@ -747,8 +747,8 @@ static int pe_write(struct pe_info *pe)
     psh->Characteristics = si->pe_flags;
     psh->VirtualAddress = addr;
     psh->Misc.VirtualSize = size;
-    pe_header.opthdr.SizeOfImage =
-      umax(pe_virtual_align(pe, size + addr), pe_header.opthdr.SizeOfImage);
+    header.opthdr.SizeOfImage =
+      umax(pe_virtual_align(pe, size + addr), header.opthdr.SizeOfImage);
 
     if (si->data_size)
     {
@@ -756,33 +756,33 @@ static int pe_write(struct pe_info *pe)
       file_offset = pe_file_align(pe, file_offset + si->data_size);
       psh->SizeOfRawData = file_offset - psh->PointerToRawData;
       if (si->cls == sec_text)
-        pe_header.opthdr.SizeOfCode += psh->SizeOfRawData;
+        header.opthdr.SizeOfCode += psh->SizeOfRawData;
       else
-        pe_header.opthdr.SizeOfInitializedData += psh->SizeOfRawData;
+        header.opthdr.SizeOfInitializedData += psh->SizeOfRawData;
     }
   }
 
-  //pe_header.filehdr.TimeDateStamp = time(NULL);
-  pe_header.filehdr.NumberOfSections = pe->sec_count;
-  pe_header.opthdr.AddressOfEntryPoint = pe->start_addr;
-  pe_header.opthdr.SizeOfHeaders = pe->sizeofheaders;
-  pe_header.opthdr.ImageBase = pe->imagebase;
-  pe_header.opthdr.Subsystem = pe->subsystem;
+  //header.filehdr.TimeDateStamp = time(NULL);
+  header.filehdr.NumberOfSections = pe->sec_count;
+  header.opthdr.AddressOfEntryPoint = pe->start_addr;
+  header.opthdr.SizeOfHeaders = pe->sizeofheaders;
+  header.opthdr.ImageBase = pe->imagebase;
+  header.opthdr.Subsystem = pe->subsystem;
   if (s1->pe_stack_size)
-    pe_header.opthdr.SizeOfStackReserve = s1->pe_stack_size;
+    header.opthdr.SizeOfStackReserve = s1->pe_stack_size;
   if (PE_DLL == pe->type)
-    pe_header.filehdr.Characteristics = CHARACTERISTICS_DLL;
-  pe_header.filehdr.Characteristics |= s1->pe_characteristics;
+    header.filehdr.Characteristics = CHARACTERISTICS_DLL;
+  header.filehdr.Characteristics |= s1->pe_characteristics;
 
   if (pe->coffsym)
   {
     pe_add_coffsym(pe);
-    pe_header.filehdr.PointerToSymbolTable = file_offset;
-    pe_header.filehdr.NumberOfSymbols
+    header.filehdr.PointerToSymbolTable = file_offset;
+    header.filehdr.NumberOfSymbols
       = pe->coffsym->data_offset / sizeof (struct syment);
   }
 
-  pe_fwrite(pe, &pe_header, sizeof pe_header);
+  pe_fwrite(pe, &header, sizeof header);
   for (i = 0; i < pe->sec_count; ++i)
     pe_fwrite(pe, &pe->sec_info[i]->ish, sizeof(IMAGE_SECTION_HEADER));
 

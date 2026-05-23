@@ -1550,6 +1550,7 @@ static int guess_filetype(const char *filename)
       else if (!strcmp(ext, "s"))
         filetype = AFF_TYPE_ASM;
       else if (!PATHCMP(ext, "c")
+               || !PATHCMP(ext, "cpp")
                || !PATHCMP(ext, "h")
                || !PATHCMP(ext, "i"))
         filetype = AFF_TYPE_C;

@@ -404,6 +404,7 @@ typedef struct Sym {
         struct Sym *cleanup_sym;
         struct Sym *cleanup_label;
     };
+    struct TokenString *default_arg;
 } Sym;
 
 typedef struct Section {
@@ -1485,6 +1486,7 @@ ST_FUNC int cprime_load_coff(CPRIMEState * s1, int fd);
 ST_FUNC void asm_instr(void);
 ST_FUNC void asm_global_instr(void);
 ST_FUNC int cprime_assemble(CPRIMEState *s1, int do_preprocess);
+ST_FUNC void cprime_asm_reset(void);
 #ifdef CONFIG_CPRIME_ASM
 ST_FUNC int find_constraint(ASMOperand *operands, int nb_operands, const char *name, const char **pp);
 ST_FUNC Sym* get_asm_sym(int name, Sym *csym);

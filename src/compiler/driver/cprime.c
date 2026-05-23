@@ -235,80 +235,129 @@ static unsigned getclock_ms(void)
 #endif
 }
 
-int main(int argc, char **argv)
+typedef struct {
+  char **argv;
+  int argc;
+} BatchArgs;
+
+static void batch_args_init(BatchArgs *ba)
+{
+  ba->argv = NULL;
+  ba->argc = 0;
+  dynarray_add(&ba->argv, &ba->argc, cprime_strdup("cpc"));
+}
+
+static int batch_split_args(BatchArgs *ba, const char *line)
+{
+  char **argv = NULL;
+  int argc = 0;
+  dynarray_split(&argv, &argc, line, 0);
+  for (int i = 0; i < argc; ++i)
+    dynarray_add(&ba->argv, &ba->argc, argv[i]);
+  cprime_free(argv);
+  return ba->argc;
+}
+
+static void batch_args_free(BatchArgs *ba)
+{
+  if (!ba)
+    return;
+  dynarray_reset(&ba->argv, &ba->argc);
+}
+
+static char *batch_trim(char *line)
+{
+  char *p = line;
+  while (*p == ' ' || *p == '\t' || *p == '\r' || *p == '\n')
+    ++p;
+  if (*p == '\0' || *p == '#')
+    return NULL;
+  char *end = p + strlen(p);
+  while (end > p && (end[-1] == ' ' || end[-1] == '\t' || end[-1] == '\r' || end[-1] == '\n'))
+    --end;
+  *end = '\0';
+  return p;
+}
+
+static int cprime_run_job(int argc, char **argv)
 {
   CPRIMEState *s, *s1;
-  int ret, opt, n = 0, t = 0, done;
-  unsigned start_time = 0, end_time = 0;
+  int ret, opt;
   const char *first_file;
+  int n = 0, t = 0;
   int argc0 = argc;
   char **argv0 = argv;
   FILE *ppfp = stdout;
+  unsigned start_time = 0, end_time = 0;
 
-redo:
-  argc = argc0, argv = argv0;
-  s = s1 = cprime_new();
+  s = cprime_new();
+  s1 = s;
   opt = cprime_parse_args(s, &argc, &argv);
 
-  if (n == 0)
+  ret = 0;
+  if (argc0 == 1 && opt == 0)
+    cprime_error_noabort("no input files");
+  else if (opt == OPT_HELP)
   {
-    ret = 0;
-    if (opt == OPT_HELP)
-    {
-      fputs(help, stdout);
-      if (s->verbose)
-        goto help2;
-    }
-    else if (opt == OPT_HELP2)
-help2: fputs(help2, stdout);
-    else if (opt == OPT_M32 || opt == OPT_M64)
-      ret = cprime_tool_cross(argv, opt);
-    else if (s->verbose)
-      printf("%s", version);
-
-    if (opt == OPT_AR)
-      ret = cprime_tool_ar(argc, argv);
-#ifdef CPRIME_TARGET_PE
-    if (opt == OPT_IMPDEF)
-      ret = cprime_tool_impdef(argc, argv);
-#endif
-    if (opt == OPT_PRINT_DIRS)
-    {
-      // Initialize Search Dirs
-      set_environment(s);
-      cprime_set_output_type(s, CPRIME_OUTPUT_MEMORY);
-      print_search_dirs(s);
-    }
-    if (opt)
-    {
-if (opt < 0) err:
-        ret = 1;
-      cprime_delete(s);
-      return ret;
-    }
-    if (s->nb_files == 0)
-      cprime_error_noabort("no input files");
-    else if (s->output_type == CPRIME_OUTPUT_PREPROCESS)
-    {
-      if (s->outfile && 0 != strcmp("-", s->outfile))
-      {
-        ppfp = fopen(s->outfile, "wb");
-        if (!ppfp)
-          cprime_error_noabort("could not write '%s'", s->outfile);
-      }
-    }
-    else if (s->output_type == CPRIME_OUTPUT_OBJ && !s->option_r)
-    {
-      if (s->nb_libraries)
-        cprime_error_noabort("cannot specify libraries with -c");
-      else if (s->nb_files > 1 && s->outfile)
-        cprime_error_noabort("cannot specify output file with -c many files");
-    }
-    if (s->nb_errors)
-      goto err;
-    if (s->do_bench)
-      start_time = getclock_ms();
+    fputs(help, stdout);
+    if (s->verbose)
+      goto help2;
   }
+  else if (opt == OPT_HELP2)
+help2: fputs(help2, stdout);
+  else if (opt == OPT_M32 || opt == OPT_M64)
+    ret = cprime_tool_cross(argv, opt);
+  else if (s->verbose)
+    printf("%s", version);
+
+  if (opt == OPT_AR)
+    ret = cprime_tool_ar(argc, argv);
+#ifdef CPRIME_TARGET_PE
+  if (opt == OPT_IMPDEF)
+    ret = cprime_tool_impdef(argc, argv);
+#endif
+  if (opt == OPT_PRINT_DIRS)
+  {
+    set_environment(s);
+    cprime_set_output_type(s, CPRIME_OUTPUT_MEMORY);
+    print_search_dirs(s);
+  }
+  if (opt)
+  {
+    if (opt < 0)
+      ret = 1;
+    goto cleanup;
+  }
+
+  if (s->nb_files == 0)
+  {
+    cprime_error_noabort("no input files");
+    ret = 1;
+    goto cleanup;
+  }
+  else if (s->output_type == CPRIME_OUTPUT_PREPROCESS)
+  {
+    if (s->outfile && 0 != strcmp("-", s->outfile))
+    {
+      ppfp = fopen(s->outfile, "wb");
+      if (!ppfp)
+        cprime_error_noabort("could not write '%s'", s->outfile);
+    }
+  }
+  else if (s->output_type == CPRIME_OUTPUT_OBJ && !s->option_r)
+  {
+    if (s->nb_libraries)
+      cprime_error_noabort("cannot specify libraries with -c");
+    else if (s->nb_files > 1 && s->outfile)
+      cprime_error_noabort("cannot specify output file with -c many files");
+  }
+  if (s->nb_errors)
+  {
+    ret = 1;
+    goto cleanup;
+  }
+  if (s->do_bench)
+    start_time = getclock_ms();
 
   set_environment(s);
   if (s->output_type == 0)
@@ -318,7 +367,7 @@ if (opt < 0) err:
 
   if ((s->output_type == CPRIME_OUTPUT_MEMORY
        || s->output_type == CPRIME_OUTPUT_PREPROCESS)
-      && (s->dflag & 16))   // -Dt Option
+      && (s->dflag & 16))
   {
     if (t)
       s->dflag |= 32;
@@ -327,7 +376,6 @@ if (opt < 0) err:
       --n;
   }
 
-  // Compile Or Add Each Files Or Library
   first_file = NULL;
   do
   {
@@ -374,26 +422,82 @@ if (opt < 0) err:
     }
   }
 
-  done = 1;
   if (t)
-    done = 0; // Run More Tests With -Dt -Run
+    ret = 0;
   else if (ret)
   {
     if (s->nb_errors)
       ret = 1;
-    // else keep the original exit code from cprime_run()
   }
-  else if (n < s->nb_files)
-    done = 0; // Compile More Files With -C
   else if (s->do_bench)
     cprime_print_stats(s, end_time - start_time);
 
+cleanup:
   cprime_delete(s);
-  if (!done)
-    goto redo;
   if (ppfp && ppfp != stdout)
     fclose(ppfp);
   return ret;
+}
+
+static int cprime_run_batch_file(const char *path)
+{
+  int fd, ret = 0;
+  char *text, *line, *next;
+  int job = 0;
+  fd = open(path, O_RDONLY | O_BINARY);
+  if (fd < 0)
+  {
+    fprintf(stderr, "batch file '%s' not found\n", path);
+    return 1;
+  }
+  text = cprime_load_text(fd);
+  close(fd);
+  if (!text)
+  {
+    fprintf(stderr, "batch file '%s' could not be read\n", path);
+    return 1;
+  }
+  line = text;
+  while (line && *line)
+  {
+    next = strpbrk(line, "\r\n");
+    if (next)
+    {
+      *next = '\0';
+      while (*++next == '\r' || *next == '\n')
+        ;
+    }
+    else
+      next = line + strlen(line);
+    char *trimmed = batch_trim(line);
+    if (!trimmed)
+    {
+      line = next;
+      continue;
+    }
+    ++job;
+    BatchArgs ba;
+    batch_args_init(&ba);
+    batch_split_args(&ba, trimmed);
+    {
+      int argc_job = ba.argc;
+      dynarray_add(&ba.argv, &ba.argc, NULL);
+      ret = cprime_run_job(argc_job, ba.argv);
+    }
+    batch_args_free(&ba);
+    if (ret)
+      break;
+    line = next;
+  }
+  cprime_free(text);
+  return ret;
+}
+
+int main(int argc, char **argv)
+{
+  if (argc == 2 && argv[1] && argv[1][0] == '@' && argv[1][1])
+    return cprime_run_batch_file(argv[1] + 1);
+  return cprime_run_job(argc, argv);
 }
 
 

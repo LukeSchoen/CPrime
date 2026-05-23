@@ -1,5 +1,5 @@
 @echo off
-setlocal
+setlocal EnableExtensions EnableDelayedExpansion
 
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
@@ -37,12 +37,15 @@ pushd "%BUILD_DIR%" || (
   exit /b 1
 )
 
-set "CPRIME_C=..\..\..\src\compiler\driver\cprime.c"
-call "%BUILD_SCRIPT%" -c "%OLD_CPC%"
+call :run_build "%OLD_CPC%"
 if errorlevel 1 (
-  echo ERROR: Build failed.
-  popd
-  exit /b 1
+  echo WARN: Build failed with "%OLD_CPC%". Trying tracked bootstrap compilers.
+  call :try_git_bootstrap
+  if errorlevel 1 (
+    echo ERROR: Build failed.
+    popd
+    exit /b 1
+  )
 )
 
 popd
@@ -76,3 +79,32 @@ if errorlevel 1 (
 del /f /q "%BACKUP_CPC%"
 echo Success: Rebuilt and replaced "%ROOT%\cpc.exe".
 exit /b 0
+
+:run_build
+set "CPRIME_C=..\..\..\src\compiler\driver\cprime.c"
+call "%BUILD_SCRIPT%" -c "%~1"
+exit /b %ERRORLEVEL%
+
+:try_git_bootstrap
+where git.exe >nul 2>nul
+if errorlevel 1 exit /b 1
+
+set "BOOT_TMP=%TEMP%\cprime-bootstrap-%RANDOM%-%RANDOM%"
+mkdir "%BOOT_TMP%" >nul 2>nul
+if errorlevel 1 exit /b 1
+
+for /f %%H in ('git.exe -C "%ROOT%" log --format^=%%H -- cpc.exe') do (
+  set "BOOT_CPC=%BOOT_TMP%\cpc-%%H.exe"
+  git.exe -C "%ROOT%" show %%H:cpc.exe > "!BOOT_CPC!"
+  if exist "!BOOT_CPC!" (
+    echo Trying bootstrap compiler %%H.
+    call :run_build "!BOOT_CPC!"
+    if not errorlevel 1 (
+      rmdir /s /q "%BOOT_TMP%" >nul 2>nul
+      exit /b 0
+    )
+  )
+)
+
+rmdir /s /q "%BOOT_TMP%" >nul 2>nul
+exit /b 1
