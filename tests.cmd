@@ -13,6 +13,9 @@ if errorlevel 1 (
 call "%SCRIPT_DIR%Tests\test_batch.cmd"
 if errorlevel 1 goto finish
 
+call "%SCRIPT_DIR%Tests\test_AsmOutput.cmd"
+if errorlevel 1 goto finish
+
 cmd /c "%SCRIPT_DIR%Tests\test__all_new_features.cmd"
 set "EXIT_CODE=%ERRORLEVEL%"
 
@@ -23,7 +26,6 @@ if "%EXIT_CODE%"=="0" (
   echo Full test suite failed with exit code %EXIT_CODE%.
 )
 
-timeout /t 3 /nobreak >nul
 goto finish
 
 :finish

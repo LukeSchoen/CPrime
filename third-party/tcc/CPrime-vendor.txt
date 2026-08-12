@@ -1,0 +1,8 @@
+Upstream TinyCC baseline vendored for CPrime compile-speed comparisons.
+
+Source: https://github.com/TinyCC/tinycc.git
+Commit: 2ba12e83b3599ca8f5d50c179fe5138fe956f0c9
+Version file: 0.9.28rc
+
+This tree is intended to stay close to raw upstream tcc. Do not apply CPrime
+language-extension changes here; use it as the C-only speed baseline.

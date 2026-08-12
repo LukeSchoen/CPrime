@@ -1,0 +1,8 @@
+Vendored clang host compiler for reproducible CPrime build-speed experiments.
+
+Source path copied from: C:\Luke\Src\Archive\surfer\clang.exe
+Version: clang 12.0.0
+Target: x86_64-pc-windows-msvc
+
+This binary is used only as an optional host compiler. It is not required for
+normal self-hosted CPC builds.

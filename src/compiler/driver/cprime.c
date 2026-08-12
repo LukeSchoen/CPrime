@@ -14,6 +14,7 @@ static const char help[] =
   "       cpc [options...] -run infile (or --) [arguments...]\n"
   "General options:\n"
   "  -c           compile only - generate an object file\n"
+  "  -S           compile only - generate assembly text\n"
   "  -o outfile   set output filename\n"
   "  -run         run compiled source [with custom stdin: -rstdin FILE]\n"
   "  -fflag       set or reset (with 'no-' prefix) 'flag' (see cpc -hh)\n"
@@ -215,7 +216,9 @@ static char *default_outputfile(CPRIMEState *s, const char *first_file)
     strcpy(ext, ".exe");
   else
 #endif
-    if ((s->just_deps || s->output_type == CPRIME_OUTPUT_OBJ) && !s->option_r && *ext)
+    if (s->output_type == CPRIME_OUTPUT_ASM && *ext)
+      strcpy(ext, ".s");
+    else if ((s->just_deps || s->output_type == CPRIME_OUTPUT_OBJ) && !s->option_r && *ext)
       strcpy(ext, ".o");
     else
       strcpy(buf, "a.out");

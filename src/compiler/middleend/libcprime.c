@@ -1321,9 +1321,9 @@ LIBCPRIMEAPI int cprime_set_output_type(CPRIMEState *s, int output_type)
   // Add Sections
   cprimeelf_new(s);
 
-  if (output_type == CPRIME_OUTPUT_OBJ)
+  if (output_type == CPRIME_OUTPUT_OBJ || output_type == CPRIME_OUTPUT_ASM)
   {
-    // Always Elf For Objects
+    // Always Elf For Objects. Assembly output uses the generated sections only.
     s->output_format = CPRIME_OUTPUT_FORMAT_ELF;
     return 0;
   }
@@ -1916,6 +1916,7 @@ enum
   CPRIME_OPTION_b,
   CPRIME_OPTION_g,
   CPRIME_OPTION_c,
+  CPRIME_OPTION_S,
   CPRIME_OPTION_dumpmachine,
   CPRIME_OPTION_dumpversion,
   CPRIME_OPTION_d,
@@ -2023,6 +2024,7 @@ static const CPRIMEOption cprime_options[] =
   { "undefined", CPRIME_OPTION_undefined, CPRIME_OPTION_HAS_ARG },
 #endif
   { "c", CPRIME_OPTION_c, 0 },
+  { "S", CPRIME_OPTION_S, 0 },
   { "dumpmachine", CPRIME_OPTION_dumpmachine, 0},
   { "dumpversion", CPRIME_OPTION_dumpversion, 0},
   { "d", CPRIME_OPTION_d, CPRIME_OPTION_HAS_ARG | CPRIME_OPTION_NOSEP },
@@ -2377,6 +2379,9 @@ g_redo:
       break;
     case CPRIME_OPTION_c:
       x = CPRIME_OUTPUT_OBJ;
+      goto set_output_type;
+    case CPRIME_OPTION_S:
+      x = CPRIME_OUTPUT_ASM;
 set_output_type:
       if (s->output_type)
         cprime_warning("-%s: overriding compiler action already specified", popt->name);

@@ -1054,17 +1054,26 @@ set_st_type:
   case TOK_ASMDIR_reloc:
   {
     ExprValue e;
+    int reloc_type;
+    const char *reloc_name;
 
     next();
     asm_expr(s1, &e);
     skip(',');
+    reloc_name = get_tok_str(tok, NULL);
 #if defined(CPRIME_TARGET_ARM64)
-    if (strcmp(get_tok_str(tok, NULL), "R_AARCH64_CALL26"))
+    if (!strcmp(reloc_name, "R_AARCH64_CALL26"))
+      reloc_type = R_AARCH64_CALL26;
+    else
+#elif defined(CPRIME_TARGET_X86_64)
+    if (!strcmp(reloc_name, "R_X86_64_RELATIVE"))
+      reloc_type = R_X86_64_RELATIVE;
+    else
 #endif
       cprime_error("unimp: reloc '%s' unknown", get_tok_str(tok, NULL));
     next();
     skip(',');
-    greloca(cur_text_section, get_asm_sym(tok, NULL), e.v, R_AARCH64_CALL26, 0);
+    greloca(cur_text_section, get_asm_sym(tok, NULL), e.v, reloc_type, 0);
     next();
   }
   break;

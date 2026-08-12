@@ -3335,11 +3335,262 @@ LIBCPRIMEAPI int elf_output_obj(CPRIMEState *s1, const char *filename)
   return ret;
 }
 
+static const char *asm_section_flags(int sh_flags)
+{
+  static char flags[8];
+  char *p = flags;
+
+  if (sh_flags & SHF_ALLOC)
+    *p++ = 'a';
+  if (sh_flags & SHF_WRITE)
+    *p++ = 'w';
+  if (sh_flags & SHF_EXECINSTR)
+    *p++ = 'x';
+  *p = '\0';
+  return flags;
+}
+
+static int asm_section_is_exportable(Section *sec)
+{
+  CPRIMEState *s1;
+  if (!sec)
+    return 0;
+  s1 = sec->s1;
+  if (sec == symtab_section)
+    return 0;
+  if (sec->sh_flags & SHF_PRIVATE)
+    return 0;
+  if (!(sec->sh_flags & SHF_ALLOC))
+    return 0;
+  return sec->sh_type == SHT_PROGBITS || sec->sh_type == SHT_NOBITS;
+}
+
+static void asm_output_section_directive(FILE *fp, Section *sec)
+{
+  CPRIMEState *s1 = sec->s1;
+  if (sec == text_section)
+    fprintf(fp, ".text\n");
+  else if (sec == data_section)
+    fprintf(fp, ".data\n");
+  else if (sec == bss_section)
+    fprintf(fp, ".bss\n");
+  else
+    fprintf(fp, ".section %s,\"%s\"\n", sec->name, asm_section_flags(sec->sh_flags));
+  if (sec->sh_addralign > 1)
+    fprintf(fp, ".balign %d\n", sec->sh_addralign);
+}
+
+static int asm_output_symbols_at(FILE *fp, Section *sec, unsigned long offset,
+                                 const char *strtab)
+{
+  CPRIMEState *s1 = sec->s1;
+  ObjW(Sym) *sym;
+  const char *name, *type_name;
+  int type;
+  int emitted = 0;
+
+  for_each_elem(symtab_section, 1, sym, ObjW(Sym))
+  {
+    if (sym->st_shndx != sec->sh_num || sym->st_value != offset || !sym->st_name)
+      continue;
+    name = strtab + sym->st_name;
+    type = Obj64_ST_TYPE(sym->st_info);
+    if (Obj64_ST_BIND(sym->st_info) == STB_GLOBAL)
+      fprintf(fp, ".globl %s\n", name);
+    if (type == STT_FUNC || type == STT_OBJECT)
+    {
+      type_name = type == STT_FUNC ? "function" : "object";
+      fprintf(fp, ".type %s,@%s\n", name, type_name);
+    }
+    fprintf(fp, "%s:\n", name);
+    emitted = 1;
+  }
+  return emitted;
+}
+
+static ObjW_Rel *asm_find_reloc_at(Section *sec, unsigned long offset)
+{
+  ObjW_Rel *rel;
+
+  if (!sec->reloc)
+    return NULL;
+  for_each_elem(sec->reloc, 0, rel, ObjW_Rel)
+    if (rel->r_offset == offset)
+      return rel;
+  return NULL;
+}
+
+static int asm_output_reloc(CPRIMEState *s1, FILE *fp, Section *sec, ObjW_Rel *rel,
+                            const char *strtab, int *size)
+{
+  ObjW(Sym) *sym;
+  const char *name;
+  int type, sym_index;
+  addr_t addend;
+
+  type = Obj64_R_TYPE(rel->r_info);
+  sym_index = Obj64_R_SYM(rel->r_info);
+  sym = &((ObjW(Sym) *)symtab_section->data)[sym_index];
+  if (!sym->st_name)
+    return cprime_error_noabort("cannot emit anonymous relocation in assembly output");
+  name = strtab + sym->st_name;
+  addend = rel->r_addend;
+
+  switch (type)
+  {
+  case R_X86_64_PC32:
+  case R_X86_64_PLT32:
+    fprintf(fp, "  .long %s - . - 4", name);
+    addend += 4;
+    *size = 4;
+    break;
+  case R_X86_64_32:
+  case R_X86_64_32S:
+    fprintf(fp, "  .long %s", name);
+    *size = 4;
+    break;
+#ifdef R_X86_64_RELATIVE
+  case R_X86_64_RELATIVE:
+    fprintf(fp, "  .long 0x%08x\n", read32le(sec->data + rel->r_offset));
+    fprintf(fp, "  .reloc . - 4, R_X86_64_RELATIVE, %s", name);
+    *size = 4;
+    break;
+#endif
+  case R_X86_64_64:
+    fprintf(fp, "  .quad %s", name);
+    *size = 8;
+    break;
+  default:
+    return cprime_error_noabort("unsupported relocation type %d in assembly output", type);
+  }
+  if (addend > 0)
+    fprintf(fp, " + %lld", (long long)addend);
+  else if (addend < 0)
+    fprintf(fp, " - %lld", (long long)-addend);
+  fprintf(fp, "\n");
+  return 0;
+}
+
+static void asm_output_byte(FILE *fp, unsigned char value, int *at_line_start,
+                            unsigned long column)
+{
+  if (*at_line_start)
+  {
+    fprintf(fp, "  .byte ");
+    *at_line_start = 0;
+  }
+  else
+    fprintf(fp, ", ");
+  fprintf(fp, "0x%02x", value);
+  if (column == 15)
+  {
+    fprintf(fp, "\n");
+    *at_line_start = 1;
+  }
+}
+
+static int cprime_output_asm(CPRIMEState *s1, const char *filename)
+{
+  FILE *fp;
+  Section *sec;
+  unsigned long i;
+  const char *strtab;
+  int n, ret = 0;
+
+  fp = fopen(filename, "w");
+  if (!fp)
+    return cprime_error_noabort("could not write '%s'", filename);
+
+  fprintf(fp, "# cpc -S assembly byte output\n");
+  fprintf(fp, "# This backend emits generated section bytes, not mnemonic disassembly.\n");
+  strtab = (const char *)symtab_section->link->data;
+
+  for (n = 1; n < s1->nb_sections; ++n)
+  {
+    int at_line_start = 1;
+    sec = s1->sections[n];
+    if (!asm_section_is_exportable(sec))
+      continue;
+
+    if (sec->sh_type == SHT_NOBITS && !sec->data_offset)
+      continue;
+
+    if (!at_line_start)
+      fprintf(fp, "\n");
+    fprintf(fp, "\n");
+    asm_output_section_directive(fp, sec);
+
+    for (i = 0; i < sec->data_offset; ++i)
+    {
+      ObjW_Rel *rel_at_i;
+      int reloc_size;
+
+      if (!at_line_start)
+      {
+        ObjW(Sym) *sym;
+        int has_symbol = 0;
+        for_each_elem(symtab_section, 1, sym, ObjW(Sym))
+        {
+          if (sym->st_shndx == sec->sh_num && sym->st_value == i && sym->st_name)
+          {
+            has_symbol = 1;
+            break;
+          }
+        }
+        if (has_symbol)
+        {
+          fprintf(fp, "\n");
+          at_line_start = 1;
+        }
+      }
+      if (asm_output_symbols_at(fp, sec, i, strtab))
+        at_line_start = 1;
+
+      rel_at_i = asm_find_reloc_at(sec, i);
+      if (rel_at_i)
+      {
+        if (!at_line_start)
+        {
+          fprintf(fp, "\n");
+          at_line_start = 1;
+        }
+        ret = asm_output_reloc(s1, fp, sec, rel_at_i, strtab, &reloc_size);
+        if (ret)
+          goto done;
+        i += reloc_size - 1;
+        at_line_start = 1;
+        continue;
+      }
+
+      if (sec->sh_type == SHT_NOBITS)
+      {
+        unsigned long start = i;
+        while (i + 1 < sec->data_offset && !asm_find_reloc_at(sec, i + 1))
+          ++i;
+        fprintf(fp, "  .skip %lu\n", i - start + 1);
+        at_line_start = 1;
+        continue;
+      }
+
+      asm_output_byte(fp, sec->data[i], &at_line_start, i & 15);
+    }
+    if (!at_line_start)
+      fprintf(fp, "\n");
+    asm_output_symbols_at(fp, sec, sec->data_offset, strtab);
+  }
+
+done:
+  fclose(fp);
+  return ret;
+}
+
 LIBCPRIMEAPI int cprime_output_file(CPRIMEState *s, const char *filename)
 {
   s->nb_errors = 0;
   if (s->test_coverage)
     cprime_tcov_add_file(s, filename);
+  if (s->output_type == CPRIME_OUTPUT_ASM)
+    return cprime_output_asm(s, filename);
   if (s->output_type == CPRIME_OUTPUT_OBJ)
     return elf_output_obj(s, filename);
 #ifdef CPRIME_TARGET_PE

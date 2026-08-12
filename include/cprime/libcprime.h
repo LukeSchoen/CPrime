@@ -44,6 +44,7 @@ LIBCPRIMEAPI int cprime_set_output_type(CPRIMEState *s, int output_type);
 #define CPRIME_OUTPUT_DLL      4
 #define CPRIME_OUTPUT_OBJ      3
 #define CPRIME_OUTPUT_PREPROCESS 5
+#define CPRIME_OUTPUT_ASM      6
 
 LIBCPRIMEAPI int cprime_add_library_path(CPRIMEState *s, const char *pathname);
 
