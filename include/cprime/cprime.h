@@ -614,7 +614,7 @@ struct CPRIMEState {
 #endif
     unsigned char test_coverage;
 
-    unsigned char gnu_ext;
+    unsigned char non_iso;
 
     unsigned char cprime_ext;
 
@@ -869,6 +869,7 @@ struct filespec {
 #define VT_STATIC  0x00002000
 #define VT_TYPEDEF 0x00004000
 #define VT_INLINE  0x00008000
+#define VT_REFERENCE 0x00010000
 
 #define VT_STRUCT_SHIFT 20
 #define VT_STRUCT_MASK (((1U << (6+6)) - 1) << VT_STRUCT_SHIFT | VT_BITFIELD)
@@ -1378,6 +1379,9 @@ ST_FUNC void gsym_addr(int t, int a);
 ST_FUNC void gsym(int t);
 ST_FUNC void load(int r, SValue *sv);
 ST_FUNC void store(int r, SValue *v);
+#ifdef CPRIME_TARGET_X86_64
+ST_FUNC int store_immediate(SValue *v, uint64_t value);
+#endif
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *align, int *regsize);
 ST_FUNC void gfunc_call(int nb_args);
 ST_FUNC void gfunc_prolog(Sym *func_sym);
@@ -1703,7 +1707,7 @@ static inline void post_sem(CPRIMESem *p) {
 #define bounds_section      CPRIME_STATE_VAR(bounds_section)
 #define lbounds_section     CPRIME_STATE_VAR(lbounds_section)
 #define symtab_section      CPRIME_STATE_VAR(symtab_section)
-#define gnu_ext             CPRIME_STATE_VAR(gnu_ext)
+#define non_iso             CPRIME_STATE_VAR(non_iso)
 #define cprime_error_noabort   CPRIME_SET_STATE(_cprime_error_noabort)
 #define cprime_error           CPRIME_SET_STATE(_cprime_error)
 #define cprime_warning         CPRIME_SET_STATE(_cprime_warning)

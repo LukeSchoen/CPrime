@@ -1,296 +1,95 @@
-# CPrime Compiler - [Download Windows Zip](https://github.com/LukeSchoen/CPrime/archive/refs/heads/main.zip)
+# CPrime: Near Instant Compile & Tiny Builds Of C - The expressiveness and comfort of C++ 
 
-## Whats's CPrime?
+[Download the Windows zip](https://github.com/LukeSchoen/CPrime/archive/refs/heads/main.zip)
 
-cPrime is a new programming language.
-It's a serious attempt to extract the *useful core* of C++ & relayer it onto C;
-without reinheriting c++'s historical-baggage, complexity, and slow compilation.
+CPrime is a programming language and compiler for people who want the speed /
+tiny build size of C, but also want larger projects with pleasant ergonomics.
 
----
+The compiler is called **CPC**. It's job is to take any C code and most of cpp
+Almost instantly makes lightweight native outputs, without bulky C++ toolchains.
 
-## Core Properties
+## The Short Version
 
-- Compiles **any C program** (including itself)
-- Can compile **many C++ files**
-- Can be compiled with **any C++ compiler**
-- Runtime behavior matches C++ expectations
+C is fast small and beautiful. C++ is powerful expressive but expensive to use,
+in compile time, binary size, and toolchain install cost (setup time, and weight)
 
----
+## Why cPrime Exists
 
-## The Problem
+C++ offers a lot of developer comfort: classes, constructors, destructors,
+templates, overloaded functions (great ways to organize your large projects)
 
-C is:
-- simple
-- fast
-- predictable
+But the price is steep:
 
-But:
-- lacks structure
-- scales poorly
+- slow builds
+- huge toolchains
+- large executables
+- layers of legacy based complexity
+- features that authors like but that cost every build forever
 
-C++ solved this with:
-- classes
-- abstraction
-- encapsulation
+CPrime asks a simple question:
 
-But introduced:
-- slow compile times
-- massive toolchains
-- legacy complexity
-- no real feature deprecation
+> What if using C++ could be done in a way that was just really cheap?
 
-Modern C++ compilers (LLVM / MSVC) can be **20–200× slower** than C compilers like TCC/LCC.
+## What Do we have Today?
 
----
+- Full C compatibility: structs, enums, function calls, recursion, pointers,
+  arrays, macros, stdio, and compile-fail cases
+- Most Of C++: constructors, local variables, classes/struct-style types
+- destructors, member functions like `foo.bar(a, b)`
+- static member functions and static data members
+- function templates and template class specifiers
+- function and class-style operator overloads (+= etc)
 
-## The Goal
+Some features are deliberately narrow at the moment. For example, templates
+`template<typename T>` are limited to a single Type T (to stop SPHINAE etc)
 
-CPrime sits in the middle:
+## What Is Intentionally left Out?
 
-- Keep **C’s simplicity and speed**
-- Adds **just enough c++ structure**
+Features that are currently intentionally dropped as unwanted:
 
----
+- namespaces
+- inheritance
+- class friends
 
-## The Repo
+As these tend to produce Rabit-Warrens.
 
-Currently Includes:
-- Self-hoisting compiler
-- Windows `build` demo
-- release.exe + Source
+The spirit is simple: avoid features that make code hard to read
+complexity needs to payoff and allign realisticallly with goals
 
-## The History
+## Build
 
-- Built in ~2 days using > 300 requests to gpt5.5  
-- Already used to port multiple 3D projects  
-- Compile speeds are dramatically faster
+The build.and script expects `cpc.exe` at the repo root: It builds a fresh
+new compiler and replaces the old compiler with the newly built one.
 
-## The Plan
+## Test
 
-- Focus: core language + compile speed
-- Essentially a **clean-room partial reimplementation of C++ on top of C**
-- Early, but already usable
+Run the main test suite:
 
----
+```bat
+tests.cmd
+```
+
+Tests both confirm C still works and ensures suppport for desired c++ code.
+
+```text
+c_compat
+features/All
+features/Templates
+features/Destructors
+features/Constructors
+features/InlineLifecycle
+features/MemberFunctions
+features/OperatorOverloads
+```
 
 ## Contributing
 
-reports, experiments, Ideas are all welcome  
-Use the issues tab
+Ideas, reports, experiments, bug reductions, and new test cases are welcome.
 
----
+Use the issue tracker:
 
-# Language Features
+Good contributions include a concrete feature goal or error symptom:
 
----
-
-## Classes
-
-```c
-class Point
-{
-  int x;
-  int y;
-
-  void translate(int dx int dy)
-  {
-    this->x += dx;
-    this->y += dy;
-  }
-};
-```
-
-- class is a struct alias  
-- supports access modifiers  
-- typedef boilerplate is optional  
-
----
-
-## Methods
-
-Supported syntax
-
-- obj.fn(arg1)  
-- ptr->fn(arg1, arg2)  
-- const correct calls  
-- name mangling for overloads  
-
----
-
-## Operators
-
-```c
-class Num
-{
-  int value;
-  int operator+(int rhs);
-};
-
-int Num::operator+(int rhs)
-{
-  return this->value + rhs;
-}
-```
-
-Supported
-
-- arithmetic + - * / %  
-- comparisons  
-- shifts  
-- indexing []  
-- assignment variants +=  
-
----
-
-## Constructors / Destructors
-
-```c
-class Widget
-{
-  int value;
-  Widget(int seed);
-};
-
-Widget::Widget(int seed)
-{
-  this->value = seed;
-}
-
-class Guard {
-  int value;
-  ~Guard();
-};
-
-Guard::~Guard()
-{
-  cleanup_total += this->value;
-}
-```
-
-- automatic lifetime handling  
-- standard C++ syntax  
-
----
-
-## Templates
-
-```c
-template<typename T>
-T id(T value)
-{
-  return value;
-}
-
-template<typename T>
-class List {
-  T items[8];
-  int count;
-
-  void push(T value)
-  {
-    this->items[this->count++] = value;
-  }
-};
-```
-
-- single type parameter (intentional)  
-- supports nesting: Map<List<String>>  
-
----
-
-## Separation of Declaration / Definition
-
-```c
-class Camera
-{
-  int value;
-  void init(int v);
-};
-
-void Camera::init(int v)
-{
-  this->value = v;
-}
-```
-
-- clean interface / implementation split  
-- no loss of C compatibility  
-
----
-
-## Overloading
-
-```c
-struct Accumulator
-{
-  int value;
-
-  void set() { this->value = 5; }
-  void set(int v) { this->value = v; }
-  void set(float v) { this->value = (int)(v * 10.0f); }
-};
-```
-
-- overload resolution via mangling  
-- templates optional  
-
----
-
-# Motivation
-
-Using C++ instead of C genuinely costs the project important resources yet it only helps the dev while they are deving.
-
-- complex setup  
-- larger binaries  
-- heavier toolchains  
-- slower compile times  
-
-The historical tradeoff to use c++ anyway has become undefensible under the rising weight of humandev-less AI-projects.
-Abstractions that only benefits developers at compile time must become free if we are to be able to justify using them.
-Thankfully object orientation helps AI's as much as it helps humans so the gains appear for humans and AI agents alike. 
----
-
-# Intentionaly Dropped Features
-
-  - friend
-  - = delete
-  - = default
-  - inheritence
-  - in-class member initializers (eg int m_val = 5;)
-
-# Considering Adding These Features
-
-  - references
-
----
-
-# Final Note
-
-Huge respect to the man, Bjarne Stroustrup  
-C++ has been the in my hand for most days of my life
-
-CPrime is about returning to
-
-- fast & lightweight
-- Prime Productivity
-
-while keeping what actually matters ~(templatable O.O.P. for scaling and customizable operators for expressing)
-
----
-
-# License
-
-Demo / test purposes for now  
-Must remain GPLv3-compatible  
-
-You may fork under GPL  
-
----
-
-## Credits
-
-Compiler core derived from  
-https://bellard.org/tcc/
-
-Transitioning toward a clean-room rewrite  
-next-big goal: a public-domain release
+1. show current/desired behavior
+2. add or propose a test that reproduces it
+3. fix the compiler only after the test proves the issue

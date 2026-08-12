@@ -618,6 +618,51 @@ void load(int r, SValue *sv)
 }
 
 // Store Register 'R' In Lvalue 'V'
+int store_immediate(SValue *v, uint64_t value)
+{
+  int fr, bt, ft, fc;
+
+  fr = v->r & VT_VALMASK;
+  ft = v->type.t & ~(VT_VOLATILE | VT_CONSTANT);
+  bt = ft & VT_BTYPE;
+  fc = v->c.i;
+
+  if (fc != v->c.i && (fr & VT_SYM))
+    return 0;
+  if (fr != VT_LOCAL)
+    return 0;
+
+  if (bt == VT_BYTE || bt == VT_BOOL)
+  {
+    orex(0, v->r, 0, 0xc6);
+    gen_modrm(0, v->r, v->sym, fc);
+    g(value);
+    return 1;
+  }
+  if (bt == VT_SHORT)
+  {
+    o(0x66);
+    orex(0, v->r, 0, 0xc7);
+    gen_modrm(0, v->r, v->sym, fc);
+    gen_le16(value);
+    return 1;
+  }
+  if (bt == VT_INT)
+  {
+    orex(0, v->r, 0, 0xc7);
+    gen_modrm(0, v->r, v->sym, fc);
+    gen_le32(value);
+    return 1;
+  }
+  if (is64_type(bt) && value == (int)value)
+  {
+    gen_modrm64(0xc7, 0, v->r, v->sym, fc);
+    gen_le32(value);
+    return 1;
+  }
+  return 0;
+}
+
 void store(int r, SValue *v)
 {
   int fr, bt, ft, fc;
@@ -924,9 +969,27 @@ void gfunc_call(int nb_args)
 
       // Generate Memcpy Call
       vset(&sv->type, r | VT_LVAL, 0);
-      vpushv(sv);
-      vstore();
-      --vtop;
+      if (struct_needs_memberwise_copy(&sv->type))
+      {
+        SValue dst_ptr, src_ptr;
+        mk_pointer(&vtop->type);
+        gaddrof();
+        dst_ptr = *vtop;
+        vtop--;
+        vpushv(sv);
+        mk_pointer(&vtop->type);
+        gaddrof();
+        src_ptr = *vtop;
+        vtop--;
+        copy_construct_struct_memberwise_from_base_ptr(&sv->type, &dst_ptr,
+                                                       &src_ptr, 0);
+      }
+      else
+      {
+        vpushv(sv);
+        vstore();
+        --vtop;
+      }
     }
     else if (bt == VT_LDOUBLE)
     {
@@ -1477,7 +1540,25 @@ void gfunc_call(int nb_args)
       o(0xf0e48348); // And $-16,%Rsp
       orex(0, r, 0, 0x50 + REG_VALUE(r)); // Push R (Last %Rsp)
       o(0x08ec8348); // Sub $8,%Rsp
-      vstore();
+      if (struct_needs_memberwise_copy(&vtop[-1].type))
+      {
+        SValue dst_ptr, src_ptr;
+        CType struct_type = vtop[-1].type;
+        vswap();
+        mk_pointer(&vtop->type);
+        gaddrof();
+        dst_ptr = *vtop;
+        vtop--;
+        mk_pointer(&vtop->type);
+        gaddrof();
+        src_ptr = *vtop;
+        vtop--;
+        copy_construct_struct_memberwise_from_base_ptr(&struct_type, &dst_ptr,
+                                                       &src_ptr, 0);
+        vpushi(0);
+      }
+      else
+        vstore();
       o(0x08c48348); // Add $8,%Rsp
       o(0x5c);       // Pop %Rsp
       break;

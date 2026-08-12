@@ -42,6 +42,25 @@ static struct TinyAlloc *tokstr_alloc;
 
 static TokenString *macro_stack;
 
+static int cprimepp_has_suffix(const char *s, const char *suffix)
+{
+  size_t n, m;
+
+  if (!s || !suffix)
+    return 0;
+  n = strlen(s);
+  m = strlen(suffix);
+  return n >= m && !strcmp(s + n - m, suffix);
+}
+
+static int cprimepp_is_cpp_filename(const char *filename)
+{
+  return cprimepp_has_suffix(filename, ".cpp")
+         || cprimepp_has_suffix(filename, ".cxx")
+         || cprimepp_has_suffix(filename, ".cc")
+         || cprimepp_has_suffix(filename, ".C");
+}
+
 static const char cprime_keywords[] =
 #define DEF(id, str) str "\0"
 #include "cprimetok.h"
@@ -1664,7 +1683,7 @@ ST_FUNC void parse_define(void)
           varg = TOK___VA_ARGS__;
           is_vaargs = 1;
         }
-        else if (tok == TOK_DOTS && gnu_ext)
+        else if (tok == TOK_DOTS && non_iso)
         {
           is_vaargs = 1;
           next_nomacro();
@@ -2229,7 +2248,7 @@ add_hex_or_ucn:
         c = '\v';
         break;
       case 'e':
-        if (!gnu_ext)
+        if (!non_iso)
           goto invalid_escape;
         c = 27;
         break;
@@ -3393,7 +3412,7 @@ static int *macro_arg_subst(Sym **nested_list, const int *macro_str, Sym *args)
         {
           /* special case for var arg macros : ## eats the ','
              if empty VA_ARGS variable. */
-          if (t1 == TOK_PPJOIN && t0 == ',' && gnu_ext && s->type.t)
+          if (t1 == TOK_PPJOIN && t0 == ',' && non_iso && s->type.t)
           {
             int c = str.str[str.len - 1];
             while (str.str[--str.len] != ',')
@@ -3695,7 +3714,7 @@ empty_arg:
             break;
           /* special case for gcc var args: add an empty
              var arg argument if it is omitted */
-          if (sa->type.t && gnu_ext)
+          if (sa->type.t && non_iso)
             goto empty_arg;
           cprime_error("macro '%s' used with too few args",
                     get_tok_str(v, 0));
@@ -4009,6 +4028,8 @@ static void cprime_predefs(CPRIMEState *s1, CString *cs, int is_asm)
   if (!is_asm)
   {
     putdef(cs, "__STDC__");
+    if (cprimepp_is_cpp_filename(file->filename))
+      cstr_cat(cs, "#define __CPRIME_CPP__ 1\n", -1);
     cstr_printf(cs, "#define __STDC_HOSTED__ %d\n", s1->nostdlib ? 0 : 1);
     cstr_printf(cs, "#define __STDC_VERSION__ %dL\n", s1->cversion);
     cstr_cat(cs,

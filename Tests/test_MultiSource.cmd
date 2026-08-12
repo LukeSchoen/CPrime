@@ -74,6 +74,78 @@ if errorlevel 1 (
 
 echo PASS header inline member multi-source
 
+set "TEMPLATE_A_SRC=%SRC_DIR%\header_template_inline_member_a.cpp"
+set "TEMPLATE_MAIN_SRC=%SRC_DIR%\header_template_inline_member_main.cpp"
+
+"%COMPILER%" -c "%TEMPLATE_A_SRC%" -o "%WORK_DIR%\template_a.o" >"%WORK_DIR%\compile_template_a.out" 2>&1
+if errorlevel 1 (
+  echo FAIL header template inline member object compile a.cpp.
+  type "%WORK_DIR%\compile_template_a.out"
+  goto fail
+)
+"%COMPILER%" -c "%TEMPLATE_MAIN_SRC%" -o "%WORK_DIR%\template_main.o" >"%WORK_DIR%\compile_template_main.out" 2>&1
+if errorlevel 1 (
+  echo FAIL header template inline member object compile main.cpp.
+  type "%WORK_DIR%\compile_template_main.out"
+  goto fail
+)
+"%COMPILER%" "%WORK_DIR%\template_a.o" "%WORK_DIR%\template_main.o" -o "%WORK_DIR%\template_linked.exe" >"%WORK_DIR%\link_template.out" 2>&1
+set "TEMPLATE_LINK_EXIT=%ERRORLEVEL%"
+if not "%TEMPLATE_LINK_EXIT%"=="0" (
+  echo FAIL header template inline member object link: exit %TEMPLATE_LINK_EXIT%
+  type "%WORK_DIR%\link_template.out"
+  goto fail
+)
+findstr /I /C:"defined twice" "%WORK_DIR%\link_template.out" >nul 2>nul
+if not errorlevel 1 (
+  echo FAIL header template inline member object link emitted duplicate-symbol diagnostics.
+  type "%WORK_DIR%\link_template.out"
+  goto fail
+)
+"%WORK_DIR%\template_linked.exe"
+if errorlevel 1 (
+  echo FAIL header template inline member linked executable returned %ERRORLEVEL%.
+  goto fail
+)
+
+echo PASS header template inline member multi-source
+
+set "TEMPLATE_FUNC_A_SRC=%SRC_DIR%\header_template_function_a.cpp"
+set "TEMPLATE_FUNC_MAIN_SRC=%SRC_DIR%\header_template_function_main.cpp"
+
+"%COMPILER%" -c "%TEMPLATE_FUNC_A_SRC%" -o "%WORK_DIR%\template_func_a.o" >"%WORK_DIR%\compile_template_func_a.out" 2>&1
+if errorlevel 1 (
+  echo FAIL header template function object compile a.cpp.
+  type "%WORK_DIR%\compile_template_func_a.out"
+  goto fail
+)
+"%COMPILER%" -c "%TEMPLATE_FUNC_MAIN_SRC%" -o "%WORK_DIR%\template_func_main.o" >"%WORK_DIR%\compile_template_func_main.out" 2>&1
+if errorlevel 1 (
+  echo FAIL header template function object compile main.cpp.
+  type "%WORK_DIR%\compile_template_func_main.out"
+  goto fail
+)
+"%COMPILER%" "%WORK_DIR%\template_func_a.o" "%WORK_DIR%\template_func_main.o" -o "%WORK_DIR%\template_func_linked.exe" >"%WORK_DIR%\link_template_func.out" 2>&1
+set "TEMPLATE_FUNC_LINK_EXIT=%ERRORLEVEL%"
+if not "%TEMPLATE_FUNC_LINK_EXIT%"=="0" (
+  echo FAIL header template function object link: exit %TEMPLATE_FUNC_LINK_EXIT%
+  type "%WORK_DIR%\link_template_func.out"
+  goto fail
+)
+findstr /I /C:"defined twice" "%WORK_DIR%\link_template_func.out" >nul 2>nul
+if not errorlevel 1 (
+  echo FAIL header template function object link emitted duplicate-symbol diagnostics.
+  type "%WORK_DIR%\link_template_func.out"
+  goto fail
+)
+"%WORK_DIR%\template_func_linked.exe"
+if errorlevel 1 (
+  echo FAIL header template function linked executable returned %ERRORLEVEL%.
+  goto fail
+)
+
+echo PASS header template function multi-source
+
 set "LIFE_SRC=%SRC_DIR%\external_lifecycle.cpp"
 set "LIFE_MAIN_SRC=%SRC_DIR%\external_lifecycle_main.cpp"
 

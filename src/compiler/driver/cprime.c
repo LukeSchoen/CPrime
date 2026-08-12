@@ -63,8 +63,6 @@ static const char help[] =
 #ifdef CPRIME_TARGET_PE
   "  create def file : cpc -impdef lib.dll [-v] [-o lib.def]\n"
 #endif
-  "Discussion & bug reports:\n"
-  "  https://lists.nongnu.org/mailman/listinfo/cprime-devel\n"
   ;
 
 static const char help2[] =

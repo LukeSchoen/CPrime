@@ -1211,8 +1211,8 @@ LIBCPRIMEAPI CPRIMEState *cprime_new(void)
   cprime_memcheck(1);
 #endif
 
-#undef gnu_ext
-  s->gnu_ext = 1;
+#undef non_iso
+  s->non_iso = 1;
   s->cprime_ext = 1;
   s->nocommon = 1;
   s->dollars_in_identifiers = 1; // On By Default Like In Gcc/Clang
