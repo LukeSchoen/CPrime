@@ -3362,7 +3362,25 @@ static int asm_section_is_exportable(Section *sec)
     return 0;
   if (!(sec->sh_flags & SHF_ALLOC))
     return 0;
-  return sec->sh_type == SHT_PROGBITS || sec->sh_type == SHT_NOBITS;
+  return sec->sh_type == SHT_PROGBITS
+      || sec->sh_type == SHT_NOBITS
+      || sec->sh_type == SHT_PREINIT_ARRAY
+      || sec->sh_type == SHT_INIT_ARRAY
+      || sec->sh_type == SHT_FINI_ARRAY;
+}
+
+static void asm_resolve_common_syms(CPRIMEState *s1)
+{
+  ObjW(Sym) *sym;
+
+  for_each_elem(symtab_section, 1, sym, ObjW(Sym))
+  {
+    if (sym->st_shndx == SHN_COMMON)
+    {
+      sym->st_value = section_add(bss_section, sym->st_size, sym->st_value);
+      sym->st_shndx = bss_section->sh_num;
+    }
+  }
 }
 
 static void asm_output_section_directive(FILE *fp, Section *sec)
@@ -3408,6 +3426,17 @@ static int asm_output_symbols_at(FILE *fp, Section *sec, unsigned long offset,
   return emitted;
 }
 
+static int asm_has_symbol_at(Section *sec, unsigned long offset)
+{
+  CPRIMEState *s1 = sec->s1;
+  ObjW(Sym) *sym;
+
+  for_each_elem(symtab_section, 1, sym, ObjW(Sym))
+    if (sym->st_shndx == sec->sh_num && sym->st_value == offset && sym->st_name)
+      return 1;
+  return 0;
+}
+
 static ObjW_Rel *asm_find_reloc_at(Section *sec, unsigned long offset)
 {
   ObjW_Rel *rel;
@@ -3420,13 +3449,26 @@ static ObjW_Rel *asm_find_reloc_at(Section *sec, unsigned long offset)
   return NULL;
 }
 
+#if defined(CPRIME_TARGET_PE) && defined(CPRIME_TARGET_X86_64)
+static addr_t asm_pe_imagebase(CPRIMEState *s1)
+{
+  if (s1->pe_imagebase)
+    return s1->pe_imagebase;
+  if (s1->has_text_addr)
+    return s1->text_addr;
+  return 0x00400000;
+}
+#endif
+
 static int asm_output_reloc(CPRIMEState *s1, FILE *fp, Section *sec, ObjW_Rel *rel,
                             const char *strtab, int *size)
 {
   ObjW(Sym) *sym;
-  const char *name;
+  const char *name, *reloc_name;
   int type, sym_index;
   addr_t addend;
+  uint64_t field_value;
+  int64_t expr_addend;
 
   type = Obj64_R_TYPE(rel->r_info);
   sym_index = Obj64_R_SYM(rel->r_info);
@@ -3438,28 +3480,101 @@ static int asm_output_reloc(CPRIMEState *s1, FILE *fp, Section *sec, ObjW_Rel *r
 
   switch (type)
   {
+#if defined(CPRIME_TARGET_PE) && defined(CPRIME_TARGET_X86_64)
   case R_X86_64_PC32:
   case R_X86_64_PLT32:
-    fprintf(fp, "  .long %s - . - 4", name);
-    addend += 4;
+    field_value = read32le(sec->data + rel->r_offset);
+    fprintf(fp, "  .long %s - .", name);
+    expr_addend = (int64_t)(int32_t)field_value + (int64_t)addend;
+    if (expr_addend > 0)
+      fprintf(fp, " + %lld", (long long)expr_addend);
+    else if (expr_addend < 0)
+      fprintf(fp, " - %lld", (long long)-expr_addend);
+    fprintf(fp, "\n");
     *size = 4;
-    break;
+    return 0;
+#ifdef R_X86_64_RELATIVE
+  case R_X86_64_RELATIVE:
+    field_value = read32le(sec->data + rel->r_offset);
+    fprintf(fp, "  .long %s", name);
+    expr_addend = (int64_t)(int32_t)field_value + (int64_t)addend
+                - (int64_t)asm_pe_imagebase(s1);
+    if (expr_addend > 0)
+      fprintf(fp, " + %lld", (long long)expr_addend);
+    else if (expr_addend < 0)
+      fprintf(fp, " - %lld", (long long)-expr_addend);
+    fprintf(fp, "\n");
+    *size = 4;
+    return 0;
+#endif
   case R_X86_64_32:
   case R_X86_64_32S:
+    field_value = read32le(sec->data + rel->r_offset);
     fprintf(fp, "  .long %s", name);
+    expr_addend = (int64_t)(int32_t)field_value + (int64_t)addend;
+    if (expr_addend > 0)
+      fprintf(fp, " + %lld", (long long)expr_addend);
+    else if (expr_addend < 0)
+      fprintf(fp, " - %lld", (long long)-expr_addend);
+    fprintf(fp, "\n");
     *size = 4;
-    break;
-#ifdef R_X86_64_RELATIVE
+    return 0;
+  case R_X86_64_64:
+    field_value = read64le(sec->data + rel->r_offset);
+    fprintf(fp, "  .quad %s", name);
+    expr_addend = (int64_t)field_value + (int64_t)addend;
+    if (expr_addend > 0)
+      fprintf(fp, " + %lld", (long long)expr_addend);
+    else if (expr_addend < 0)
+      fprintf(fp, " - %lld", (long long)-expr_addend);
+    fprintf(fp, "\n");
+    *size = 8;
+    return 0;
+#else
+  case R_X86_64_PC32:
+    reloc_name = "R_X86_64_PC32";
+    goto emit_reloc32;
+  case R_X86_64_PLT32:
+    reloc_name = "R_X86_64_PLT32";
+    goto emit_reloc32;
+#endif
+#if !(defined(CPRIME_TARGET_PE) && defined(CPRIME_TARGET_X86_64))
+  case R_X86_64_32:
+    reloc_name = "R_X86_64_32";
+    goto emit_reloc32;
+  case R_X86_64_32S:
+    reloc_name = "R_X86_64_32S";
+emit_reloc32:
+    fprintf(fp, "  .long 0x%08x\n", read32le(sec->data + rel->r_offset));
+    fprintf(fp, "  .reloc . - 4, %s, %s", reloc_name, name);
+    if (addend > 0)
+      fprintf(fp, ", %lld", (long long)addend);
+    else if (addend < 0)
+      fprintf(fp, ", -%lld", (long long)-addend);
+    fprintf(fp, "\n");
+    *size = 4;
+    return 0;
+#endif
+#if defined(R_X86_64_RELATIVE) && !(defined(CPRIME_TARGET_PE) && defined(CPRIME_TARGET_X86_64))
   case R_X86_64_RELATIVE:
     fprintf(fp, "  .long 0x%08x\n", read32le(sec->data + rel->r_offset));
     fprintf(fp, "  .reloc . - 4, R_X86_64_RELATIVE, %s", name);
     *size = 4;
-    break;
+    fprintf(fp, "\n");
+    return 0;
 #endif
+#if !(defined(CPRIME_TARGET_PE) && defined(CPRIME_TARGET_X86_64))
   case R_X86_64_64:
-    fprintf(fp, "  .quad %s", name);
+    fprintf(fp, "  .quad 0x%016llx\n", (unsigned long long)read64le(sec->data + rel->r_offset));
+    fprintf(fp, "  .reloc . - 8, R_X86_64_64, %s", name);
+    if (addend > 0)
+      fprintf(fp, ", %lld", (long long)addend);
+    else if (addend < 0)
+      fprintf(fp, ", -%lld", (long long)-addend);
+    fprintf(fp, "\n");
     *size = 8;
-    break;
+    return 0;
+#endif
   default:
     return cprime_error_noabort("unsupported relocation type %d in assembly output", type);
   }
@@ -3501,15 +3616,35 @@ static int cprime_output_asm(CPRIMEState *s1, const char *filename)
   if (!fp)
     return cprime_error_noabort("could not write '%s'", filename);
 
-  fprintf(fp, "# cpc -S assembly byte output\n");
-  fprintf(fp, "# This backend emits generated section bytes, not mnemonic disassembly.\n");
+  if (s1->output_asm_bytes)
+  {
+    fprintf(fp, "# cpc -Sbytes assembly byte output\n");
+    fprintf(fp, "# This backend emits generated section bytes, not mnemonic assembly.\n");
+  }
+  else
+    fprintf(fp, "# cpc -S assembly output\n");
+  asm_resolve_common_syms(s1);
   strtab = (const char *)symtab_section->link->data;
+
+  if (!s1->output_asm_bytes && s1->asm_text.data)
+  {
+    fputs(s1->asm_text.data, fp);
+#if defined(CPRIME_TARGET_PE) && defined(CPRIME_TARGET_X86_64)
+    if (s1->uw_offs)
+    {
+      fprintf(fp, "\n.text\n.balign 4\n.uw_base:\n");
+      fprintf(fp, "  .byte 0x01, 0x04, 0x02, 0x05, 0x04, 0x03, 0x01, 0x50\n");
+    }
+#endif
+  }
 
   for (n = 1; n < s1->nb_sections; ++n)
   {
     int at_line_start = 1;
     sec = s1->sections[n];
     if (!asm_section_is_exportable(sec))
+      continue;
+    if (!s1->output_asm_bytes && sec == text_section)
       continue;
 
     if (sec->sh_type == SHT_NOBITS && !sec->data_offset)
@@ -3527,17 +3662,7 @@ static int cprime_output_asm(CPRIMEState *s1, const char *filename)
 
       if (!at_line_start)
       {
-        ObjW(Sym) *sym;
-        int has_symbol = 0;
-        for_each_elem(symtab_section, 1, sym, ObjW(Sym))
-        {
-          if (sym->st_shndx == sec->sh_num && sym->st_value == i && sym->st_name)
-          {
-            has_symbol = 1;
-            break;
-          }
-        }
-        if (has_symbol)
+        if (asm_has_symbol_at(sec, i))
         {
           fprintf(fp, "\n");
           at_line_start = 1;
@@ -3565,7 +3690,9 @@ static int cprime_output_asm(CPRIMEState *s1, const char *filename)
       if (sec->sh_type == SHT_NOBITS)
       {
         unsigned long start = i;
-        while (i + 1 < sec->data_offset && !asm_find_reloc_at(sec, i + 1))
+        while (i + 1 < sec->data_offset
+               && !asm_find_reloc_at(sec, i + 1)
+               && !asm_has_symbol_at(sec, i + 1))
           ++i;
         fprintf(fp, "  .skip %lu\n", i - start + 1);
         at_line_start = 1;

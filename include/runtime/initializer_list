@@ -1,0 +1,44 @@
+#ifndef _INITIALIZER_LIST
+#define _INITIALIZER_LIST
+
+namespace std
+{
+  template<class T>
+  class initializer_list
+  {
+  public:
+    typedef T value_type;
+    typedef const T &reference;
+    typedef const T &const_reference;
+    typedef __SIZE_TYPE__ size_type;
+    typedef const T *iterator;
+    typedef const T *const_iterator;
+
+    iterator _array;
+    size_type _len;
+
+  private:
+    initializer_list(iterator array, size_type len) : _array(array), _len(len) {}
+
+  public:
+    initializer_list() : _array(0), _len(0) {}
+
+    size_type size() const { return _len; }
+    const_iterator begin() const { return _array; }
+    const_iterator end() const { return _array + _len; }
+  };
+
+  template<class T>
+  const T *begin(initializer_list<T> values)
+  {
+    return values.begin();
+  }
+
+  template<class T>
+  const T *end(initializer_list<T> values)
+  {
+    return values.end();
+  }
+}
+
+#endif

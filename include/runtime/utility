@@ -1,0 +1,19 @@
+#ifndef _UTILITY
+#define _UTILITY
+
+namespace std
+{
+  template<class T>
+  T&& forward(T &value)
+  {
+    return (T&&)value;
+  }
+
+  template<class T>
+  T&& move(T &value)
+  {
+    return (T&&)value;
+  }
+}
+
+#endif

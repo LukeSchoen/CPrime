@@ -1,0 +1,26 @@
+#ifndef _CMATH
+#define _CMATH
+
+#include <math.h>
+
+#undef isinf
+#undef isnan
+#undef isnormal
+#undef signbit
+
+namespace std
+{
+  template<typename T>
+  int isnan(T value) { return value != value; }
+
+  template<typename T>
+  int isinf(T value) { return value == (T)(1.0 / 0.0) || value == (T)(-1.0 / 0.0); }
+
+  template<typename T>
+  int isnormal(T value) { return !isnan<T>(value) && !isinf<T>(value) && value != (T)0; }
+
+  template<typename T>
+  int signbit(T value) { return value < (T)0; }
+}
+
+#endif

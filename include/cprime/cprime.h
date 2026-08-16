@@ -645,6 +645,7 @@ struct CPRIMEState {
     char *mapfile;
 
     int output_type;
+    unsigned char output_asm_bytes;
 
     int output_format;
 
@@ -668,6 +669,9 @@ struct CPRIMEState {
     CString cmdline_defs;
 
     CString cmdline_incl;
+
+    CString asm_text;
+    CString asm_func_body;
 
     void *error_opaque;
     void (*error_func)(void *opaque, const char *msg);
@@ -1447,6 +1451,8 @@ ST_FUNC void gen_opl(int op);
 #ifdef CPRIME_TARGET_PE
 ST_FUNC void gen_vla_result(int addr);
 #endif
+ST_FUNC void x86_64_asm_func_begin(Sym *sym);
+ST_FUNC void x86_64_asm_label(int label);
 ST_FUNC void gen_cvt_sxtw(void);
 ST_FUNC void gen_cvt_csti(int t);
 #endif

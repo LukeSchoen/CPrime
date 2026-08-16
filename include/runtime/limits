@@ -1,0 +1,19 @@
+#ifndef _LIMITS
+#define _LIMITS
+
+#include <limits.h>
+#include <float.h>
+
+namespace std
+{
+  template<typename T>
+  struct numeric_limits {
+    static T min() { return (T)0; }
+    static T max() { return (T)2147483647; }
+    static T lowest() { return (T)-2147483647; }
+    static T infinity() { return (T)(1.0 / 0.0); }
+    static T quiet_NaN() { return (T)__builtin_nan(""); }
+  };
+}
+
+#endif

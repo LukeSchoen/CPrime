@@ -18,3 +18,4 @@
 /third-party/tcc/win32/libtcc/
 /BuildProfile/clang-build/
 /build/scripts/windows/cpc.exe
+/BuildProfile/out/asm-compare-*.csv

@@ -1054,11 +1054,15 @@ set_st_type:
   case TOK_ASMDIR_reloc:
   {
     ExprValue e;
+    Sym *reloc_sym;
+    addr_t offset;
+    addr_t addend = 0;
     int reloc_type;
     const char *reloc_name;
 
     next();
     asm_expr(s1, &e);
+    offset = e.v;
     skip(',');
     reloc_name = get_tok_str(tok, NULL);
 #if defined(CPRIME_TARGET_ARM64)
@@ -1068,13 +1072,32 @@ set_st_type:
 #elif defined(CPRIME_TARGET_X86_64)
     if (!strcmp(reloc_name, "R_X86_64_RELATIVE"))
       reloc_type = R_X86_64_RELATIVE;
+    else if (!strcmp(reloc_name, "R_X86_64_PC32"))
+      reloc_type = R_X86_64_PC32;
+    else if (!strcmp(reloc_name, "R_X86_64_PLT32"))
+      reloc_type = R_X86_64_PLT32;
+    else if (!strcmp(reloc_name, "R_X86_64_32"))
+      reloc_type = R_X86_64_32;
+    else if (!strcmp(reloc_name, "R_X86_64_32S"))
+      reloc_type = R_X86_64_32S;
+    else if (!strcmp(reloc_name, "R_X86_64_64"))
+      reloc_type = R_X86_64_64;
     else
 #endif
       cprime_error("unimp: reloc '%s' unknown", get_tok_str(tok, NULL));
     next();
     skip(',');
-    greloca(cur_text_section, get_asm_sym(tok, NULL), e.v, reloc_type, 0);
+    reloc_sym = get_asm_sym(tok, NULL);
     next();
+    if (tok == ',')
+    {
+      next();
+      asm_expr(s1, &e);
+      if (e.sym)
+        expect("constant");
+      addend = e.v;
+    }
+    greloca(cur_text_section, reloc_sym, offset, reloc_type, addend);
   }
   break;
   default:

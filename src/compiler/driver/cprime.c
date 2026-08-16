@@ -15,6 +15,7 @@ static const char help[] =
   "General options:\n"
   "  -c           compile only - generate an object file\n"
   "  -S           compile only - generate assembly text\n"
+  "  -Sbytes      compile only - generate byte-exact assembly serialization\n"
   "  -o outfile   set output filename\n"
   "  -run         run compiled source [with custom stdin: -rstdin FILE]\n"
   "  -fflag       set or reset (with 'no-' prefix) 'flag' (see cpc -hh)\n"

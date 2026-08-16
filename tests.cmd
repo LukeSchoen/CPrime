@@ -16,6 +16,9 @@ if errorlevel 1 goto finish
 call "%SCRIPT_DIR%Tests\test_AsmOutput.cmd"
 if errorlevel 1 goto finish
 
+call "%SCRIPT_DIR%Tests\test_ReadableAsmOutput.cmd"
+if errorlevel 1 goto finish
+
 cmd /c "%SCRIPT_DIR%Tests\test__all_new_features.cmd"
 set "EXIT_CODE=%ERRORLEVEL%"
 

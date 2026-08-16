@@ -27,4 +27,7 @@ if errorlevel 1 exit /b %ERRORLEVEL%
 call "%SCRIPT_DIR%test_Templates.cmd" %*
 if errorlevel 1 exit /b %ERRORLEVEL%
 
+call "%SCRIPT_DIR%run.cmd" -Suite "features/Namespaces" %*
+if errorlevel 1 exit /b %ERRORLEVEL%
+
 exit /b 0

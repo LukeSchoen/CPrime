@@ -1,4 +1,4 @@
-// EXPECT_COMPILE_FAIL: 1
+// EXPECT_EXIT: 0
 
 template<class T>
 T id(T v)
@@ -8,5 +8,5 @@ T id(T v)
 
 int main(void)
 {
-  return id(int)(1);
+  return id(int)(0);
 }

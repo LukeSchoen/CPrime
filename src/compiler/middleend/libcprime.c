@@ -76,7 +76,7 @@ static inline char *config_cprimedir_w32(char *path)
 #define CONFIG_CPRIMEDIR config_cprimedir_w32(alloca(MAX_PATH))
 #endif
 
-#define CPRIME_PORTABLE_VERSION "1.0"
+#define CPRIME_PORTABLE_VERSION "1.4"
 #define CPRIME_PAYLOAD_MAGIC "CPCPAY11"
 #define CPRIME_PAYLOAD_HEADER "CPRIMEPKG10"
 
@@ -1233,6 +1233,8 @@ LIBCPRIMEAPI CPRIMEState *cprime_new(void)
   s->enable_new_dtags = 1;
 #endif
   s->ppfp = stdout;
+  cstr_new(&s->asm_text);
+  cstr_new(&s->asm_func_body);
   // Might Be Used In Error() Before Preprocess_Start()
   s->include_stack_ptr = s->include_stack;
 
@@ -1274,6 +1276,8 @@ LIBCPRIMEAPI void cprime_delete(CPRIMEState *s1)
   cprime_free(s1->mapfile);
   cprime_free(s1->outfile);
   cprime_free(s1->deps_outfile);
+  cstr_free(&s1->asm_text);
+  cstr_free(&s1->asm_func_body);
 #if defined CPRIME_TARGET_MACHO
   cprime_free(s1->install_name);
 #endif
@@ -1916,6 +1920,7 @@ enum
   CPRIME_OPTION_b,
   CPRIME_OPTION_g,
   CPRIME_OPTION_c,
+  CPRIME_OPTION_Sbytes,
   CPRIME_OPTION_S,
   CPRIME_OPTION_dumpmachine,
   CPRIME_OPTION_dumpversion,
@@ -2024,6 +2029,7 @@ static const CPRIMEOption cprime_options[] =
   { "undefined", CPRIME_OPTION_undefined, CPRIME_OPTION_HAS_ARG },
 #endif
   { "c", CPRIME_OPTION_c, 0 },
+  { "Sbytes", CPRIME_OPTION_Sbytes, 0 },
   { "S", CPRIME_OPTION_S, 0 },
   { "dumpmachine", CPRIME_OPTION_dumpmachine, 0},
   { "dumpversion", CPRIME_OPTION_dumpversion, 0},
@@ -2224,7 +2230,7 @@ static void insert_args(CPRIMEState *s1, char ***pargv, int *pargc, int optind, 
 
 static void args_parser_add_file(CPRIMEState *s, const char *filename, int filetype)
 {
-  struct filespec *f = cprime_malloc(sizeof *f + strlen(filename));
+  struct filespec *f = cprime_malloc(sizeof *f + strlen(filename) + 1);
   f->type = filetype;
   strcpy(f->name, filename);
   dynarray_add(&s->files, &s->nb_files, f);
@@ -2377,11 +2383,15 @@ g_redo:
         goto g_redo;
       }
       break;
-    case CPRIME_OPTION_c:
-      x = CPRIME_OUTPUT_OBJ;
-      goto set_output_type;
-    case CPRIME_OPTION_S:
-      x = CPRIME_OUTPUT_ASM;
+  case CPRIME_OPTION_c:
+    x = CPRIME_OUTPUT_OBJ;
+    goto set_output_type;
+  case CPRIME_OPTION_Sbytes:
+    s->output_asm_bytes = 1;
+    x = CPRIME_OUTPUT_ASM;
+    goto set_output_type;
+  case CPRIME_OPTION_S:
+    x = CPRIME_OUTPUT_ASM;
 set_output_type:
       if (s->output_type)
         cprime_warning("-%s: overriding compiler action already specified", popt->name);

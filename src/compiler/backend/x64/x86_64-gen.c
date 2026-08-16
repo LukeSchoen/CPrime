@@ -135,6 +135,111 @@ ST_DATA const int reg_classes[NB_REGS] =
   /* st0 */ RC_ST0
 };
 
+static const char *const x86_64_reg64_names[16] =
+{
+  "rax", "rcx", "rdx", "rbx", "rsp", "rbp", "rsi", "rdi",
+  "r8", "r9", "r10", "r11", "r12", "r13", "r14", "r15"
+};
+
+static const char *const x86_64_reg32_names[16] =
+{
+  "eax", "ecx", "edx", "ebx", "esp", "ebp", "esi", "edi",
+  "r8d", "r9d", "r10d", "r11d", "r12d", "r13d", "r14d", "r15d"
+};
+
+static int x86_64_asm_enabled(void)
+{
+  return cprime_state
+         && cprime_state->output_type == CPRIME_OUTPUT_ASM
+         && !cprime_state->output_asm_bytes;
+}
+
+static void x86_64_asm_vprintf(CString *cs, const char *fmt, va_list ap)
+{
+  cstr_printf(cs, "  ");
+  cstr_vprintf(cs, fmt, ap);
+  cstr_printf(cs, "\n");
+}
+
+static void x86_64_asm_body(const char *fmt, ...)
+{
+  va_list ap;
+  if (!x86_64_asm_enabled())
+    return;
+  va_start(ap, fmt);
+  x86_64_asm_vprintf(&cprime_state->asm_func_body, fmt, ap);
+  va_end(ap);
+}
+
+static void x86_64_asm_text(const char *fmt, ...)
+{
+  va_list ap;
+  if (!x86_64_asm_enabled())
+    return;
+  va_start(ap, fmt);
+  cstr_vprintf(&cprime_state->asm_text, fmt, ap);
+  va_end(ap);
+}
+
+static const char *x86_64_reg_name(int reg, int is64)
+{
+  reg &= 15;
+  return is64 ? x86_64_reg64_names[reg] : x86_64_reg32_names[reg];
+}
+
+ST_FUNC void x86_64_asm_func_begin(Sym *sym)
+{
+  const char *name;
+  ObjSym *esym;
+
+  if (!x86_64_asm_enabled())
+    return;
+  name = get_tok_str(sym->v, NULL);
+  esym = elfsym(sym);
+  cstr_reset(&cprime_state->asm_func_body);
+  x86_64_asm_text("\n.text\n.balign 8\n");
+  if (esym && Obj64_ST_BIND(esym->st_info) == STB_GLOBAL)
+    x86_64_asm_text(".globl %s\n", name);
+  x86_64_asm_text(".type %s,@function\n%s:\n", name, name);
+}
+
+ST_FUNC void x86_64_asm_label(int label)
+{
+  if (!x86_64_asm_enabled())
+    return;
+  cstr_printf(&cprime_state->asm_func_body, ".Lpc_%d:\n", label);
+}
+
+static const char *x86_64_asm_jcc_name(int opcode)
+{
+  switch (opcode & 15)
+  {
+  case 0x2: return "jb";
+  case 0x3: return "jae";
+  case 0x4: return "je";
+  case 0x5: return "jne";
+  case 0x6: return "jbe";
+  case 0x7: return "ja";
+  case 0xc: return "jl";
+  case 0xd: return "jge";
+  case 0xe: return "jle";
+  case 0xf: return "jg";
+  default: return "jne";
+  }
+}
+
+static void x86_64_asm_func_finish(int stack_size)
+{
+  if (!x86_64_asm_enabled())
+    return;
+  x86_64_asm_text("  pushq %%rbp\n");
+  x86_64_asm_text("  movq %%rsp, %%rbp\n");
+  x86_64_asm_text("  subq $%d, %%rsp\n", stack_size);
+  if (cprime_state->asm_func_body.data)
+    x86_64_asm_text("%s", cprime_state->asm_func_body.data);
+  cstr_reset(&cprime_state->asm_func_body);
+}
+
 static unsigned long func_sub_sp_offset;
 static int func_ret_sub;
 
@@ -480,11 +585,17 @@ void load(int r, SValue *sv)
       b = 0x8b;
     }
     if (ll)
+    {
       gen_modrm64(b, r, fr, sv->sym, fc);
+      if (x86_64_asm_enabled() && v == VT_LOCAL && b == 0x8b)
+        x86_64_asm_body("movq %d(%%rbp), %%%s", fc, x86_64_reg_name(r, 1));
+    }
     else
     {
       orex(ll, fr, r, b);
       gen_modrm(r, fr, sv->sym, fc);
+      if (x86_64_asm_enabled() && v == VT_LOCAL && b == 0x8b)
+        x86_64_asm_body("movl %d(%%rbp), %%%s", fc, x86_64_reg_name(r, 0));
     }
   }
   else
@@ -523,17 +634,20 @@ void load(int r, SValue *sv)
         {
           orex(0, r, 0, 0xb8 + REG_VALUE(r)); // Mov $Xx, R
           gen_le32(sv->c.i);
+          x86_64_asm_body("movl $%d, %%%s", (int)sv->c.i, x86_64_reg_name(r, 0));
         }
         else
         {
           orex(0, r, r, 0x31); // Xor R, R
           o(0xc0 + REG_VALUE(r) * 9);
+          x86_64_asm_body("xorl %%%s, %%%s", x86_64_reg_name(r, 0), x86_64_reg_name(r, 0));
         }
       }
       else
       {
         orex(0, r, 0, 0xb8 + REG_VALUE(r)); // Mov $Xx, R
         gen_le32(fc);
+        x86_64_asm_body("movl $%d, %%%s", fc, x86_64_reg_name(r, 0));
       }
     }
     else if (v == VT_LOCAL)
@@ -612,6 +726,10 @@ void load(int r, SValue *sv)
       {
         orex(is64_type(ft), r, v, 0x89);
         o(0xc0 + REG_VALUE(r) + REG_VALUE(v) * 8); // Mov V, R
+        x86_64_asm_body("mov%s %%%s, %%%s",
+                        is64_type(ft) ? "q" : "l",
+                        x86_64_reg_name(v, is64_type(ft)),
+                        x86_64_reg_name(r, is64_type(ft)));
       }
     }
   }
@@ -652,6 +770,8 @@ int store_immediate(SValue *v, uint64_t value)
     orex(0, v->r, 0, 0xc7);
     gen_modrm(0, v->r, v->sym, fc);
     gen_le32(value);
+    if (x86_64_asm_enabled() && fr == VT_LOCAL)
+      x86_64_asm_body("movl $%d, %d(%%rbp)", (int)value, fc);
     return 1;
   }
   if (is64_type(bt) && value == (int)value)
@@ -745,10 +865,17 @@ void store(int r, SValue *v)
   else
   {
     if (fr == VT_CONST || fr == VT_LOCAL || (v->r & VT_LVAL))
+    {
       gen_modrm(r, v->r, v->sym, fc);
+      if (x86_64_asm_enabled() && fr == VT_LOCAL)
+        x86_64_asm_body("movl %%%s, %d(%%rbp)",
+                        x86_64_reg_name(r, 0), fc);
+    }
     else if (fr != r)
     {
       o(0xc0 + fr + r * 8); // Mov R, Fr
+      x86_64_asm_body("movl %%%s, %%%s",
+                      x86_64_reg_name(r, 0), x86_64_reg_name(fr, 0));
     }
   }
 }
@@ -763,6 +890,7 @@ static void gcall_or_jmp(int is_jmp)
     // Constant Symbolic Case -> Simple Relocation
     greloca(cur_text_section, vtop->sym, ind + 1, R_X86_64_PLT32, (int)(vtop->c.i - 4));
     oad(0xe8 + is_jmp, 0); // Call/Jmp Im
+    x86_64_asm_body("%s %s", is_jmp ? "jmp" : "call", get_tok_str(vtop->sym->v, NULL));
   }
   else
   {
@@ -1068,6 +1196,8 @@ void gfunc_call(int nb_args)
           d = arg_prepare_reg(arg);
           orex(1, d, r, 0x89); // Mov
           o(0xc0 + REG_VALUE(r) * 8 + REG_VALUE(d));
+          x86_64_asm_body("movq %%%s, %%%s",
+                          x86_64_reg_name(r, 1), x86_64_reg_name(d, 1));
         }
       }
     }
@@ -1078,9 +1208,11 @@ void gfunc_call(int nb_args)
   if (nb_args > 0)
   {
     o(0xd1894c); // Mov %R10, %Rcx
+    x86_64_asm_body("movq %%r10, %%rcx");
     if (nb_args > 1)
     {
       o(0xda894c); // Mov %R11, %Rdx
+      x86_64_asm_body("movq %%r11, %%rdx");
     }
   }
 
@@ -1126,6 +1258,8 @@ void gfunc_prolog(Sym *func_sym)
   if (!using_regs(size))
   {
     gen_modrm64(0x89, arg_regs[reg_param_index], VT_LOCAL, NULL, addr);
+    x86_64_asm_body("movq %%%s, %d(%%rbp)",
+                    x86_64_reg_name(arg_regs[reg_param_index], 1), addr);
     func_vc = addr;
     reg_param_index++;
     addr += 8;
@@ -1140,7 +1274,11 @@ void gfunc_prolog(Sym *func_sym)
     if (!using_regs(size))
     {
       if (reg_param_index < REGN)
+      {
         gen_modrm64(0x89, arg_regs[reg_param_index], VT_LOCAL, NULL, addr);
+        x86_64_asm_body("movq %%%s, %d(%%rbp)",
+                        x86_64_reg_name(arg_regs[reg_param_index], 1), addr);
+      }
       gfunc_set_param(sym, addr, 1);
     }
     else
@@ -1156,7 +1294,11 @@ void gfunc_prolog(Sym *func_sym)
           gen_modrm(reg_param_index, VT_LOCAL, NULL, addr);
         }
         else
+        {
           gen_modrm64(0x89, arg_regs[reg_param_index], VT_LOCAL, NULL, addr);
+          x86_64_asm_body("movq %%%s, %d(%%rbp)",
+                          x86_64_reg_name(arg_regs[reg_param_index], 1), addr);
+        }
       }
       gfunc_set_param(sym, addr, 0);
     }
@@ -1169,6 +1311,8 @@ void gfunc_prolog(Sym *func_sym)
     if (func_var)
     {
       gen_modrm64(0x89, arg_regs[reg_param_index], VT_LOCAL, NULL, addr);
+      x86_64_asm_body("movq %%%s, %d(%%rbp)",
+                      x86_64_reg_name(arg_regs[reg_param_index], 1), addr);
       addr += 8;
     }
     reg_param_index++;
@@ -1194,21 +1338,25 @@ void gfunc_epilog(void)
 #endif
 
   o(0xc9); // Leave
+  x86_64_asm_body("leave");
   if (func_ret_sub == 0)
   {
     o(0xc3); // Ret
+    x86_64_asm_body("ret");
   }
   else
   {
     o(0xc2); // Ret N
     g(func_ret_sub);
     g(func_ret_sub >> 8);
+    x86_64_asm_body("ret $%d", func_ret_sub);
   }
 
   v = -loc;
   start = func_sub_sp_offset - FUNC_PROLOG_SIZE;
   cur_text_section->data_offset = ind;
   pe_add_unwind_data(start, ind, v);
+  x86_64_asm_func_finish(v);
 
   ind = start;
   if (v >= 4096)
@@ -1893,7 +2041,9 @@ ST_FUNC void gen_fill_nops(int bytes)
 // Generate A Jump To A Label
 int gjmp(int t)
 {
-  return gjmp2(0xe9, t);
+  t = gjmp2(0xe9, t);
+  x86_64_asm_body("jmp .Lpc_%d", t);
+  return t;
 }
 
 // Generate A Jump To A Fixed Address
@@ -1948,6 +2098,7 @@ ST_FUNC int gjmp_cond(int op, int t)
   }
   g(0x0f);
   t = gjmp2(op - 16, t);
+  x86_64_asm_body("%s .Lpc_%d", x86_64_asm_jcc_name(op - 16), t);
   return t;
 }
 
@@ -1980,11 +2131,29 @@ gen_op8:
         orex(ll, r, 0, 0x83);
         o(0xc0 | (opc << 3) | REG_VALUE(r));
         g(c);
+        if (op == '+')
+          x86_64_asm_body("add%s $%d, %%%s",
+                          ll ? "q" : "l", c, x86_64_reg_name(r, ll));
+        else if (op == '-')
+          x86_64_asm_body("sub%s $%d, %%%s",
+                          ll ? "q" : "l", c, x86_64_reg_name(r, ll));
+        else if (op >= TOK_ULT && op <= TOK_GT)
+          x86_64_asm_body("cmp%s $%d, %%%s",
+                          ll ? "q" : "l", c, x86_64_reg_name(r, ll));
       }
       else
       {
         orex(ll, r, 0, 0x81);
         oad(0xc0 | (opc << 3) | REG_VALUE(r), c);
+        if (op == '+')
+          x86_64_asm_body("add%s $%d, %%%s",
+                          ll ? "q" : "l", c, x86_64_reg_name(r, ll));
+        else if (op == '-')
+          x86_64_asm_body("sub%s $%d, %%%s",
+                          ll ? "q" : "l", c, x86_64_reg_name(r, ll));
+        else if (op >= TOK_ULT && op <= TOK_GT)
+          x86_64_asm_body("cmp%s $%d, %%%s",
+                          ll ? "q" : "l", c, x86_64_reg_name(r, ll));
       }
     }
     else
@@ -1994,6 +2163,21 @@ gen_op8:
       fr = vtop[0].r;
       orex(ll, r, fr, (opc << 3) | 0x01);
       o(0xc0 + REG_VALUE(r) + REG_VALUE(fr) * 8);
+      if (op == '+')
+        x86_64_asm_body("add%s %%%s, %%%s",
+                        ll ? "q" : "l",
+                        x86_64_reg_name(fr, ll),
+                        x86_64_reg_name(r, ll));
+      else if (op == '-')
+        x86_64_asm_body("sub%s %%%s, %%%s",
+                        ll ? "q" : "l",
+                        x86_64_reg_name(fr, ll),
+                        x86_64_reg_name(r, ll));
+      else if (op >= TOK_ULT && op <= TOK_GT)
+        x86_64_asm_body("cmp%s %%%s, %%%s",
+                        ll ? "q" : "l",
+                        x86_64_reg_name(fr, ll),
+                        x86_64_reg_name(r, ll));
     }
     vtop--;
     if (op >= TOK_ULT && op <= TOK_GT)

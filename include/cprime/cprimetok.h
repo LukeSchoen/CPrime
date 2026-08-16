@@ -371,5 +371,5 @@
 
 #include "i386-tok.h"
 
-
+     DEF(TOK_NAMESPACE, "namespace")
 

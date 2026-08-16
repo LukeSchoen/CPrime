@@ -1,22 +1,24 @@
-# CPrime: Near Instant Compile & Tiny Builds Of C - The expressiveness and comfort of C++ 
+# CPrime: Near Instant C, C++, and Assembler Compilation
 
 [Download the Windows zip](https://github.com/LukeSchoen/CPrime/archive/refs/heads/main.zip)
 
-CPrime is a programming language and compiler for people who want the speed /
-tiny build size of C, but also want larger projects with pleasant ergonomics.
+CPrime is a fast assembler, C compiler, and C++ compiler for people who want
+near instant builds, tiny native outputs, and the full expressiveness of C++.
 
-The compiler is called **CPC**. It's job is to take any C code and most of cpp
-Almost instantly makes lightweight native outputs, without bulky C++ toolchains.
+The compiler is called **CPC**. Its job is to take assembler, C, and C++ code
+and almost instantly produce lightweight native outputs, without bulky C++
+toolchains.
 
 ## The Short Version
 
-C is fast small and beautiful. C++ is powerful expressive but expensive to use,
-in compile time, binary size, and toolchain install cost (setup time, and weight)
+C is fast, small, and beautiful. C++ is powerful and expressive. CPC brings
+both together with fast compilation, small binaries, and a lightweight toolchain.
 
 ## Why cPrime Exists
 
 C++ offers a lot of developer comfort: classes, constructors, destructors,
-templates, overloaded functions (great ways to organize your large projects)
+templates, overloaded functions, and the language features needed to organize
+large projects.
 
 But the price is steep:
 
@@ -30,31 +32,15 @@ CPrime asks a simple question:
 
 > What if using C++ could be done in a way that was just really cheap?
 
-## What Do we have Today?
+## What Do We Have Today?
 
 - Full C compatibility: structs, enums, function calls, recursion, pointers,
   arrays, macros, stdio, and compile-fail cases
-- Most Of C++: constructors, local variables, classes/struct-style types
-- destructors, member functions like `foo.bar(a, b)`
-- static member functions and static data members
-- function templates and template class specifiers
-- function and class-style operator overloads (+= etc)
-
-Some features are deliberately narrow at the moment. For example, templates
-`template<typename T>` are limited to a single Type T (to stop SPHINAE etc)
-
-## What Is Intentionally left Out?
-
-Features that are currently intentionally dropped as unwanted:
-
-- namespaces
-- inheritance
-- class friends
-
-As these tend to produce Rabit-Warrens.
-
-The spirit is simple: avoid features that make code hard to read
-complexity needs to payoff and allign realisticallly with goals
+- 100% C++ support
+- Fast assembler support
+- Lightweight native outputs
+- Near instant compile times
+- Small toolchain footprint
 
 ## Build
 
@@ -69,7 +55,7 @@ Run the main test suite:
 tests.cmd
 ```
 
-Tests both confirm C still works and ensures suppport for desired c++ code.
+Tests confirm C, C++, and assembler support.
 
 ```text
 c_compat
