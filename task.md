@@ -285,3 +285,52 @@ known. A broad defer attempt fixed this probe path but regressed
 `test_template_out_of_class_member_template_definition.cpp`, so it was reverted.
 Next work should add lazy member-template constructor replay for actual calls,
 then defer eager replay of member-template lifecycle bodies safely.
+
+## 2026-08-17 Later Wave Notes
+
+Fixed and verified in focused tests:
+
+```bat
+.\cpc.exe -run Tests\features\Templates\pass\test_initializer_list_enum_type.cpp
+.\cpc.exe -run Tests\features\Templates\pass\test_initializer_list_enum_braced_temporary.cpp
+.\cpc.exe -run Tests\features\Templates\pass\test_template_initializer_list_enum_member_signature.cpp
+.\cpc.exe -run Tests\features\Templates\pass\test_template_initializer_list_enum_constructor_decl.cpp
+.\cpc.exe -run Tests\features\Templates\pass\test_initializer_list_enum_repeated_materialization.cpp
+.\cpc.exe -run Tests\features\Templates\pass\test_initializer_list_typedef_char_repeated_materialization.cpp
+.\cpc.exe -run Tests\features\Templates\pass\test_initializer_list_float_repeated_materialization.cpp
+.\cpc.exe -run Tests\features\Classes\pass\test_deleted_default_constructor_declaration.cpp
+.\cpc.exe -run Tests\features\Classes\pass\test_functional_constructor_two_arguments.cpp
+.\cpc.exe -run Tests\features\Classes\pass\test_typedef_functional_constructor_two_arguments.cpp
+.\cpc.exe -run Tests\features\Templates\pass\test_template_class_repeated_member_param_after_typedef_instantiation.cpp
+.\cpc.exe -run Tests\features\Templates\pass\test_member_template_binary_operator_same_type_fallback.cpp
+```
+
+Notes:
+
+- `std::initializer_list<T>` replay now preserves enum and signed-char identity
+  well enough to avoid repeated `begin()` materialization conflicts.
+- Namespace-qualified nested class-template types are materialized while
+  generating class specializations, which avoids delayed `initializer_list<T>`
+  failures in constructor signatures.
+- Deleted lifecycle declarations such as `Ctor() = delete;` are accepted.
+- Eager class-template member replay no longer compiles default constructors
+  just because a specialization appears in a reference parameter declaration.
+- Pending template member bodies whose owning specialization is still
+  incomplete stay queued instead of compiling with missing fields.
+- Typedefs to class types now route functional construction like `v2I(96, 48)`
+  through constructor parsing instead of scalar functional-cast parsing.
+
+Current direct `Racer.cpp` compile moved through the headers and now reaches the
+function body:
+
+```text
+C:/Luke/Src/OT/cl/Projects/Model Viewer/src/Private/Racer.cpp:17:
+error: cannot convert 'struct clVector2__i32' to 'int'
+```
+
+The current reduced shape is `auto value = lhs - rhs;` where `lhs` and `rhs`
+are same-type class-template instances and the only declared operator is a
+skipped member-template `operator-`. CPC now carries the class type through the
+operator fallback, but local `auto` declarations still default to `int`, causing
+the conversion failure. Next work: implement local `auto` initializer type
+inference for struct/class expressions, then rerun direct `Racer.cpp -c`.

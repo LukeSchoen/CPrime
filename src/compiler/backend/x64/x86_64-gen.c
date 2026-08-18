@@ -538,6 +538,7 @@ void load(int r, SValue *sv)
         break;
       }
     }
+    ft &= ~VT_WCHAR_T;
     if ((ft & VT_BTYPE) == VT_FLOAT)
     {
       b = 0x6e0f66;
