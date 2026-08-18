@@ -1,0 +1,74 @@
+#ifndef _ALGORITHM
+#define _ALGORITHM
+
+namespace std
+{
+  template<class T>
+  void iter_swap(T *left, T *right)
+  {
+    T value = *left;
+    *left = *right;
+    *right = value;
+  }
+
+  template<class T>
+  void sort(T *begin, T *end)
+  {
+    for (T *current = begin + 1; current < end; ++current)
+    {
+      T *position = current;
+      while (position > begin && *position < *(position - 1))
+      {
+        T value = *position;
+        *position = *(position - 1);
+        *(position - 1) = value;
+        --position;
+      }
+    }
+  }
+
+  template<class T>
+  T *lower_bound(T *begin, T *end, const T &value)
+  {
+    while (begin < end)
+    {
+      T *middle = begin + (end - begin) / 2;
+      if (*middle < value) begin = middle + 1;
+      else end = middle;
+    }
+    return begin;
+  }
+
+  template<class T>
+  T *upper_bound(T *begin, T *end, const T &value)
+  {
+    while (begin < end)
+    {
+      T *middle = begin + (end - begin) / 2;
+      if (!(value < *middle)) begin = middle + 1;
+      else end = middle;
+    }
+    return begin;
+  }
+
+  template<class T>
+  void replace(T *begin, T *end, const T &old_value, const T &new_value)
+  {
+    for (; begin != end; ++begin)
+      if (*begin == old_value) *begin = new_value;
+  }
+
+  template<class T>
+  void shuffle(T *begin, T *end)
+  {
+    for (T *current = end; current - begin > 1; --current)
+    {
+      T *other = begin + (rand() % (current - begin));
+      T value = *(current - 1);
+      *(current - 1) = *other;
+      *other = value;
+    }
+  }
+}
+
+#endif

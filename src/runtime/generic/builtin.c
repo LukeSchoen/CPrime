@@ -7,6 +7,23 @@
 #define	BUILTINN(x)	"__cprime_builtin_" # x
 #endif
 
+/* Microsoft-compatible byte string intrinsics are declared by the Windows
+   headers and used by CommonLibrary's memory wrappers.  They are ordinary
+   runtime functions on targets where the frontend does not inline them. */
+void __movsb(unsigned char *dst, const unsigned char *src,
+             unsigned long long count)
+{
+  while (count--)
+    *dst++ = *src++;
+}
+
+void __stosb(unsigned char *dst, unsigned char value,
+             unsigned long long count)
+{
+  while (count--)
+    *dst++ = value;
+}
+
 /* ---------------------------------------------- */
 /* This file implements:
  * __builtin_ffs

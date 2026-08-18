@@ -174,6 +174,35 @@ if errorlevel 1 (
 )
 
 echo PASS external lifecycle multi-source
+
+set "DEFAULT_CTOR_SRC=%SRC_DIR%\external_default_constructor_args.cpp"
+set "DEFAULT_CTOR_MAIN_SRC=%SRC_DIR%\external_default_constructor_args_main.cpp"
+
+"%COMPILER%" -c "%DEFAULT_CTOR_SRC%" -o "%WORK_DIR%\default_ctor.o" >"%WORK_DIR%\compile_default_ctor.out" 2>&1
+if errorlevel 1 (
+  echo FAIL default-argument constructor object compile.
+  type "%WORK_DIR%\compile_default_ctor.out"
+  goto fail
+)
+"%COMPILER%" -c "%DEFAULT_CTOR_MAIN_SRC%" -o "%WORK_DIR%\default_ctor_main.o" >"%WORK_DIR%\compile_default_ctor_main.out" 2>&1
+if errorlevel 1 (
+  echo FAIL default-argument constructor main compile.
+  type "%WORK_DIR%\compile_default_ctor_main.out"
+  goto fail
+)
+"%COMPILER%" "%WORK_DIR%\default_ctor.o" "%WORK_DIR%\default_ctor_main.o" -o "%WORK_DIR%\default_ctor.exe" >"%WORK_DIR%\link_default_ctor.out" 2>&1
+if errorlevel 1 (
+  echo FAIL default-argument constructor object link.
+  type "%WORK_DIR%\link_default_ctor.out"
+  goto fail
+)
+"%WORK_DIR%\default_ctor.exe"
+if errorlevel 1 (
+  echo FAIL default-argument constructor executable returned %ERRORLEVEL%.
+  goto fail
+)
+
+echo PASS default-argument constructor multi-source
 rmdir /s /q "%WORK_DIR%" >nul 2>nul
 exit /b 0
 

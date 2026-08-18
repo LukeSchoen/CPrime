@@ -1897,7 +1897,9 @@ pack_set:
   }
   else if (tok == TOK_comment)
   {
-    char *p; int t;
+    char *p;
+    char pragma_arg[1024];
+    int t;
     next();
     skip('(');
     t = tok;
@@ -1905,8 +1907,13 @@ pack_set:
     skip(',');
     if (tok != TOK_STR)
       goto pragma_err;
-    p = cprime_strdup(tokc.str.data);
-    next();
+    pragma_arg[0] = '\0';
+    while (tok == TOK_STR)
+    {
+      pstrcat(pragma_arg, sizeof(pragma_arg), tokc.str.data);
+      next();
+    }
+    p = cprime_strdup(pragma_arg);
     if (tok != ')')
       goto pragma_err;
     if (t == TOK_lib)

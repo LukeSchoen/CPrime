@@ -23,6 +23,14 @@ namespace std
   {
     return (T&&)value;
   }
+
+  template<class T>
+  void swap(T &lhs, T &rhs)
+  {
+    T temporary = lhs;
+    lhs = rhs;
+    rhs = temporary;
+  }
 }
 
 #endif

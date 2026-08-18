@@ -17,6 +17,49 @@ typedef float GLclampf;
 typedef double GLdouble;
 typedef double GLclampd;
 
+#ifndef GL_REPEAT
+#define GL_REPEAT 0x2901
+#endif
+#ifndef GL_NEAREST_MIPMAP_NEAREST
+#define GL_NEAREST_MIPMAP_NEAREST 0x2700
+#define GL_LINEAR_MIPMAP_NEAREST 0x2701
+#define GL_NEAREST_MIPMAP_LINEAR 0x2702
+#define GL_LINEAR_MIPMAP_LINEAR 0x2703
+#endif
+#ifndef GL_DEPTH_COMPONENT
+#define GL_DEPTH_COMPONENT 0x1902
+#endif
+#ifndef GL_TEXTURE_1D
+#define GL_TEXTURE_1D 0x0DE0
+#endif
+#ifndef GL_NEAREST
+#define GL_NEAREST 0x2600
+#endif
+#ifndef GL_RGBA
+#define GL_RGBA 0x1908
+#endif
+#ifndef GL_UNSIGNED_BYTE
+#define GL_UNSIGNED_BYTE 0x1401
+#endif
+#ifndef GL_TEXTURE_2D
+#define GL_TEXTURE_2D 0x0DE1
+#endif
+#ifndef GL_LESS
+#define GL_LESS 0x0201
+#endif
+#ifndef GL_SRC_ALPHA
+#define GL_SRC_ALPHA 0x0302
+#endif
+#ifndef GL_ONE_MINUS_SRC_ALPHA
+#define GL_ONE_MINUS_SRC_ALPHA 0x0303
+#endif
+#ifndef GL_VENDOR
+#define GL_VENDOR 0x1F00
+#endif
+#ifndef GL_RENDERER
+#define GL_RENDERER 0x1F01
+#endif
+
 #ifndef GL_FALSE
 #define GL_FALSE 0
 #endif
@@ -75,5 +118,16 @@ typedef double GLclampd;
 #define GL_DEPTH_ATTACHMENT 0x8D00
 #define GL_DEPTH_COMPONENT16 0x81A5
 #define GL_RGB32F 0x8815
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+void glEnable(GLenum cap);
+void glDisable(GLenum cap);
+void glBlendFunc(GLenum sfactor, GLenum dfactor);
+void glDepthMask(GLboolean flag);
+#ifdef __cplusplus
+}
+#endif
 
 #endif

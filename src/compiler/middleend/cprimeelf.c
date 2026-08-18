@@ -764,6 +764,29 @@ ST_FUNC int set_elf_sym(Section *s, addr_t value, unsigned long size,
       {
         // Data Symbol Keeps Precedence Over Common/Bss
       }
+      else if ((strstr(name, "_constructor") || strstr(name, "_destructor"))
+               && strstr(name, "__"))
+      {
+        /* Lifecycle functions instantiated for a mangled template class are
+           ODR entities. Object formats without COMDAT metadata retain the
+           first instantiation, matching weak-template semantics. */
+      }
+      else if (size > 0 && size == esym->st_size
+               && shndx == esym->st_shndx
+               && shndx < s1->nb_sections
+               && s1->sections[shndx]
+               && value <= s1->sections[shndx]->data_offset
+               && esym->st_value <= s1->sections[shndx]->data_offset
+               && size <= s1->sections[shndx]->data_offset - value
+               && size <= s1->sections[shndx]->data_offset - esym->st_value
+               && !memcmp(s1->sections[shndx]->data + value,
+                          s1->sections[shndx]->data + esym->st_value,
+                          size))
+      {
+        /* Header-defined inline/template entities may arrive from separate
+           objects without COMDAT metadata. Coalesce only byte-identical
+           definitions; differing definitions remain a hard link error. */
+      }
       else if (s->sh_flags & SHF_DYNSYM)
       {
         // we accept that two DLL define the same symbol

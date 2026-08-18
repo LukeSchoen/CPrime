@@ -19,3 +19,13 @@
 /BuildProfile/clang-build/
 /build/scripts/windows/cpc.exe
 /BuildProfile/out/asm-compare-*.csv
+
+# Local compiler debugging artifacts
+/tmp_*
+/Tests/tmp_*
+/build/*.log
+/build/probe_*
+/build/reduced_*
+/build_trace.log
+/build.log
+/temp_trace.log

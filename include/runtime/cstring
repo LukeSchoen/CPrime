@@ -1,0 +1,19 @@
+#ifndef _CSTRING
+#define _CSTRING
+
+#include <string.h>
+
+namespace std
+{
+  inline int memcmp(const void *lhs, const void *rhs, size_t count)
+  {
+    return __builtin_memcmp(lhs, rhs, count);
+  }
+
+  inline size_t strlen(const char *text)
+  {
+    return __builtin_strlen(text);
+  }
+}
+
+#endif
