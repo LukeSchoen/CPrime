@@ -730,6 +730,9 @@ again:
             if (resolve_member_func_by_arg_types(&func_vt, TOK_CONSTRUCTOR1,
                                                  &arg_type, 1))
               converting_ctor = 1;
+            else if (class_has_single_arg_constructor_for(&func_vt,
+                                                          &vtop->type))
+              converting_ctor = 1;
           }
           if (!converting_ctor)
             gen_assign_cast(&func_vt);

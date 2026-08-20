@@ -17,7 +17,7 @@ if (-not $CpcPath) {
 $CpcPath = [System.IO.Path]::GetFullPath($CpcPath)
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 if (-not $OutDir) {
-    $OutDir = Join-Path $ProjectRoot "builds\split_new"
+    $OutDir = Join-Path $ProjectRoot "builds\racer"
 }
 $OutDir = [System.IO.Path]::GetFullPath($OutDir)
 
@@ -28,7 +28,7 @@ New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $commonLib = Join-Path $ProjectRoot "CommonLib\commonLib"
 $flagsFile = Join-Path $ProjectRoot "builds\core\generated_core_cpc_flags.rsp"
 $sourcesFile = Join-Path $ProjectRoot "builds\core\generated_core_sources.rsp"
-$sdl2Def = Join-Path $ProjectRoot "builds\split\SDL2.def"
+$sdl2Def = Join-Path $ProjectRoot "builds\racer\SDL2.def"
 $runtimeLib = Join-Path $env:LOCALAPPDATA "cpc\1.4\lib\libcprime1.a"
 
 if (-not (Test-Path -LiteralPath $flagsFile)) { throw "Missing flags rsp: $flagsFile" }
@@ -41,9 +41,9 @@ $flags += "-DMA_NO_SSE2"
 $flags += "-DMA_NO_AVX2"
 $flags += ('-I"' + (Join-Path $ProjectRoot "CommonLib\3rdParty\Imagine\include") + '"')
 
-# Extra CommonLib implementation sources compiled separately because the
-# generated core source list does not include them.
-$extraCommonLibSources = @(
+# Additional implementation sources compiled separately because the generated
+# source list does not include them.
+$additionalSources = @(
     @{ Name = "cl2DDraw";          Rel = "Polygon\cl2DDraw.cpp" }
     @{ Name = "cl2DDrawSample";    Rel = "Polygon\cl2DDrawSample.cpp" }
     @{ Name = "cl2DDrawTransform"; Rel = "Polygon\cl2DDrawTransform.c" }
@@ -110,7 +110,7 @@ if (-not $LinkOnly) {
     # Remove stale objects from previous runs so every link is built from a
     # single consistent compiler and source state.
     $outFull = [System.IO.Path]::GetFullPath($OutDir).TrimEnd('\') + '\'
-    foreach ($pattern in @("core_*.obj", "commonlib_*.obj")) {
+    foreach ($pattern in @("generated_*.obj", "additional_*.obj", "core_*.obj", "commonlib_*.obj")) {
         Get-ChildItem -LiteralPath $OutDir -Filter $pattern -ErrorAction SilentlyContinue | ForEach-Object {
             $full = [System.IO.Path]::GetFullPath($_.FullName)
             if ($full.StartsWith($outFull, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -118,23 +118,23 @@ if (-not $LinkOnly) {
             }
         }
     }
-    $coreSources = Get-Content -LiteralPath $sourcesFile | Where-Object { $_.Trim() } |
+    $generatedSources = Get-Content -LiteralPath $sourcesFile | Where-Object { $_.Trim() } |
         ForEach-Object { $_.Trim().Trim('"') }
-    $coreOk = $true
-    foreach ($src in $coreSources) {
+    $generatedOk = $true
+    foreach ($src in $generatedSources) {
         $name = [System.IO.Path]::GetFileNameWithoutExtension($src)
-        $ok = Invoke-CpcCompile -Label ("core_" + $name) -Source $src
-        if (-not $ok) { $coreOk = $false }
+        $ok = Invoke-CpcCompile -Label ("generated_" + $name) -Source $src
+        if (-not $ok) { $generatedOk = $false }
     }
-    Write-Host ("Core compile: " + $(if ($coreOk) { "all OK" } else { "FAILURES" }))
+    Write-Host ("Generated source compile: " + $(if ($generatedOk) { "all OK" } else { "FAILURES" }))
 
-    $extraCommonLibOk = $true
-    foreach ($entry in $extraCommonLibSources) {
+    $additionalOk = $true
+    foreach ($entry in $additionalSources) {
         $src = Join-Path $commonLib ("src\" + $entry.Rel)
-        $ok = Invoke-CpcCompile -Label ("commonlib_" + $entry.Name) -Source $src
-        if (-not $ok) { $extraCommonLibOk = $false }
+        $ok = Invoke-CpcCompile -Label ("additional_" + $entry.Name) -Source $src
+        if (-not $ok) { $additionalOk = $false }
     }
-    Write-Host ("Extra CommonLib compile: " + $(if ($extraCommonLibOk) { "all OK" } else { "FAILURES" }))
+    Write-Host ("Additional source compile: " + $(if ($additionalOk) { "all OK" } else { "FAILURES" }))
 }
 
 if ($SkipLink) {
@@ -145,8 +145,8 @@ if ($SkipLink) {
 # runs each line of the file as one job, so the whole link command must be a
 # single line in the batch file.
 $objs = @()
-$objs += Get-ChildItem -LiteralPath $OutDir -Filter "core_*.obj" | Sort-Object Name
-$objs += Get-ChildItem -LiteralPath $OutDir -Filter "commonlib_*.obj" | Sort-Object Name
+$objs += Get-ChildItem -LiteralPath $OutDir -Filter "generated_*.obj" | Sort-Object Name
+$objs += Get-ChildItem -LiteralPath $OutDir -Filter "additional_*.obj" | Sort-Object Name
 $linkBat = Join-Path $OutDir "link_cmd.bat"
 
 $def = Join-Path $OutDir "racer_test.def"
