@@ -1,0 +1,7 @@
+#ifndef _CPC_NEW
+#define _CPC_NEW
+
+/* Placement new is handled natively by the compiler; this header exists so
+   code that includes <new> compiles. */
+
+#endif

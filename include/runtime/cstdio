@@ -1,0 +1,45 @@
+#ifndef _CPC_CSTDIO
+#define _CPC_CSTDIO
+
+#include <stdio.h>
+
+namespace std
+{
+  typedef FILE FILE;
+
+  inline FILE *tmpfile() { return tmpfile(); }
+  inline int fclose(FILE *stream) { return fclose(stream); }
+  inline size_t fread(void *buffer, size_t size, size_t count, FILE *stream)
+  {
+    return fread(buffer, size, count, stream);
+  }
+  inline size_t fwrite(const void *buffer, size_t size, size_t count, FILE *stream)
+  {
+    return fwrite(buffer, size, count, stream);
+  }
+  inline int fflush(FILE *stream) { return fflush(stream); }
+  inline int fseek(FILE *stream, long offset, int origin)
+  {
+    return fseek(stream, offset, origin);
+  }
+  inline long ftell(FILE *stream) { return ftell(stream); }
+  inline FILE *fopen(const char *filename, const char *mode)
+  {
+    return fopen(filename, mode);
+  }
+  inline char *fgets(char *buffer, int count, FILE *stream)
+  {
+    return fgets(buffer, count, stream);
+  }
+  inline int fputs(const char *text, FILE *stream) { return fputs(text, stream); }
+  inline int remove(const char *filename) { return remove(filename); }
+  inline int rename(const char *oldname, const char *newname)
+  {
+    return rename(oldname, newname);
+  }
+  inline void rewind(FILE *stream) { rewind(stream); }
+  inline int feof(FILE *stream) { return feof(stream); }
+  inline int ferror(FILE *stream) { return ferror(stream); }
+}
+
+#endif

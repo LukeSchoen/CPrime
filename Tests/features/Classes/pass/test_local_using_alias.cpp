@@ -6,7 +6,7 @@ T twice(T value)
 {
   using Element = T;
   Element copy = value;
-  Element zero(zero_value<Element>());
+  Element zero = zero_value<Element>();
   return copy + value + zero;
 }
 

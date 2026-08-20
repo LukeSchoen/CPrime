@@ -1,0 +1,16 @@
+#ifndef _CPC_THREAD
+#define _CPC_THREAD
+
+namespace std
+{
+  class thread
+  {
+  public:
+    thread() {}
+    bool joinable() const { return false; }
+    void join() {}
+    void detach() {}
+  };
+}
+
+#endif

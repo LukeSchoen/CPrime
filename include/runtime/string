@@ -1,0 +1,166 @@
+#ifndef _CPC_STRING
+#define _CPC_STRING
+
+#include <stdlib.h>
+#include <string.h>
+#include <wchar.h>
+#include <stddef.h>
+
+/* Minimal std::string / std::wstring implementation for code that uses
+   CommonLibrary's clWideString bridge (ToWideString/FromWideString). */
+namespace std
+{
+  class wstring
+  {
+  public:
+    static const size_t npos = (size_t)-1;
+
+    wstring() : m_data(0), m_len(0) {}
+    wstring(const wstring &o) : m_data(0), m_len(0) { assign(o.m_data, o.m_len); }
+    wstring(size_t count, wchar_t ch) : m_data(0), m_len(0)
+    {
+      m_data = (wchar_t *)malloc((count + 1) * sizeof(wchar_t));
+      if (m_data)
+      {
+        for (size_t i = 0; i < count; ++i)
+          m_data[i] = ch;
+        m_data[count] = 0;
+        m_len = count;
+      }
+    }
+    explicit wstring(const wchar_t *text) : m_data(0), m_len(0)
+    {
+      if (text)
+        assign(text, wcslen(text));
+    }
+    ~wstring() { free(m_data); }
+
+    wstring &operator=(const wstring &o)
+    {
+      if (this != &o)
+        assign(o.m_data, o.m_len);
+      return *this;
+    }
+
+    size_t length() const { return m_len; }
+    size_t size() const { return m_len; }
+    size_t find_first_of(wchar_t ch, size_t pos = 0) const
+    {
+      const wchar_t *data = c_str();
+      for (size_t i = pos; i < m_len; ++i)
+        if (data[i] == ch)
+          return i;
+      return npos;
+    }
+    wstring substr(size_t pos, size_t count = npos) const
+    {
+      wstring ret;
+      size_t len;
+      if (pos >= m_len)
+        return ret;
+      len = m_len - pos;
+      if (count < len)
+        len = count;
+      ret.assign(c_str() + pos, len);
+      return ret;
+    }
+    const wchar_t *c_str() const { return m_data ? m_data : L""; }
+    const wchar_t &operator[](size_t i) const { return m_data[i]; }
+    wchar_t &operator[](size_t i) { return m_data[i]; }
+
+  private:
+    void assign(const wchar_t *text, size_t len)
+    {
+      if (m_data)
+        free(m_data);
+      m_data = (wchar_t *)malloc((len + 1) * sizeof(wchar_t));
+      if (m_data)
+      {
+        for (size_t i = 0; i < len; ++i)
+          m_data[i] = text[i];
+        m_data[len] = 0;
+      }
+      m_len = len;
+    }
+    wchar_t *m_data;
+    size_t m_len;
+  };
+
+  class string
+  {
+  public:
+    static const size_t npos = (size_t)-1;
+
+    string() : m_data(0), m_len(0) {}
+    string(const string &o) : m_data(0), m_len(0) { assign(o.m_data, o.m_len); }
+    string(size_t count, char ch) : m_data(0), m_len(0)
+    {
+      m_data = (char *)malloc(count + 1);
+      if (m_data)
+      {
+        for (size_t i = 0; i < count; ++i)
+          m_data[i] = ch;
+        m_data[count] = 0;
+        m_len = count;
+      }
+    }
+    explicit string(const char *text) : m_data(0), m_len(0)
+    {
+      if (text)
+        assign(text, __builtin_strlen(text));
+    }
+    ~string() { free(m_data); }
+
+    string &operator=(const string &o)
+    {
+      if (this != &o)
+        assign(o.m_data, o.m_len);
+      return *this;
+    }
+
+    size_t length() const { return m_len; }
+    size_t size() const { return m_len; }
+    size_t find_first_of(char ch, size_t pos = 0) const
+    {
+      const char *data = c_str();
+      for (size_t i = pos; i < m_len; ++i)
+        if (data[i] == ch)
+          return i;
+      return npos;
+    }
+    string substr(size_t pos, size_t count = npos) const
+    {
+      string ret;
+      size_t len;
+      if (pos >= m_len)
+        return ret;
+      len = m_len - pos;
+      if (count < len)
+        len = count;
+      ret.assign(c_str() + pos, len);
+      return ret;
+    }
+    const char *c_str() const { return m_data ? m_data : ""; }
+    const char &operator[](size_t i) const { return m_data[i]; }
+    char &operator[](size_t i) { return m_data[i]; }
+
+  private:
+    void assign(const char *text, size_t len)
+    {
+      if (m_data)
+        free(m_data);
+      m_data = (char *)malloc(len + 1);
+      if (m_data)
+      {
+        for (size_t i = 0; i < len; ++i)
+          m_data[i] = text[i];
+        m_data[len] = 0;
+      }
+      m_len = len;
+    }
+    char *m_data;
+    size_t m_len;
+  };
+}
+
+#endif

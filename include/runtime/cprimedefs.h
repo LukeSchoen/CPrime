@@ -47,6 +47,7 @@
 #define _Nullable_result
 #define _Null_unspecified
 
+
 #ifndef __CPRIME_PP__
 #define __builtin_offsetof(type, field) ((__SIZE_TYPE__)&((type*)0)->field)
 #define __builtin_extract_return_addr(x) x

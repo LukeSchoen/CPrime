@@ -15,13 +15,13 @@ namespace std
   template<class T>
   T&& forward(T &value)
   {
-    return (T&&)value;
+    return value;
   }
 
   template<class T>
   T&& move(T &value)
   {
-    return (T&&)value;
+    return value;
   }
 
   template<class T>

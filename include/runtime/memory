@@ -1,0 +1,42 @@
+#ifndef _CPC_MEMORY
+#define _CPC_MEMORY
+
+#include <stddef.h>
+#include <utility>
+
+namespace std
+{
+  template<class T>
+  class unique_ptr
+  {
+  public:
+    unique_ptr() : m_ptr(0) {}
+    explicit unique_ptr(T *p) : m_ptr(p) {}
+    unique_ptr(unique_ptr &&o) : m_ptr(o.m_ptr) { o.m_ptr = 0; }
+    ~unique_ptr() { delete m_ptr; }
+
+    unique_ptr &operator=(unique_ptr &&o)
+    {
+      if (this != &o)
+      {
+        delete m_ptr;
+        m_ptr = o.m_ptr;
+        o.m_ptr = 0;
+      }
+      return *this;
+    }
+    unique_ptr(const unique_ptr &) = delete;
+    unique_ptr &operator=(const unique_ptr &) = delete;
+
+    T *operator->() const { return m_ptr; }
+    T &operator*() const { return *m_ptr; }
+    T *get() const { return m_ptr; }
+    void reset(T *p = 0) { delete m_ptr; m_ptr = p; }
+    explicit operator bool() const { return m_ptr != 0; }
+
+  private:
+    T *m_ptr;
+  };
+}
+
+#endif

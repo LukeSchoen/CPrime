@@ -1,0 +1,57 @@
+#ifndef _CPC_MUTEX
+#define _CPC_MUTEX
+
+/* Minimal synchronization primitives for code that only needs the types
+   (CommonLibrary's clMutex/clScopeLock declarations). */
+namespace std
+{
+  class mutex
+  {
+  public:
+    mutex() {}
+    void lock() {}
+    void unlock() {}
+  };
+
+  class recursive_mutex
+  {
+  public:
+    recursive_mutex() {}
+    void lock() {}
+    void unlock() {}
+  };
+
+  template<class T>
+  class lock_guard
+  {
+  public:
+    explicit lock_guard(T &m) : m_mutex(m) { m_mutex.lock(); }
+    ~lock_guard() { m_mutex.unlock(); }
+    lock_guard(const lock_guard &) = delete;
+    lock_guard &operator=(const lock_guard &) = delete;
+  private:
+    T &m_mutex;
+  };
+
+  class condition_variable
+  {
+  public:
+    condition_variable() {}
+    void notify_one() {}
+    void notify_all() {}
+  };
+
+  template<class T>
+  class unique_lock
+  {
+  public:
+    explicit unique_lock(T &m) : m_mutex(&m) { m_mutex->lock(); }
+    ~unique_lock() { if (m_mutex) m_mutex->unlock(); }
+    unique_lock(const unique_lock &) = delete;
+    unique_lock &operator=(const unique_lock &) = delete;
+  private:
+    T *m_mutex;
+  };
+}
+
+#endif

@@ -25,7 +25,7 @@ But the price is steep:
 - slow builds
 - huge toolchains
 - large executables
-- layers of legacy based complexity
+- layers of accumulated complexity
 - features that authors like but that cost every build forever
 
 CPrime asks a simple question:

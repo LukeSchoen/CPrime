@@ -4,6 +4,21 @@ setlocal EnableExtensions EnableDelayedExpansion
 set "SCRIPT_DIR=%~dp0"
 for %%I in ("%SCRIPT_DIR%..") do set "ROOT=%%~fI"
 set "COMPILER=%ROOT%\cpc.exe"
+set "COMPILER_PATH="
+
+:parse_args
+if "%~1"=="" goto args_done
+if /I "%~1"=="-CompilerPath" (
+  set "COMPILER_PATH=%~2"
+  shift
+  shift
+  goto parse_args
+)
+shift
+goto parse_args
+
+:args_done
+if defined COMPILER_PATH set "COMPILER=%COMPILER_PATH%"
 set "SRC_DIR=%SCRIPT_DIR%features\MultiSource\pass"
 set "WORK_DIR=%TEMP%\cprime-multisource-tests-%RANDOM%-%RANDOM%"
 
@@ -110,6 +125,42 @@ if errorlevel 1 (
 
 echo PASS header template inline member multi-source
 
+set "OUT_CLASS_A_SRC=%SRC_DIR%\out_of_class_template_member_a.cpp"
+set "OUT_CLASS_MAIN_SRC=%SRC_DIR%\out_of_class_template_member_main.cpp"
+
+"%COMPILER%" -c "%OUT_CLASS_A_SRC%" -o "%WORK_DIR%\out_class_a.o" >"%WORK_DIR%\compile_out_class_a.out" 2>&1
+if errorlevel 1 (
+  echo FAIL out-of-class template member object compile a.cpp.
+  type "%WORK_DIR%\compile_out_class_a.out"
+  goto fail
+)
+"%COMPILER%" -c "%OUT_CLASS_MAIN_SRC%" -o "%WORK_DIR%\out_class_main.o" >"%WORK_DIR%\compile_out_class_main.out" 2>&1
+if errorlevel 1 (
+  echo FAIL out-of-class template member object compile main.cpp.
+  type "%WORK_DIR%\compile_out_class_main.out"
+  goto fail
+)
+"%COMPILER%" "%WORK_DIR%\out_class_a.o" "%WORK_DIR%\out_class_main.o" -o "%WORK_DIR%\out_class_linked.exe" >"%WORK_DIR%\link_out_class.out" 2>&1
+set "OUT_CLASS_LINK_EXIT=%ERRORLEVEL%"
+if not "%OUT_CLASS_LINK_EXIT%"=="0" (
+  echo FAIL out-of-class template member object link: exit %OUT_CLASS_LINK_EXIT%
+  type "%WORK_DIR%\link_out_class.out"
+  goto fail
+)
+findstr /I /C:"defined twice" "%WORK_DIR%\link_out_class.out" >nul 2>nul
+if not errorlevel 1 (
+  echo FAIL out-of-class template member object link emitted duplicate-symbol diagnostics.
+  type "%WORK_DIR%\link_out_class.out"
+  goto fail
+)
+"%WORK_DIR%\out_class_linked.exe"
+if errorlevel 1 (
+  echo FAIL out-of-class template member linked executable returned %ERRORLEVEL%.
+  goto fail
+)
+
+echo PASS out-of-class template member multi-source
+
 set "TEMPLATE_FUNC_A_SRC=%SRC_DIR%\header_template_function_a.cpp"
 set "TEMPLATE_FUNC_MAIN_SRC=%SRC_DIR%\header_template_function_main.cpp"
 
@@ -203,6 +254,35 @@ if errorlevel 1 (
 )
 
 echo PASS default-argument constructor multi-source
+
+set "DEFAULT_ASSIGN_A_SRC=%SRC_DIR%\test_defaulted_assign_a.cpp"
+set "DEFAULT_ASSIGN_MAIN_SRC=%SRC_DIR%\test_defaulted_assign_main.cpp"
+
+"%COMPILER%" -c "%DEFAULT_ASSIGN_A_SRC%" -o "%WORK_DIR%\default_assign_a.o" >"%WORK_DIR%\compile_default_assign_a.out" 2>&1
+if errorlevel 1 (
+  echo FAIL defaulted assignment object compile a.cpp.
+  type "%WORK_DIR%\compile_default_assign_a.out"
+  goto fail
+)
+"%COMPILER%" -c "%DEFAULT_ASSIGN_MAIN_SRC%" -o "%WORK_DIR%\default_assign_main.o" >"%WORK_DIR%\compile_default_assign_main.out" 2>&1
+if errorlevel 1 (
+  echo FAIL defaulted assignment main compile.
+  type "%WORK_DIR%\compile_default_assign_main.out"
+  goto fail
+)
+"%COMPILER%" "%WORK_DIR%\default_assign_a.o" "%WORK_DIR%\default_assign_main.o" -o "%WORK_DIR%\default_assign.exe" >"%WORK_DIR%\link_default_assign.out" 2>&1
+if errorlevel 1 (
+  echo FAIL defaulted assignment object link.
+  type "%WORK_DIR%\link_default_assign.out"
+  goto fail
+)
+"%WORK_DIR%\default_assign.exe"
+if errorlevel 1 (
+  echo FAIL defaulted assignment executable returned %ERRORLEVEL%.
+  goto fail
+)
+
+echo PASS defaulted assignment multi-source
 rmdir /s /q "%WORK_DIR%" >nul 2>nul
 exit /b 0
 

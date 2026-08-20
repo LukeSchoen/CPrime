@@ -4,6 +4,14 @@
 #include <limits.h>
 #include <float.h>
 
+#ifdef min
+#undef min
+#endif
+
+#ifdef max
+#undef max
+#endif
+
 namespace std
 {
   template<typename T>
