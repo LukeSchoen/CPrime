@@ -1,0 +1,6 @@
+#ifndef _CPRIME_CCTYPE
+#define _CPRIME_CCTYPE
+
+#include <ctype.h>
+
+#endif

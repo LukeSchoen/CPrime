@@ -81,7 +81,6 @@ echo Success: Rebuilt and replaced "%ROOT%\cpc.exe".
 exit /b 0
 
 :run_build
-set "CPRIME_C=..\..\..\src\compiler\driver\cprime.c"
 call "%BUILD_SCRIPT%" -c "%~1"
 exit /b %ERRORLEVEL%
 

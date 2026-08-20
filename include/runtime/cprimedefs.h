@@ -42,6 +42,7 @@
 #define __has_builtin(x) 0
 #define __has_feature(x) 0
 #define __has_attribute(x) 0
+#define __assume(x) ((void)0)
 #define _Nonnull
 #define _Nullable
 #define _Nullable_result

@@ -3,6 +3,31 @@
 
 #define FLT_RADIX 2
 
+#define _DN_SAVE 0x00000000
+#define _DN_FLUSH 0x01000000
+#define _MCW_DN 0x03000000
+
+static __inline unsigned int _statusfp(void)
+{
+  return 0;
+}
+
+static __inline unsigned int _controlfp(unsigned int new_value, unsigned int mask)
+{
+  (void)new_value;
+  (void)mask;
+  return 0;
+}
+
+static __inline int _controlfp_s(unsigned int *current_state, unsigned int new_value, unsigned int mask)
+{
+  if (current_state)
+    *current_state = 0;
+  (void)new_value;
+  (void)mask;
+  return 0;
+}
+
 #define FLT_MANT_DIG 24
 #define FLT_DIG 6
 #define FLT_ROUNDS 1
@@ -25,7 +50,6 @@
 #define DBL_MAX_10_EXP 308
 
 #if defined __i386__ || defined __x86_64__
-
 #define LDBL_MANT_DIG 64
 #define LDBL_DIG 18
 #define LDBL_EPSILON 1.08420217248550443401e-19L
@@ -36,7 +60,6 @@
 #define LDBL_MAX 1.18973149535723176502e+4932L
 #define LDBL_MAX_10_EXP 4932
 #define DECIMAL_DIG 21
-
 #elif defined __aarch64__ || defined __riscv
 #define LDBL_MANT_DIG 113
 #define LDBL_DIG 33
@@ -48,11 +71,9 @@
 #define LDBL_MAX 1.18973149535723176508575932662800702e+4932L
 #define LDBL_MAX_10_EXP 4932
 #define DECIMAL_DIG 36
-
 #else
-
 #define LDBL_MANT_DIG 53
-#define LDBL_DIG 15
+#define LDBL_DIG 18
 #define LDBL_EPSILON 2.2204460492503131e-16L
 #define LDBL_MIN_EXP (-1021)
 #define LDBL_MIN 2.2250738585072014e-308L
@@ -61,10 +82,6 @@
 #define LDBL_MAX 1.7976931348623157e+308L
 #define LDBL_MAX_10_EXP 308
 #define DECIMAL_DIG 17
-
 #endif
 
 #endif
-
-
-

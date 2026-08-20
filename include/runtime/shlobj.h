@@ -1,0 +1,94 @@
+#ifndef _CPRIME_SHLOBJ_H
+#define _CPRIME_SHLOBJ_H
+
+#include <windows.h>
+
+#ifndef SHSTDAPI
+#if !defined(_SHELL32_)
+#define SHSTDAPI EXTERN_C DECLSPEC_IMPORT HRESULT WINAPI
+#define SHSTDAPI_(type) EXTERN_C DECLSPEC_IMPORT type WINAPI
+#else
+#define SHSTDAPI STDAPI
+#define SHSTDAPI_(type) STDAPI_(type)
+#endif
+#endif
+
+#ifndef SHFOLDERAPI
+#if defined(_SHFOLDER_) || defined(_SHELL32_)
+#define SHFOLDERAPI STDAPI
+#else
+#define SHFOLDERAPI EXTERN_C DECLSPEC_IMPORT HRESULT WINAPI
+#endif
+#endif
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <pshpack1.h>
+typedef struct _SHITEMID {
+    USHORT cb;
+    BYTE abID[1];
+} SHITEMID;
+
+typedef struct _ITEMIDLIST {
+    SHITEMID mkid;
+} ITEMIDLIST;
+#include <poppack.h>
+
+typedef SHITEMID *LPSHITEMID;
+typedef const SHITEMID *LPCSHITEMID;
+typedef ITEMIDLIST *LPITEMIDLIST;
+typedef const ITEMIDLIST *LPCITEMIDLIST;
+
+#define PIDLIST_ABSOLUTE LPITEMIDLIST
+#define PCIDLIST_ABSOLUTE LPCITEMIDLIST
+#define PCUIDLIST_ABSOLUTE LPCITEMIDLIST
+#define PIDLIST_RELATIVE LPITEMIDLIST
+#define PCIDLIST_RELATIVE LPCITEMIDLIST
+#define PUIDLIST_RELATIVE LPITEMIDLIST
+#define PCUIDLIST_RELATIVE LPCITEMIDLIST
+#define PITEMID_CHILD LPITEMIDLIST
+#define PCITEMID_CHILD LPCITEMIDLIST
+#define PUITEMID_CHILD LPITEMIDLIST
+#define PCUITEMID_CHILD LPCITEMIDLIST
+#define PCUITEMID_CHILD_ARRAY LPCITEMIDLIST *
+
+#define CSIDL_DESKTOP 0x0000
+#define CSIDL_PERSONAL 0x0005
+#define CSIDL_MYMUSIC 0x000d
+#define CSIDL_MYVIDEO 0x000e
+#define CSIDL_DESKTOPDIRECTORY 0x0010
+#define CSIDL_APPDATA 0x001a
+#define CSIDL_WINDOWS 0x0024
+#define CSIDL_SYSTEM 0x0025
+#define CSIDL_PROGRAM_FILES 0x0026
+#define CSIDL_MYPICTURES 0x0027
+#define CSIDL_PROGRAM_FILESX86 0x002a
+#define CSIDL_FLAG_CREATE 0x8000
+
+SHFOLDERAPI SHGetFolderPathA(HWND hwnd, int csidl, HANDLE hToken, DWORD dwFlags, LPSTR pszPath);
+SHFOLDERAPI SHGetFolderPathW(HWND hwnd, int csidl, HANDLE hToken, DWORD dwFlags, LPWSTR pszPath);
+
+SHSTDAPI_(void) ILFree(PIDLIST_RELATIVE pidl);
+SHSTDAPI_(PIDLIST_ABSOLUTE) ILCreateFromPathA(PCSTR pszPath);
+SHSTDAPI_(PIDLIST_ABSOLUTE) ILCreateFromPathW(PCWSTR pszPath);
+SHSTDAPI SHOpenFolderAndSelectItems(PCIDLIST_ABSOLUTE pidlFolder, UINT cidl, PCUITEMID_CHILD_ARRAY apidl, DWORD dwFlags);
+SHSTDAPI_(WINBOOL) SHGetPathFromIDListA(PCIDLIST_ABSOLUTE pidl, LPSTR pszPath);
+SHSTDAPI_(WINBOOL) SHGetPathFromIDListW(PCIDLIST_ABSOLUTE pidl, LPWSTR pszPath);
+
+#ifdef UNICODE
+#define SHGetFolderPath SHGetFolderPathW
+#define ILCreateFromPath ILCreateFromPathW
+#define SHGetPathFromIDList SHGetPathFromIDListW
+#else
+#define SHGetFolderPath SHGetFolderPathA
+#define ILCreateFromPath ILCreateFromPathA
+#define SHGetPathFromIDList SHGetPathFromIDListA
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

@@ -123,15 +123,46 @@ static int cprime_mkdirs(const char *path)
   return 0;
 }
 
-static int cprime_write_manifest(const char *root)
+static int cprime_manifest_matches(const char *path, const char *exe)
+{
+  FILE *fp;
+  long long size = 0, mtime = 0, got_size = -1, got_mtime = -1;
+  WIN32_FILE_ATTRIBUTE_DATA data;
+
+  if (!GetFileAttributesExA(exe, GetFileExInfoStandard, &data))
+    return 0;
+  size = ((long long)data.nFileSizeHigh << 32) | data.nFileSizeLow;
+  mtime = ((long long)data.ftLastWriteTime.dwHighDateTime << 32) | data.ftLastWriteTime.dwLowDateTime;
+
+  fp = fopen(path, "rb");
+  if (!fp)
+    return 0;
+  if (fscanf(fp, "size=%lld\nmtime=%lld\n", &got_size, &got_mtime) != 2)
+  {
+    fclose(fp);
+    return 0;
+  }
+  fclose(fp);
+  return got_size == size && got_mtime == mtime;
+}
+
+static int cprime_write_manifest(const char *root, const char *exe)
 {
   FILE *fp;
   char path[MAX_PATH * 4];
+  WIN32_FILE_ATTRIBUTE_DATA data;
+  long long size, mtime;
+
+  if (!GetFileAttributesExA(exe, GetFileExInfoStandard, &data))
+    return -1;
+  size = ((long long)data.nFileSizeHigh << 32) | data.nFileSizeLow;
+  mtime = ((long long)data.ftLastWriteTime.dwHighDateTime << 32) | data.ftLastWriteTime.dwLowDateTime;
+
   snprintf(path, sizeof(path), "%s/manifest.ok", root);
   fp = fopen(path, "wb");
   if (!fp)
     return -1;
-  fwrite("ok\n", 1, 3, fp);
+  fprintf(fp, "size=%lld\nmtime=%lld\n", size, mtime);
   fclose(fp);
   return 0;
 }
@@ -303,12 +334,12 @@ static char *cprime_try_portable_extract_w32(char *out, size_t n)
   long long endpos;
   if (!cprime_portable_root_w32(out, n))
     return NULL;
+  GetModuleFileNameA(cprime_module, exe, sizeof(exe));
   snprintf(marker_path, sizeof(marker_path), "%s/manifest.ok", out);
-  if (cprime_path_exists(marker_path))
+  if (cprime_manifest_matches(marker_path, exe))
     return out;
   if (cprime_mkdirs(out) < 0)
     return NULL;
-  GetModuleFileNameA(cprime_module, exe, sizeof(exe));
   fp = fopen(exe, "rb");
   if (!fp)
     return NULL;
@@ -402,7 +433,7 @@ static char *cprime_try_portable_extract_w32(char *out, size_t n)
     }
   }
   fclose(fp);
-  if (cprime_write_manifest(out) < 0)
+  if (cprime_write_manifest(out, exe) < 0)
     return NULL;
   return out;
 }

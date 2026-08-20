@@ -36,6 +36,10 @@ if (-not (Test-Path -LiteralPath $sourcesFile)) { throw "Missing sources rsp: $s
 if (-not (Test-Path -LiteralPath $sdl2Def)) { throw "Missing SDL2 import def: $sdl2Def" }
 
 $flags = Get-Content -LiteralPath $flagsFile | Where-Object { $_.Trim() }
+$flags += "-D_MSC_VER=1900"
+$flags += "-DMA_NO_SSE2"
+$flags += "-DMA_NO_AVX2"
+$flags += ('-I"' + (Join-Path $ProjectRoot "CommonLib\3rdParty\Imagine\include") + '"')
 
 # Extra CommonLib implementation sources compiled separately because the
 # generated core source list does not include them.

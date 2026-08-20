@@ -3,6 +3,31 @@
 
 #define FLT_RADIX 2
 
+#define _DN_SAVE 0x00000000
+#define _DN_FLUSH 0x01000000
+#define _MCW_DN 0x03000000
+
+static __inline unsigned int _statusfp(void)
+{
+  return 0;
+}
+
+static __inline unsigned int _controlfp(unsigned int new_value, unsigned int mask)
+{
+  (void)new_value;
+  (void)mask;
+  return 0;
+}
+
+static __inline int _controlfp_s(unsigned int *current_state, unsigned int new_value, unsigned int mask)
+{
+  if (current_state)
+    *current_state = 0;
+  (void)new_value;
+  (void)mask;
+  return 0;
+}
+
 /* IEEE float */
 #define FLT_MANT_DIG 24
 #define FLT_DIG 6

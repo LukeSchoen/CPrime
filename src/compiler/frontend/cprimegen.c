@@ -326,6 +326,8 @@ static int template_type_tok_from_ctype(CType *type);
 static void infer_expr_type_from_tokens(TokenString *expr, CType *type)
 {
   int saved_nocode_wanted = nocode_wanted;
+  int saved_tok = tok;
+  CValue saved_tokc = tokc;
   TokenString macro;
   TokenString *expr_macro_stack;
 
@@ -339,6 +341,8 @@ static void infer_expr_type_from_tokens(TokenString *expr, CType *type)
   vpop();
   if (macro_stack == expr_macro_stack)
     end_macro();
+  tok = saved_tok;
+  tokc = saved_tokc;
   nocode_wanted = saved_nocode_wanted;
 }
 
@@ -9548,6 +9552,7 @@ static int find_template_member_class_in_str(TokenString *str, int type_param_to
 }
 
 static int token_string_starts_template(TokenString *str);
+static int token_string_has_variadic_pack(TokenString *str);
 
 static int template_class_needs_member_layout(TemplateDef *td)
 {
@@ -13150,6 +13155,8 @@ static int template_lookup_inst(TemplateDef *td, TemplateArgList *args)
   int i, j, same;
 
   template_validate_arg_count(td, args);
+  if (!td->is_class && td->variadic_param_index >= 0)
+    return 0;
   if (td->nb_inst <= 0)
     return 0;
   if (!td->inst_type_toks || !td->inst_name_toks
@@ -13946,6 +13953,12 @@ static int instantiate_template_if_needed(TemplateDef *td, TemplateArgList *args
   Sym *type_sym, *ident_sym;
   int type_tok;
   int function_decl_name_done = 0;
+  int function_params_started = 0;
+  int function_params_done = 0;
+  int function_param_depth = 0;
+  int pack_type_tok = 0;
+  int pack_start = -1;
+  int pack_name_tok = 0;
 
   if (!td)
     cprime_error("instantiate_template_if_needed called with NULL template");
@@ -14060,6 +14073,137 @@ static int instantiate_template_if_needed(TemplateDef *td, TemplateArgList *args
   next();
   while (tok != TOK_EOF)
   {
+    if (!td->is_class && td->variadic_param_index >= 0 && !pack_type_tok)
+    {
+      pack_start = td->variadic_param_index;
+      if (pack_start >= 0 && pack_start < td->nb_type_params)
+        pack_type_tok = td->type_param_toks[pack_start];
+    }
+    if (!td->is_class && function_decl_name_done && !function_params_started
+        && !function_params_done && tok == '(')
+    {
+      function_params_started = 1;
+      function_param_depth = 0;
+      tok_str_add(spec, tok);
+      next();
+      continue;
+    }
+    if (!td->is_class && function_params_started && !function_params_done)
+    {
+      if (pack_type_tok && tok == pack_type_tok)
+      {
+        int param_toks[64], nb_param_toks = 0;
+        int depth = 0, has_pack = 0, pi, ti, found_pack_name = 0;
+
+        while (tok != TOK_EOF)
+        {
+          if (depth == 0 && (tok == ',' || tok == ')'))
+            break;
+          if (nb_param_toks < (int)(sizeof(param_toks) / sizeof(param_toks[0])))
+            param_toks[nb_param_toks++] = tok;
+          if (tok == TOK_DOTS)
+            has_pack = 1;
+          if (tok == '(' || tok == '[' || tok == TOK_LT || tok == '<')
+            ++depth;
+          else if ((tok == ')' || tok == ']' || tok == TOK_GT || tok == '>')
+                   && depth > 0)
+            --depth;
+          else if (tok == TOK_SAR && depth > 0)
+          {
+            --depth;
+            if (depth > 0)
+              --depth;
+          }
+          next();
+        }
+        if (has_pack)
+        {
+          char pack_name[256];
+          for (ti = nb_param_toks - 1; ti >= 0; --ti)
+            if (param_toks[ti] >= TOK_UIDENT && param_toks[ti] != pack_type_tok)
+            {
+              pack_name_tok = param_toks[ti];
+              found_pack_name = 1;
+              break;
+            }
+          for (pi = pack_start; pi < args->nb; ++pi)
+          {
+            if (pi > pack_start)
+              tok_str_add(spec, ',');
+            for (ti = 0; ti < nb_param_toks; ++ti)
+            {
+              int pt = param_toks[ti];
+              if (pt == TOK_DOTS)
+                continue;
+              if (pt == pack_type_tok)
+                tok_str_add(spec, args->toks[pi]);
+              else if (found_pack_name && pt == pack_name_tok)
+              {
+                snprintf(pack_name, sizeof(pack_name), "%s__pack%d",
+                         get_tok_str(pack_name_tok, NULL), pi - pack_start);
+                tok_str_add(spec, tok_alloc_const(pack_name));
+              }
+              else
+                tok_str_add(spec, pt);
+            }
+          }
+          continue;
+        }
+        for (ti = 0; ti < nb_param_toks; ++ti)
+          template_add_subst_token(spec, td, args, mangled_tok,
+                                   alias_from, alias_to, nb_aliases,
+                                   param_toks[ti]);
+        continue;
+      }
+      if (tok == '(' || tok == '[' || tok == TOK_LT || tok == '<')
+        ++function_param_depth;
+      else if ((tok == ')' || tok == ']' || tok == TOK_GT || tok == '>')
+               && function_param_depth > 0)
+        --function_param_depth;
+      else if (tok == TOK_SAR && function_param_depth > 0)
+      {
+        --function_param_depth;
+        if (function_param_depth > 0)
+          --function_param_depth;
+      }
+      else if (tok == ')' && function_param_depth == 0)
+      {
+        function_params_done = 1;
+        function_params_started = 0;
+      }
+    }
+    if (!td->is_class && function_params_done && pack_name_tok
+        && tok == pack_name_tok)
+    {
+      int saved_name_tok = tok;
+      CValue saved_name_tokc = tokc;
+      next();
+      if (tok == TOK_DOTS)
+      {
+        int pi;
+        char pack_name[256];
+        for (pi = pack_start; pi < args->nb; ++pi)
+        {
+          if (pi > pack_start)
+            tok_str_add(spec, ',');
+          snprintf(pack_name, sizeof(pack_name), "%s__pack%d",
+                   get_tok_str(pack_name_tok, NULL), pi - pack_start);
+          tok_str_add(spec, tok_alloc_const(pack_name));
+        }
+        next();
+        continue;
+      }
+      if (pack_start >= 0 && args->nb == pack_start + 1)
+      {
+        char pack_name[256];
+        snprintf(pack_name, sizeof(pack_name), "%s__pack0",
+                 get_tok_str(pack_name_tok, NULL));
+        tok_str_add(spec, tok_alloc_const(pack_name));
+      }
+      else
+        tok_str_add2(spec, saved_name_tok, &saved_name_tokc);
+      continue;
+    }
     if (td->variadic_param_index >= 0 && tok == TOK_DOTS)
     {
       next();
@@ -14782,14 +14926,15 @@ static void infer_template_args_from_call(TemplateDef *td, CType *arg_types,
                                           int arg_count, TemplateArgList *args)
 {
   int i, j, arg_index, type_tok;
-  int pack_start = td->variadic_param_index >= 0
-                   ? td->variadic_param_index
-                   : -1;
+  int pack_param_index = td->variadic_param_index >= 0
+                         ? td->variadic_param_index
+                         : -1;
+  int pack_arg_start = pack_param_index >= 0 ? td->func_min_args : -1;
 
   args->nb = td->nb_required_type_params;
-  if (pack_start >= 0 && pack_start < arg_count
-      && args->nb + (arg_count - pack_start) <= 16)
-    args->nb += arg_count - pack_start;
+  if (pack_param_index >= 0 && pack_arg_start < arg_count
+      && args->nb + (arg_count - pack_arg_start) <= 16)
+    args->nb += arg_count - pack_arg_start;
   for (i = 0; i < args->nb; ++i)
     args->toks[i] = 0;
   if (td->def_str)
@@ -14849,12 +14994,12 @@ static void infer_template_args_from_call(TemplateDef *td, CType *arg_types,
   /* Fill inferred pack element types from the remaining call arguments so
      variadic forwarding bodies (e.g. clConstruct's clForward(Args, args)...)
      receive a concrete type for each pack element. */
-  if (pack_start >= 0)
-    for (i = pack_start; i < arg_count && i < 16; ++i)
+  if (pack_param_index >= 0)
+    for (i = pack_arg_start; i < arg_count && i < 16; ++i)
     {
       type_tok = template_type_tok_from_ctype(&arg_types[i]);
-      if (type_tok && i < args->nb)
-        args->toks[i] = type_tok;
+      if (type_tok && pack_param_index + (i - pack_arg_start) < args->nb)
+        args->toks[pack_param_index + (i - pack_arg_start)] = type_tok;
     }
   for (i = 0; i < args->nb; ++i)
   {
@@ -15060,10 +15205,6 @@ static TokenString *parse_constructor_member_initializers(CType *struct_type)
   TokenString *prefix, *args;
   int this_tok = tok_alloc_const("this");
 
-  if (getenv("CPC_DBG_FIELD"))
-    fprintf(stderr, "DBG member-init class=%s\n",
-            get_struct_type_name_tok(struct_type) >= TOK_UIDENT
-            ? get_tok_str(get_struct_type_name_tok(struct_type), NULL) : "?");
   if (tok != ':')
     return NULL;
   next();
@@ -15870,10 +16011,6 @@ static Sym *find_field (CType *type, int v, int *cumofs)
   }
   if (!(v & SYM_FIELD))
   {
-    if (getenv("CPC_DBG_FIELD"))
-      fprintf(stderr, "DBG field not found: %s in class %s\n",
-              get_tok_str(v, NULL),
-              type->ref ? get_tok_str(type->ref->v & ~SYM_STRUCT, NULL) : "?");
     cprime_error("field not found: %s", get_tok_str(v, NULL));
   }
   return s;
@@ -17361,6 +17498,7 @@ storage:
     case TOK_INLINE1:
     case TOK_INLINE2:
     case TOK_INLINE3:
+    case TOK_INLINE4:
       t |= VT_INLINE;
       next();
       break;
@@ -21496,9 +21634,10 @@ static int try_parse_range_for(void)
   int var_tok, range_tok, index_tok, ptr_tok, body_first_tok;
   int is_array_range, array_count;
   int has_range_elem_type = 0;
+  int has_range_type = 0;
   Sym *range_sym;
-  CType range_elem_type;
-  TokenString *body, *lowered, *var_decl;
+  CType range_type, range_elem_type;
+  TokenString *body, *lowered, *var_decl, *range_expr;
 
   var_decl = tok_str_alloc();
   while (tok == TOK_LINENUM)
@@ -21557,10 +21696,29 @@ static int try_parse_range_for(void)
   }
   else if (tok >= TOK_UIDENT && struct_find(tok))
   {
+    int class_tok = tok;
     tok_str_add(var_decl, tok);
     next();
     while (tok == TOK_LINENUM)
       next();
+    if (tok == ':')
+    {
+      int nested_tok;
+      next();
+      skip(':');
+      while (tok == TOK_LINENUM)
+        next();
+      if (tok < TOK_UIDENT)
+        cprime_error("range-for nested type");
+      nested_tok = make_static_member_tok(class_tok, tok);
+      if (!struct_find(nested_tok))
+        nested_tok = tok;
+      var_decl->len = 0;
+      tok_str_add(var_decl, nested_tok);
+      next();
+      while (tok == TOK_LINENUM)
+        next();
+    }
     if (tok != '&')
       cprime_error("range-for reference");
     tok_str_add(var_decl, tok);
@@ -21585,16 +21743,56 @@ static int try_parse_range_for(void)
     next();
   if (tok < TOK_UIDENT)
     cprime_error("range-for range");
-  range_tok = tok;
+  range_expr = tok_str_alloc();
+  {
+    int paren = 0, bracket = 0, angle = 0;
+    while (tok != TOK_EOF)
+    {
+      if (!paren && !bracket && !angle && tok == ')')
+        break;
+      tok_str_add2(range_expr, tok, &tokc);
+      if (tok == '(')
+        ++paren;
+      else if (tok == ')' && paren > 0)
+        --paren;
+      else if (tok == '[')
+        ++bracket;
+      else if (tok == ']' && bracket > 0)
+        --bracket;
+      else if (tok == TOK_LT || tok == '<')
+        ++angle;
+      else if ((tok == TOK_GT || tok == '>') && angle > 0)
+        --angle;
+      else if (tok == TOK_SAR && angle > 0)
+      {
+        --angle;
+        if (angle > 0)
+          --angle;
+      }
+      next();
+    }
+  }
+  tok_str_add(range_expr, TOK_EOF);
+  range_tok = range_expr->len == 2 ? range_expr->str[0] : 0;
   range_sym = sym_find(range_tok);
   is_array_range = range_sym && (range_sym->type.t & VT_ARRAY);
   array_count = is_array_range ? range_sym->type.ref->c : 0;
-  if (!is_array_range && range_sym
-      && (range_sym->type.t & VT_BTYPE) == VT_STRUCT)
+  if (range_sym)
+  {
+    range_type = range_sym->type;
+    has_range_type = 1;
+  }
+  else
+  {
+    infer_expr_type_from_tokens(range_expr, &range_type);
+    has_range_type = 1;
+  }
+  if (!is_array_range && has_range_type
+      && (range_type.t & VT_BTYPE) == VT_STRUCT)
   {
     CType index_type = int_type;
     Sym *index_func =
-      resolve_member_func_by_arg_types(&range_sym->type,
+      resolve_member_func_by_arg_types(&range_type,
                                        tok_alloc_const("operator[]"),
                                        &index_type, 1);
     if (index_func && (index_func->type.t & VT_BTYPE) == VT_FUNC
@@ -21609,7 +21807,6 @@ static int try_parse_range_for(void)
       has_range_elem_type = 1;
     }
   }
-  next();
   skip(')');
 
   body_first_tok = tok;
@@ -21641,7 +21838,7 @@ static int try_parse_range_for(void)
     tok_str_add_cint(lowered, array_count);
   else
   {
-    tok_str_add(lowered, range_tok);
+    tok_str_append_without_eof(lowered, range_expr);
     tok_str_add(lowered, '.');
     tok_str_add(lowered, tok_alloc_const("Size"));
     tok_str_add(lowered, '(');
@@ -21679,7 +21876,7 @@ static int try_parse_range_for(void)
     tok_str_add(lowered, ptr_tok);
     tok_str_add(lowered, '=');
     tok_str_add(lowered, '&');
-    tok_str_add(lowered, range_tok);
+    tok_str_append_without_eof(lowered, range_expr);
     tok_str_add(lowered, '[');
     tok_str_add(lowered, index_tok);
     tok_str_add(lowered, ']');
