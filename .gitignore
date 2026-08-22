@@ -21,6 +21,9 @@
 /BuildProfile/out/asm-compare-*.csv
 
 # Local compiler debugging artifacts
+*.log
+*.err
+*.out
 /tmp_*
 /Tests/tmp_*
 /build/*.log

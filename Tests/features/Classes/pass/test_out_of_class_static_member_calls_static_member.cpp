@@ -29,7 +29,7 @@ bool StaticCallFile::Delete(StaticCallPath path)
 
 bool StaticCallFolder::Create(StaticCallPath path)
 {
-  if (StaticCallFolder::Exists(path))
+  if (Exists(path))
     return true;
   if (StaticCallFile::Delete(path))
     return true;

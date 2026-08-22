@@ -664,10 +664,9 @@ do_init_list:
           TokenString macro = *elements[i];
           begin_macro(&macro, 0);
           next();
-          expr_eq();
+          decl_initializer(&element_init, element_type,
+                           element_addr + i * element_size, DIF_FIRST);
           end_macro();
-          init_putv(&element_init, element_type,
-                    element_addr + i * element_size);
         }
         vset(element_type, VT_LOCAL | VT_LVAL, element_addr);
         vtop->r2 = element_r2;

@@ -5,8 +5,9 @@
 CPrime is a fast assembler, C compiler, and C++ compiler for people who want
 near instant builds, tiny native outputs, and the full expressiveness of C++.
 
-The compiler is called **CPC**. Its job is to take assembler, C, and C++ code
-and almost instantly produce lightweight native outputs, without bulky C++
+The compiler is called **CPC**. It is a full C++ compiler: you can throw a big
+C++ project at it and it will compile. CPC takes assembler, C, and C++ code and
+almost instantly produces lightweight native outputs, without bulky C++
 toolchains.
 
 ## The Short Version
@@ -36,6 +37,7 @@ CPrime asks a simple question:
 
 - Full C compatibility: structs, enums, function calls, recursion, pointers,
   arrays, macros, stdio, and compile-fail cases
+- Full C++ project support
 - 100% C++ support
 - Fast assembler support
 - Lightweight native outputs

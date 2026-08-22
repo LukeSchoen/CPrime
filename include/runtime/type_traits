@@ -18,6 +18,17 @@ namespace std
   template<> struct is_floating_point<double> { static const bool value = true; };
 
   template<class T> struct is_signed { static const bool value = false; };
+  typedef unsigned char __cpc_unsigned_char;
+  typedef unsigned short __cpc_unsigned_short;
+  typedef unsigned int __cpc_unsigned_int;
+  typedef unsigned long __cpc_unsigned_long;
+  typedef unsigned long long __cpc_unsigned_long_long;
+  template<class T> struct is_unsigned { static const bool value = false; };
+  template<> struct is_unsigned<__cpc_unsigned_char> { static const bool value = true; };
+  template<> struct is_unsigned<__cpc_unsigned_short> { static const bool value = true; };
+  template<> struct is_unsigned<__cpc_unsigned_int> { static const bool value = true; };
+  template<> struct is_unsigned<__cpc_unsigned_long> { static const bool value = true; };
+  template<> struct is_unsigned<__cpc_unsigned_long_long> { static const bool value = true; };
 
   template<bool B, class T, class F> struct conditional { typedef F type; };
   template<class T, class F> struct conditional<true, T, F> { typedef T type; };

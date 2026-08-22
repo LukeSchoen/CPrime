@@ -166,10 +166,7 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
 
   skip('(');
   skip_line_markers();
-  if (tok == '{')
-    call_arg_count = count_saved_braced_ctor_args(call_args, 32);
-  else
-    call_arg_count = count_saved_call_args(call_args, 32);
+  call_arg_count = count_saved_call_args(call_args, 32);
   infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
   {
     Sym *overload = resolve_member_func_by_arg_types(type, TOK_CONSTRUCTOR1,
@@ -857,33 +854,8 @@ static void call_lifecycle_constructor_saved_args(CType *type, int r, int addr,
 
   for (ai = 0; ai < call_arg_count; ++ai)
   {
-    if (saved_arg_is_braced(call_args[ai]) && sa
-        && (((sa->type.t & VT_BTYPE) == VT_STRUCT)
-            || (is_reference_type(&sa->type)
-                && ((pointed_type(&sa->type)->t & VT_BTYPE) == VT_STRUCT))))
-    {
-      CType temp_type;
-      AttributeDef temp_ad;
-      TokenString macro;
-      temp_type = is_reference_type(&sa->type) ? *pointed_type(&sa->type)
-                                               : sa->type;
-      memset(&temp_ad, 0, sizeof temp_ad);
-      macro = *call_args[ai];
-      begin_macro(&macro, 0);
-      next();
-      decl_initializer_alloc(&temp_type, &temp_ad, VT_LOCAL | VT_LVAL,
-                             1, 0, NULL, 0, VT_LOCAL);
-      end_macro();
-    }
-    else
-    {
-      TokenString macro = *call_args[ai];
-      begin_macro(&macro, 0);
-      next();
-      expr_eq();
-      end_macro();
-    }
-    gfunc_param_typed(func_type, sa);
+    emit_saved_arg_for_param(call_args[ai], sa);
+    gfunc_param_typed_with_conversions(func_type, sa);
     nb_args++;
     if (sa)
       sa = sa->next;
@@ -945,10 +917,25 @@ static int try_parse_cpp_functional_constructor(int type_tok)
 
   next();
   skip_line_markers();
-  if (tok == '{')
-    call_arg_count = count_saved_braced_ctor_args(call_args, 32);
-  else
-    call_arg_count = count_saved_call_args(call_args, 32);
+  call_arg_count = count_saved_call_args(call_args, 32);
+  if (call_arg_count == 1 && saved_arg_is_braced(call_args[0])
+      && !class_has_initializer_list_constructor_candidate(&type))
+  {
+    AttributeDef ad;
+    TokenString macro = *call_args[0];
+
+    memset(&ad, 0, sizeof ad);
+    begin_macro(&macro, 0);
+    next();
+    decl_initializer_alloc(&type, &ad, VT_LOCAL | VT_LVAL, 1, 0, NULL, 0,
+                           VT_LOCAL);
+    end_macro();
+    if (tok == TOK_EOF)
+      next();
+    else
+      skip(')');
+    return 1;
+  }
   infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
   ctor_func = resolve_member_func_by_arg_types(&type, TOK_CONSTRUCTOR1,
                                                call_arg_types,
@@ -990,6 +977,49 @@ static int try_parse_cpp_functional_constructor(int type_tok)
 
   vset(&type, VT_LOCAL | VT_LVAL, addr);
   vtop->r2 = r2;
+  return 1;
+}
+
+static int try_parse_cpp_functional_type_cast(int type_tok)
+{
+  Sym *type_sym;
+  CType cast_type;
+
+  if (tok != '(')
+    return 0;
+
+  type_sym = struct_find(type_tok);
+  if (type_sym && IS_ENUM(type_sym->type.t))
+  {
+    cast_type = type_sym->type;
+    cast_type.t &= ~(VT_STORAGE | VT_ENUM);
+    cast_type.ref = NULL;
+  }
+  else
+  {
+    type_sym = sym_find(type_tok);
+    if (!type_sym)
+      type_sym = sym_find2(global_stack, type_tok);
+    if (!type_sym || !(type_sym->type.t & VT_TYPEDEF)
+        || (type_sym->type.t & VT_BTYPE) == VT_STRUCT)
+      return 0;
+    cast_type = type_sym->type;
+    cast_type.t &= ~VT_TYPEDEF;
+  }
+
+  next();
+  if (tok == ')')
+  {
+    next();
+    vpushi(0);
+  }
+  else
+  {
+    expr_eq();
+    skip(')');
+  }
+
+  gen_cast(&cast_type);
   return 1;
 }
 
@@ -1346,6 +1376,7 @@ static int member_overload_exists_for_call(CType *type, int method_tok,
 {
   int struct_tok;
   MemberFuncOverload *o;
+  ClassBaseInfo *info;
 
   struct_tok = get_struct_type_name_tok(type);
   if (!struct_tok)
@@ -1355,6 +1386,52 @@ static int member_overload_exists_for_call(CType *type, int method_tok,
         && explicit_arg_count >= o->min_arg_count
         && explicit_arg_count <= o->explicit_arg_count)
       return 1;
+  for (info = class_base_infos; info; info = info->next)
+  {
+    CType base_type;
+
+    if (info->class_tok != struct_tok)
+      continue;
+    if (!make_class_type_from_tok(&base_type, info->base_tok))
+      continue;
+    base_type.t |= type->t & VT_CONSTANT;
+    if (member_overload_exists_for_call(&base_type, method_tok,
+                                        explicit_arg_count))
+      return 1;
+  }
+  return 0;
+}
+
+static int member_func_owner_for_call(CType *type, int method_tok,
+                                      int explicit_arg_count)
+{
+  int struct_tok;
+  MemberFuncOverload *o;
+  ClassBaseInfo *info;
+
+  struct_tok = get_struct_type_name_tok(type);
+  if (!struct_tok)
+    return 0;
+  for (o = member_func_overloads; o; o = o->next)
+    if (o->struct_tok == struct_tok && o->method_tok == method_tok
+        && explicit_arg_count >= o->min_arg_count
+        && explicit_arg_count <= o->explicit_arg_count)
+      return struct_tok;
+  for (info = class_base_infos; info; info = info->next)
+  {
+    CType base_type;
+    int owner_tok;
+
+    if (info->class_tok != struct_tok)
+      continue;
+    if (!make_class_type_from_tok(&base_type, info->base_tok))
+      continue;
+    base_type.t |= type->t & VT_CONSTANT;
+    owner_tok = member_func_owner_for_call(&base_type, method_tok,
+                                           explicit_arg_count);
+    if (owner_tok)
+      return owner_tok;
+  }
   return 0;
 }
 
@@ -1363,6 +1440,7 @@ static int member_overload_count_for_call(CType *type, int method_tok,
 {
   int struct_tok, count = 0;
   MemberFuncOverload *o;
+  ClassBaseInfo *info;
 
   struct_tok = get_struct_type_name_tok(type);
   if (!struct_tok)
@@ -1372,6 +1450,18 @@ static int member_overload_count_for_call(CType *type, int method_tok,
         && explicit_arg_count >= o->min_arg_count
         && explicit_arg_count <= o->explicit_arg_count)
       ++count;
+  for (info = class_base_infos; info; info = info->next)
+  {
+    CType base_type;
+
+    if (info->class_tok != struct_tok)
+      continue;
+    if (!make_class_type_from_tok(&base_type, info->base_tok))
+      continue;
+    base_type.t |= type->t & VT_CONSTANT;
+    count += member_overload_count_for_call(&base_type, method_tok,
+                                            explicit_arg_count);
+  }
   return count;
 }
 
@@ -1513,7 +1603,7 @@ static int try_materialize_constructor_conversion(CType *type)
 {
   SValue source;
   Sym *ctor_func, *ctor_type, *sa;
-  int size, align, addr, r2;
+  int size, align, addr, r2, nb_args;
 
   if ((type->t & VT_BTYPE) != VT_STRUCT)
     return 0;
@@ -1522,6 +1612,16 @@ static int try_materialize_constructor_conversion(CType *type)
   if (!ctor_func)
     ctor_func = resolve_member_field_func_by_arg_types(type, TOK_CONSTRUCTOR1,
                                                        &vtop->type, 1);
+  if (!ctor_func && (vtop->type.t & VT_ARRAY))
+  {
+    CType decayed_arg_type = vtop->type;
+    decayed_arg_type.t &= ~VT_ARRAY;
+    ctor_func = resolve_member_func_by_arg_types(type, TOK_CONSTRUCTOR1,
+                                                 &decayed_arg_type, 1);
+    if (!ctor_func)
+      ctor_func = resolve_member_field_func_by_arg_types(type, TOK_CONSTRUCTOR1,
+                                                         &decayed_arg_type, 1);
+  }
   if (!ctor_func)
     return 0;
   if ((ctor_func->type.t & VT_BTYPE) != VT_FUNC || !ctor_func->type.ref)
@@ -1550,11 +1650,20 @@ static int try_materialize_constructor_conversion(CType *type)
   gfunc_param_typed(ctor_type, sa);
   if (sa)
     sa = sa->next;
-  if (sa)
-    cprime_error("too few arguments to constructor");
+  nb_args = 2;
+  while (sa)
+  {
+    int saved_tok = tok;
+    CValue saved_tokc = tokc;
+    emit_default_arg(ctor_type, sa);
+    tok = saved_tok;
+    tokc = saved_tokc;
+    nb_args++;
+    sa = sa->next;
+  }
 
   vcheck_cmp();
-  gfunc_call(2);
+  gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 
   vset(type, VT_LOCAL | VT_LVAL, addr);
@@ -2040,6 +2149,7 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
                                     CType *func_type, TokenString *body)
 {
   int struct_tok, mangled_tok, i;
+  int this_tok, public_this_tok;
   Sym *arg;
   PendingMemberFunc *pm;
   TokenString *str;
@@ -2048,6 +2158,13 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   if (!struct_tok)
     cprime_error("inline member functions require a named struct/class");
   mangled_tok = make_member_func_tok_for_type(struct_tok, method_tok, func_type);
+  {
+    char this_name[256];
+    snprintf(this_name, sizeof this_name, "__cprime_this_%s",
+             get_tok_str(mangled_tok, NULL));
+    this_tok = tok_alloc_const(this_name);
+  }
+  public_this_tok = tok_alloc_const("this");
   {
     CType lowered_type = make_lowered_member_func_type(struct_type, func_type);
     external_global_sym(mangled_tok, &lowered_type);
@@ -2066,7 +2183,7 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   if (func_type->t & VT_CONSTANT)
     tok_str_add(str, TOK_CONST1);
   tok_str_add(str, '*');
-  tok_str_add(str, tok_alloc_const("this"));
+  tok_str_add(str, this_tok);
   for (arg = func_type->ref->next; arg; arg = arg->next)
   {
     tok_str_add(str, ',');
@@ -2078,6 +2195,11 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   for (i = 0; i < body->len && body->str[i] != TOK_EOF; ++i)
   {
     int prev_body_tok = 0, pi;
+    if (TOK_HAS_VALUE(body->str[i]))
+    {
+      tok_str_add_record(str, body->str, body->len, &i);
+      continue;
+    }
     for (pi = i - 1; pi >= 0; --pi)
     {
       if (body->str[pi] == TOK_LINENUM)
@@ -2091,6 +2213,7 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
     if (body->str[i] >= TOK_UIDENT
         && (i == 0 || body->str[i - 1] != ':')
         && (i + 1 >= body->len || body->str[i + 1] != ':')
+        && prev_body_tok != '~'
         && class_tok_matches_unqualified_name(struct_tok, body->str[i]))
     {
       tok_str_add(str, struct_tok);
@@ -2115,11 +2238,38 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
       }
       else
       {
-        tok_str_add(str, tok_alloc_const("this"));
-        tok_str_add(str, TOK_ARROW);
+        int owner_tok = member_func_owner_for_call(struct_type, body->str[i],
+                                                   0);
+        if (!owner_tok)
+        {
+        }
+        else if (owner_tok == struct_tok)
+        {
+        }
+        else
+        {
+          tok_str_add(str, '(');
+          tok_str_add(str, '(');
+          tok_str_add(str, TOK_STRUCT);
+          tok_str_add(str, owner_tok);
+          tok_str_add(str, '*');
+          tok_str_add(str, ')');
+          tok_str_add(str, this_tok);
+          tok_str_add(str, ')');
+        }
+        if (owner_tok == struct_tok)
+        {
+          tok_str_add(str, this_tok);
+          tok_str_add(str, TOK_ARROW);
+        }
+        else if (owner_tok)
+          tok_str_add(str, TOK_ARROW);
       }
     }
-    tok_str_add(str, body->str[i]);
+    if (body->str[i] == public_this_tok)
+      tok_str_add(str, this_tok);
+    else
+      tok_str_add(str, body->str[i]);
   }
   tok_str_add(str, TOK_EOF);
 
@@ -2257,6 +2407,11 @@ static void add_lifecycle_param_tokens(TokenString *str, TokenString *params,
   for (i = 0; i < params->len && params->str[i] != TOK_EOF; ++i)
   {
     int lt = i + 1;
+    if (TOK_HAS_VALUE(params->str[i]))
+    {
+      tok_str_add_record(str, params->str, params->len, &i);
+      continue;
+    }
     while (lt + 1 < params->len && params->str[lt] == TOK_LINENUM)
       lt += 2;
     if (params->str[i] >= TOK_IDENT && lt < params->len
@@ -2373,7 +2528,7 @@ static void add_pending_lifecycle_decl(CType *struct_type, int method_tok,
   func_type = make_func_type_from_saved_params(&ret_type, params);
   lowered_type = make_lowered_member_func_type(struct_type, &func_type);
   mangled_tok = make_lifecycle_func_tok_for_type(struct_tok, method_tok,
-                                                &lowered_type, 0);
+                                                 &lowered_type, 0);
   if (pending_member_func_has_tok(mangled_tok))
     return;
   if (sym_find(mangled_tok) || sym_find2(global_stack, mangled_tok))
@@ -2483,6 +2638,75 @@ static Sym *resolve_initializer_list_constructor(CType *type)
   return NULL;
 }
 
+static int class_has_initializer_list_constructor_candidate(CType *type)
+{
+  int struct_tok = get_struct_type_name_tok(type);
+  MemberFuncOverload *o;
+  TemplateDef *td;
+  int i, j;
+
+  if (!struct_tok)
+    return 0;
+  if (resolve_initializer_list_constructor(type))
+    return 1;
+  for (o = member_func_overloads; o; o = o->next)
+  {
+    Sym *param;
+    CType *param_type;
+
+    if (o->struct_tok != struct_tok || o->method_tok != TOK_CONSTRUCTOR1
+        || o->explicit_arg_count != 1 || !o->func_type.ref)
+      continue;
+    param = o->func_type.ref->next;
+    if (param)
+      param = param->next; /* skip lowered this */
+    if (!param)
+      continue;
+    param_type = &param->type;
+    if (is_reference_type(param_type))
+      param_type = pointed_type(param_type);
+    if (type_is_std_initializer_list(param_type))
+      return 1;
+  }
+
+  td = find_class_template_def_for_class_tok(struct_tok);
+  if (!td)
+  {
+    const char *struct_name = get_tok_str(struct_tok, NULL);
+    for (i = 0; i < nb_template_defs; ++i)
+    {
+      const char *base_name;
+      size_t base_len;
+      td = template_defs[i];
+      if (!td->is_class)
+        continue;
+      base_name = get_tok_str(td->lookup_tok ? td->lookup_tok : td->name_tok,
+                              NULL);
+      base_len = strlen(base_name);
+      if (!strncmp(struct_name, base_name, base_len)
+          && struct_name[base_len] == '_'
+          && struct_name[base_len + 1] == '_')
+        break;
+      td = NULL;
+    }
+  }
+  if (!td)
+    return 0;
+  if (td->def_str && token_string_has_initializer_list(td->def_str))
+    return 1;
+  for (j = 0; j < td->nb_inst; ++j)
+    if (td->inst_name_toks[j] == struct_tok)
+      for (i = 0; i < nb_template_member_defs; ++i)
+      {
+        TemplateMemberDef *md = template_member_defs[i];
+        if (md->class_tok == td->name_tok
+            && template_member_def_method_tok(md) == TOK_CONSTRUCTOR1
+            && token_string_has_initializer_list(md->def_str))
+          return 1;
+      }
+  return 0;
+}
+
 static void add_pending_global_dynamic_init(int var_tok, CType *type,
                                             TokenString *init)
 {
@@ -2541,7 +2765,7 @@ static void add_pending_global_dynamic_init(int var_tok, CType *type,
 
 static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
 {
-  int i, in_body = 0, this_tok = tok_alloc_const("this");
+  int i, in_body = 0, this_tok;
   Sym *class_sym;
   CType class_type;
   TokenString *dst;
@@ -2553,10 +2777,33 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
     return;
   class_type = class_sym->type;
   class_type.ref = class_sym;
+  this_tok = 0;
+  for (i = 0; i < pm->str->len; ++i)
+  {
+    int t = pm->str->str[i];
+    if (TOK_HAS_VALUE(t))
+    {
+      i += tok_str_value_extra_words(pm->str->str, pm->str->len, i);
+      continue;
+    }
+    if (t >= TOK_UIDENT
+        && !strncmp(get_tok_str(t, NULL), "__cprime_this_", 14))
+    {
+      this_tok = t;
+      break;
+    }
+  }
+  if (!this_tok)
+    this_tok = tok_alloc_const("this");
   dst = tok_str_alloc();
   for (i = 0; i < pm->str->len && pm->str->str[i] != TOK_EOF; ++i)
   {
     int t = pm->str->str[i];
+    if (TOK_HAS_VALUE(t))
+    {
+      tok_str_add_record(dst, pm->str->str, pm->str->len, &i);
+      continue;
+    }
     if (!in_body)
     {
       tok_str_add(dst, t);

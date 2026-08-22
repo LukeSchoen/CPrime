@@ -1,0 +1,8 @@
+#ifndef _CPC_QUEUE
+#define _CPC_QUEUE
+
+namespace std
+{
+}
+
+#endif

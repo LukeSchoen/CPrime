@@ -2,6 +2,7 @@ param(
     [string]$CpcPath = "",
     [string]$ProjectRoot = "C:\Luke\Src\OT\cl",
     [string]$OutDir = "",
+    [int]$CompileTimeoutSeconds = 10,
     [switch]$LinkOnly,
     [switch]$SkipLink
 )
@@ -82,14 +83,28 @@ function Invoke-CpcCompile {
 
     $obj = Join-Path $OutDir ($Label + ".obj")
     $log = Join-Path $OutDir ($Label + ".obj.log")
-    $args = @($flags) + @($ExtraFlags) + @("-c", $Source, "-o", $obj)
-    $savedEap = $ErrorActionPreference
-    $ErrorActionPreference = "Continue"
-    try {
-        & $CpcPath @args *> $log 2>&1
-        $exit = $LASTEXITCODE
-    } finally {
-        $ErrorActionPreference = $savedEap
+    $args = @($flags)
+    if ($ExtraFlags) {
+        $args += @($ExtraFlags)
+    }
+    $args += @("-c", $Source, "-o", $obj)
+    $errLog = $log + ".err"
+    Remove-Item -LiteralPath $log, $errLog -Force -ErrorAction SilentlyContinue
+    $proc = Start-Process -FilePath $CpcPath -ArgumentList $args `
+        -RedirectStandardOutput $log -RedirectStandardError $errLog `
+        -PassThru -NoNewWindow
+    $timedOut = $false
+    if (-not $proc.WaitForExit($CompileTimeoutSeconds * 1000)) {
+        $timedOut = $true
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        $exit = -999
+        Add-Content -LiteralPath $log -Encoding ASCII `
+            -Value ("cpc compile timed out after {0}s" -f $CompileTimeoutSeconds)
+    } else {
+        $exit = $proc.ExitCode
+    }
+    if (Test-Path -LiteralPath $errLog) {
+        Get-Content -LiteralPath $errLog | Add-Content -LiteralPath $log
     }
     $text = ""
     if (Test-Path -LiteralPath $log) {
@@ -98,7 +113,8 @@ function Invoke-CpcCompile {
     }
     $errors = ([regex]::Matches($text, "error:" )).Count
     $warnings = ([regex]::Matches($text, "warning:" )).Count
-    Write-Host ("{0,-22} exit={1,-3} warnings={2,-4} errors={3}" -f $Label, $exit, $warnings, $errors)
+    $status = if ($timedOut) { " TIMEOUT" } else { "" }
+    Write-Host ("{0,-22} exit={1,-4} warnings={2,-4} errors={3}{4}" -f $Label, $exit, $warnings, $errors, $status)
     if ($exit -ne 0) {
         $firstError = (Get-Content -LiteralPath $log | Select-String -Pattern "error:" | Select-Object -First 3) -join "`n"
         Write-Host $firstError

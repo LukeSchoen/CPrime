@@ -216,10 +216,92 @@ static void append_range_for_body(TokenString *dst, TokenString *body,
   }
 }
 
+static void skip_or_save_balanced_tokens(TokenString *dst)
+{
+  int level = 0;
+  do
+  {
+    int t = tok;
+    if (t == TOK_EOF)
+      cprime_error("unexpected end of file");
+    tok_str_add_tok(dst);
+    next();
+    if (t == '{' || t == '(' || t == '[')
+      level++;
+    else if (t == '}' || t == ')' || t == ']')
+      level--;
+  }
+  while (level > 0);
+}
+
+static void skip_or_save_statement_tokens(TokenString *dst, int nested)
+{
+  while (tok == TOK_LINENUM)
+  {
+    tok_str_add_tok(dst);
+    next();
+  }
+
+  if (tok == '{')
+  {
+    skip_or_save_balanced_tokens(dst);
+    return;
+  }
+
+  if (tok == TOK_IF)
+  {
+    tok_str_add_tok(dst);
+    next();
+    while (tok == TOK_LINENUM)
+    {
+      tok_str_add_tok(dst);
+      next();
+    }
+    if (tok == '(')
+      skip_or_save_balanced_tokens(dst);
+    else
+      cprime_error("'(' expected");
+    skip_or_save_statement_tokens(dst, 1);
+    while (tok == TOK_LINENUM)
+    {
+      tok_str_add_tok(dst);
+      next();
+    }
+    if (tok == TOK_ELSE)
+    {
+      tok_str_add_tok(dst);
+      next();
+      skip_or_save_statement_tokens(dst, 1);
+    }
+    return;
+  }
+
+  while (tok != TOK_EOF && tok != ';' && tok != '}')
+  {
+    tok_str_add_tok(dst);
+    next();
+  }
+  if (nested && tok == ';')
+  {
+    tok_str_add_tok(dst);
+    next();
+  }
+}
+
+static void skip_or_save_statement(TokenString **str)
+{
+  if (str)
+    *str = tok_str_alloc();
+  skip_or_save_statement_tokens(*str, 0);
+  if (str)
+    tok_str_add(*str, TOK_EOF);
+}
+
 static int try_parse_range_for(void)
 {
   char tmp_name[64];
   int var_tok, range_tok, index_tok, ptr_tok, body_first_tok;
+  int body_had_semicolon = 0;
   int is_array_range, array_count;
   int has_range_elem_type = 0;
   int has_range_type = 0;
@@ -274,18 +356,97 @@ static int try_parse_range_for(void)
     next();
     while (tok == TOK_LINENUM)
       next();
+    if (tok == '(')
+    {
+      int range_decl_parens = 0;
+      do
+      {
+        tok_str_add(var_decl, tok);
+        range_decl_parens++;
+        next();
+        while (tok == TOK_LINENUM)
+          next();
+      }
+      while (tok == '(');
+      if (tok == '*')
+      {
+        tok_str_add(var_decl, tok);
+        next();
+        while (tok == TOK_LINENUM)
+          next();
+        while (tok == '(')
+        {
+          tok_str_add(var_decl, tok);
+          range_decl_parens++;
+          next();
+          while (tok == TOK_LINENUM)
+            next();
+        }
+      }
+      if (tok < TOK_UIDENT)
+        cprime_error("range-for variable before '%s'",
+                     get_tok_str(tok, &tokc));
+      var_tok = tok;
+      tok_str_add(var_decl, tok);
+      next();
+      while (tok == TOK_LINENUM)
+        next();
+      while (range_decl_parens-- > 0)
+      {
+        skip(')');
+        tok_str_add(var_decl, ')');
+      }
+      while (tok == TOK_LINENUM)
+        next();
+      goto range_for_decl_done;
+    }
     if (tok < TOK_UIDENT)
-      cprime_error("range-for variable");
+      cprime_error("range-for variable before '%s'", get_tok_str(tok, &tokc));
+    var_tok = tok;
+    tok_str_add(var_decl, tok);
+    next();
+    while (tok == TOK_LINENUM)
+      next();
+range_for_decl_done:
+    ;
+  }
+  else if (tok == TOK_STRUCT || tok == TOK_UNION || tok == TOK_ENUM)
+  {
+    CType range_type;
+    AttributeDef range_ad;
+
+    memset(&range_type, 0, sizeof range_type);
+    memset(&range_ad, 0, sizeof range_ad);
+    if (!parse_btype(&range_type, &range_ad, 0))
+      cprime_error("range-for variable type");
+    if (!add_ctype_tokens(var_decl, &range_type))
+      cprime_error("range-for variable type");
+    while (tok == TOK_LINENUM)
+      next();
+    if (tok != '&')
+      cprime_error("range-for reference");
+    tok_str_add(var_decl, tok);
+    next();
+    while (tok == TOK_LINENUM)
+      next();
+    if (tok < TOK_UIDENT)
+      cprime_error("range-for variable before '%s'", get_tok_str(tok, &tokc));
     var_tok = tok;
     tok_str_add(var_decl, tok);
     next();
     while (tok == TOK_LINENUM)
       next();
   }
-  else if (tok >= TOK_UIDENT && struct_find(tok))
+  else if (tok >= TOK_UIDENT)
   {
-    int class_tok = tok;
-    tok_str_add(var_decl, tok);
+    int class_tok = find_current_class_nested_type_tok(tok);
+    if (!struct_find(class_tok))
+      class_tok = find_any_nested_struct_type_tok(tok);
+    if (!class_tok)
+      class_tok = tok;
+    TokenString *replay = tok_str_alloc();
+    tok_str_add2(replay, tok, &tokc);
+    tok_str_add(var_decl, class_tok);
     next();
     while (tok == TOK_LINENUM)
       next();
@@ -308,13 +469,35 @@ static int try_parse_range_for(void)
         next();
     }
     if (tok != '&')
-      cprime_error("range-for reference");
+    {
+      if (tok < TOK_UIDENT)
+      {
+        restore_cpp_lifecycle_probe(replay);
+        tok_str_free(var_decl);
+        return 0;
+      }
+      var_tok = tok;
+      tok_str_add2(replay, tok, &tokc);
+      tok_str_add(var_decl, tok);
+      next();
+      while (tok == TOK_LINENUM)
+        next();
+      if (tok != ':')
+      {
+        restore_cpp_lifecycle_probe(replay);
+        tok_str_free(var_decl);
+        return 0;
+      }
+      tok_str_free(replay);
+      goto range_for_decl_parsed;
+    }
+    tok_str_free(replay);
     tok_str_add(var_decl, tok);
     next();
     while (tok == TOK_LINENUM)
       next();
     if (tok < TOK_UIDENT)
-      cprime_error("range-for variable");
+      cprime_error("range-for variable before '%s'", get_tok_str(tok, &tokc));
     var_tok = tok;
     tok_str_add(var_decl, tok);
     next();
@@ -326,6 +509,7 @@ static int try_parse_range_for(void)
     tok_str_free(var_decl);
     return 0;
   }
+range_for_decl_parsed:
   skip(':');
   while (tok == TOK_LINENUM)
     next();
@@ -398,9 +582,12 @@ static int try_parse_range_for(void)
   skip(')');
 
   body_first_tok = tok;
-  skip_or_save_block(&body);
-  if (body_first_tok != '{')
+  skip_or_save_statement(&body);
+  if (body_first_tok != '{' && tok == ';')
+  {
     skip(';');
+    body_had_semicolon = 1;
+  }
 
   snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_i_%d",
            range_for_temp_counter++);
@@ -471,7 +658,7 @@ static int try_parse_range_for(void)
     tok_str_add(lowered, ';');
     append_range_for_body(lowered, body, var_tok, ptr_tok);
   }
-  if (body_first_tok != '{')
+  if (body_first_tok != '{' && body_had_semicolon)
     tok_str_add(lowered, ';');
   tok_str_add(lowered, '}');
   tok_str_add(lowered, '}');
@@ -665,13 +852,18 @@ again:
         int struct_tok = get_struct_type_name_tok(&func_vt);
         int saved_tok;
         CValue saved_tokc;
+        int use_initializer_list_ctor;
         TokenString *return_expr;
 
         if (!struct_tok)
           cprime_error("braced return requires a named class or struct");
+        use_initializer_list_ctor =
+            class_has_initializer_list_constructor_candidate(&func_vt);
         return_expr = tok_str_alloc();
         tok_str_add(return_expr, struct_tok);
         tok_str_add(return_expr, '(');
+        if (use_initializer_list_ctor)
+          tok_str_add(return_expr, '{');
         next();
         while (tok != TOK_EOF && depth > 0)
         {
@@ -688,6 +880,8 @@ again:
           tok_str_add_tok(return_expr);
           next();
         }
+        if (use_initializer_list_ctor)
+          tok_str_add(return_expr, '}');
         tok_str_add(return_expr, ')');
         tok_str_add(return_expr, TOK_EOF);
         saved_tok = tok;
