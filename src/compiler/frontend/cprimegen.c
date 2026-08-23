@@ -144,6 +144,7 @@ static void save_lvalues(void);
 static void gfunc_param_typed(Sym *func, Sym *arg);
 static int gvtst(int inv, int t);
 static void type_to_str(char *buf, int buf_size, CType *type, const char *varstr);
+static int get_struct_type_name_tok(CType *type);
 static inline void convert_parameter_type(CType *pt);
 static void gen_inline_functions(CPRIMEState *s);
 static void free_inline_functions(CPRIMEState *s);
@@ -269,6 +270,9 @@ typedef struct TemplateArgList
 static void infer_template_args_from_call(TemplateDef *td, CType *arg_types,
                                           int arg_count,
                                           TemplateArgList *args);
+static int template_def_first_param_matches_call(TemplateDef *td,
+                                                 CType *arg_types,
+                                                 int arg_count);
 static int instantiate_template_if_needed(TemplateDef *td,
                                           TemplateArgList *args);
 static void compile_pending_template_specs_without_member_flush(void);
@@ -276,14 +280,24 @@ static void compile_pending_template_specs_without_member_flush(void);
 typedef struct TemplateMemberDef
 {
   int class_tok;
+  int nested_class_tok;
+  int method_tok;
   int type_param_tok;
   TokenString *def_str;
   int *inst_type_toks;
   int *inst_pack_toks;
+  int *inst_func_toks;
   int nb_inst, al_inst;
   int *inst_class_toks;
   CType *inst_ret_types;
   int nb_inst_ret_types, al_inst_ret_types;
+  int *param_class_toks;
+  int *param_type_toks;
+  int *param_member_toks;
+  CType *param_types;
+  int nb_param_types, al_param_types;
+  int instantiating;
+  struct TemplateMemberDef *bucket_next;
 } TemplateMemberDef;
 
 typedef struct TemplateAliasInst
@@ -342,6 +356,8 @@ static int class_or_inst_has_member_template_name(int class_tok,
 static int is_same_template_family_conversion_ctor(CType *class_type,
                                                     CType *arg_type);
 static int same_template_family_compatible_elements(CType *type1, CType *type2);
+static int same_template_family_instantiations(CType *type1, CType *type2);
+static int try_materialize_same_template_family_conversion(CType *type);
 static int template_lookup_inst(TemplateDef *td, TemplateArgList *args);
 static void note_template_inst(TemplateDef *td, TemplateArgList *args,
                                int mangled_tok);
@@ -355,18 +371,23 @@ static void infer_expr_type_from_tokens(TokenString *expr, CType *type)
   int saved_tok = tok;
   CValue saved_tokc = tokc;
   TokenString macro;
-  TokenString *expr_macro_stack;
+  TokenString *saved_macro_stack = macro_stack;
+  const int *saved_macro_ptr = macro_ptr;
 
   macro = *expr;
+  if (getenv("CPC_TRACE_SHALLOW")
+      && token_string_contains_tok(expr, tok_alloc_const("clVector2")))
+    fprintf(stderr, "CPC_SHALLOW infer-expr func=%s len=%d\n",
+            funcname ? funcname : "<none>", expr->len);
   nocode_wanted++;
   begin_macro(&macro, 0);
-  expr_macro_stack = macro_stack;
   next();
   expr_eq();
   *type = vtop->type;
   vpop();
-  if (macro_stack == expr_macro_stack)
+  while (macro_stack && macro_stack != saved_macro_stack)
     end_macro();
+  macro_ptr = saved_macro_ptr;
   tok = saved_tok;
   tokc = saved_tokc;
   nocode_wanted = saved_nocode_wanted;
@@ -399,6 +420,11 @@ static int defining_class_stack[32];
 static int nb_defining_class_stack;
 static int compiling_non_lifecycle_template_member_body;
 static int last_decl_was_auto;
+static CType template_member_call_arg_types[16];
+static int nb_template_member_call_arg_types;
+static int template_member_extra_param_toks[15];
+static int template_member_extra_arg_toks[15];
+static int nb_template_member_extra_params;
 static int last_btype_was_typedef;
 static int last_btype_was_decltype;
 static int last_instantiated_member_func_tok;
@@ -432,6 +458,7 @@ typedef struct MemberFuncOverload
   int is_const;
   CType func_type;
   struct MemberFuncOverload *next;
+  struct MemberFuncOverload *bucket_next;
 } MemberFuncOverload;
 
 typedef struct FreeFuncOverload
@@ -445,7 +472,55 @@ typedef struct FreeFuncOverload
 } FreeFuncOverload;
 
 static MemberFuncOverload *member_func_overloads;
+#define MEMBER_CANDIDATE_BUCKETS 4096
+static MemberFuncOverload *member_func_overload_buckets[MEMBER_CANDIDATE_BUCKETS];
+static TemplateMemberDef *template_member_buckets[MEMBER_CANDIDATE_BUCKETS];
+static TemplateMemberDef *template_member_bucket_tails[MEMBER_CANDIDATE_BUCKETS];
+static unsigned long long profile_template_calls;
+static unsigned long long profile_template_def_scans;
+static unsigned long long profile_template_member_scans;
+static unsigned long long profile_overload_scans;
+static unsigned long long profile_other_overload_scans[8];
 static FreeFuncOverload *free_func_overloads;
+
+static unsigned member_candidate_bucket(int struct_tok, int method_tok)
+{
+  unsigned a = (unsigned)struct_tok;
+  unsigned b = (unsigned)method_tok;
+  return ((a * 2654435761u) ^ (b * 2246822519u))
+         & (MEMBER_CANDIDATE_BUCKETS - 1);
+}
+
+static MemberFuncOverload *member_func_candidates(int struct_tok,
+                                                  int method_tok)
+{
+  return member_func_overload_buckets[
+    member_candidate_bucket(struct_tok, method_tok)];
+}
+
+static void index_member_func_overload(MemberFuncOverload *o)
+{
+  unsigned bucket = member_candidate_bucket(o->struct_tok, o->method_tok);
+  o->bucket_next = member_func_overload_buckets[bucket];
+  member_func_overload_buckets[bucket] = o;
+}
+
+static TemplateMemberDef *template_member_candidates(int class_tok,
+                                                      int method_tok)
+{
+  return template_member_buckets[
+    member_candidate_bucket(class_tok, method_tok)];
+}
+
+static void index_template_member(TemplateMemberDef *md)
+{
+  unsigned bucket = member_candidate_bucket(md->class_tok, md->method_tok);
+  if (template_member_bucket_tails[bucket])
+    template_member_bucket_tails[bucket]->bucket_next = md;
+  else
+    template_member_buckets[bucket] = md;
+  template_member_bucket_tails[bucket] = md;
+}
 static int *defaulted_member_struct_toks;
 static int *defaulted_member_method_toks;
 static CType *defaulted_member_func_types;
@@ -455,6 +530,7 @@ static int tok_public;
 static int tok_protected;
 static int tok_private;
 static int tok_explicit;
+static int tok_mutable;
 static int tok_constexpr;
 static TokenString *last_cpp_conversion_operator_type_tokens;
 
@@ -592,6 +668,20 @@ static void free_template_state(void)
   MemberFuncOverload *o;
   FreeFuncOverload *fo;
 
+  if (getenv("CPC_PROFILE_SCANS"))
+    fprintf(stderr,
+            "CPC_PROFILE template_calls=%llu template_defs=%llu template_members=%llu overloads=%llu defs=%d members=%d\n",
+            profile_template_calls, profile_template_def_scans,
+            profile_template_member_scans, profile_overload_scans,
+            nb_template_defs, nb_template_member_defs);
+  if (getenv("CPC_PROFILE_SCANS"))
+    fprintf(stderr,
+            "CPC_PROFILE other_overloads=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
+            profile_other_overload_scans[0], profile_other_overload_scans[1],
+            profile_other_overload_scans[2], profile_other_overload_scans[3],
+            profile_other_overload_scans[4], profile_other_overload_scans[5],
+            profile_other_overload_scans[6], profile_other_overload_scans[7]);
+
   /* Compiled pending specs are freed by end_macro() and their slots are
      NULLed during compile_pending_template_specs().  Entries that were
      queued but never compiled still own tokstr allocations and must be
@@ -621,9 +711,21 @@ static void free_template_state(void)
     if (!md)
       continue;
     tok_str_free(md->def_str);
+    cprime_free(md->inst_type_toks);
+    cprime_free(md->inst_pack_toks);
+    cprime_free(md->inst_func_toks);
+    cprime_free(md->inst_class_toks);
+    cprime_free(md->inst_ret_types);
+    cprime_free(md->param_class_toks);
+    cprime_free(md->param_type_toks);
+    cprime_free(md->param_member_toks);
+    cprime_free(md->param_types);
     cprime_free(md);
   }
   cprime_free(template_member_defs);
+  memset(template_member_buckets, 0, sizeof(template_member_buckets));
+  memset(template_member_bucket_tails, 0,
+         sizeof(template_member_bucket_tails));
   template_member_defs = NULL;
   nb_template_member_defs = 0;
 
@@ -658,6 +760,8 @@ static void free_template_state(void)
     member_func_overloads = o->next;
     cprime_free(o);
   }
+  memset(member_func_overload_buckets, 0,
+         sizeof(member_func_overload_buckets));
   while (free_func_overloads)
   {
     fo = free_func_overloads;
@@ -915,6 +1019,7 @@ ST_FUNC void cprimegen_init(CPRIMEState *s1)
   tok_protected = tok_alloc_const("protected");
   tok_private = tok_alloc_const("private");
   tok_explicit = tok_alloc_const("explicit");
+  tok_mutable = tok_alloc_const("mutable");
   tok_constexpr = tok_alloc_const("constexpr");
 #ifdef precedence_parser
   init_prec();
@@ -1732,6 +1837,15 @@ ST_FUNC Sym *external_global_sym(int v, CType *type)
 {
   Sym *s;
 
+  if (getenv("CPC_TRACE_EXTERNAL_SYM")
+      && strstr(get_tok_str(v, NULL), "clMaxComponent"))
+    fprintf(stderr, "CPC_EXTERNAL_SYM_IN name=%s type_t=%04x ret_t=%04x ret_s=%s\n",
+            get_tok_str(v, NULL), type ? type->t : 0,
+            type && (type->t & VT_BTYPE) == VT_FUNC && type->ref
+              ? type->ref->type.t : 0,
+            type && (type->t & VT_BTYPE) == VT_FUNC && type->ref
+              ? get_tok_str(get_struct_type_name_tok(&type->ref->type), NULL)
+              : "<none>");
   s = sym_find(v);
   if (!s)
   {
@@ -2115,6 +2229,15 @@ static Sym *external_sym(int v, CType *type, int r, AttributeDef *ad)
 {
   Sym *s;
 
+  if (getenv("CPC_TRACE_EXTERNAL_SYM")
+      && strstr(get_tok_str(v, NULL), "clMaxComponent"))
+    fprintf(stderr, "CPC_EXTERNAL_SYM_DEF name=%s type_t=%04x ret_t=%04x ret_s=%s\n",
+            get_tok_str(v, NULL), type ? type->t : 0,
+            type && (type->t & VT_BTYPE) == VT_FUNC && type->ref
+              ? type->ref->type.t : 0,
+            type && (type->t & VT_BTYPE) == VT_FUNC && type->ref
+              ? get_tok_str(get_struct_type_name_tok(&type->ref->type), NULL)
+              : "<none>");
   // Look For Global Symbol
   s = sym_find(v);
   while (s && s->sym_scope)
@@ -4599,6 +4722,13 @@ static int is_compatible_unqualified_types(CType *type1, CType *type2)
 
 static void cast_error(CType *st, CType *dt)
 {
+  if (getenv("CPC_TRACE_CAST_ERROR"))
+    fprintf(stderr, "CPC_CAST_ERROR func=%s tok=%s macro=%p src=%04x/%s dst=%04x/%s func_ret=%04x/%s\n",
+            funcname ? funcname : "<none>", get_tok_str(tok, &tokc),
+            (void *)macro_stack,
+            st->t, get_tok_str(get_struct_type_name_tok(st), NULL),
+            dt->t, get_tok_str(get_struct_type_name_tok(dt), NULL),
+            func_vt.t, get_tok_str(get_struct_type_name_tok(&func_vt), NULL));
   type_incompatibility_error(st, dt, "cannot convert '%s' to '%s'");
 }
 
@@ -4690,6 +4820,17 @@ static void verify_assign_cast(CType *dt)
 case_VT_STRUCT:
     if (!is_compatible_unqualified_types(dt, st))
     {
+      if (getenv("CPC_TRACE_ASSIGN_CAST"))
+        fprintf(stderr, "CPC_ASSIGN_CAST dst_t=%04x dst_s=%s src_t=%04x src_s=%s file=%s line=%d\n",
+                dt->t, get_tok_str(get_struct_type_name_tok(dt), NULL),
+                st->t, get_tok_str(get_struct_type_name_tok(st), NULL),
+                file ? file->filename : "<no file>", file ? file->line_num : 0);
+      if (getenv("CPC_DUMP_MEMBER_TEMPLATE")
+          && get_struct_type_name_tok(dt)
+          && get_struct_type_name_tok(st))
+        fprintf(stderr, "CPC_STRUCT_CAST_CHECK dst=%s src=%s\n",
+                get_tok_str(get_struct_type_name_tok(dt), NULL),
+                get_tok_str(get_struct_type_name_tok(st), NULL));
       if (same_template_family_compatible_elements(dt, st))
         break;
 error:
@@ -4701,9 +4842,27 @@ error:
 
 static void gen_assign_cast(CType *dt)
 {
+  if ((dt->t & VT_BTYPE) == VT_STRUCT
+      && (vtop->type.t & VT_BTYPE) == VT_STRUCT
+      && !is_compatible_unqualified_types(dt, &vtop->type)
+      && same_template_family_instantiations(dt, &vtop->type)
+      && try_materialize_same_template_family_conversion(dt))
+    return;
   verify_assign_cast(dt);
   gen_cast(dt);
 }
+
+/* Find the global declaration through the token's symbol chain. */
+static inline Sym *global_symbol_find(int v)
+{
+  Sym *s = sym_find(v);
+
+  while (s && sym_scope_ex(s))
+    s = s->prev_tok;
+  return s;
+}
+
+static const char *cpc_vstore_context;
 
 // Store Vtop In Lvalue Pushed On Stack
 ST_FUNC void vstore(void)
@@ -4713,6 +4872,18 @@ ST_FUNC void vstore(void)
   ft = vtop[-1].type.t;
   sbt = vtop->type.t &VT_BTYPE;
   dbt = ft &VT_BTYPE;
+  if (getenv("CPC_TRACE_VSTORE")
+      && ((vtop[-1].type.t & VT_BTYPE) == VT_STRUCT
+          || (vtop->type.t & VT_BTYPE) == VT_STRUCT))
+    fprintf(stderr, "CPC_VSTORE dst_t=%04x dst_s=%s dst_r=%04x src_t=%04x src_s=%s src_r=%04x depth=%d file=%s line=%d\n",
+            vtop[-1].type.t, get_tok_str(get_struct_type_name_tok(&vtop[-1].type), NULL),
+            vtop[-1].r, vtop->type.t,
+            get_tok_str(get_struct_type_name_tok(&vtop->type), NULL),
+            vtop->r, (int)(vtop - vstack),
+            file ? file->filename : "<no file>", file ? file->line_num : 0);
+  if (getenv("CPC_TRACE_VSTORE"))
+    fprintf(stderr, "CPC_VSTORE_CONTEXT %s\n",
+            cpc_vstore_context ? cpc_vstore_context : "<none>");
   verify_assign_cast(&vtop[-1].type);
 
   if (sbt == VT_STRUCT)
@@ -5300,15 +5471,12 @@ static int class_tok_matches_unqualified_name(int class_tok, int name_tok)
 static int template_scalar_typedef_tok(const char *name, int type_flags)
 {
   int type_tok = tok_alloc_const(name);
-  Sym *s = sym_find2(global_stack, type_tok);
+  Sym *s = global_symbol_find(type_tok);
 
   if (!s || !(s->type.t & VT_TYPEDEF))
   {
-    CType type;
-    type.t = type_flags | VT_TYPEDEF;
-    type.ref = NULL;
-    s = sym_push2(&global_stack, type_tok, type.t, 0);
-    s->type.ref = type.ref;
+    s = global_identifier_push(type_tok, type_flags | VT_TYPEDEF, 0);
+    s->type.ref = NULL;
   }
   return type_tok;
 }
@@ -5722,7 +5890,8 @@ static void push_saved_param_scope(TokenString *params, Sym **saved_ls,
     memset(&ad, 0, sizeof ad);
     if (!parse_btype(&param_type, &ad, 0))
       expect("parameter type");
-    type_decl(&param_type, &ad, &name_tok, TYPE_DIRECT | TYPE_PARAM);
+    type_decl(&param_type, &ad, &name_tok,
+              TYPE_DIRECT | TYPE_ABSTRACT | TYPE_PARAM);
     if (tok == '=')
     {
       TokenString *default_arg = NULL;
@@ -5791,12 +5960,14 @@ static int try_parse_cpp_lifecycle_def(void)
   if (tok == '~')
   {
     next();
-    if (tok != class_tok)
+    if (tok != class_tok
+        && !class_tok_matches_unqualified_name(class_tok, tok))
       cprime_error("destructor name must match class name");
     method_tok = TOK_DESTRUCTOR1;
     next();
   }
-  else if (tok == class_tok)
+  else if (tok == class_tok
+           || class_tok_matches_unqualified_name(class_tok, tok))
   {
     method_tok = TOK_CONSTRUCTOR1;
     next();
@@ -5847,6 +6018,7 @@ static int try_parse_cpp_lifecycle_def(void)
     struct_type.ref->a.lifecycle_dtor = 1;
   if (params->len <= 1)
     declare_lifecycle_func(&struct_type, method_tok);
+  skip_member_func_cv_qualifiers();
   if (tok == ';')
   {
     next();
@@ -5873,6 +6045,11 @@ static int try_parse_cpp_lifecycle_def(void)
     int i, inserted = 0;
     for (i = 0; i < body->len; ++i)
     {
+      if (TOK_HAS_VALUE(body->str[i]))
+      {
+        tok_str_add_record(combined, body->str, body->len, &i);
+        continue;
+      }
       tok_str_add(combined, body->str[i]);
       if (!inserted && body->str[i] == '{')
       {
@@ -5948,7 +6125,8 @@ static CType make_func_type_from_saved_params(CType *ret_type, TokenString *para
     if (!parse_btype(&param_type, &ad, 0))
       expect("parameter type");
     v = 0;
-    type_decl(&param_type, &ad, &v, TYPE_DIRECT | TYPE_PARAM);
+    type_decl(&param_type, &ad, &v,
+              TYPE_DIRECT | TYPE_ABSTRACT | TYPE_PARAM);
     if (tok == '=')
     {
       next();
@@ -6216,12 +6394,12 @@ static int parse_cpp_scoped_member_def_body(CType *ret_type, int class_tok)
     mangled_tok = make_free_func_tok_for_type(static_base_tok, &static_func_type);
     canonical_sym = sym_find(mangled_tok);
     if (!canonical_sym)
-      canonical_sym = sym_find2(global_stack, mangled_tok);
+      canonical_sym = global_symbol_find(mangled_tok);
     if (canonical_sym)
       is_static_member_def = 1;
   }
   if (!canonical_sym)
-    canonical_sym = sym_find2(global_stack, mangled_tok);
+    canonical_sym = global_symbol_find(mangled_tok);
 
   decl_field = find_field_try(&class_type, method_tok, &dummy_ofs);
   if (!decl_field)
@@ -6441,7 +6619,7 @@ static int parse_cpp_scoped_member_def_body(CType *ret_type, int class_tok)
   end_macro();
   canonical_sym = sym_find(mangled_tok);
   if (!canonical_sym)
-    canonical_sym = sym_find2(global_stack, mangled_tok);
+    canonical_sym = global_symbol_find(mangled_tok);
   if (canonical_sym)
   {
     CType *overload_type = find_overload_func_type_by_mangled(mangled_tok);
@@ -6499,7 +6677,7 @@ static int try_parse_cpp_scoped_member_def(CType *ret_type)
       member_tok = make_static_member_tok(class_tok, member_tok);
       decl_sym = sym_find(member_tok);
       if (!decl_sym)
-        decl_sym = sym_find2(global_stack, member_tok);
+        decl_sym = global_symbol_find(member_tok);
       if (!decl_sym)
         cprime_error("static data member definition requires class member declaration '%s'",
                   get_tok_str(member_tok, NULL));
@@ -6589,7 +6767,7 @@ static int try_rewrite_cpp_scoped_static_data_after_declarator(CType *type,
   member_tok = make_static_member_tok(class_tok, member_tok);
   decl_sym = sym_find(member_tok);
   if (!decl_sym)
-    decl_sym = sym_find2(global_stack, member_tok);
+    decl_sym = global_symbol_find(member_tok);
   if (!decl_sym)
     cprime_error("static data member definition requires class member declaration '%s'",
               get_tok_str(member_tok, NULL));
@@ -6605,7 +6783,16 @@ static Sym *find_field (CType *type, int v, int *cumofs)
   if (!(v & SYM_FIELD))   // Top-Level Call
   {
     if ((type->t & VT_BTYPE) != VT_STRUCT)
+    {
+      if (getenv("CPC_DUMP_FIELD_FAIL"))
+        fprintf(stderr,
+                "CPC_FIELD_NONSTRUCT func=%s t=%04x ref=%s field=%s\n",
+                funcname ? funcname : "<none>", type->t,
+                type->ref ? get_tok_str(type->ref->v & ~SYM_STRUCT, NULL)
+                          : "<null>",
+                v >= TOK_IDENT ? get_tok_str(v, NULL) : "<token>");
       expect("struct or union");
+    }
     if (v < TOK_UIDENT)
       expect("field name");
     if (s->c < 0)
@@ -6632,7 +6819,28 @@ static Sym *find_field (CType *type, int v, int *cumofs)
     }
   }
   if (!(v & SYM_FIELD))
+  {
+    if (getenv("CPC_DUMP_FIELD_FAIL"))
+    {
+      fprintf(stderr, "CPC_FIELD_FAIL func=%s type=%s t=%04x field=%s\n",
+              funcname ? funcname : "<none>",
+              type->ref ? get_tok_str(type->ref->v & ~SYM_STRUCT, NULL)
+                        : "<null>",
+              type->t, get_tok_str(v, NULL));
+      if (type->ref)
+      {
+        Sym *d = type->ref->next;
+        int n = 0;
+        while (d && n++ < 32)
+        {
+          fprintf(stderr, "  member v=%s raw=%x type=%04x\n",
+                  get_tok_str(d->v & ~SYM_FIELD, NULL), d->v, d->type.t);
+          d = d->next;
+        }
+      }
+    }
     cprime_error("field not found: %s", get_tok_str(v, NULL));
+  }
   return s;
 }
 
@@ -6670,7 +6878,7 @@ static int tok_is_decl_type_name(int t)
     return 1;
   s = sym_find(t);
   if (!s)
-    s = sym_find2(global_stack, t);
+    s = global_symbol_find(t);
   return s && ((s->type.t & VT_TYPEDEF) || (s->type.t & VT_ENUM));
 }
 
@@ -6842,7 +7050,7 @@ static Sym *find_static_member_by_class_try(int class_tok, int member_tok,
   static_tok = make_static_member_tok(class_tok, member_tok);
   s = sym_find(static_tok);
   if (!s)
-    s = sym_find2(global_stack, static_tok);
+    s = global_symbol_find(static_tok);
   if (s)
   {
     if (owner_tok)
@@ -6932,7 +7140,8 @@ static void check_fields (CType *type, int check)
       else
         ts->tok &= ~SYM_FIELD;
     }
-    else if ((s->type.t & VT_BTYPE) == VT_STRUCT)
+    else if ((s->type.t & VT_BTYPE) == VT_STRUCT
+             && !get_struct_type_name_tok(&s->type))
       check_fields (&s->type, check);
   }
 }
@@ -7489,6 +7698,8 @@ enum_done:
           else if (member_str && td && td->nb_type_params > 0)
             add_template_member_def(td->name_tok, td->type_param_toks[0],
                                     member_str);
+          else if (member_str && class_tok)
+            add_template_member_def(class_tok, 0, member_str);
           else if (member_str)
             tok_str_free(member_str);
           continue;
@@ -7499,11 +7710,12 @@ enum_done:
           lifecycle_explicit = 1;
           next();
           if (tok != get_struct_type_name_tok(type)
+              && tok != TOK_OPERATOR
               && (tok < TOK_UIDENT
                   || make_current_namespace_tok(tok)
                      != get_struct_type_name_tok(type))
               && tok != '~')
-            cprime_error("explicit is only supported on constructors");
+            cprime_error("explicit is only supported on constructors and conversion operators");
         }
 
         if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "friend"))
@@ -7725,6 +7937,11 @@ enum_done:
                 int i, inserted = 0;
                 for (i = 0; i < body->len; ++i)
                 {
+                  if (TOK_HAS_VALUE(body->str[i]))
+                  {
+                    tok_str_add_record(combined, body->str, body->len, &i);
+                    continue;
+                  }
                   tok_str_add(combined, body->str[i]);
                   if (!inserted && body->str[i] == '{')
                   {
@@ -7757,6 +7974,9 @@ enum_done:
             continue;
           }
         }
+
+        if (tok == tok_mutable)
+          next();
 
         if (!parse_btype(&btype, &ad1, 0))
         {
@@ -8406,7 +8626,7 @@ storage:
             }
             s = sym_find(qtok);
             if (!s)
-              s = sym_find2(global_stack, qtok);
+              s = global_symbol_find(qtok);
             if (s && (s->type.t & VT_TYPEDEF))
             {
               tok_str_free(replay);
@@ -8642,10 +8862,10 @@ storage:
       s = sym_find(n);
       if (!s || !(s->type.t & VT_TYPEDEF))
       {
-        Sym *global_typedef = sym_find2(global_stack, n);
+        Sym *global_typedef = global_symbol_find(n);
         if ((!global_typedef || !(global_typedef->type.t & VT_TYPEDEF))
             && n != tok)
-          global_typedef = sym_find2(global_stack, tok);
+          global_typedef = global_symbol_find(tok);
         if (global_typedef && (global_typedef->type.t & VT_TYPEDEF))
           s = global_typedef;
       }
@@ -9168,6 +9388,13 @@ static void gfunc_param_typed(Sym *func, Sym *arg)
     type = arg->type;
     decay_reference_type(&type);
     param_pointed = pointed_type(&arg->type);
+    if (getenv("CPC_TRACE_PARAM_CAST"))
+      fprintf(stderr, "CPC_PARAM_CAST func_tok=%s arg_tok=%s ref param_t=%04x param_s=%s val_t=%04x val_s=%s file=%s line=%d\n",
+              func && func->v ? get_tok_str(func->v, NULL) : "<anon>",
+              arg && arg->v ? get_tok_str(arg->v, NULL) : "<anon>",
+              param_pointed->t, get_tok_str(get_struct_type_name_tok(param_pointed), NULL),
+              vtop->type.t, get_tok_str(get_struct_type_name_tok(&vtop->type), NULL),
+              file ? file->filename : "<no file>", file ? file->line_num : 0);
     if (!(arg->type.t & VT_RVALUE_REFERENCE)
         && (param_pointed->t & VT_CONSTANT)
         && (param_pointed->t & VT_BTYPE) == VT_STRUCT
@@ -9209,7 +9436,9 @@ static void gfunc_param_typed(Sym *func, Sym *arg)
       vset(&storage_type, VT_LOCAL | VT_LVAL, addr);
       vtop->r2 = r2;
       vpushv(&value);
+      cpc_vstore_context = "gfunc_param_ref_temp";
       vstore();
+      cpc_vstore_context = NULL;
       vpop();
       vset(&storage_type, VT_LOCAL | VT_LVAL, addr);
       vtop->r2 = r2;
@@ -9225,6 +9454,13 @@ static void gfunc_param_typed(Sym *func, Sym *arg)
   {
     type = arg->type;
     type.t &= ~VT_CONSTANT; // need to do that to avoid false warning
+    if (getenv("CPC_TRACE_PARAM_CAST"))
+      fprintf(stderr, "CPC_PARAM_CAST func_tok=%s arg_tok=%s val param_t=%04x param_s=%s val_t=%04x val_s=%s file=%s line=%d\n",
+              func && func->v ? get_tok_str(func->v, NULL) : "<anon>",
+              arg && arg->v ? get_tok_str(arg->v, NULL) : "<anon>",
+              type.t, get_tok_str(get_struct_type_name_tok(&type), NULL),
+              vtop->type.t, get_tok_str(get_struct_type_name_tok(&vtop->type), NULL),
+              file ? file->filename : "<no file>", file ? file->line_num : 0);
     gen_assign_cast(&type);
   }
 }
@@ -9283,7 +9519,7 @@ static int make_type_from_type_arg_tok(CType *type, int type_tok)
   default:
     s = sym_find(type_tok);
     if (!s)
-      s = sym_find2(global_stack, type_tok);
+      s = global_symbol_find(type_tok);
     if (s && (s->type.t & VT_TYPEDEF))
     {
       *type = s->type;
@@ -9364,7 +9600,7 @@ static void parse_decltype_type(CType *type)
     {
       Sym *s = sym_find(name_tok);
       if (!s)
-        s = sym_find2(global_stack, name_tok);
+        s = global_symbol_find(name_tok);
       next();
       if (s && (s->type.t & VT_BTYPE) == VT_FUNC && s->type.ref
           && tok == ')')
@@ -9584,7 +9820,9 @@ static void parse_atomic(int atok)
     vpush(&ct);
     *vtop = store;
     vswap();
+    cpc_vstore_context = "expr_eq";
     vstore();
+    cpc_vstore_context = NULL;
   }
 }
 
@@ -9629,6 +9867,7 @@ push_tokc:
   case TOK_FLOAT:
   case TOK_DOUBLE:
   case TOK_BOOL:
+  case TOK_BOOL2:
   case TOK_UNSIGNED:
   {
     CType cast_type;
@@ -9646,9 +9885,17 @@ push_tokc:
       else
         expr_eq();
       skip(')');
+      if ((cast_type.t & VT_BTYPE) == VT_BOOL
+          && (vtop->type.t & VT_BTYPE) == VT_STRUCT)
+        try_call_cpp_bool_conversion_operator();
       gen_cast(&cast_type);
       break;
     }
+    if (getenv("CPC_TRACE_EXPR_ERROR"))
+      fprintf(stderr, "CPC_EXPR_ERROR func=%s tok=%s file=%s line=%d macro=%p\n",
+              funcname ? funcname : "<none>", get_tok_str(tok, &tokc),
+              file ? file->filename : "<none>", file ? file->line_num : 0,
+              (void *)macro_stack);
     cprime_error("expression expected before '%s'", get_tok_str(tok, &tokc));
   }
   case TOK_CUINT:
@@ -9726,20 +9973,23 @@ str_init:
       int first_tok = tok;
       CValue first_tokc = tokc;
       Sym *type_sym = struct_find(first_tok);
+      int first_tok_is_typedef = 0;
       TokenString *replay = tok_str_alloc();
 
       if (!type_sym)
       {
         Sym *alias_sym = sym_find(first_tok);
         if (!alias_sym)
-          alias_sym = sym_find2(global_stack, first_tok);
+          alias_sym = global_symbol_find(first_tok);
         if (alias_sym && (alias_sym->type.t & VT_TYPEDEF)
             && ((alias_sym->type.t & VT_BTYPE) == VT_STRUCT))
           type_sym = alias_sym->type.ref;
+        if (alias_sym && (alias_sym->type.t & VT_TYPEDEF))
+          first_tok_is_typedef = 1;
       }
       tok_str_add2(replay, first_tok, &first_tokc);
       next();
-      if (type_sym && tok == '(')
+      if ((type_sym || first_tok_is_typedef) && tok == '(')
       {
         restore_cpp_lifecycle_probe(replay);
         gexpr();
@@ -9826,6 +10076,8 @@ str_init:
   case '*':
     next();
     unary();
+    if (try_call_cpp_unary_operator('*'))
+      break;
     indir();
     break;
   case '&':
@@ -10086,6 +10338,8 @@ str_init:
     t = tok;
     next();
     unary();
+    if (try_call_cpp_unary_operator(t))
+      break;
     inc(0, t);
     break;
   case '-':
@@ -10222,7 +10476,36 @@ tok_identifier:
       int qualified_instance_member_tok = 0;
       CType template_call_type;
       if (tok < TOK_UIDENT)
+      {
+        if (getenv("CPC_TRACE_EXPR_ERROR"))
+        {
+          TokenString *trace_macro = macro_stack;
+          fprintf(stderr, "CPC_EXPR_ERROR func=%s tok=%s file=%s line=%d macro=%p\n",
+                  funcname ? funcname : "<none>", get_tok_str(tok, &tokc),
+                  file ? file->filename : "<none>",
+                  file ? file->line_num : 0, (void *)macro_stack);
+          while (trace_macro)
+          {
+            const int *tp = trace_macro->str;
+            const int *te = tp + trace_macro->len;
+            CValue tv;
+            int tt, tc = 0;
+            fprintf(stderr, "  macro=%p alloc=%d len=%d toks=",
+                    (void *)trace_macro, trace_macro->alloc, trace_macro->len);
+            while (tp < te && tc++ < 16)
+            {
+              TOK_GET(&tt, &tp, &tv);
+              if (!tt || tt == TOK_EOF)
+                break;
+              fprintf(stderr, "%s%s", tc > 1 ? " " : "",
+                      get_tok_str(tt, &tv));
+            }
+            fprintf(stderr, "\n");
+            trace_macro = trace_macro->prev;
+          }
+        }
         cprime_error("expression expected before '%s'", get_tok_str(tok, &tokc));
+      }
       t = tok;
       next();
       if ((!strncmp(get_tok_str(t, NULL), "std::is_", 8)
@@ -10248,11 +10531,24 @@ tok_identifier:
       }
       {
         TemplateDef *td = find_class_template_def(find_current_namespace_tok(t));
+        if (getenv("CPC_TRACE_NUMERIC_LIMITS")
+            && strstr(get_tok_str(t, NULL), "numeric_limits"))
+          fprintf(stderr, "CPC_NUM_LIMITS_LOOKUP t=%s ns=%s td=%s tok=%s\n",
+                  get_tok_str(t, NULL),
+                  get_tok_str(find_current_namespace_tok(t), NULL),
+                  td ? get_tok_str(td->name_tok, NULL) : "<none>",
+                  get_tok_str(tok, &tokc));
         if (td && td->is_class && (tok == TOK_LT || tok == '<'))
         {
           TemplateArgList args;
           int qualified_member_tok = 0;
           parse_template_type_args(&args);
+          if (getenv("CPC_TRACE_NUMERIC_LIMITS")
+              && strstr(get_tok_str(t, NULL), "numeric_limits"))
+            fprintf(stderr, "CPC_NUM_LIMITS_ARGS t=%s arg0=%s tok=%s\n",
+                    get_tok_str(t, NULL),
+                    args.nb > 0 ? get_tok_str(args.toks[0], NULL) : "<none>",
+                    get_tok_str(tok, &tokc));
           if (tok == ':')
           {
             next();
@@ -10282,18 +10578,22 @@ tok_identifier:
               if (is_standard_type_trait_tok(t))
                 cprime_error("type trait value expected");
               qualified_member_tok = tok;
-              /* Not a type trait: rewind the scoped name so the general
-                 Class<T>::member path below parses the static member. */
-              unget_tok(':');
-              unget_tok(':');
             }
           }
           t = instantiate_template_if_needed(td, &args);
+          if (getenv("CPC_TRACE_NUMERIC_LIMITS"))
+            fprintf(stderr, "CPC_NUM_LIMITS_INST inst=%s has_struct=%d member=%s\n",
+                    get_tok_str(t, NULL), struct_find(t) != NULL,
+                    qualified_member_tok ? get_tok_str(qualified_member_tok, NULL) : "<none>");
           compile_pending_template_specs_without_member_flush();
           if (qualified_member_tok)
           {
             qualified_instance_class_tok = t;
             qualified_instance_member_tok = qualified_member_tok;
+            instantiate_static_template_member_for_call(t,
+                                                        qualified_member_tok);
+            t = make_static_member_tok(t, qualified_member_tok);
+            next();
           }
         }
       }
@@ -10304,7 +10604,7 @@ tok_identifier:
         Sym *class_alias_sym;
         class_alias_sym = sym_find(t);
         if (!class_alias_sym)
-          class_alias_sym = sym_find2(global_stack, t);
+          class_alias_sym = global_symbol_find(t);
         if (class_alias_sym
             && (class_alias_sym->type.t & VT_TYPEDEF)
             && ((class_alias_sym->type.t & VT_BTYPE) == VT_STRUCT))
@@ -10335,7 +10635,7 @@ tok_identifier:
                                                             enum_member_tok);
             enum_member_sym = sym_find(scoped_enum_member_tok);
             if (!enum_member_sym)
-              enum_member_sym = sym_find2(global_stack, scoped_enum_member_tok);
+              enum_member_sym = global_symbol_find(scoped_enum_member_tok);
             if (enum_member_sym)
               t = scoped_enum_member_tok;
             else
@@ -10430,11 +10730,23 @@ tok_identifier:
       }
       {
         TemplateDef *td = find_class_template_def(t);
+        if (getenv("CPC_TRACE_NUMERIC_LIMITS")
+            && strstr(get_tok_str(t, NULL), "numeric_limits"))
+          fprintf(stderr, "CPC_NUM_LIMITS_Q_LOOKUP t=%s td=%s tok=%s\n",
+                  get_tok_str(t, NULL),
+                  td ? get_tok_str(td->name_tok, NULL) : "<none>",
+                  get_tok_str(tok, &tokc));
         if (td && td->is_class && (tok == TOK_LT || tok == '<'))
         {
           TemplateArgList args;
           int qualified_member_tok = 0;
           parse_template_type_args(&args);
+          if (getenv("CPC_TRACE_NUMERIC_LIMITS")
+              && strstr(get_tok_str(t, NULL), "numeric_limits"))
+            fprintf(stderr, "CPC_NUM_LIMITS_Q_ARGS t=%s arg0=%s tok=%s\n",
+                    get_tok_str(t, NULL),
+                    args.nb > 0 ? get_tok_str(args.toks[0], NULL) : "<none>",
+                    get_tok_str(tok, &tokc));
           if (tok == ':')
           {
             next();
@@ -10461,12 +10773,29 @@ tok_identifier:
           }
           t = instantiate_template_if_needed(td, &args);
           compile_pending_template_specs_without_member_flush();
+          if (getenv("CPC_TRACE_NUMERIC_LIMITS"))
+            fprintf(stderr, "CPC_NUM_LIMITS_Q_INST inst=%s has_struct=%d member=%s\n",
+                    get_tok_str(t, NULL), struct_find(t) != NULL,
+                    qualified_member_tok ? get_tok_str(qualified_member_tok, NULL) : "<none>");
           if (qualified_member_tok)
           {
             qualified_instance_class_tok = t;
             qualified_instance_member_tok = qualified_member_tok;
+            instantiate_static_template_member_for_call(t,
+                                                        qualified_member_tok);
+            t = make_static_member_tok(t, qualified_member_tok);
+            next();
           }
         }
+      }
+      if (qualified_instance_member_tok && tok == ':')
+      {
+        next();
+        if (tok != ':')
+          cprime_error("':' expected");
+        next();
+        if (tok == qualified_instance_member_tok)
+          next();
       }
       if (tok == ':' && struct_find(t))
       {
@@ -10474,7 +10803,7 @@ tok_identifier:
         Sym *class_alias_sym;
         class_alias_sym = sym_find(t);
         if (!class_alias_sym)
-          class_alias_sym = sym_find2(global_stack, t);
+          class_alias_sym = global_symbol_find(t);
         if (class_alias_sym
             && (class_alias_sym->type.t & VT_TYPEDEF)
             && ((class_alias_sym->type.t & VT_BTYPE) == VT_STRUCT))
@@ -10660,6 +10989,18 @@ tok_identifier:
             if (template_return_ctype_from_struct_tok(&inferred_return_type,
                   infer_template_return_struct_tok(td, &inferred_args)))
               has_inferred_return_type = 1;
+            if (getenv("CPC_DUMP_TEMPLATE_CALL")
+                && (strstr(get_tok_str(t, NULL), "clClamp")
+                    || strstr(get_tok_str(t, NULL), "clMin")
+                    || strstr(get_tok_str(t, NULL), "clMax")
+                    || strstr(get_tok_str(t, NULL), "clLerp")))
+              fprintf(stderr, "CPC_TEMPLATE_CALL %s type_arg=%s has_ret=%d ret=%s\n",
+                      get_tok_str(t, NULL), get_tok_str(type_tok, NULL),
+                      has_inferred_return_type,
+                      has_inferred_return_type
+                        && get_struct_type_name_tok(&inferred_return_type)
+                        ? get_tok_str(get_struct_type_name_tok(&inferred_return_type), NULL)
+                        : "<none>");
             t = instantiate_template_if_needed(td, &inferred_args);
             compile_pending_template_specs_without_member_flush();
             inferred_call = 1;
@@ -10706,8 +11047,7 @@ tok_identifier:
         {
           Sym *enum_member_sym = sym_find(qualified_instance_member_tok);
           if (!enum_member_sym)
-            enum_member_sym = sym_find2(global_stack,
-                                        qualified_instance_member_tok);
+            enum_member_sym = global_symbol_find(qualified_instance_member_tok);
           if (enum_member_sym && (enum_member_sym->type.t & VT_ENUM_VAL))
           {
             s = enum_member_sym;
@@ -10720,7 +11060,7 @@ tok_identifier:
           int static_tok = make_static_member_tok(class_tok, lookup_tok);
           s = sym_find(static_tok);
           if (!s)
-            s = sym_find2(global_stack, static_tok);
+            s = global_symbol_find(static_tok);
           if (s)
             t = static_tok;
         }
@@ -10883,6 +11223,21 @@ tok_identifier:
               }
             }
           }
+          if (getenv("CPC_TRACE_UNDECLARED"))
+          {
+            Sym *trace_sym;
+            int trace_count = 0;
+            fprintf(stderr,
+                    "CPC_UNDECLARED name=%s func=%s file=%s line=%d locals=",
+                    name, funcname ? funcname : "<none>",
+                    file ? file->filename : "<none>",
+                    file ? file->line_num : 0);
+            for (trace_sym = local_stack; trace_sym && trace_count < 24;
+                 trace_sym = trace_sym->prev, ++trace_count)
+              fprintf(stderr, "%s%s", trace_count ? "," : "",
+                      get_tok_str(trace_sym->v & ~SYM_FIELD, NULL));
+            fprintf(stderr, "\n");
+          }
           cprime_error("'%s' undeclared", name);
         }
         /* for simple function calls, we tolerate undeclared
@@ -10922,6 +11277,18 @@ tok_identifier:
           && (r & VT_VALMASK) != VT_LLOCAL)
         r = (r & ~VT_VALMASK) | VT_LOCAL;
 
+      if (getenv("CPC_TRACE_STATIC_CALL")
+          && strstr(get_tok_str(t, NULL), "Smallest"))
+        fprintf(stderr, "CPC_STATIC_CALL_PUSH t=%s tok=%s s=%s type_t=%04x ret_t=%04x ret_s=%s r=%04x\n",
+                get_tok_str(t, NULL), get_tok_str(tok, &tokc),
+                s ? get_tok_str(s->v, NULL) : "<none>",
+                s ? s->type.t : 0,
+                s && (s->type.t & VT_BTYPE) == VT_FUNC && s->type.ref
+                  ? s->type.ref->type.t : 0,
+                s && (s->type.t & VT_BTYPE) == VT_FUNC && s->type.ref
+                  ? get_tok_str(get_struct_type_name_tok(&s->type.ref->type), NULL)
+                  : "<none>",
+                r);
       vset(&s->type, r, s->c);
       /* Point to s as backpointer (even without r&VT_SYM).
       Will be used by at least the x86 inline asm parser for
@@ -11245,7 +11612,9 @@ tok_identifier:
             {
               vset(&ret.type, VT_LOCAL | VT_LVAL, addr + offset);
               vswap();
+              cpc_vstore_context = "overload_packed_struct_ret";
               vstore();
+              cpc_vstore_context = NULL;
               vtop--;
               if (--ret_nregs == 0)
                 break;
@@ -11345,6 +11714,18 @@ tok_identifier:
         next();
         saved_call_arg_count = count_saved_call_args(call_args, 32);
         infer_saved_arg_types(call_args, call_arg_types, saved_call_arg_count);
+        if (getenv("CPC_DUMP_FREE_RESOLVE")
+            && overload_name_tok >= TOK_UIDENT)
+        {
+          int di;
+          fprintf(stderr, "CPC_FREE_CALL name=%s argc=%d",
+                  get_tok_str(overload_name_tok, NULL), saved_call_arg_count);
+          for (di = 0; di < saved_call_arg_count; ++di)
+            fprintf(stderr, " arg%d_t=%04x arg%d_s=%s",
+                    di, call_arg_types[di].t, di,
+                    get_tok_str(get_struct_type_name_tok(&call_arg_types[di]), NULL));
+          fprintf(stderr, "\n");
+        }
         func_sym = resolve_free_func_by_arg_types(overload_name_tok,
                                                   call_arg_types,
                                                   saved_call_arg_count);
@@ -11365,7 +11746,8 @@ tok_identifier:
       if (vtop->sym)
       {
         CType *overload_type = find_overload_func_type_by_mangled(vtop->sym->v);
-        if (overload_type)
+        if (overload_type
+            && same_func_param_signature(&vtop->sym->type, overload_type))
         {
           use_overload_func_type(vtop->sym, overload_type);
           vtop->type = vtop->sym->type;
@@ -11557,7 +11939,9 @@ error_func:
           {
             vset(&ret.type, VT_LOCAL | VT_LVAL, addr + offset);
             vswap();
+            cpc_vstore_context = "func_packed_struct_ret";
             vstore();
+            cpc_vstore_context = NULL;
             vtop--;
             if (--ret_nregs == 0)
               break;
@@ -11981,6 +12365,20 @@ static void expr_eq(void)
     next();
     if (t == '=')
     {
+      if (tok == '{' && ((vtop->type.t & VT_BTYPE) == VT_STRUCT))
+      {
+        CType rhs_type = vtop->type;
+        AttributeDef ad;
+
+        rhs_type.t &= ~VT_LVAL;
+        memset(&ad, 0, sizeof ad);
+        decl_initializer_alloc(&rhs_type, &ad, VT_LOCAL | VT_LVAL,
+                               1, 0, NULL, 0, VT_LOCAL);
+        if (try_call_cpp_assignment_operator())
+          return;
+        vstore();
+        return;
+      }
       expr_eq();
       if (try_call_cpp_assignment_operator())
         return;
@@ -12164,8 +12562,24 @@ static int try_gfunc_return_copy_construct(CType *func_type)
   return 1;
 }
 
+static int ctype_from_mangled_scalar_template_arg(CType *type, const char *name);
+
 static void gfunc_return(CType *func_type)
 {
+  CType scalar_template_ret;
+
+  if ((func_type->t & VT_BTYPE) == VT_STRUCT
+      && btype_is_arithmetic_scalar(vtop->type.t & VT_BTYPE)
+      && ctype_from_mangled_scalar_template_arg(&scalar_template_ret,
+                                                funcname))
+    *func_type = scalar_template_ret;
+  if (getenv("CPC_TRACE_RETURN"))
+    fprintf(stderr, "CPC_RETURN func=%s ret_t=%04x ret_s=%s val_t=%04x val_s=%s val_r=%04x file=%s line=%d\n",
+            funcname ? funcname : "<none>", func_type->t,
+            get_tok_str(get_struct_type_name_tok(func_type), NULL),
+            vtop->type.t, get_tok_str(get_struct_type_name_tok(&vtop->type), NULL),
+            vtop->r, file ? file->filename : "<no file>",
+            file ? file->line_num : 0);
   if ((func_type->t & VT_BTYPE) == VT_STRUCT)
   {
     CType type, ret_type;
@@ -12188,7 +12602,9 @@ static void gfunc_return(CType *func_type)
       indir();
       vswap();
       // Copy Structure Value To Pointer
+      cpc_vstore_context = "return_sret_copy";
       vstore();
+      cpc_vstore_context = NULL;
     }
     else
     {
@@ -12208,9 +12624,18 @@ static void gfunc_return(CType *func_type)
         loc = (loc - size) & -align;
         addr = loc;
         type = *func_type;
+        if (getenv("CPC_TRACE_RETURN"))
+          fprintf(stderr, "CPC_RETURN_PACKED_TEMP func=%s ret_t=%04x ret_s=%s val_t=%04x val_s=%s val_r=%04x\n",
+                  funcname ? funcname : "<none>", func_type->t,
+                  get_tok_str(get_struct_type_name_tok(func_type), NULL),
+                  vtop->type.t,
+                  get_tok_str(get_struct_type_name_tok(&vtop->type), NULL),
+                  vtop->r);
         vset(&type, VT_LOCAL | VT_LVAL, addr);
         vswap();
+        cpc_vstore_context = "return_packed_temp";
         vstore();
+        cpc_vstore_context = NULL;
         vpop();
         vset(&ret_type, VT_LOCAL | VT_LVAL, addr);
       }
@@ -12252,6 +12677,46 @@ static void check_func_return(void)
   }
   else
     cprime_warning("function might return no value: '%s'", funcname);
+}
+
+static int ctype_from_mangled_scalar_template_arg(CType *type, const char *name)
+{
+  const char *p, *q;
+  char arg[32];
+  size_t n;
+
+  if (!type || !name)
+    return 0;
+  p = strstr(name, "__");
+  if (!p)
+    return 0;
+  p += 2;
+  q = strstr(p, "__");
+  if (!q)
+    return 0;
+  n = (size_t)(q - p);
+  if (n == 0 || n >= sizeof(arg))
+    return 0;
+  memcpy(arg, p, n);
+  arg[n] = '\0';
+  type->ref = NULL;
+  if (!strcmp(arg, "i32") || !strcmp(arg, "int"))
+    type->t = VT_INT;
+  else if (!strcmp(arg, "ui32"))
+    type->t = VT_INT | VT_UNSIGNED;
+  else if (!strcmp(arg, "i64"))
+    type->t = VT_LLONG;
+  else if (!strcmp(arg, "ui64"))
+    type->t = VT_LLONG | VT_UNSIGNED;
+  else if (!strcmp(arg, "float") || !strcmp(arg, "f32"))
+    type->t = VT_FLOAT;
+  else if (!strcmp(arg, "double") || !strcmp(arg, "f64"))
+    type->t = VT_DOUBLE;
+  else if (!strcmp(arg, "bool"))
+    type->t = VT_BOOL;
+  else
+    return 0;
+  return 1;
 }
 
 // -------------------------------------------------------------------------
@@ -12353,12 +12818,14 @@ static void save_lvalues(void)
   SValue *sv = vtop;
   while (sv >= vstack)
   {
-    if (sv->sym && (sv->r & VT_LVAL))
+    if (sv->sym && (sv->r & VT_LVAL)
+        && ((sv->type.t & VT_BTYPE) != VT_STRUCT))
     {
       int align, size = type_size(&sv->type, &align);
       int r2, l = get_temp_local_var(size, align, &r2);
       vset(&sv->type, VT_LOCAL | VT_LVAL, l), vtop->r2 = r2;
-      vpushv(sv), *sv = vtop[-1], vstore(), --vtop;
+      vpushv(sv), *sv = vtop[-1], cpc_vstore_context = "save_lvalues",
+        vstore(), cpc_vstore_context = NULL, --vtop;
     }
     --sv;
   }
@@ -12391,6 +12858,15 @@ static void gen_function(Sym *sym)
      the nested function's return type is the deduced result. */
   while ((func_vt.t & VT_BTYPE) == VT_FUNC && func_vt.ref)
     func_vt = func_vt.ref->type;
+  if (getenv("CPC_TRACE_FUNCTION_ENTRY")
+      && funcname
+      && (strstr(funcname, "clMaxComponent")
+          || strstr(funcname, "clAABB2__i64_Smallest")))
+    fprintf(stderr, "CPC_FUNCTION_ENTRY func=%s ret_t=%04x ret_s=%s sym_ret_t=%04x sym_ret_s=%s\n",
+            funcname, func_vt.t,
+            get_tok_str(get_struct_type_name_tok(&func_vt), NULL),
+            sym->type.ref->type.t,
+            get_tok_str(get_struct_type_name_tok(&sym->type.ref->type), NULL));
   func_var = sym->type.ref->f.func_type == FUNC_ELLIPSIS;
 
   // NOTE: we patch the symbol size later
@@ -12470,6 +12946,8 @@ static void gen_inline_functions(CPRIMEState *s)
       sym = fn->sym;
       if (sym && (sym->c || !(sym->type.t & VT_INLINE)))
       {
+        if (fn->preserve_type)
+          sym->type = fn->type;
         /* the function was used or forced (and then not internal):
            generate its code and convert it to a normal function */
         if ((sym->type.t & VT_BTYPE) == VT_FUNC && sym->type.ref
@@ -12486,6 +12964,24 @@ static void gen_inline_functions(CPRIMEState *s)
         }
         fn->sym = NULL;
         cprimepp_putfile(fn->filename);
+        if (getenv("CPC_TRACE_INLINE_BODY")
+            && sym
+            && strstr(get_tok_str(sym->v, NULL),
+                      getenv("CPC_TRACE_INLINE_BODY")))
+        {
+          int bi;
+          fprintf(stderr, "CPC_INLINE_BODY func=%s file=%s ret_t=%04x ret_s=%s toks=",
+                  get_tok_str(sym->v, NULL),
+                  fn->filename,
+                  sym->type.ref ? sym->type.ref->type.t : 0,
+                  sym->type.ref
+                    ? get_tok_str(get_struct_type_name_tok(&sym->type.ref->type), NULL)
+                    : "<none>");
+          for (bi = 0; bi < fn->func_str->len && bi < 80; ++bi)
+            fprintf(stderr, "%s%s", bi ? " " : "",
+                    get_tok_str(fn->func_str->str[bi], NULL));
+          fprintf(stderr, "\n");
+        }
         begin_macro(fn->func_str, 1);
         next();
         cur_text_section = text_section;
@@ -12785,7 +13281,7 @@ static int decl(int l)
         {
           Sym *previous = sym_find(v);
           if (!previous)
-            previous = sym_find2(global_stack, v);
+            previous = global_symbol_find(v);
           repeated_inline_definition = previous
             && (previous->type.t & VT_BTYPE) == VT_FUNC
             && (previous->type.t & VT_INLINE)
@@ -12819,6 +13315,25 @@ static int decl(int l)
           fn = cprime_malloc(sizeof *fn + strlen(file->filename));
           strcpy(fn->filename, file->filename);
           fn->sym = sym;
+          fn->type = sym->type;
+          {
+            Sym *first_arg = sym->type.ref ? sym->type.ref->next : NULL;
+            const char *first_name = first_arg
+              ? get_tok_str(first_arg->v, NULL) : "";
+            fn->preserve_type = !is_member_func_mangled_tok(sym->v)
+              && strcmp(first_name, "this")
+              && strncmp(first_name, "__cprime_this_", 14);
+          }
+          if (getenv("CPC_TRACE_INLINE_QUEUE")
+              && (strstr(file->filename, "clVector2.inl")
+                  || (sym && strstr(get_tok_str(sym->v, NULL), "clMaxComponent"))))
+            fprintf(stderr, "CPC_INLINE_QUEUE func=%s ret_t=%04x ret_s=%s decl_v=%s type_t=%04x\n",
+                    get_tok_str(sym->v, NULL),
+                    sym->type.ref ? sym->type.ref->type.t : 0,
+                    sym->type.ref
+                      ? get_tok_str(get_struct_type_name_tok(&sym->type.ref->type), NULL)
+                      : "<none>",
+                    get_tok_str(v, NULL), type.t);
           dynarray_add(&cprime_state->inline_fns,
                        &cprime_state->nb_inline_fns, fn);
           skip_or_save_block(&fn->func_str);

@@ -662,11 +662,20 @@ do_init_list:
         for (i = 0; i < len; ++i)
         {
           TokenString macro = *elements[i];
+          TokenString *saved_macro_stack = macro_stack;
+          const int *saved_macro_ptr = macro_ptr;
+          if (getenv("CPC_TRACE_SHALLOW")
+              && token_string_contains_tok(&macro,
+                                           tok_alloc_const("clVector2")))
+            fprintf(stderr, "CPC_SHALLOW init-list func=%s len=%d\n",
+                    funcname ? funcname : "<none>", macro.len);
           begin_macro(&macro, 0);
           next();
           decl_initializer(&element_init, element_type,
                            element_addr + i * element_size, DIF_FIRST);
-          end_macro();
+          while (macro_stack && macro_stack != saved_macro_stack)
+            end_macro();
+          macro_ptr = saved_macro_ptr;
         }
         vset(element_type, VT_LOCAL | VT_LVAL, element_addr);
         vtop->r2 = element_r2;

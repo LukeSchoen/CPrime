@@ -36,6 +36,7 @@ static void tok_print(const int *str, const char *msg, ...);
 static void next_nomacro(void);
 static void parse_number(const char *p);
 static void parse_string(const char *p, int len);
+static int tok_str_value_extra_words(const int *str, int len, int index);
 
 static struct TinyAlloc *toksym_alloc;
 static struct TinyAlloc *tokstr_alloc;
@@ -103,6 +104,32 @@ ST_FUNC void skip(int c)
   if (tok != c)
   {
     char tmp[40];
+    if (getenv("CPC_TRACE_EXPECT"))
+    {
+      int mi = macro_stack && macro_ptr
+                 ? (int)(macro_ptr - macro_stack->str) : -1;
+      fprintf(stderr, "CPC_EXPECT func=%s expected=%s got=%s macro=%p\n",
+              funcname ? funcname : "<none>", get_tok_str(c, &tokc),
+              get_tok_str(tok, &tokc), (void *)macro_stack);
+      if (macro_stack && mi >= 0)
+      {
+        int i, begin = mi > 5 ? mi - 5 : 0;
+        fprintf(stderr, "CPC_EXPECT_CONTEXT index=%d toks=", mi);
+        for (i = begin; i < macro_stack->len && i < mi + 6; ++i)
+        {
+          if (TOK_HAS_VALUE(macro_stack->str[i]))
+          {
+            fprintf(stderr, "%s<value>", i == begin ? "" : " ");
+            i += tok_str_value_extra_words(macro_stack->str,
+                                           macro_stack->len, i);
+            continue;
+          }
+          fprintf(stderr, "%s%s", i == begin ? "" : " ",
+                  get_tok_str(macro_stack->str[i], NULL));
+        }
+        fprintf(stderr, "\n");
+      }
+    }
     pstrcpy(tmp, sizeof tmp, get_tok_str(c, &tokc));
     cprime_error("'%s' expected (got '%s')", tmp, get_tok_str(tok, &tokc));
   }
@@ -111,6 +138,32 @@ ST_FUNC void skip(int c)
 
 ST_FUNC void expect(const char *msg)
 {
+  if (getenv("CPC_TRACE_EXPECT"))
+  {
+    int mi = macro_stack && macro_ptr
+               ? (int)(macro_ptr - macro_stack->str) : -1;
+    fprintf(stderr, "CPC_EXPECT func=%s expected=%s got=%s macro=%p\n",
+            funcname ? funcname : "<none>", msg,
+            get_tok_str(tok, &tokc), (void *)macro_stack);
+    if (macro_stack && mi >= 0)
+    {
+      int i, begin = mi > 8 ? mi - 8 : 0;
+      fprintf(stderr, "CPC_EXPECT_CONTEXT index=%d toks=", mi);
+      for (i = begin; i < macro_stack->len && i < mi + 9; ++i)
+      {
+        if (TOK_HAS_VALUE(macro_stack->str[i]))
+        {
+          fprintf(stderr, "%s<value>", i == begin ? "" : " ");
+          i += tok_str_value_extra_words(macro_stack->str,
+                                         macro_stack->len, i);
+          continue;
+        }
+        fprintf(stderr, "%s%s", i == begin ? "" : " ",
+                get_tok_str(macro_stack->str[i], NULL));
+      }
+      fprintf(stderr, "\n");
+    }
+  }
   cprime_error("%s expected", msg);
 }
 

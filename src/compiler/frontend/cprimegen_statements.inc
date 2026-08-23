@@ -300,9 +300,11 @@ static void skip_or_save_statement(TokenString **str)
 static int try_parse_range_for(void)
 {
   char tmp_name[64];
-  int var_tok, range_tok, index_tok, ptr_tok, body_first_tok;
+  int var_tok, range_tok, index_tok, ptr_tok, iterator_tok, end_tok;
+  int body_first_tok;
   int body_had_semicolon = 0;
   int is_array_range, array_count;
+  int is_iterator_range = 0;
   int has_range_elem_type = 0;
   int has_range_type = 0;
   Sym *range_sym;
@@ -513,7 +515,7 @@ range_for_decl_parsed:
   skip(':');
   while (tok == TOK_LINENUM)
     next();
-  if (tok < TOK_UIDENT)
+  if (tok == ')' || tok == TOK_EOF)
     cprime_error("range-for range");
   range_expr = tok_str_alloc();
   {
@@ -563,10 +565,15 @@ range_for_decl_parsed:
       && (range_type.t & VT_BTYPE) == VT_STRUCT)
   {
     CType index_type = int_type;
+    int begin_tok = tok_alloc_const("begin");
+    int end_method_tok = tok_alloc_const("end");
     Sym *index_func =
       resolve_member_func_by_arg_types(&range_type,
                                        tok_alloc_const("operator[]"),
                                        &index_type, 1);
+    is_iterator_range = type_has_member_func_name(&range_type, begin_tok)
+                        && type_has_member_func_name(&range_type,
+                                                     end_method_tok);
     if (index_func && (index_func->type.t & VT_BTYPE) == VT_FUNC
         && index_func->type.ref)
     {
@@ -595,36 +602,92 @@ range_for_decl_parsed:
   snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_p_%d",
            range_for_temp_counter++);
   ptr_tok = tok_alloc_const(tmp_name);
+  snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_it_%d",
+           range_for_temp_counter++);
+  iterator_tok = tok_alloc_const(tmp_name);
+  snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_end_%d",
+           range_for_temp_counter++);
+  end_tok = tok_alloc_const(tmp_name);
 
   lowered = tok_str_alloc();
   tok_str_add(lowered, '{');
-  tok_str_add(lowered, TOK_INT);
-  tok_str_add(lowered, index_tok);
-  tok_str_add(lowered, ';');
-  tok_str_add(lowered, TOK_FOR);
-  tok_str_add(lowered, '(');
-  tok_str_add(lowered, index_tok);
-  tok_str_add(lowered, '=');
-  tok_str_add_cint(lowered, 0);
-  tok_str_add(lowered, ';');
-  tok_str_add(lowered, index_tok);
-  tok_str_add(lowered, TOK_NE);
-  if (is_array_range)
-    tok_str_add_cint(lowered, array_count);
-  else
+  if (is_iterator_range)
   {
+    tok_str_add(lowered, TOK_AUTO);
+    tok_str_add(lowered, iterator_tok);
+    tok_str_add(lowered, '=');
+    tok_str_add(lowered, '(');
     tok_str_append_without_eof(lowered, range_expr);
+    tok_str_add(lowered, ')');
     tok_str_add(lowered, '.');
-    tok_str_add(lowered, tok_alloc_const("Size"));
+    tok_str_add(lowered, tok_alloc_const("begin"));
     tok_str_add(lowered, '(');
     tok_str_add(lowered, ')');
+    tok_str_add(lowered, ';');
+    tok_str_add(lowered, TOK_AUTO);
+    tok_str_add(lowered, end_tok);
+    tok_str_add(lowered, '=');
+    tok_str_add(lowered, '(');
+    tok_str_append_without_eof(lowered, range_expr);
+    tok_str_add(lowered, ')');
+    tok_str_add(lowered, '.');
+    tok_str_add(lowered, tok_alloc_const("end"));
+    tok_str_add(lowered, '(');
+    tok_str_add(lowered, ')');
+    tok_str_add(lowered, ';');
+  }
+  else
+  {
+    tok_str_add(lowered, TOK_INT);
+    tok_str_add(lowered, index_tok);
+    tok_str_add(lowered, ';');
+  }
+  tok_str_add(lowered, TOK_FOR);
+  tok_str_add(lowered, '(');
+  if (!is_iterator_range)
+  {
+    tok_str_add(lowered, index_tok);
+    tok_str_add(lowered, '=');
+    tok_str_add_cint(lowered, 0);
   }
   tok_str_add(lowered, ';');
-  tok_str_add(lowered, index_tok);
-  tok_str_add(lowered, '=');
-  tok_str_add(lowered, index_tok);
-  tok_str_add(lowered, '+');
-  tok_str_add_cint(lowered, 1);
+  if (is_iterator_range)
+  {
+    tok_str_add(lowered, iterator_tok);
+    tok_str_add(lowered, TOK_NE);
+    tok_str_add(lowered, end_tok);
+  }
+  else
+  {
+    tok_str_add(lowered, index_tok);
+    tok_str_add(lowered, TOK_NE);
+    if (is_array_range)
+      tok_str_add_cint(lowered, array_count);
+    else
+    {
+      tok_str_add(lowered, '(');
+      tok_str_append_without_eof(lowered, range_expr);
+      tok_str_add(lowered, ')');
+      tok_str_add(lowered, '.');
+      tok_str_add(lowered, tok_alloc_const("Size"));
+      tok_str_add(lowered, '(');
+      tok_str_add(lowered, ')');
+    }
+  }
+  tok_str_add(lowered, ';');
+  if (is_iterator_range)
+  {
+    tok_str_add(lowered, TOK_INC);
+    tok_str_add(lowered, iterator_tok);
+  }
+  else
+  {
+    tok_str_add(lowered, index_tok);
+    tok_str_add(lowered, '=');
+    tok_str_add(lowered, index_tok);
+    tok_str_add(lowered, '+');
+    tok_str_add_cint(lowered, 1);
+  }
   tok_str_add(lowered, ')');
   tok_str_add(lowered, '{');
   if (is_array_range)
@@ -637,6 +700,19 @@ range_for_decl_parsed:
     tok_str_add(lowered, ']');
     tok_str_add(lowered, ';');
     tok_str_append_without_eof(lowered, body);
+  }
+  else if (is_iterator_range)
+  {
+    tok_str_add(lowered, TOK_AUTO);
+    tok_str_add(lowered, ptr_tok);
+    tok_str_add(lowered, '=');
+    tok_str_add(lowered, '&');
+    tok_str_add(lowered, '(');
+    tok_str_add(lowered, '*');
+    tok_str_add(lowered, iterator_tok);
+    tok_str_add(lowered, ')');
+    tok_str_add(lowered, ';');
+    append_range_for_body(lowered, body, var_tok, ptr_tok);
   }
   else
   {
@@ -651,7 +727,9 @@ range_for_decl_parsed:
     tok_str_add(lowered, ptr_tok);
     tok_str_add(lowered, '=');
     tok_str_add(lowered, '&');
+    tok_str_add(lowered, '(');
     tok_str_append_without_eof(lowered, range_expr);
+    tok_str_add(lowered, ')');
     tok_str_add(lowered, '[');
     tok_str_add(lowered, index_tok);
     tok_str_add(lowered, ']');
@@ -687,7 +765,7 @@ static void gexpr_decl(void)
     {
       Sym *alias_sym = sym_find(first_tok);
       if (!alias_sym)
-        alias_sym = sym_find2(global_stack, first_tok);
+        alias_sym = global_symbol_find(first_tok);
       if (alias_sym && (alias_sym->type.t & VT_TYPEDEF)
           && ((alias_sym->type.t & VT_BTYPE) == VT_STRUCT))
         type_sym = alias_sym->type.ref;

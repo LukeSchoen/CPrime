@@ -63,7 +63,7 @@ static int find_current_namespace_tok(int name_tok)
   if (!nb_namespace_stack || name_tok < TOK_UIDENT)
     return name_tok;
   t = make_current_namespace_tok(name_tok);
-  if (sym_find(t) || sym_find2(global_stack, t) || struct_find(t))
+  if (sym_find(t) || global_symbol_find(t) || struct_find(t))
     return t;
   return name_tok;
 }
@@ -81,7 +81,7 @@ static Sym *find_namespace_or_plain_symbol(int *ptok)
       s = sym_find(t);
   }
   if (!s)
-    s = sym_find2(global_stack, t);
+    s = global_symbol_find(t);
   if (s)
     *ptok = t;
   return s;
@@ -227,7 +227,7 @@ static int make_member_func_tok_for_type(int struct_tok, int method_tok,
   if (!func_type || !func_type->ref || !func_type->ref->next)
     return tok_alloc_const(name);
   base_tok = tok_alloc_const(name);
-  if (!sym_find(base_tok) && !sym_find2(global_stack, base_tok))
+  if (!sym_find(base_tok) && !global_symbol_find(base_tok))
     return base_tok;
   for (arg = func_type->ref->next; arg; arg = arg->next)
     if (!append_type_mangle(name, sizeof(name), &arg->type))
@@ -263,7 +263,7 @@ static int make_lifecycle_func_tok_for_type(int struct_tok, int method_tok,
   if (!lowered_type || !lowered_type->ref || !lowered_type->ref->next)
     return tok_alloc_const(name);
   if (!same_count && !other_count && !sym_find(tok_alloc_const(name))
-      && !sym_find2(global_stack, tok_alloc_const(name)))
+      && !global_symbol_find(tok_alloc_const(name)))
     return tok_alloc_const(name);
   arg = lowered_type->ref->next;
   if (arg)
@@ -319,7 +319,8 @@ static void note_member_func_overload(int struct_tok, int method_tok,
       is_const = pointed_type(&this_arg->type)->t & VT_CONSTANT;
   }
 
-  for (o = member_func_overloads; o; o = o->next)
+  for (o = member_func_candidates(struct_tok, method_tok);
+       o; o = o->bucket_next)
     if (o->struct_tok == struct_tok && o->method_tok == method_tok
         && o->mangled_tok == mangled_tok)
     {
@@ -346,6 +347,7 @@ static void note_member_func_overload(int struct_tok, int method_tok,
     o->func_type = *lowered_type;
   o->next = member_func_overloads;
   member_func_overloads = o;
+  index_member_func_overload(o);
 }
 
 static int func_explicit_arg_count(CType *func_type)
@@ -411,10 +413,23 @@ static void note_free_func_overload(int name_tok, int mangled_tok,
   for (o = free_func_overloads; o; o = o->next)
   {
     if (o->name_tok == name_tok && o->mangled_tok == mangled_tok)
+    {
+      if (func_type && func_type->ref)
+      {
+        o->explicit_arg_count = func_explicit_arg_count(func_type);
+        o->min_arg_count = func_min_arg_count(func_type);
+        o->func_type = *func_type;
+      }
       return;
+    }
     if (o->name_tok == name_tok && func_type
         && same_func_param_signature(&o->func_type, func_type))
+    {
+      o->explicit_arg_count = func_explicit_arg_count(func_type);
+      o->min_arg_count = func_min_arg_count(func_type);
+      o->func_type = *func_type;
       return;
+    }
   }
   o = cprime_mallocz(sizeof(*o));
   o->name_tok = name_tok;
@@ -514,11 +529,29 @@ static int prepare_free_func_declarator(int name_tok, CType *func_type)
   int mangled_tok;
   Sym *base;
 
+  if (getenv("CPC_TRACE_FREE_DECL")
+      && strstr(get_tok_str(name_tok, NULL), "clMaxComponent"))
+    fprintf(stderr, "CPC_FREE_DECL_IN name=%s ret_t=%04x ret_s=%s argc=%d\n",
+            get_tok_str(name_tok, NULL),
+            func_type && func_type->ref ? func_type->ref->type.t : 0,
+            func_type && func_type->ref
+              ? get_tok_str(get_struct_type_name_tok(&func_type->ref->type), NULL)
+              : "<none>",
+            func_explicit_arg_count(func_type));
   base = find_global_symbol(name_tok);
   if (base && (base->type.t & VT_BTYPE) == VT_FUNC
       && same_func_param_signature(&base->type, func_type))
     preserve_func_default_args(func_type, &base->type);
   mangled_tok = make_free_func_tok_for_type(name_tok, func_type);
+  if (getenv("CPC_TRACE_FREE_DECL")
+      && strstr(get_tok_str(name_tok, NULL), "clMaxComponent"))
+    fprintf(stderr, "CPC_FREE_DECL_OUT name=%s mangled=%s ret_t=%04x ret_s=%s base=%s\n",
+            get_tok_str(name_tok, NULL), get_tok_str(mangled_tok, NULL),
+            func_type && func_type->ref ? func_type->ref->type.t : 0,
+            func_type && func_type->ref
+              ? get_tok_str(get_struct_type_name_tok(&func_type->ref->type), NULL)
+              : "<none>",
+            base ? get_tok_str(base->v, NULL) : "<none>");
   if (mangled_tok != name_tok)
   {
     base = find_global_symbol(mangled_tok);
@@ -536,16 +569,24 @@ static int prepare_free_func_declarator(int name_tok, CType *func_type)
 static void emit_default_arg(Sym *func_type, Sym *arg)
 {
   TokenString macro;
+  TokenString *saved_macro_stack = macro_stack;
+  const int *saved_macro_ptr = macro_ptr;
 
   if (!arg || !arg->default_arg)
   {
     cprime_error("too few arguments to function");
   }
   macro = *arg->default_arg;
+  if (getenv("CPC_TRACE_SHALLOW")
+      && token_string_contains_tok(&macro, tok_alloc_const("clVector2")))
+    fprintf(stderr, "CPC_SHALLOW default-arg func=%s len=%d\n",
+            funcname ? funcname : "<none>", macro.len);
   begin_macro(&macro, 0);
   next();
   expr_eq();
-  end_macro();
+  while (macro_stack && macro_stack != saved_macro_stack)
+    end_macro();
+  macro_ptr = saved_macro_ptr;
   gfunc_param_typed(func_type, arg);
 }
 
@@ -702,7 +743,7 @@ static int saved_arg_functional_temporary_type(TokenString *arg, CType *type)
 
   s = sym_find(type_tok);
   if (!s)
-    s = sym_find2(global_stack, type_tok);
+    s = global_symbol_find(type_tok);
   if (s && (s->type.t & VT_TYPEDEF)
       && ((s->type.t & VT_BTYPE) == VT_STRUCT))
   {
@@ -725,7 +766,12 @@ static void infer_saved_arg_type(TokenString *arg, CType *type)
 {
   SValue *saved_vtop = vtop;
   int saved_nocode_wanted = nocode_wanted;
+  int saved_tok = tok;
+  CValue saved_tokc = tokc;
+  TokenString *saved_macro_stack = macro_stack;
+  const int *saved_macro_ptr = macro_ptr;
   int is_single_cchar = saved_arg_is_single_cchar(arg);
+  TokenString macro;
 
   if (saved_arg_is_braced(arg))
   {
@@ -737,7 +783,15 @@ static void infer_saved_arg_type(TokenString *arg, CType *type)
     return;
 
   nocode_wanted++;
-  begin_macro(arg, 0);
+  if (getenv("CPC_TRACE_SHALLOW")
+      && token_string_contains_tok(arg, tok_alloc_const("clVector2")))
+    fprintf(stderr, "CPC_SHALLOW infer-saved func=%s len=%d\n",
+            funcname ? funcname : "<none>", arg->len);
+  /* end_macro() resets a non-owning macro buffer.  Replay a shallow view so
+     overload inference does not consume the saved argument that emission
+     still needs. */
+  macro = *arg;
+  begin_macro(&macro, 0);
   next();
   expr_eq();
   *type = vtop->type;
@@ -745,11 +799,15 @@ static void infer_saved_arg_type(TokenString *arg, CType *type)
       || (((type->t & VT_BTYPE) == VT_STRUCT)
           && saved_arg_is_functional_temporary(arg)))
     type->t |= VT_RVALUE_REFERENCE;
-  end_macro();
+  while (macro_stack && macro_stack != saved_macro_stack)
+    end_macro();
+  macro_ptr = saved_macro_ptr;
   if (is_single_cchar)
     type->t = VT_BYTE;
   vtop = saved_vtop;
   nocode_wanted = saved_nocode_wanted;
+  tok = saved_tok;
+  tokc = saved_tokc;
 }
 
 static void infer_saved_arg_types(TokenString **args, CType *types, int nb_args)
@@ -770,16 +828,24 @@ static int emit_saved_arg_for_param(TokenString *arg, Sym *param)
     CType temp_type;
     AttributeDef temp_ad;
     TokenString macro;
+    TokenString *saved_macro_stack = macro_stack;
+    const int *saved_macro_ptr = macro_ptr;
 
     temp_type = is_reference_type(&param->type) ? *pointed_type(&param->type)
                                                : param->type;
     memset(&temp_ad, 0, sizeof temp_ad);
     macro = *arg;
+    if (getenv("CPC_TRACE_SHALLOW")
+        && token_string_contains_tok(&macro, tok_alloc_const("clVector2")))
+      fprintf(stderr, "CPC_SHALLOW braced-arg func=%s len=%d\n",
+              funcname ? funcname : "<none>", macro.len);
     begin_macro(&macro, 0);
     next();
     decl_initializer_alloc(&temp_type, &temp_ad, VT_LOCAL | VT_LVAL,
                            1, 0, NULL, 0, VT_LOCAL);
-    end_macro();
+    while (macro_stack && macro_stack != saved_macro_stack)
+      end_macro();
+    macro_ptr = saved_macro_ptr;
     return 1;
   }
 
@@ -1007,6 +1073,10 @@ static Sym *resolve_free_func_by_arg_types(int name_tok, CType *arg_types,
       }
     if (!ok)
       continue;
+    if (getenv("CPC_DUMP_FREE_RESOLVE")
+        && name_tok >= TOK_UIDENT)
+      fprintf(stderr, "CPC_FREE_OK name=%s rank=%d cand=%s\n",
+              get_tok_str(name_tok, NULL), arg_rank, get_tok_str(s->v, NULL));
     if (arg_rank > best_arg_rank)
       continue;
     if (arg_rank < best_arg_rank)
@@ -1015,12 +1085,21 @@ static Sym *resolve_free_func_by_arg_types(int name_tok, CType *arg_types,
       matches = 0;
       best_arg_rank = arg_rank;
     }
+    if (getenv("CPC_DUMP_FREE_RESOLVE")
+        && name_tok >= TOK_UIDENT)
+      fprintf(stderr, "CPC_FREE_CAND name=%s rank=%d cand=%s\n",
+              get_tok_str(name_tok, NULL), arg_rank, get_tok_str(s->v, NULL));
     match = s;
     matches++;
   }
   if (matches > 1)
     cprime_error("ambiguous overloaded function '%s'",
               get_tok_str(name_tok, NULL));
+  if (match && getenv("CPC_DUMP_FREE_RESOLVE")
+      && name_tok >= TOK_UIDENT)
+    fprintf(stderr, "CPC_FREE_RESOLVE name=%s argc=%d -> %s\n",
+            get_tok_str(name_tok, NULL), explicit_arg_count,
+            get_tok_str(match->v, NULL));
   return match;
 }
 
@@ -1042,9 +1121,22 @@ static void instantiate_function_templates_for_call(int name_tok,
     if (arg_count < td->func_min_args
         || (!td->func_is_variadic && arg_count > td->func_max_args))
       continue;
+    if (!template_def_first_param_matches_call(td, arg_types, arg_count))
+      continue;
     infer_template_args_from_call(td, arg_types, arg_count, &args);
     if (nb_inst_toks < (int)(sizeof(inst_toks) / sizeof(inst_toks[0])))
-      inst_toks[nb_inst_toks++] = instantiate_template_if_needed(td, &args);
+    {
+      inst_toks[nb_inst_toks] = instantiate_template_if_needed(td, &args);
+      if (getenv("CPC_TRACE_TEMPLATE_CALL")
+          && name_tok >= TOK_UIDENT
+          && strstr(get_tok_str(name_tok, NULL), "clMaxComponent"))
+        fprintf(stderr, "CPC_TEMPLATE_CALL name=%s inst=%s arg0=%s argc=%d\n",
+                get_tok_str(name_tok, NULL),
+                get_tok_str(inst_toks[nb_inst_toks], NULL),
+                args.nb > 0 ? get_tok_str(args.toks[0], NULL) : "<none>",
+                arg_count);
+      nb_inst_toks++;
+    }
     else
       instantiate_template_if_needed(td, &args);
   }
@@ -1053,7 +1145,7 @@ static void instantiate_function_templates_for_call(int name_tok,
   {
     Sym *s = sym_find(inst_toks[i]);
     if (!s)
-      s = sym_find2(global_stack, inst_toks[i]);
+      s = global_symbol_find(inst_toks[i]);
     if (s && (s->type.t & VT_BTYPE) == VT_FUNC && s->type.ref)
       note_free_func_overload(name_tok, inst_toks[i], &s->type);
   }
@@ -1155,13 +1247,13 @@ static int make_lifecycle_func_tok_for_params(int struct_tok, int method_tok,
   if (!params || params->len <= 1)
   {
     if (!same_count && !other_count && !sym_find(tok_alloc_const(name))
-        && !sym_find2(global_stack, tok_alloc_const(name)))
+        && !global_symbol_find(tok_alloc_const(name)))
       return tok_alloc_const(name);
     pstrcat(name, sizeof(name), "_0args");
     return tok_alloc_const(name);
   }
   if (!same_count && !other_count && !sym_find(tok_alloc_const(name))
-      && !sym_find2(global_stack, tok_alloc_const(name)))
+      && !global_symbol_find(tok_alloc_const(name)))
     return tok_alloc_const(name);
   for (i = 0; i < params->len && params->str[i] != TOK_EOF; ++i)
   {
@@ -1257,7 +1349,8 @@ static void note_raw_lifecycle_overload(int struct_tok, int method_tok,
 {
   MemberFuncOverload *o;
 
-  for (o = member_func_overloads; o; o = o->next)
+  for (o = member_func_candidates(struct_tok, method_tok);
+       o; o = o->bucket_next)
     if (o->struct_tok == struct_tok && o->method_tok == method_tok
         && o->mangled_tok == mangled_tok)
       return;
@@ -1268,6 +1361,7 @@ static void note_raw_lifecycle_overload(int struct_tok, int method_tok,
   o->explicit_arg_count = count_param_tokens(params);
   o->next = member_func_overloads;
   member_func_overloads = o;
+  index_member_func_overload(o);
 }
 
 static const char *cpp_operator_name_from_tok(int op)
@@ -1300,6 +1394,8 @@ static const char *cpp_operator_name_from_tok(int op)
   case TOK_A_XOR: return "operator^=";
   case TOK_A_SHL: return "operator<<=";
   case TOK_A_SAR: return "operator>>=";
+  case TOK_INC: return "operator++";
+  case TOK_DEC: return "operator--";
   case '!': return "operator!";
   case TOK_SHR:
   case TOK_SAR: return "operator>>";
@@ -1361,6 +1457,11 @@ static void finish_cpp_member_func_call(Sym *func_type, int nb_args)
   int size, align, n, r, t;
 
   ret.r2 = VT_CONST;
+  if (getenv("CPC_TRACE_MATRIX"))
+    fprintf(stderr, "CPC_MATRIX_FINISH enter ret=%04x/%s depth=%d\n",
+            func_type->type.t,
+            get_tok_str(get_struct_type_name_tok(&func_type->type), NULL),
+            (int)(vtop - vstack));
   ret_align = regsize = 0;
   if ((func_type->type.t & VT_BTYPE) == VT_STRUCT)
   {
@@ -1407,6 +1508,11 @@ static void finish_cpp_member_func_call(Sym *func_type, int nb_args)
 
   vcheck_cmp();
   gfunc_call(nb_args);
+  if (getenv("CPC_TRACE_MATRIX"))
+    fprintf(stderr, "CPC_MATRIX_FINISH called ret=%04x/%s ret_nregs=%d depth=%d\n",
+            func_type->type.t,
+            get_tok_str(get_struct_type_name_tok(&func_type->type), NULL),
+            ret_nregs, (int)(vtop - vstack));
 
   if (ret_nregs < 0)
   {
@@ -1477,8 +1583,12 @@ static void finish_cpp_member_func_call(Sym *func_type, int nb_args)
 static int try_call_cpp_binary_operator(int op)
 {
   int method_tok;
+  int instantiated_member_tok;
   Sym *func_sym, *func_type, *sa;
+  Sym stable_func_type;
   CType saved_ret_type;
+  SValue saved_lhs, saved_rhs;
+  SValue *saved_operand_vtop;
 
   method_tok = get_cpp_binary_operator_method_tok(op);
   if (!method_tok)
@@ -1500,15 +1610,51 @@ static int try_call_cpp_binary_operator(int op)
     vswap();
   }
 
-  instantiate_template_member_for_call(&vtop[-1].type, method_tok,
-                                       &vtop->type, 1);
-  func_sym = resolve_member_func_by_arg_types(&vtop[-1].type, method_tok,
-                                              &vtop->type, 1);
+  saved_operand_vtop = vtop;
+  saved_lhs = vtop[-1];
+  saved_rhs = *vtop;
+  instantiate_template_member_for_call(&saved_lhs.type, method_tok,
+                                       &saved_rhs.type, 1);
+  vtop = saved_operand_vtop;
+  vtop[-1] = saved_lhs;
+  *vtop = saved_rhs;
+  instantiated_member_tok = last_instantiated_member_func_tok;
+  func_sym = resolve_member_func_by_arg_types(&saved_lhs.type, method_tok,
+                                              &saved_rhs.type, 1);
+  vtop = saved_operand_vtop;
+  vtop[-1] = saved_lhs;
+  *vtop = saved_rhs;
   if (!func_sym)
+    func_sym = resolve_member_field_func_by_arg_types(&saved_lhs.type,
+                                                      method_tok,
+                                                      &saved_rhs.type, 1);
+  vtop = saved_operand_vtop;
+  vtop[-1] = saved_lhs;
+  *vtop = saved_rhs;
+  if (!func_sym)
+  {
     func_sym = resolve_member_func(&vtop[-1].type, method_tok);
+  }
+  if (!func_sym && instantiated_member_tok)
+  {
+    func_sym = global_symbol_find(instantiated_member_tok);
+    if (!func_sym)
+      func_sym = sym_find(instantiated_member_tok);
+  }
   if (func_sym)
-    adjust_template_member_auto_return_for_call(&vtop[-1].type, method_tok,
-                                                &vtop->type, 1, func_sym);
+  {
+    adjust_template_member_auto_return_for_call(&saved_lhs.type, method_tok,
+                                                &saved_rhs.type, 1, func_sym);
+    vtop = saved_operand_vtop;
+    vtop[-1] = saved_lhs;
+    *vtop = saved_rhs;
+  }
+  if (func_sym && getenv("CPC_DUMP_MEMBER_RESOLVE"))
+    fprintf(stderr, "CPC_BINARY_RESOLVE lhs=%s rhs_t=%04x method=%s -> %s ret_t=%04x\n",
+            get_tok_str(get_struct_type_name_tok(&vtop[-1].type), NULL),
+            vtop->type.t, get_tok_str(method_tok, NULL),
+            get_tok_str(func_sym->v, NULL),
+            func_sym->type.ref ? func_sym->type.ref->type.t : 0);
   if (!func_sym)
   {
     int lhs_struct_tok = get_struct_type_name_tok(&vtop[-1].type);
@@ -1547,7 +1693,8 @@ static int try_call_cpp_binary_operator(int op)
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("operator overload target is not declared as function");
 
-  func_type = func_sym->type.ref;
+  stable_func_type = *func_sym->type.ref;
+  func_type = &stable_func_type;
   saved_ret_type = func_type->type;
   if ((saved_ret_type.t & VT_BTYPE) != VT_STRUCT
       && (op == '+' || op == '-' || op == '*' || op == '/'
@@ -1561,19 +1708,50 @@ static int try_call_cpp_binary_operator(int op)
     cprime_error("operator overload must have exactly one explicit parameter");
 
   /* Convert lhs/rhs into member call args: operator(this, rhs). */
+  if (getenv("CPC_TRACE_MATRIX"))
+    fprintf(stderr, "CPC_MATRIX_EMIT start below=%04x top=%04x depth=%d\n",
+            vtop[-1].type.t, vtop->type.t, (int)(vtop - vstack));
   vswap();
+  if (getenv("CPC_TRACE_MATRIX"))
+    fprintf(stderr, "CPC_MATRIX_EMIT swap below=%04x top=%04x depth=%d\n",
+            vtop[-1].type.t, vtop->type.t, (int)(vtop - vstack));
   mk_pointer(&vtop->type);
   gaddrof();
   gv(RC_INT);
+  if (getenv("CPC_TRACE_MATRIX"))
+    fprintf(stderr, "CPC_MATRIX_EMIT addr below=%04x top=%04x depth=%d\n",
+            vtop[-1].type.t, vtop->type.t, (int)(vtop - vstack));
   vswap();
   save_lvalues();
+  if (getenv("CPC_TRACE_MATRIX"))
+    fprintf(stderr, "CPC_MATRIX_EMIT saved below=%04x top=%04x ret=%s depth=%d\n",
+            vtop[-1].type.t, vtop->type.t,
+            get_tok_str(get_struct_type_name_tok(&func_type->type), NULL),
+            (int)(vtop - vstack));
   gfunc_param_typed(func_type, sa->next);
+  if (getenv("CPC_TRACE_MATRIX"))
+    fprintf(stderr, "CPC_MATRIX_EMIT param1 ret=%s depth=%d\n",
+            get_tok_str(get_struct_type_name_tok(&func_type->type), NULL),
+            (int)(vtop - vstack));
   vswap();
   gfunc_param_typed(func_type, sa);
+  if (getenv("CPC_TRACE_MATRIX"))
+    fprintf(stderr, "CPC_MATRIX_EMIT param2 ret=%s depth=%d\n",
+            get_tok_str(get_struct_type_name_tok(&func_type->type), NULL),
+            (int)(vtop - vstack));
   vswap();
   vpushsym(&func_sym->type, func_sym);
+  if (getenv("CPC_TRACE_MATRIX"))
+    fprintf(stderr, "CPC_MATRIX_EMIT pushed ret=%s depth=%d\n",
+            get_tok_str(get_struct_type_name_tok(&func_type->type), NULL),
+            (int)(vtop - vstack));
   vrott(3);
   finish_cpp_member_func_call(func_type, 2);
+  if (getenv("CPC_TRACE_MATRIX"))
+    fprintf(stderr, "CPC_MATRIX_EMIT finish top=%04x/%s depth=%d\n",
+            vtop->type.t,
+            get_tok_str(get_struct_type_name_tok(&vtop->type), NULL),
+            (int)(vtop - vstack));
   return 1;
 }
 
@@ -1627,7 +1805,17 @@ static int try_call_cpp_unary_operator(int op)
   if (!func_sym)
     func_sym = resolve_member_func(&vtop->type, method_tok);
   if (!func_sym)
+  {
+    if (getenv("CPC_DUMP_MEMBER_RESOLVE") && op == '*')
+      fprintf(stderr, "CPC_UNARY_RESOLVE op=* recv=%s t=%04x -> <none>\n",
+              get_tok_str(get_struct_type_name_tok(&vtop->type), NULL),
+              vtop->type.t);
     return 0;
+  }
+  if (getenv("CPC_DUMP_MEMBER_RESOLVE") && op == '*')
+    fprintf(stderr, "CPC_UNARY_RESOLVE op=* recv=%s t=%04x -> %s\n",
+            get_tok_str(get_struct_type_name_tok(&vtop->type), NULL),
+            vtop->type.t, get_tok_str(func_sym->v, NULL));
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("operator overload target is not declared as function");
   if (op == '-' && member_is_auto_return_tok(func_sym->v))
@@ -1644,7 +1832,7 @@ static int try_call_cpp_unary_operator(int op)
                 : 0;
     typed_sym = typed_tok ? sym_find(typed_tok) : NULL;
     if (!typed_sym && typed_tok)
-      typed_sym = sym_find2(global_stack, typed_tok);
+      typed_sym = global_symbol_find(typed_tok);
     if (typed_sym && (typed_sym->type.t & VT_BTYPE) == VT_FUNC
         && typed_sym->type.ref)
       func_sym = typed_sym;
@@ -1672,8 +1860,10 @@ static int try_call_cpp_bool_conversion_operator(void)
 {
   int method_tok = tok_alloc_const("operator bool");
   Sym *func_sym;
+  Sym *canonical_sym = NULL;
   Sym *func_type;
   Sym *sa;
+  int trace_depth_before = 0;
 
   if ((vtop->type.t & VT_BTYPE) != VT_STRUCT)
     return 0;
@@ -1684,6 +1874,10 @@ static int try_call_cpp_bool_conversion_operator(void)
     return 0;
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("conversion operator target is not declared as function");
+  if (getenv("CPC_TRACE_CLBITREF")
+      && get_struct_type_name_tok(&vtop->type)
+      && strstr(get_tok_str(get_struct_type_name_tok(&vtop->type), NULL), "clBitRef"))
+    trace_depth_before = (int)(vtop - vstack);
   func_type = func_sym->type.ref;
   sa = func_type->next;
   if (!sa || sa->next)
@@ -1695,6 +1889,10 @@ static int try_call_cpp_bool_conversion_operator(void)
   vpushsym(&func_sym->type, func_sym);
   vswap();
   finish_cpp_member_func_call(func_type, 1);
+  if (trace_depth_before
+      && getenv("CPC_TRACE_CLBITREF"))
+    fprintf(stderr, "CPC_CLBITREF_BOOL_DEPTH before=%d after=%d ret_t=%04x ret_r=%04x\n",
+            trace_depth_before, (int)(vtop - vstack), vtop->type.t, vtop->r);
   return 1;
 }
 
@@ -1710,9 +1908,16 @@ static int try_call_cpp_index_operator(void)
   func_sym = resolve_member_func_by_arg_types(&vtop[-1].type, method_tok,
                                               &vtop->type, 1);
   if (!func_sym)
-    func_sym = resolve_member_func(&vtop[-1].type, method_tok);
+    func_sym = resolve_member_field_func_by_arg_types(&vtop[-1].type,
+                                                      method_tok,
+                                                      &vtop->type, 1);
   if (!func_sym)
     return 0;
+  if (getenv("CPC_DUMP_MEMBER_RESOLVE"))
+    fprintf(stderr, "CPC_COMPOUND_RESOLVE lhs=%s rhs_t=%04x method=%s -> %s\n",
+            get_tok_str(get_struct_type_name_tok(&vtop[-1].type), NULL),
+            vtop->type.t, get_tok_str(method_tok, NULL),
+            get_tok_str(func_sym->v, NULL));
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("operator overload target is not declared as function");
   func_type = func_sym->type.ref;
@@ -1741,17 +1946,42 @@ static int try_call_cpp_assignment_operator(void)
   Sym *func_sym;
   Sym *func_type;
   Sym *sa, *this_arg, *value_arg;
+  CType receiver_type;
+  int trace_depth_before = 0;
 
   if ((vtop[-1].type.t & VT_BTYPE) != VT_STRUCT)
     return 0;
-  func_sym = resolve_member_func_by_arg_types(&vtop[-1].type, method_tok,
+  receiver_type = vtop[-1].type;
+  if (!(vtop[-1].r & VT_LVAL)
+      || ((vtop[-1].r & VT_VALMASK) < VT_CONST))
+    receiver_type.t &= ~VT_CONSTANT;
+  func_sym = resolve_member_func_by_arg_types(&receiver_type, method_tok,
                                               &vtop->type, 1);
+  if (getenv("CPC_TRACE_CLBITREF")
+      && get_struct_type_name_tok(&vtop[-1].type)
+      && strstr(get_tok_str(get_struct_type_name_tok(&vtop[-1].type), NULL), "clBitRef"))
+    fprintf(stderr, "CPC_CLBITREF_ASSIGN first=%s lhs_t=%04x lhs_r=%04x recv_t=%04x\n",
+            func_sym ? get_tok_str(func_sym->v, NULL) : "<none>",
+            vtop[-1].type.t, vtop[-1].r, receiver_type.t);
   if (!func_sym)
-    func_sym = resolve_member_func(&vtop[-1].type, method_tok);
+  {
+    func_sym = resolve_member_field_func_by_arg_types(&vtop[-1].type,
+                                                      method_tok,
+                                                      &vtop->type, 1);
+  }
   if (!func_sym)
     return 0;
+  if (getenv("CPC_DUMP_MEMBER_RESOLVE"))
+    fprintf(stderr, "CPC_COMPOUND_RESOLVE lhs=%s rhs_t=%04x method=%s -> %s\n",
+            get_tok_str(get_struct_type_name_tok(&vtop[-1].type), NULL),
+            vtop->type.t, get_tok_str(method_tok, NULL),
+            get_tok_str(func_sym->v, NULL));
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("operator overload target is not declared as function");
+  if (getenv("CPC_TRACE_CLBITREF")
+      && get_struct_type_name_tok(&vtop[-1].type)
+      && strstr(get_tok_str(get_struct_type_name_tok(&vtop[-1].type), NULL), "clBitRef"))
+    trace_depth_before = (int)(vtop - vstack);
   func_type = func_sym->type.ref;
   sa = func_type->next;
   if (!sa || !sa->next || sa->next->next)
@@ -1759,10 +1989,12 @@ static int try_call_cpp_assignment_operator(void)
   this_arg = sa;
   value_arg = sa->next;
   vswap();
+  vtop->type = receiver_type;
   mk_pointer(&vtop->type);
   gaddrof();
   gv(RC_INT);
   vswap();
+  save_lvalues();
   gfunc_param_typed(func_type, value_arg);
   vswap();
   gfunc_param_typed(func_type, this_arg);
@@ -1770,6 +2002,12 @@ static int try_call_cpp_assignment_operator(void)
   vpushsym(&func_sym->type, func_sym);
   vrott(3);
   finish_cpp_member_func_call(func_type, 2);
+  if (trace_depth_before
+      && getenv("CPC_TRACE_CLBITREF"))
+    fprintf(stderr, "CPC_CLBITREF_ASSIGN_DEPTH before=%d after=%d ret_t=%04x ret_r=%04x below_t=%04x below_r=%04x\n",
+            trace_depth_before, (int)(vtop - vstack), vtop->type.t, vtop->r,
+            vtop > vstack ? vtop[-1].type.t : 0,
+            vtop > vstack ? vtop[-1].r : 0);
   return 1;
 }
 
@@ -1790,6 +2028,11 @@ static int try_call_cpp_compound_assign_operator(int op)
     func_sym = resolve_member_func(&vtop[-1].type, method_tok);
   if (!func_sym)
     return 0;
+  if (getenv("CPC_DUMP_MEMBER_RESOLVE"))
+    fprintf(stderr, "CPC_COMPOUND_RESOLVE lhs=%s rhs_t=%04x method=%s -> %s\n",
+            get_tok_str(get_struct_type_name_tok(&vtop[-1].type), NULL),
+            vtop->type.t, get_tok_str(method_tok, NULL),
+            get_tok_str(func_sym->v, NULL));
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("operator overload target is not declared as function");
   func_type = func_sym->type.ref;

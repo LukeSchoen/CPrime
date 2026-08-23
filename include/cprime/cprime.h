@@ -517,6 +517,8 @@ typedef struct AttributeDef {
 typedef struct InlineFunc {
     TokenString *func_str;
     Sym *sym;
+    CType type;
+    int preserve_type;
     char filename[1];
 } InlineFunc;
 
