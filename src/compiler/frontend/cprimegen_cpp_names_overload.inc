@@ -1000,6 +1000,8 @@ static void gfunc_param_typed_with_conversions(Sym *func_type, Sym *param)
     if ((construct_type.t & VT_BTYPE) == VT_STRUCT
         && !is_compatible_unqualified_types(&construct_type,
                                             &arg_value_type)
+        && !same_concrete_template_instantiation(&construct_type,
+                                                 &arg_value_type)
         && class_has_single_arg_constructor_for(&construct_type,
                                                 &arg_value_type))
     {
@@ -1289,7 +1291,8 @@ static int call_arg_exact_param_type(CType *param_type, CType *arg_type)
     param.t &= ~VT_DEFSIGN;
     arg.t &= ~VT_DEFSIGN;
   }
-  return is_compatible_unqualified_types(&param, &arg);
+  return is_compatible_unqualified_types(&param, &arg)
+         || same_concrete_template_instantiation(&param, &arg);
 }
 
 static int free_func_has_exact_concrete_match(int name_tok,

@@ -3287,7 +3287,9 @@ static TemplateDef *find_class_template_def_for_class_tok(int class_tok)
     if (!td->is_class)
       continue;
     for (j = 0; j < td->nb_inst; ++j)
-      if (td->inst_name_toks[j] == class_tok)
+      if (td->inst_name_toks[j] == class_tok
+          || !strcmp(get_tok_str(td->inst_name_toks[j], NULL),
+                     get_tok_str(class_tok, NULL)))
         return td;
   }
   return NULL;
@@ -5471,6 +5473,7 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
   {
     pm = cprime_mallocz(sizeof(*pm));
     pm->str = body_def;
+    pm->func_tok = member_func_tok;
     pm->struct_tok = class_mangled_tok;
     pm->is_template_member = 1;
     pm->is_lifecycle_member = is_lifecycle_member_tok(method_tok);
@@ -6123,8 +6126,16 @@ static void instantiate_template_member_for_call(CType *type, int method_tok,
           continue;
         /* Most inline member templates are emitted during class layout.
            Dependent auto-return operators still need a call-specific replay
-           so the concrete return type is available before postfix lookup. */
+           so the concrete return type is available before postfix lookup.
+           Converting constructor templates also require call-specific replay:
+           their member template argument comes from the source class, and a
+           class-layout replay cannot know or emit that specialization. */
         if (!template_member_def_is_scoped(md)
+            && !(method_tok == TOK_CONSTRUCTOR1
+                 && arg_types && explicit_arg_count == 1
+                 && template_member_is_same_family_conversion_ctor(md)
+                 && is_same_template_family_conversion_ctor(type,
+                                                            &arg_types[0]))
             && !(token_string_is_auto_type_token_prefix(md->def_str)
                  && !strncmp(get_tok_str(method_tok, NULL), "operator", 8)))
           continue;
@@ -9676,12 +9687,85 @@ static int infer_template_return_scalar_ctype(TemplateDef *td,
                                               TemplateArgList *args,
                                               CType *ret_type)
 {
+  static int scalar_inference_depth;
   int i;
   if (!td || !td->def_str || !args || !ret_type)
     return 0;
   if (infer_template_return_member_call_ctype(td, args, ret_type)
       && (ret_type->t & VT_BTYPE) != VT_STRUCT)
     return 1;
+
+  /* Preserve the type selected by a dependent decltype cast.  Numeric
+     helpers commonly return a fixed floating type even when their template
+     argument is integral:
+
+       return (decltype(scale<T>()))(value) * scale<T>();
+
+     Falling back to T for the outer auto return truncates that expression.
+     Follow the concrete helper interface when the same zero-argument helper
+     is both the decltype operand and an operand of the returned expression. */
+  if (scalar_inference_depth < 16)
+    for (i = 0; i + 9 < td->def_str->len; ++i)
+      if (td->def_str->str[i] == TOK_RETURN)
+      {
+        int di, call_tok, param_index, j, saw_matching_call = 0;
+        TemplateDef *return_td;
+        TemplateArgList return_args;
+
+        for (di = i + 1; di + 8 < td->def_str->len
+                         && td->def_str->str[di] != ';'; ++di)
+          if (td->def_str->str[di] == TOK_DECLTYPE)
+            break;
+        if (di + 8 >= td->def_str->len
+            || td->def_str->str[di] != TOK_DECLTYPE
+            || td->def_str->str[di + 1] != '('
+            || td->def_str->str[di + 2] < TOK_UIDENT
+            || (td->def_str->str[di + 3] != TOK_LT
+                && td->def_str->str[di + 3] != '<')
+            || (td->def_str->str[di + 5] != TOK_GT
+                && td->def_str->str[di + 5] != '>')
+            || td->def_str->str[di + 6] != '('
+            || td->def_str->str[di + 7] != ')'
+            || td->def_str->str[di + 8] != ')')
+          continue;
+        call_tok = td->def_str->str[di + 2];
+        param_index = template_param_index(td, td->def_str->str[di + 4]);
+        if (param_index < 0 || param_index >= args->nb)
+          continue;
+        for (j = di + 9; j + 4 < td->def_str->len
+                         && td->def_str->str[j] != ';'; ++j)
+          if (td->def_str->str[j] == call_tok
+              && (td->def_str->str[j + 1] == TOK_LT
+                  || td->def_str->str[j + 1] == '<')
+              && td->def_str->str[j + 2] == td->def_str->str[di + 4]
+              && (td->def_str->str[j + 3] == TOK_GT
+                  || td->def_str->str[j + 3] == '>')
+              && td->def_str->str[j + 4] == '(')
+          {
+            saw_matching_call = 1;
+            break;
+          }
+        if (!saw_matching_call)
+          continue;
+        return_td = find_function_template_def(call_tok);
+        if (!return_td)
+        {
+          int qualified_tok = find_current_namespace_tok(call_tok);
+          if (qualified_tok != call_tok)
+            return_td = find_function_template_def(qualified_tok);
+        }
+        if (!return_td)
+          continue;
+        template_arg_list_one(&return_args, args->toks[param_index]);
+        ++scalar_inference_depth;
+        if (infer_template_return_scalar_ctype(return_td, &return_args,
+                                               ret_type))
+        {
+          --scalar_inference_depth;
+          return 1;
+        }
+        --scalar_inference_depth;
+      }
   for (i = 0; i + 7 < td->def_str->len; ++i)
     if (td->def_str->str[i] == TOK_RETURN)
     {

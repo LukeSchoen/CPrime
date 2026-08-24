@@ -667,9 +667,17 @@ do_init_list:
       if (len)
       {
         init_params element_init = {0};
+        SValue *element_storage;
         element_addr = get_temp_local_var(element_size * len, element_align,
                                           &element_r2);
         element_init.local_offset = element_addr + element_size * len;
+        /* Keep the complete backing allocation live while each element is
+           materialized.  Struct element expressions can allocate their own
+           temporaries; without this marker the temp allocator reuses and
+           overwrites the initializer_list's first slot. */
+        vset(element_type, VT_LOCAL | VT_LVAL, element_addr);
+        vtop->r2 = element_r2;
+        element_storage = vtop;
         for (i = 0; i < len; ++i)
         {
           TokenString macro = *elements[i];
@@ -687,9 +695,10 @@ do_init_list:
           while (macro_stack && macro_stack != saved_macro_stack)
             end_macro();
           macro_ptr = saved_macro_ptr;
+          if (vtop != element_storage)
+            cprime_internal_error(
+              "unbalanced initializer_list element initializer");
         }
-        vset(element_type, VT_LOCAL | VT_LVAL, element_addr);
-        vtop->r2 = element_r2;
         mk_pointer(&vtop->type);
         gaddrof();
       }

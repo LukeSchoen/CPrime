@@ -137,6 +137,7 @@ static int decl(int l);
 static void expr_eq(void);
 static void vpush_type_size(CType *type, int *a);
 static int is_compatible_unqualified_types(CType *type1, CType *type2);
+static int same_concrete_template_instantiation(CType *type1, CType *type2);
 static inline int64_t expr_const64(void);
 static void vpush64(int ty, unsigned long long v);
 static void vpush(CType *type);
@@ -548,6 +549,7 @@ static int al_namespace_toks;
 typedef struct PendingMemberFunc
 {
   TokenString *str;
+  int func_tok;
   int struct_tok;
   int is_template_member;
   int is_lifecycle_member;
@@ -558,6 +560,9 @@ static PendingMemberFunc **pending_member_funcs;
 static int nb_pending_member_funcs;
 static int defer_pending_member_funcs;
 static int compiling_pending_member_funcs;
+static int *compiled_pending_member_func_toks;
+static int nb_compiled_pending_member_func_toks;
+static int al_compiled_pending_member_func_toks;
 static int compile_lifecycle_member_funcs_only;
 static int nb_pending_global_inits;
 
@@ -751,9 +756,22 @@ static int pending_member_func_has_tok(int func_tok)
   return 0;
 }
 
+static int compiled_pending_member_func_has_tok(int func_tok)
+{
+  int i;
+
+  for (i = 0; i < nb_compiled_pending_member_func_toks; ++i)
+    if (compiled_pending_member_func_toks[i] == func_tok)
+      return 1;
+  return 0;
+}
+
 static int pending_member_func_has_body_tok(int func_tok)
 {
   int i, j;
+
+  if (compiled_pending_member_func_has_tok(func_tok))
+    return 1;
 
   for (i = 0; i < nb_pending_member_funcs; ++i)
   {
@@ -839,6 +857,10 @@ static void free_template_state(void)
   cprime_free(pending_member_funcs);
   pending_member_funcs = NULL;
   nb_pending_member_funcs = 0;
+  cprime_free(compiled_pending_member_func_toks);
+  compiled_pending_member_func_toks = NULL;
+  nb_compiled_pending_member_func_toks = 0;
+  al_compiled_pending_member_func_toks = 0;
 
   cprime_free(pending_template_member_body_requests);
   pending_template_member_body_requests = NULL;
@@ -6179,20 +6201,40 @@ static TokenString *parse_explicit_constructor_member_initializers(
 
   for (;;)
   {
-    int field_tok, dummy_ofs, skip_initializer_emit = 0;
+    int field_tok, storage_field_tok, dummy_ofs, skip_initializer_emit = 0;
     int is_delegating_initializer = 0;
     Sym *field;
     CType field_type;
+    ClassBaseInfo *base_info;
     int field_struct_tok, level, saw_arg, arg_count;
 
     if (tok < TOK_UIDENT)
       cprime_error("member initializer name");
     field_tok = tok;
+    storage_field_tok = field_tok;
     field = find_field_try(struct_type, field_tok, &dummy_ofs);
-    if (field && initialized_fields)
-      tok_str_add(initialized_fields, field_tok);
+    base_info = NULL;
+    if (!field)
+    {
+      int class_tok = get_struct_type_name_tok(struct_type);
+      for (base_info = class_base_infos; base_info; base_info = base_info->next)
+        if (base_info->class_tok == class_tok
+            && (base_info->base_tok == field_tok
+                || class_tok_matches_unqualified_name(base_info->base_tok,
+                                                      field_tok)))
+          break;
+      if (base_info && base_info->field)
+      {
+        field = base_info->field;
+        storage_field_tok = field->v & ~SYM_FIELD;
+      }
+    }
     if (field)
+    {
       field_type = field->type;
+      if (initialized_fields)
+        tok_str_add(initialized_fields, storage_field_tok);
+    }
     else
     {
       field_type.t = VT_VOID;
@@ -6387,7 +6429,7 @@ static TokenString *parse_explicit_constructor_member_initializers(
       tok_str_add(prefix, '(');
       tok_str_add(prefix, this_tok);
       tok_str_add(prefix, TOK_ARROW);
-      tok_str_add(prefix, field_tok);
+      tok_str_add(prefix, storage_field_tok);
       tok_str_add(prefix, ')');
       tok_str_add(prefix, ')');
       tok_str_add(prefix, field_struct_tok);
@@ -10411,6 +10453,8 @@ static void gfunc_param_typed(Sym *func, Sym *arg)
         && (param_pointed->t & VT_CONSTANT)
         && (param_pointed->t & VT_BTYPE) == VT_STRUCT
         && !is_compatible_unqualified_types(param_pointed, &vtop->type)
+        && !same_concrete_template_instantiation(param_pointed,
+                                                 &vtop->type)
         && class_has_single_arg_constructor_for(param_pointed, &vtop->type))
     {
       CType temp_type = *param_pointed;
@@ -12358,6 +12402,16 @@ tok_identifier:
       if (!s || IS_ASM_SYM(s))
       {
         const char *name = get_tok_str(t, NULL);
+        /* `nullptr` is a C++ core literal, not an ordinary identifier.  The
+           runtime headers also define it as zero for legacy paths, but saved
+           overload-call arguments can be replayed after that macro context
+           has been consumed.  Recognize the literal directly so overload
+           probing and emission see the same null pointer constant. */
+        if (!strcmp(name, "nullptr"))
+        {
+          vpushi(0);
+          break;
+        }
         if (tok == '(')
         {
           Sym *this_sym = find_cpp_this_symbol();

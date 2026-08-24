@@ -8,6 +8,20 @@
 
 extern "C"
 {
+void cpcRacerStartup()
+{
+  wchar_t path[MAX_PATH] = { 0 };
+  DWORD length = GetModuleFileNameW(NULL, path, MAX_PATH);
+  if (!length || length >= MAX_PATH)
+    return;
+  while (length && path[length - 1] != L'\\' && path[length - 1] != L'/')
+    --length;
+  if (!length)
+    return;
+  path[length - 1] = L'\0';
+  SetCurrentDirectoryW(path);
+}
+
 void clClearAnyPreviousWindowsError()
 {
   (void)GetLastError();

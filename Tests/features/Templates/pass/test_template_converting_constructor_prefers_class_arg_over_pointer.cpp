@@ -25,6 +25,5 @@ int main()
 {
   ConvertingCtorMatrixD source = { 3.0 };
   ConvertingCtorMatrixF target(source);
-  (void)target;
-  return 0;
+  return target.value == 3.0f ? 0 : 1;
 }

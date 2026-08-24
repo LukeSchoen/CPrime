@@ -56,6 +56,7 @@ if (-not (Test-Path -LiteralPath $sdl2Def)) { throw "Missing SDL2 import def: $s
 
 $flags = Get-Content -LiteralPath $flagsFile | Where-Object { $_.Trim() }
 $flags += "-D_MSC_VER=1900"
+$flags += "-DCPRIME_RACER_BUILD"
 $flags += "-DMA_NO_SSE2"
 $flags += "-DMA_NO_AVX2"
 $flags += ('-I"' + (Join-Path $ProjectRoot "CommonLib\3rdParty\Imagine\include") + '"')
@@ -411,9 +412,10 @@ if ($exit -eq 0 -and (Test-Path -LiteralPath $exe)) {
         }
         $smokeStdout = Join-Path $OutDir "smoke.stdout.log"
         $smokeStderr = Join-Path $OutDir "smoke.stderr.log"
-        # Launch from the artifact directory: this matches opening Racer.exe
-        # directly and catches missing DLLs and working-directory asset bugs.
-        $runtimeWorkingDir = $OutDir
+        # Launch from an unrelated directory.  Racer startup must normalize its
+        # working directory to the executable before resolving Assets/, while
+        # Windows must still resolve the packaged DLLs beside Racer.exe.
+        $runtimeWorkingDir = [System.IO.Path]::GetTempPath()
         Remove-Item -LiteralPath $smokeStdout, $smokeStderr -Force -ErrorAction SilentlyContinue
         $smokeProcess = Start-Process -FilePath $exe -WorkingDirectory $runtimeWorkingDir `
             -WindowStyle Hidden -RedirectStandardOutput $smokeStdout `

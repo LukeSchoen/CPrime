@@ -229,27 +229,7 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
 
   for (ai = 0; ai < call_arg_count; ++ai)
   {
-    if (saved_arg_is_braced(call_args[ai]) && sa
-        && (((sa->type.t & VT_BTYPE) == VT_STRUCT)
-            || (is_reference_type(&sa->type)
-                && ((pointed_type(&sa->type)->t & VT_BTYPE) == VT_STRUCT))))
-    {
-      CType temp_type;
-      int arg_size, arg_align, arg_r2, arg_addr;
-      temp_type = is_reference_type(&sa->type) ? *pointed_type(&sa->type)
-                                               : sa->type;
-      arg_size = type_size(&temp_type, &arg_align);
-      arg_addr = get_temp_local_var(arg_size, arg_align, &arg_r2);
-      vset(&temp_type, VT_LOCAL | VT_LVAL, arg_addr);
-      vtop->r2 = arg_r2;
-    }
-    else
-    {
-      begin_macro(call_args[ai], 1);
-      next();
-      expr_eq();
-      end_macro();
-    }
+    emit_saved_arg_for_param(call_args[ai], sa);
     gfunc_param_typed(func_type, sa);
     nb_args++;
     if (sa)
@@ -715,13 +695,6 @@ static void copy_construct_struct_memberwise_from_base_ptr(CType *type,
     return;
   }
 
-  if (resolve_copy_constructor_func(type, type))
-  {
-    copy_construct_one_lvalue_pair(type, dst_ptr, src_ptr, base_offset,
-                                   move_source);
-    return;
-  }
-
   for (field = type->ref->next; field; field = field->next)
   {
     int field_offset = base_offset + field->c;
@@ -1142,7 +1115,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
 {
   Sym *ctor_func, *func_type, *sa;
   CType call_arg_types[32], ptr_type;
-  int nb_args, ai, saved_tok;
+  int nb_args, ai, saved_tok, use_implicit_memberwise_copy = 0;
   CValue saved_tokc;
 
   if (getenv("CPC_TRACE_PLACEMENT"))
@@ -1183,10 +1156,25 @@ static void call_placement_constructor(CType *type, TokenString *placement,
     ctor_func = resolve_member_field_func_by_arg_types(type, TOK_CONSTRUCTOR1,
                                                        call_arg_types,
                                                        call_arg_count);
-  if (!ctor_func)
+  if (!ctor_func && call_arg_count == 1)
+  {
+    CType source_value_type = call_arg_types[0];
+    source_value_type.t &= ~VT_RVALUE_REFERENCE;
+    if (is_reference_type(&source_value_type))
+      source_value_type = *pointed_type(&source_value_type);
+    use_implicit_memberwise_copy =
+      (source_value_type.t & VT_BTYPE) == VT_STRUCT
+      && is_compatible_unqualified_types(type, &source_value_type);
+  }
+  /* A class retains its implicit copy constructor when it also has unrelated
+     one-argument constructors.  If overload discovery found no authored
+     self-type constructor, do not let the argument-count fallback select a
+     scalar/converting constructor for a same-type placement copy.  The null
+     target below is the existing memberwise implicit-copy path. */
+  if (!ctor_func && !use_implicit_memberwise_copy)
     ctor_func = resolve_member_func_by_arg_count(type, TOK_CONSTRUCTOR1,
                                                 call_arg_count);
-  if (!ctor_func)
+  if (!ctor_func && !use_implicit_memberwise_copy)
     ctor_func = resolve_lifecycle_func(type, TOK_CONSTRUCTOR1);
   if (getenv("CPC_TRACE_PLACEMENT"))
   {
@@ -1927,9 +1915,13 @@ static int same_template_family_instantiations(CType *type1, CType *type2)
     seen1 = seen2 = 0;
     for (j = 0; j < td->nb_inst; ++j)
     {
-      if (td->inst_name_toks[j] == tok1)
+      if (td->inst_name_toks[j] == tok1
+          || !strcmp(get_tok_str(td->inst_name_toks[j], NULL),
+                     get_tok_str(tok1, NULL)))
         seen1 = 1;
-      if (td->inst_name_toks[j] == tok2)
+      if (td->inst_name_toks[j] == tok2
+          || !strcmp(get_tok_str(td->inst_name_toks[j], NULL),
+                     get_tok_str(tok2, NULL)))
         seen2 = 1;
     }
     if (seen1 && seen2)
@@ -2140,9 +2132,13 @@ static int is_same_template_family_conversion_ctor(CType *class_type,
       continue;
     for (j = 0; j < td->nb_inst; ++j)
     {
-      if (td->inst_name_toks[j] == class_tok)
+      if (td->inst_name_toks[j] == class_tok
+          || !strcmp(get_tok_str(td->inst_name_toks[j], NULL),
+                     get_tok_str(class_tok, NULL)))
         class_seen = 1;
-      if (td->inst_name_toks[j] == arg_tok)
+      if (td->inst_name_toks[j] == arg_tok
+          || !strcmp(get_tok_str(td->inst_name_toks[j], NULL),
+                     get_tok_str(arg_tok, NULL)))
         arg_seen = 1;
     }
     if (class_seen && arg_seen)
@@ -2549,23 +2545,16 @@ next_overload:
   return NULL;
 }
 
-static int exact_template_signature_type(CType *type1, CType *type2)
+static int same_concrete_template_instantiation(CType *type1, CType *type2)
 {
-  CType value1 = *type1, value2 = *type2;
   int tok1, tok2, i, j, k;
 
-  if ((type1->t & (VT_REFERENCE | VT_RVALUE_REFERENCE))
-      != (type2->t & (VT_REFERENCE | VT_RVALUE_REFERENCE)))
+  if (!type1 || !type2
+      || (type1->t & VT_BTYPE) != VT_STRUCT
+      || (type2->t & VT_BTYPE) != VT_STRUCT)
     return 0;
-  if (is_reference_type(&value1))
-    value1 = *pointed_type(&value1);
-  if (is_reference_type(&value2))
-    value2 = *pointed_type(&value2);
-  if ((value1.t & VT_BTYPE) != VT_STRUCT
-      || (value2.t & VT_BTYPE) != VT_STRUCT)
-    return is_compatible_types(type1, type2);
-  tok1 = get_struct_type_name_tok(&value1);
-  tok2 = get_struct_type_name_tok(&value2);
+  tok1 = get_struct_type_name_tok(type1);
+  tok2 = get_struct_type_name_tok(type2);
   if (tok1 == tok2)
     return 1;
   for (i = 0; i < nb_template_defs; ++i)
@@ -2591,6 +2580,23 @@ static int exact_template_signature_type(CType *type1, CType *type2)
     return 1;
   }
   return 0;
+}
+
+static int exact_template_signature_type(CType *type1, CType *type2)
+{
+  CType value1 = *type1, value2 = *type2;
+
+  if ((type1->t & (VT_REFERENCE | VT_RVALUE_REFERENCE))
+      != (type2->t & (VT_REFERENCE | VT_RVALUE_REFERENCE)))
+    return 0;
+  if (is_reference_type(&value1))
+    value1 = *pointed_type(&value1);
+  if (is_reference_type(&value2))
+    value2 = *pointed_type(&value2);
+  if ((value1.t & VT_BTYPE) != VT_STRUCT
+      || (value2.t & VT_BTYPE) != VT_STRUCT)
+    return is_compatible_types(type1, type2);
+  return same_concrete_template_instantiation(&value1, &value2);
 }
 
 static int member_func_has_param_signature(Sym *s, CType *func_type)
@@ -3277,6 +3283,7 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
 
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
+  pm->func_tok = mangled_tok;
   pm->struct_tok = struct_tok;
   pm->is_lifecycle_member = 1;
   dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
@@ -4204,6 +4211,23 @@ static void compile_pending_member_funcs(int start)
     defer_pending_member_funcs = 1;
     decl(VT_CONST);
     defer_pending_member_funcs = saved_defer_pending_member_funcs;
+    if (pm->func_tok
+        && !compiled_pending_member_func_has_tok(pm->func_tok))
+    {
+      if (nb_compiled_pending_member_func_toks
+          >= al_compiled_pending_member_func_toks)
+      {
+        al_compiled_pending_member_func_toks =
+          al_compiled_pending_member_func_toks
+            ? al_compiled_pending_member_func_toks * 2 : 32;
+        compiled_pending_member_func_toks = cprime_realloc(
+          compiled_pending_member_func_toks,
+          al_compiled_pending_member_func_toks
+            * sizeof(*compiled_pending_member_func_toks));
+      }
+      compiled_pending_member_func_toks[
+        nb_compiled_pending_member_func_toks++] = pm->func_tok;
+    }
     /* Each replayed member body is an independent function definition.
        decl() leaves the enclosing local scope live, so restore the saved
        scope before the next queued member is inspected; otherwise a member

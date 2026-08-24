@@ -18,5 +18,6 @@ DerivedCtorInit::DerivedCtorInit(int value)
 
 int main()
 {
-  return 0;
+  DerivedCtorInit value(37);
+  return value.x == 37 ? 0 : 1;
 }
