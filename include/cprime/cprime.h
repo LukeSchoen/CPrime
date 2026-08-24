@@ -519,6 +519,7 @@ typedef struct InlineFunc {
     Sym *sym;
     CType type;
     int preserve_type;
+    int stable_heap;
     char filename[1];
 } InlineFunc;
 

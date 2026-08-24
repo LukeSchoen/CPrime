@@ -300,11 +300,12 @@ static void skip_or_save_statement(TokenString **str)
 static int try_parse_range_for(void)
 {
   char tmp_name[64];
-  int var_tok, range_tok, index_tok, ptr_tok, iterator_tok, end_tok;
+  int var_tok, range_tok, index_tok, ptr_tok, value_tok, iterator_tok, end_tok;
   int body_first_tok;
   int body_had_semicolon = 0;
   int is_array_range, array_count;
   int is_iterator_range = 0;
+  int iterator_deref_returns_reference = 0;
   int has_range_elem_type = 0;
   int has_range_type = 0;
   Sym *range_sym;
@@ -561,6 +562,16 @@ range_for_decl_parsed:
     infer_expr_type_from_tokens(range_expr, &range_type);
     has_range_type = 1;
   }
+  /* A named range is commonly a reference parameter (`const C &range`).
+     Member discovery belongs to the referred-to class, not to CPC's lowered
+     pointer representation of the reference. */
+  if (has_range_type && is_reference_type(&range_type))
+  {
+    decay_reference_type(&range_type);
+    range_type = *pointed_type(&range_type);
+  }
+  if (has_range_type && (range_type.t & VT_BTYPE) == VT_STRUCT)
+    materialize_incomplete_template_type(&range_type);
   if (!is_array_range && has_range_type
       && (range_type.t & VT_BTYPE) == VT_STRUCT)
   {
@@ -574,6 +585,40 @@ range_for_decl_parsed:
     is_iterator_range = type_has_member_func_name(&range_type, begin_tok)
                         && type_has_member_func_name(&range_type,
                                                      end_method_tok);
+    if (is_iterator_range)
+    {
+      Sym *begin_func = resolve_member_func_by_arg_count(&range_type,
+                                                         begin_tok, 0);
+      if (begin_func && (begin_func->type.t & VT_BTYPE) == VT_FUNC
+          && begin_func->type.ref)
+      {
+        CType iterator_type = begin_func->type.ref->type;
+        Sym *deref_func;
+        if (is_reference_type(&iterator_type))
+        {
+          decay_reference_type(&iterator_type);
+          iterator_type = *pointed_type(&iterator_type);
+        }
+        materialize_incomplete_template_type(&iterator_type);
+        if ((iterator_type.t & VT_BTYPE) == VT_PTR)
+        {
+          /* Dereferencing a built-in pointer is always an lvalue.  Treating
+             it like a proxy iterator materializes a copy of each element,
+             so `for (T &value : range)` binds to that copy instead of the
+             element and can discard ownership state in copy constructors. */
+          iterator_deref_returns_reference = 1;
+        }
+        else
+        {
+          deref_func = resolve_member_func_by_arg_count(
+                         &iterator_type, tok_alloc_const("operator*"), 0);
+          if (deref_func && (deref_func->type.t & VT_BTYPE) == VT_FUNC
+              && deref_func->type.ref)
+            iterator_deref_returns_reference =
+              is_reference_type(&deref_func->type.ref->type);
+        }
+      }
+    }
     if (index_func && (index_func->type.t & VT_BTYPE) == VT_FUNC
         && index_func->type.ref)
     {
@@ -602,6 +647,9 @@ range_for_decl_parsed:
   snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_p_%d",
            range_for_temp_counter++);
   ptr_tok = tok_alloc_const(tmp_name);
+  snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_value_%d",
+           range_for_temp_counter++);
+  value_tok = tok_alloc_const(tmp_name);
   snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_it_%d",
            range_for_temp_counter++);
   iterator_tok = tok_alloc_const(tmp_name);
@@ -703,15 +751,39 @@ range_for_decl_parsed:
   }
   else if (is_iterator_range)
   {
-    tok_str_add(lowered, TOK_AUTO);
-    tok_str_add(lowered, ptr_tok);
-    tok_str_add(lowered, '=');
-    tok_str_add(lowered, '&');
-    tok_str_add(lowered, '(');
-    tok_str_add(lowered, '*');
-    tok_str_add(lowered, iterator_tok);
-    tok_str_add(lowered, ')');
-    tok_str_add(lowered, ';');
+    if (iterator_deref_returns_reference)
+    {
+      tok_str_add(lowered, TOK_AUTO);
+      tok_str_add(lowered, '*');
+      tok_str_add(lowered, ptr_tok);
+      tok_str_add(lowered, '=');
+      tok_str_add(lowered, '&');
+      tok_str_add(lowered, '(');
+      tok_str_add(lowered, '*');
+      tok_str_add(lowered, iterator_tok);
+      tok_str_add(lowered, ')');
+      tok_str_add(lowered, ';');
+    }
+    else
+    {
+      /* Proxy iterators return an aggregate by value.  Store that temporary
+         for the iteration before taking its address. */
+      tok_str_add(lowered, TOK_AUTO);
+      tok_str_add(lowered, value_tok);
+      tok_str_add(lowered, '=');
+      tok_str_add(lowered, '(');
+      tok_str_add(lowered, '*');
+      tok_str_add(lowered, iterator_tok);
+      tok_str_add(lowered, ')');
+      tok_str_add(lowered, ';');
+      tok_str_add(lowered, TOK_AUTO);
+      tok_str_add(lowered, '*');
+      tok_str_add(lowered, ptr_tok);
+      tok_str_add(lowered, '=');
+      tok_str_add(lowered, '&');
+      tok_str_add(lowered, value_tok);
+      tok_str_add(lowered, ';');
+    }
     append_range_for_body(lowered, body, var_tok, ptr_tok);
   }
   else
@@ -1351,13 +1423,15 @@ static void skip_or_save_block(TokenString **str)
 {
   int braces = tok == '{';
   int level = 0;
+  int angle = 0;
+  int prev_sig = 0;
   if (str)
     *str = tok_str_alloc();
 
   while (1)
   {
     int t = tok;
-    if (level == 0
+    if (level == 0 && angle == 0
         && (t == ','
             || t == ';'
             || t == '}'
@@ -1374,7 +1448,19 @@ static void skip_or_save_block(TokenString **str)
     if (str)
       tok_str_add_tok(*str);
     next();
-    if (t == '{' || t == '(' || t == '[')
+    if ((t == TOK_LT || t == '<')
+        && (angle > 0
+            || (prev_sig >= TOK_UIDENT && find_template_def(prev_sig))))
+      ++angle;
+    else if ((t == TOK_SAR || t == TOK_SHR) && angle > 0)
+    {
+      --angle;
+      if (angle > 0)
+        --angle;
+    }
+    else if (t == TOK_GT && angle > 0)
+      --angle;
+    else if (t == '{' || t == '(' || t == '[')
       level++;
     else if (t == '}' || t == ')' || t == ']')
     {
@@ -1382,6 +1468,8 @@ static void skip_or_save_block(TokenString **str)
       if (level == 0 && braces && t == '}')
         break;
     }
+    if (t != TOK_LINENUM && !TOK_HAS_VALUE(t))
+      prev_sig = t;
   }
   if (str)
     tok_str_add(*str, TOK_EOF);
@@ -1449,11 +1537,6 @@ static void init_putz(init_params *p, unsigned long c, int size)
     gfunc_call(3);
   }
 }
-
-#define DIF_FIRST     1
-#define DIF_SIZE_ONLY 2
-#define DIF_HAVE_ELEM 4
-#define DIF_CLEAR     8
 
 /* delete relocations for specified range c ... c + size. Unfortunatly
    in very special cases, relocations may occur unordered */

@@ -37,7 +37,12 @@ template<typename T> Text operator+(const T &lhs, const Text &rhs)
 int main()
 {
   Text name("channel");
+  Text suffix = name + ": value";
+  if (suffix.length != 2)
+    return 1;
+  Text prefix = "No data" + name;
+  if (prefix.length != 2)
+    return 2;
   Text message = "No data has been bound for " + name + ": value";
-  (void)message;
-  return 0;
+  return message.length == 3 ? 0 : 3;
 }

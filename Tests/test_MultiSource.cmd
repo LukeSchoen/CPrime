@@ -197,6 +197,35 @@ if errorlevel 1 (
 
 echo PASS header template function multi-source
 
+set "FRIEND_A_SRC=%SRC_DIR%\header_friend_definition_a.cpp"
+set "FRIEND_MAIN_SRC=%SRC_DIR%\header_friend_definition_main.cpp"
+
+"%COMPILER%" -c "%FRIEND_A_SRC%" -o "%WORK_DIR%\friend_a.o" >"%WORK_DIR%\compile_friend_a.out" 2>&1
+if errorlevel 1 (
+  echo FAIL header friend definition object compile a.cpp.
+  type "%WORK_DIR%\compile_friend_a.out"
+  goto fail
+)
+"%COMPILER%" -c "%FRIEND_MAIN_SRC%" -o "%WORK_DIR%\friend_main.o" >"%WORK_DIR%\compile_friend_main.out" 2>&1
+if errorlevel 1 (
+  echo FAIL header friend definition object compile main.cpp.
+  type "%WORK_DIR%\compile_friend_main.out"
+  goto fail
+)
+"%COMPILER%" "%WORK_DIR%\friend_a.o" "%WORK_DIR%\friend_main.o" -o "%WORK_DIR%\friend_linked.exe" >"%WORK_DIR%\link_friend.out" 2>&1
+if errorlevel 1 (
+  echo FAIL header friend definition object link.
+  type "%WORK_DIR%\link_friend.out"
+  goto fail
+)
+"%WORK_DIR%\friend_linked.exe"
+if errorlevel 1 (
+  echo FAIL header friend definition executable returned %ERRORLEVEL%.
+  goto fail
+)
+
+echo PASS header friend definition multi-source
+
 set "LIFE_SRC=%SRC_DIR%\external_lifecycle.cpp"
 set "LIFE_MAIN_SRC=%SRC_DIR%\external_lifecycle_main.cpp"
 

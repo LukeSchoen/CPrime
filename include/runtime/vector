@@ -1,0 +1,122 @@
+#ifndef _CPC_VECTOR
+#define _CPC_VECTOR
+
+#include <stddef.h>
+#include <stdlib.h>
+#include <string.h>
+
+namespace std
+{
+  template<typename T>
+  class vector
+  {
+  public:
+    vector() : m_data(0), m_size(0), m_capacity(0) {}
+
+    explicit vector(size_t count) : m_data(0), m_size(0), m_capacity(0)
+    {
+      resize_default(count);
+    }
+
+    vector(size_t count, const T &value)
+      : m_data(0), m_size(0), m_capacity(0)
+    {
+      size_t i;
+      this->reserve(count);
+      for (i = 0; i < count; i = i + 1)
+        this->m_data[i] = value;
+      this->m_size = count;
+    }
+
+    vector(const vector &other) : m_data(0), m_size(0), m_capacity(0)
+    {
+      size_t i;
+      this->reserve(other.m_size);
+      for (i = 0; i < other.m_size; i = i + 1)
+        this->m_data[i] = other.m_data[i];
+      this->m_size = other.m_size;
+    }
+
+    ~vector()
+    {
+      this->clear();
+      free(this->m_data);
+    }
+
+    vector &operator=(const vector &other)
+    {
+      size_t i;
+      if (this != &other)
+      {
+        this->clear();
+        this->reserve(other.m_size);
+        for (i = 0; i < other.m_size; i = i + 1)
+          this->m_data[i] = other.m_data[i];
+        this->m_size = other.m_size;
+      }
+      return *this;
+    }
+
+    T &operator[](size_t index) { return this->m_data[index]; }
+    const T &operator[](size_t index) const { return this->m_data[index]; }
+    T *data() { return this->m_data; }
+    const T *data() const { return this->m_data; }
+    T *begin() { return this->m_data; }
+    const T *begin() const { return this->m_data; }
+    T *end() { return this->m_data + this->m_size; }
+    const T *end() const { return this->m_data + this->m_size; }
+    size_t size() const { return this->m_size; }
+    bool empty() const { return this->m_size == 0; }
+
+    void clear()
+    {
+      size_t i;
+      for (i = 0; i < this->m_size; i = i + 1)
+        this->m_data[i].~T();
+      this->m_size = 0;
+    }
+
+    void reserve(size_t capacity)
+    {
+      T *next;
+      size_t i;
+      if (capacity <= this->m_capacity)
+        return;
+      next = (T *)malloc(capacity * sizeof(T));
+      memset(next, 0, capacity * sizeof(T));
+      for (i = 0; i < this->m_size; i = i + 1)
+      {
+        next[i] = this->m_data[i];
+        this->m_data[i].~T();
+      }
+      free(this->m_data);
+      this->m_data = next;
+      this->m_capacity = capacity;
+    }
+
+    void push_back(const T &value)
+    {
+      if (this->m_size == this->m_capacity)
+        this->reserve(this->m_capacity ? this->m_capacity * 2 : 4);
+      this->m_data[this->m_size] = value;
+      this->m_size = this->m_size + 1;
+    }
+
+  private:
+    void resize_default(size_t count)
+    {
+      size_t i;
+      this->reserve(count);
+      for (i = 0; i < count; i = i + 1)
+      {
+      }
+      this->m_size = count;
+    }
+
+    T *m_data;
+    size_t m_size;
+    size_t m_capacity;
+  };
+}
+
+#endif

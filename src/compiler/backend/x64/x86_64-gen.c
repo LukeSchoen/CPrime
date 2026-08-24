@@ -1111,7 +1111,8 @@ void gfunc_call(int nb_args)
         src_ptr = *vtop;
         vtop--;
         copy_construct_struct_memberwise_from_base_ptr(&sv->type, &dst_ptr,
-                                                       &src_ptr, 0);
+                                                       &src_ptr, 0,
+          (sv->type.t & VT_RVALUE_REFERENCE) != 0);
       }
       else
       {
@@ -1693,6 +1694,7 @@ void gfunc_call(int nb_args)
       {
         SValue dst_ptr, src_ptr;
         CType struct_type = vtop[-1].type;
+        int move_source = (vtop->type.t & VT_RVALUE_REFERENCE) != 0;
         vswap();
         mk_pointer(&vtop->type);
         gaddrof();
@@ -1703,7 +1705,8 @@ void gfunc_call(int nb_args)
         src_ptr = *vtop;
         vtop--;
         copy_construct_struct_memberwise_from_base_ptr(&struct_type, &dst_ptr,
-                                                       &src_ptr, 0);
+                                                       &src_ptr, 0,
+                                                       move_source);
         vpushi(0);
       }
       else

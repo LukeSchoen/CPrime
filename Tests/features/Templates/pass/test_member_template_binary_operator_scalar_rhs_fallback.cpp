@@ -8,7 +8,10 @@ struct ScalarOperatorVec
   ScalarOperatorVec(const T &_x, const T &_y) : x(_x), y(_y) {}
 
   template <typename U>
-  auto operator*(const U &value) const;
+  auto operator*(const U &value) const
+  {
+    return ScalarOperatorVec<T>(x * (T)value, y * (T)value);
+  }
 };
 
 typedef ScalarOperatorVec<float> ScalarOperatorVecF;
@@ -30,6 +33,6 @@ int main()
 {
   ScalarOperatorVecF vec = { 1.0f, 2.0f };
   ScalarOperatorVec4 wrapped(vec * 0.5f, 0.0f, 0.0f);
-  (void)wrapped;
-  return 0;
+  return wrapped.x == 0.5f && wrapped.y == 1.0f
+           && wrapped.z == 0.0f && wrapped.w == 0.0f ? 0 : 1;
 }

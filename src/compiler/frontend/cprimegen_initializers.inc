@@ -53,7 +53,16 @@ static int decl_designator(init_params *p, CType *type, unsigned long c,
   {
     l = tok, next();
     if (tok == ':')
-      goto struct_field;
+    {
+      /* C permits the legacy designated-initializer spelling `field: value`,
+         but in C++ the same prefix can begin a qualified expression such as
+         `std::move(value)`.  Do not consume the identifier as a field name
+         when the colon is followed by another colon. */
+      next();
+      if (tok != ':')
+        goto struct_field_name_read;
+      unget_tok(':');
+    }
     unget_tok(l);
   }
 
@@ -90,6 +99,7 @@ static int decl_designator(init_params *p, CType *type, unsigned long c,
       l = tok;
 struct_field:
       next();
+struct_field_name_read:
       f = find_field(type, l, &cumofs);
       if (cur_field)
         *cur_field = f;
@@ -400,7 +410,8 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       src_ptr = *vtop;
       vtop--;
       copy_construct_struct_memberwise_from_base_ptr(&dtype, &dst_ptr,
-                                                     &src_ptr, 0);
+                                                     &src_ptr, 0,
+        (source.type.t & VT_RVALUE_REFERENCE) != 0);
     }
     else
     {
@@ -772,6 +783,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
   TokenString *init_str = NULL;
   Sym *ctor_func = NULL;
   int has_expr_struct_init;
+  int initialize_nonlocal_vtables = 0;
 
   Section *sec;
   Sym *flexible_array;
@@ -805,6 +817,9 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 
   flexible_array = NULL;
   size = type_size(type, &align);
+  if (size < 0 && (type->t & VT_BTYPE) == VT_STRUCT
+      && materialize_incomplete_template_type(type))
+    size = type_size(type, &align);
 
   /* exactly one flexible array may be initialized, either the
      toplevel array or the last member of the toplevel struct */
@@ -1077,7 +1092,8 @@ err_size:
       if (!ctor_func)
         ctor_func = resolve_lifecycle_func(type, TOK_CONSTRUCTOR1);
       call_lifecycle_constructor_saved_args(&sym->type, sym->r, sym->c,
-                                            sym, ctor_func, call_args, 1);
+                                            VT_CONST, sym, ctor_func,
+                                            call_args, 1);
     }
     else if (has_ctor_init)
       call_lifecycle_constructor(&sym->type, sym->r, sym->c, sym, ctor_func);
@@ -1089,6 +1105,20 @@ err_size:
         call_lifecycle_constructor_noargs(&sym->type, sym->r, sym->c,
                                           sym, ctor_func);
     }
+    /* Constructors run base initialization first, so publish the most-derived
+       dispatch tables after construction.  This also covers implicit trivial
+       constructors, which otherwise have no generated body in which to set a
+       vptr. */
+    initialize_virtual_tables_for_object(&sym->type, sym->r, sym->c, sym);
+  }
+  else if (sym && !NODATA_WANTED && !(type->t & VT_VLA)
+           && cur_text_section)
+  {
+    /* Function-local static and thread-local objects live in a data section,
+       but their declaration still executes in function code.  Refreshing
+       their most-derived vptrs here is idempotent and covers objects whose
+       otherwise-trivial construction needs no emitted constructor call. */
+    initialize_nonlocal_vtables = 1;
   }
 
 no_alloc:
@@ -1100,6 +1130,8 @@ no_alloc:
   }
 
   nocode_wanted = saved_nocode_wanted;
+  if (initialize_nonlocal_vtables)
+    initialize_virtual_tables_for_object(&sym->type, sym->r, sym->c, sym);
 }
 
 // Generate Vla Code Saved In Post_Type()
