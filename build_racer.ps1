@@ -2,6 +2,8 @@ param(
     [string]$CpcPath = "",
     [string]$ProjectRoot = "C:\Luke\Src\OT\cl",
     [string]$OutDir = "",
+    [string]$ExePath = "",
+    [string]$SourcesFile = "",
     [string]$RuntimeDllDir = "",
     [string]$AssetsDir = "",
     [int]$CompileTimeoutSeconds = 30,
@@ -9,7 +11,10 @@ param(
     [switch]$LinkOnly,
     [switch]$SkipLink,
     [switch]$SkipSmokeTest,
-    [switch]$ExportSymbols
+    [switch]$Unity,
+    [switch]$ExportSymbols,
+    [ValidateRange(1, 64)]
+    [int]$Jobs = [Environment]::ProcessorCount
 )
 
 $ErrorActionPreference = "Stop"
@@ -23,9 +28,14 @@ if (-not $CpcPath) {
 $CpcPath = [System.IO.Path]::GetFullPath($CpcPath)
 $ProjectRoot = [System.IO.Path]::GetFullPath($ProjectRoot)
 if (-not $OutDir) {
-    $OutDir = Join-Path $ProjectRoot "builds\racer"
+    $OutDir = Join-Path $ProjectRoot "builds\prime"
 }
 $OutDir = [System.IO.Path]::GetFullPath($OutDir)
+if (-not $ExePath) {
+    $ExePath = Join-Path $ProjectRoot "builds\racer.exe"
+}
+$exe = [System.IO.Path]::GetFullPath($ExePath)
+$runtimeOutputDir = Split-Path $exe -Parent
 . (Join-Path $PSScriptRoot "support\pe_runtime_dependencies.ps1")
 
 if (-not $AssetsDir) {
@@ -37,7 +47,7 @@ if (-not (Test-Path -LiteralPath $CpcPath)) { throw "Compiler not found: $CpcPat
 if (-not (Test-Path -LiteralPath $ProjectRoot)) { throw "Project root not found: $ProjectRoot" }
 if (-not (Test-Path -LiteralPath $AssetsDir -PathType Container)) { throw "Racer assets not found: $AssetsDir" }
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
-$exe = Join-Path $OutDir "Racer.exe"
+New-Item -ItemType Directory -Force -Path $runtimeOutputDir | Out-Null
 if (-not $SkipLink -and (Test-Path -LiteralPath $exe -PathType Leaf)) {
     # Never let a failed compile or link leave a stale executable that can be
     # mistaken for the artifact produced by this invocation.
@@ -46,13 +56,9 @@ if (-not $SkipLink -and (Test-Path -LiteralPath $exe -PathType Leaf)) {
 
 $commonLib = Join-Path $ProjectRoot "CommonLib\commonLib"
 $flagsFile = Join-Path $ProjectRoot "builds\core\generated_core_cpc_flags.rsp"
-$sourcesFile = Join-Path $ProjectRoot "builds\core\generated_core_sources.rsp"
-$sdl2Def = Join-Path $ProjectRoot "builds\racer\SDL2.def"
 $runtimeLib = Join-Path $env:LOCALAPPDATA "cpc\1.4\lib\libcprime1.a"
 
 if (-not (Test-Path -LiteralPath $flagsFile)) { throw "Missing flags rsp: $flagsFile" }
-if (-not (Test-Path -LiteralPath $sourcesFile)) { throw "Missing sources rsp: $sourcesFile" }
-if (-not (Test-Path -LiteralPath $sdl2Def)) { throw "Missing SDL2 import def: $sdl2Def" }
 
 $flags = Get-Content -LiteralPath $flagsFile | Where-Object { $_.Trim() }
 $flags += "-D_MSC_VER=1900"
@@ -67,65 +73,62 @@ $flags += "-D_S_IFDIR=0x4000"
 $flags += "-D_S_IREAD=0x0100"
 $flags += "-D_S_IWRITE=0x0080"
 
-# Additional implementation sources compiled separately because the generated
-# source list does not include them.
-$additionalSources = @(
-    @{ Name = "cl2DDraw";          Rel = "Polygon\cl2DDraw.cpp" }
-    @{ Name = "cl2DDrawSample";    Rel = "Polygon\cl2DDrawSample.cpp" }
-    @{ Name = "cl2DDrawTransform"; Rel = "Polygon\cl2DDrawTransform.c" }
-    @{ Name = "clAlloc";           Rel = "Platform\clAlloc.cpp" }
-    @{ Name = "clAssets";          Rel = "Platform\clAssets.cpp" }
-    @{ Name = "clControls";        Rel = "UI\clControls.cpp" }
-    @{ Name = "clImageAccess";     Rel = "Raster\clImageAccess.cpp" }
-    @{ Name = "clHardwareTexture"; Rel = "Raster\clHardwareTexture.cpp" }
-    @{ Name = "clMemory";          Rel = "Platform\clMemory.cpp" }
-    @{ Name = "clScan";            Rel = "Strings\clScan.cpp" }
-    @{ Name = "clSeekRaw";         Rel = "Strings\clSeekRaw.cpp" }
-    @{ Name = "clStringEncoding";  Rel = "Strings\clStringEncoding.cpp" }
-    @{ Name = "clStream";           Rel = "Streams\clStream.cpp" }
-    @{ Name = "clSeek";             Rel = "Streams\clSeek.cpp" }
-    @{ Name = "clMemoryStream";     Rel = "Streams\clMemoryStream.cpp" }
-    @{ Name = "clRawFileStream";    Rel = "Streams\clRawFileStream.cpp" }
-    @{ Name = "clString";          Rel = "Strings\clString.cpp" }
-    @{ Name = "clTinyGLWrangler";  Rel = "Polygon\clTinyGLWrangler.cpp" }
-    @{ Name = "clWindow";          Rel = "Raster\clWindow.cpp" }
-    @{ Name = "clRelAssert";       Rel = "Platform\clRelAssert.cpp" }
-    @{ Name = "clPath";            Rel = "Platform\clPath.cpp" }
-    @{ Name = "clFolder";          Rel = "Platform\clFolder.cpp" }
-    @{ Name = "clDecryptThis";     Rel = "Encryption\clDecryptThis.cpp" }
-    @{ Name = "clCamera";          Rel = "UI\clCamera.cpp" }
-    @{ Name = "clImage";           Rel = "Raster\clImage.cpp" }
-    @{ Name = "clRenderObjectCore"; Rel = "Polygon\clRenderObjectCore.cpp" }
-    @{ Name = "clRenderObject";    Rel = "Polygon\clRenderObject.cpp" }
-    @{ Name = "clBitArray2";       Rel = "Buffer\clBitArray2.cpp" }
-    @{ Name = "clBitList";         Rel = "Buffer\clBitList.cpp" }
-    @{ Name = "clLZ4";             Rel = "Compression\clLZ4.cpp" }
-    @{ Name = "LZ4";               Rel = "Compression\LZ4.c"; Flags = @("-Dui32=uint32_t", "-Dui8=uint8_t") }
-    @{ Name = "clReachabilityFinder"; Rel = "Grid\clReachabilityFinder.cpp" }
-    @{ Name = "clHash";            Rel = "Math\clHash.cpp" }
-    @{ Name = "clKHashP";          Rel = "Math\Hash\khashp.c" }
-    @{ Name = "clDDA2";            Rel = "Math\Geometry\clDDA2.cpp" }
-    @{ Name = "clKNN3CpcSupport"; Source = (Join-Path $PSScriptRoot "support\racer_cpc_knn3.cpp") }
-    @{ Name = "clPlatformCpcSupport"; Source = (Join-Path $PSScriptRoot "support\racer_cpc_platform.cpp") }
-    @{ Name = "clAbiCpcSupport"; Source = (Join-Path $PSScriptRoot "support\racer_cpc_abi.cpp") }
-    @{ Name = "clFile";            Rel = "Platform\clFile.cpp" }
-    @{ Name = "clDrive";           Rel = "Platform\clDrive.cpp" }
-    @{ Name = "clFileDump";        Rel = "Platform\clFileDump.cpp" }
-    @{ Name = "clFileHelper";      Rel = "Platform\clFileHelper.cpp" }
-    @{ Name = "clReport";          Rel = "Platform\clReport.cpp" }
-    @{ Name = "clCannyFilter";     Rel = "Raster\clCannyFilter.cpp" }
-    @{ Name = "clColor";           Rel = "Raster\clColor.cpp" }
-    @{ Name = "clDepthImage";      Rel = "Raster\clDepthImage.cpp" }
-    @{ Name = "clHistogram";       Rel = "Raster\clHistogram.cpp" }
-    @{ Name = "clImageRaw";        Rel = "Raster\clImageRaw.cpp" }
-    @{ Name = "clFileStream";      Rel = "Streams\clFileStream.cpp" }
-    @{ Name = "clWideString";      Rel = "Strings\clWideString.cpp" }
-    @{ Name = "clPrintCpcSupport"; Source = (Join-Path $PSScriptRoot "support\racer_cpc_print.cpp") }
-    @{ Name = "clThreading";       Rel = "Threading\clThreading.cpp" }
-    @{ Name = "clShaderPool";      Rel = "Polygon\clShaderPool.cpp" }
-    @{ Name = "clShaderReader";    Rel = "Polygon\clShaderReader.cpp" }
-    @{ Name = "clShaders";         Rel = "Polygon\clShaders.cpp" }
-    @{ Name = "clIndex";           Rel = "Math\clIndex.cpp" }
+# The normal project files are the source manifest, just as they are for the
+# Clang batch builds.  A caller may pass the text manifest produced by the CMD
+# files, while direct driver invocations read the same ClCompile entries here.
+if ($SourcesFile) {
+    $SourcesFile = [System.IO.Path]::GetFullPath($SourcesFile)
+    if (-not (Test-Path -LiteralPath $SourcesFile -PathType Leaf)) {
+        throw "Project source manifest not found: $SourcesFile"
+    }
+    $projectSources = Get-Content -LiteralPath $SourcesFile | Where-Object { $_.Trim() } |
+        ForEach-Object { [System.IO.Path]::GetFullPath($_.Trim().Trim('"')) }
+} else {
+    $projectSources = @()
+    $projectSpecs = @(
+        @{ File = Join-Path $commonLib "commonLib.vcxproj"; Root = $commonLib }
+        @{ File = Join-Path $ProjectRoot "Projects\Model Viewer\Model Viewer.vcxproj"; Root = Join-Path $ProjectRoot "Projects\Model Viewer" }
+    )
+    foreach ($spec in $projectSpecs) {
+        if (-not (Test-Path -LiteralPath $spec.File -PathType Leaf)) {
+            throw "Visual Studio project not found: $($spec.File)"
+        }
+        foreach ($line in Select-String -LiteralPath $spec.File -Pattern '<ClCompile Include="([^"]+)"') {
+            foreach ($match in $line.Matches) {
+                $projectSources += [System.IO.Path]::GetFullPath((Join-Path $spec.Root $match.Groups[1].Value))
+            }
+        }
+    }
+}
+$projectSources = @($projectSources | Select-Object -Unique)
+if (-not $projectSources.Count) { throw "The Visual Studio projects contain no compile sources." }
+
+$projectBuildSources = @()
+foreach ($source in $projectSources) {
+    if (-not (Test-Path -LiteralPath $source -PathType Leaf)) {
+        throw "Project compile source not found: $source"
+    }
+    $leaf = [System.IO.Path]::GetFileName($source)
+    # Retain the three existing CPC compatibility substitutions.  Source
+    # discovery itself now comes entirely from the shared project manifest.
+    if ($leaf -eq "clKNN3.cpp" -or $leaf -eq "clPrint.cpp") { continue }
+    if ($leaf -eq "clAssert.cpp") {
+        $source = Join-Path $commonLib "src\Platform\clRelAssert.cpp"
+        $leaf = "clRelAssert.cpp"
+    }
+    $name = [System.IO.Path]::GetFileNameWithoutExtension($leaf)
+    $priority = if ($name -eq "clCamera") { 0 } elseif (
+        $source.StartsWith((Join-Path $ProjectRoot "Projects\Model Viewer"), [System.StringComparison]::OrdinalIgnoreCase) -or
+        $source -like "*\src\Core\*") { 1 } else { 2 }
+    $entry = @{ Name = $name; Source = $source; Priority = $priority }
+    if ($name -eq "LZ4") { $entry.Flags = @("-Dui32=uint32_t", "-Dui8=uint8_t") }
+    $projectBuildSources += $entry
+}
+
+# CPC still needs these implementation units in addition to the canonical
+# project graph.  They are compiler/link compatibility inputs, not a second
+# hand-maintained copy of the project's source list.
+$cpcImplementationSources = @(
     @{ Name = "vnHalf"; Source = (Join-Path $ProjectRoot "CommonLib\3rdParty\Imagine\include\Base\vnhalf.cpp") }
     @{ Name = "vnImage"; Source = (Join-Path $ProjectRoot "CommonLib\3rdParty\Imagine\include\Base\vnimage.cpp") }
     @{ Name = "vnImageAverage"; Source = (Join-Path $ProjectRoot "CommonLib\3rdParty\Imagine\include\Kernels\vnimageaverage.cpp") }
@@ -144,6 +147,77 @@ $additionalSources = @(
     @{ Name = "vnImageBlockUnpack"; Source = (Join-Path $ProjectRoot "CommonLib\3rdParty\Imagine\include\Utilities\vnimageblockunpack.cpp") }
     @{ Name = "vnImageSampler"; Source = (Join-Path $ProjectRoot "CommonLib\3rdParty\Imagine\include\Utilities\vnimagesampler.cpp") }
 )
+$cpcSupportSources = @(
+    @{ Name = "clKNN3CpcSupport"; Source = (Join-Path $PSScriptRoot "support\racer_cpc_knn3.cpp") }
+    @{ Name = "clAbiCpcSupport"; Source = (Join-Path $PSScriptRoot "support\racer_cpc_abi.cpp") }
+    @{ Name = "clPrintCpcSupport"; Source = (Join-Path $PSScriptRoot "support\racer_cpc_print.cpp") }
+)
+$additionalSources = @($projectBuildSources) + @($cpcImplementationSources) + @($cpcSupportSources)
+
+if ($Jobs -gt [Environment]::ProcessorCount) {
+    $Jobs = [Environment]::ProcessorCount
+}
+$script:activeCompiles = [System.Collections.ArrayList]::new()
+$script:anyCompileFailed = $false
+
+function Complete-CpcCompile {
+    param([pscustomobject]$Compile)
+
+    $proc = $Compile.Process
+    $timedOut = -not $proc.HasExited -and
+        $Compile.Timer.Elapsed.TotalSeconds -ge $CompileTimeoutSeconds
+    if ($timedOut) {
+        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+        $proc.WaitForExit()
+        $exit = -999
+        Add-Content -LiteralPath $Compile.Log -Encoding ASCII `
+            -Value ("cpc compile timed out after {0}s" -f $CompileTimeoutSeconds)
+    } else {
+        $proc.WaitForExit()
+        $proc.Refresh()
+        $exit = $proc.ExitCode
+    }
+    $Compile.Timer.Stop()
+    if (Test-Path -LiteralPath $Compile.ErrLog) {
+        Get-Content -LiteralPath $Compile.ErrLog | Add-Content -LiteralPath $Compile.Log
+    }
+    $text = ""
+    if (Test-Path -LiteralPath $Compile.Log) {
+        $raw = Get-Content -Raw -LiteralPath $Compile.Log
+        if ($raw) { $text = $raw }
+    }
+    $errors = ([regex]::Matches($text, "error:" )).Count
+    $warnings = ([regex]::Matches($text, "warning:" )).Count
+    $status = if ($timedOut) { " TIMEOUT" } else { "" }
+    Write-Host ("{0,-22} {1,9:n3}s exit={2,-4} warnings={3,-4} errors={4}{5}" -f `
+        $Compile.Label, $Compile.Timer.Elapsed.TotalSeconds, $exit, $warnings, $errors, $status)
+    if ($exit -ne 0) {
+        $script:anyCompileFailed = $true
+        $firstError = (Get-Content -LiteralPath $Compile.Log | Select-String -Pattern "error:" | Select-Object -First 3) -join "`n"
+        Write-Host $firstError
+    }
+}
+
+function Wait-CpcCompileSlot {
+    param([switch]$Drain)
+
+    do {
+        $completed = $false
+        foreach ($compile in @($script:activeCompiles)) {
+            if ($compile.Process.HasExited -or
+                $compile.Timer.Elapsed.TotalSeconds -ge $CompileTimeoutSeconds) {
+                Complete-CpcCompile -Compile $compile
+                [void]$script:activeCompiles.Remove($compile)
+                $completed = $true
+                if (-not $Drain) { return }
+            }
+        }
+        if ($script:activeCompiles.Count -and (-not $completed -or $Drain)) {
+            Start-Sleep -Milliseconds 10
+        }
+    } while ($script:activeCompiles.Count -and
+             ($Drain -or $script:activeCompiles.Count -ge $Jobs))
+}
 
 function Invoke-CpcCompile {
     param(
@@ -164,51 +238,31 @@ function Invoke-CpcCompile {
     $args += @("-c", $quotedSource, "-o", $obj)
     $errLog = $log + ".err"
     Remove-Item -LiteralPath $log, $errLog -Force -ErrorAction SilentlyContinue
+    while ($script:activeCompiles.Count -ge $Jobs) {
+        Wait-CpcCompileSlot
+    }
+    $compileTimer = [System.Diagnostics.Stopwatch]::StartNew()
     $proc = Start-Process -FilePath $CpcPath -ArgumentList $args `
         -RedirectStandardOutput $log -RedirectStandardError $errLog `
         -PassThru -NoNewWindow
-    # Force Process to retain its native handle.  Without this, Windows
-    # PowerShell can report a null ExitCode after the child has exited.
+    # Materialize the native handle now so ExitCode remains available after
+    # redirected streams drain on Windows PowerShell.
     $processHandle = $proc.Handle
-    $timedOut = $false
-    if (-not $proc.WaitForExit($CompileTimeoutSeconds * 1000)) {
-        $timedOut = $true
-        Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-        $exit = -999
-        Add-Content -LiteralPath $log -Encoding ASCII `
-            -Value ("cpc compile timed out after {0}s" -f $CompileTimeoutSeconds)
-    } else {
-        # Windows PowerShell can leave ExitCode unset after the timed wait until
-        # the redirected output streams have drained and the process object is
-        # refreshed.  Complete that bookkeeping before recording the result.
-        $proc.WaitForExit()
-        $proc.Refresh()
-        $exit = $proc.ExitCode
-    }
-    if (Test-Path -LiteralPath $errLog) {
-        Get-Content -LiteralPath $errLog | Add-Content -LiteralPath $log
-    }
-    $text = ""
-    if (Test-Path -LiteralPath $log) {
-        $raw = Get-Content -Raw -LiteralPath $log
-        if ($raw) { $text = $raw }
-    }
-    $errors = ([regex]::Matches($text, "error:" )).Count
-    $warnings = ([regex]::Matches($text, "warning:" )).Count
-    $status = if ($timedOut) { " TIMEOUT" } else { "" }
-    Write-Host ("{0,-22} exit={1,-4} warnings={2,-4} errors={3}{4}" -f $Label, $exit, $warnings, $errors, $status)
-    if ($exit -ne 0) {
-        $firstError = (Get-Content -LiteralPath $log | Select-String -Pattern "error:" | Select-Object -First 3) -join "`n"
-        Write-Host $firstError
-    }
-    return $exit -eq 0
+    [void]$script:activeCompiles.Add([pscustomobject]@{
+        Label = $Label
+        Process = $proc
+        Timer = $compileTimer
+        Log = $log
+        ErrLog = $errLog
+    })
+    return $true
 }
 
 if (-not $LinkOnly) {
     # Remove stale objects from previous runs so every link is built from a
     # single consistent compiler and source state.
     $outFull = [System.IO.Path]::GetFullPath($OutDir).TrimEnd('\') + '\'
-    foreach ($pattern in @("generated_*.obj", "additional_*.obj", "core_*.obj", "commonlib_*.obj")) {
+    foreach ($pattern in @("generated_*.obj", "additional_*.obj", "unity_*.obj", "core_*.obj", "commonlib_*.obj")) {
         Get-ChildItem -LiteralPath $OutDir -Filter $pattern -ErrorAction SilentlyContinue | ForEach-Object {
             $full = [System.IO.Path]::GetFullPath($_.FullName)
             if ($full.StartsWith($outFull, [System.StringComparison]::OrdinalIgnoreCase)) {
@@ -216,19 +270,107 @@ if (-not $LinkOnly) {
             }
         }
     }
-    $generatedSources = Get-Content -LiteralPath $sourcesFile | Where-Object { $_.Trim() } |
-        ForEach-Object { $_.Trim().Trim('"') }
-    $generatedOk = $true
-    foreach ($src in $generatedSources) {
-        $name = [System.IO.Path]::GetFileNameWithoutExtension($src)
-        $ok = Invoke-CpcCompile -Label ("generated_" + $name) -Source $src
-        if (-not $ok) { $generatedOk = $false }
-    }
-    Write-Host ("Generated source compile: " + $(if ($generatedOk) { "all OK" } else { "FAILURES" }))
+    if ($Unity) {
+        $unityLines = @()
+        # Define camera members immediately after their declarations.  Large
+        # template-heavy consumers can otherwise instantiate similarly named
+        # member signatures before CPC reaches the out-of-class definitions.
+        $unitySupportNames = @("clKNN3CpcSupport", "clAbiCpcSupport", "clPrintCpcSupport")
+        $unityEntries = @($additionalSources |
+            Where-Object { $unitySupportNames -notcontains $_.Name } |
+            Sort-Object @{ Expression = { if ($_.Priority -ne $null) { $_.Priority } else { 2 } } })
+        foreach ($entry in $unityEntries) {
+            $src = $entry.Source
+            if ($entry.PatchGaussianConstants) {
+                $patchedKernelDir = Join-Path $OutDir "Imagine\Kernels"
+                New-Item -ItemType Directory -Force -Path $patchedKernelDir | Out-Null
+                $patchedSource = Join-Path $patchedKernelDir "vnimagegaussian.cpp"
+                $patchedHeader = Join-Path $patchedKernelDir "vnImageGaussian.h"
+                Copy-Item -LiteralPath $src -Destination $patchedSource -Force
+                $headerSource = Join-Path (Split-Path $src -Parent) "vnImageGaussian.h"
+                $sourceText = Get-Content -Raw -LiteralPath $headerSource
+                $sourceText = $sourceText.Replace(
+                    "static CONST FLOAT32 g_stddev   = sqrt( g_variance );",
+                    "static CONST FLOAT32 g_stddev   = 0.31622776601683794f;")
+                $sourceText = $sourceText.Replace(
+                    "static CONST FLOAT32 g_coeff    = 1.0f / ( g_stddev * sqrt( 2.0 * VN_PI ) );",
+                    "static CONST FLOAT32 g_coeff    = 1.2615662610100802f;")
+                Set-Content -LiteralPath $patchedHeader -Value $sourceText -Encoding ASCII
+                $src = $patchedSource
+            }
+            if ($entry.Name -eq "LZ4") {
+                $unityLines += "#define ui32 uint32_t"
+                $unityLines += "#define ui8 uint8_t"
+            }
+            $unityLines += ('#include "' + $src.Replace('\', '/') + '"')
+            if ($entry.Name -eq "LZ4") {
+                $unityLines += "#undef ui8"
+                $unityLines += "#undef ui32"
+            }
+        }
+        $unityKernelFlags = @('-I"' + (Join-Path $ProjectRoot "CommonLib\3rdParty\Imagine\include\Kernels") + '"')
+        $unityChunks = @()
+        $currentChunk = @()
+        $includeCount = 0
+        for ($lineIndex = 0; $lineIndex -lt $unityLines.Count; ++$lineIndex) {
+            $line = $unityLines[$lineIndex]
+            $isIsolatedInclude = $line -like '*src/Raster/clImage.cpp"' -or
+                $line -like '*src/Raster/clHistogram.cpp"' -or
+                $line -like '*src/Grid/clReachabilityFinder.cpp"'
+            if ($isIsolatedInclude -and $currentChunk.Count) {
+                $unityChunks += ,@($currentChunk)
+                $currentChunk = @()
+                $includeCount = 0
+            }
+            $currentChunk += $line
+            if ($line.StartsWith('#include ')) { ++$includeCount }
+            $nextIsUndef = $lineIndex + 1 -lt $unityLines.Count -and $unityLines[$lineIndex + 1].StartsWith('#undef ')
+            if (($includeCount -ge 4 -or $isIsolatedInclude) -and -not $nextIsUndef) {
+                $unityChunks += ,@($currentChunk)
+                $currentChunk = @()
+                $includeCount = 0
+            }
+        }
+        if ($currentChunk.Count) { $unityChunks += ,@($currentChunk) }
 
+        $unityOk = $true
+        $unityChunkPaths = @()
+        for ($chunkIndex = 0; $chunkIndex -lt $unityChunks.Count; ++$chunkIndex) {
+            $chunkSource = Join-Path $OutDir ("generated_racer_unity_{0:d2}.cpp" -f $chunkIndex)
+            Set-Content -LiteralPath $chunkSource -Value $unityChunks[$chunkIndex] -Encoding ASCII
+            $unityChunkPaths += $chunkSource
+        }
+        # Long template-heavy chunks determine parallel wall time.  Launch
+        # those first so quick translation units cannot occupy every worker
+        # while the critical jobs are still waiting in the submission loop.
+        $unityCompileOrder = @(0..($unityChunks.Count - 1) | Sort-Object -Descending {
+            $text = $unityChunks[$_] -join "`n"
+            if ($text -like '*clRenderObject.cpp*') { 1000 }
+            elseif ($text -like '*Racer.cpp*') { 950 }
+            elseif ($text -like '*cl2DDraw.cpp*') { 900 }
+            elseif ($text -like '*clRenderObjectCore.cpp*') { 850 }
+            elseif ($text -like '*src/Raster/clImage.cpp*') { 800 }
+            elseif ($text -like '*clDepthImage.cpp*') { 750 }
+            elseif ($text -like '*clShaders.cpp*') { 700 }
+            elseif ($text -like '*clImageRaw.cpp*') { 650 }
+            else { 0 }
+        })
+        foreach ($chunkIndex in $unityCompileOrder) {
+            $chunkSource = $unityChunkPaths[$chunkIndex]
+            $chunkOk = Invoke-CpcCompile -Label ("unity_Racer_{0:d2}" -f $chunkIndex) -Source $chunkSource -ExtraFlags $unityKernelFlags
+            if (-not $chunkOk) { $unityOk = $false }
+        }
+        $generatedOk = $unityOk
+        $additionalOk = $unityOk
+        foreach ($entry in $additionalSources | Where-Object { $unitySupportNames -contains $_.Name }) {
+            $supportOk = Invoke-CpcCompile -Label ("additional_" + $entry.Name) -Source $entry.Source
+            if (-not $supportOk) { $additionalOk = $false }
+        }
+    } else {
+    $generatedOk = $true
     $additionalOk = $true
     foreach ($entry in $additionalSources) {
-        $src = if ($entry.Source) { $entry.Source } else { Join-Path $commonLib ("src\" + $entry.Rel) }
+        $src = $entry.Source
         if ($entry.PatchGaussianConstants) {
             $patchedKernelDir = Join-Path $OutDir "Imagine\Kernels"
             New-Item -ItemType Directory -Force -Path $patchedKernelDir | Out-Null
@@ -250,7 +392,23 @@ if (-not $LinkOnly) {
         $ok = Invoke-CpcCompile -Label ("additional_" + $entry.Name) -Source $src -ExtraFlags $extraFlags
         if (-not $ok) { $additionalOk = $false }
     }
-    Write-Host ("Additional source compile: " + $(if ($additionalOk) { "all OK" } else { "FAILURES" }))
+    }
+}
+
+if ($script:activeCompiles.Count) {
+    Wait-CpcCompileSlot -Drain
+}
+if ($script:anyCompileFailed) {
+    $generatedOk = $false
+    $additionalOk = $false
+}
+if (-not $LinkOnly) {
+    if ($Unity) {
+        Write-Host ("Unity source compile: " + $(if ($generatedOk -and $additionalOk) { "OK" } else { "FAILURE" }))
+    } else {
+        Write-Host ("Generated source compile: " + $(if ($generatedOk) { "all OK" } else { "FAILURES" }))
+        Write-Host ("Additional source compile: " + $(if ($additionalOk) { "all OK" } else { "FAILURES" }))
+    }
 }
 
 if ($SkipLink) {
@@ -269,6 +427,7 @@ if (-not $LinkOnly -and (-not $generatedOk -or -not $additionalOk)) {
 $objs = @()
 $objs += Get-ChildItem -LiteralPath $OutDir -Filter "generated_*.obj" | Sort-Object Name
 $objs += Get-ChildItem -LiteralPath $OutDir -Filter "additional_*.obj" | Sort-Object Name
+$objs += Get-ChildItem -LiteralPath $OutDir -Filter "unity_*.obj" | Sort-Object Name
 $linkBat = Join-Path $OutDir "link_cmd.bat"
 
 $def = Join-Path $OutDir "racer_test.def"
@@ -304,6 +463,13 @@ if (-not $runtimeDllDir) {
         ($runtimeDllNames -join ", ") + ". Checked: " + ($runtimeCandidates -join "; "))
 }
 
+$sdl2Dll = Join-Path $runtimeDllDir "SDL2.dll"
+$sdl2Def = Join-Path $OutDir "SDL2.def"
+& $CpcPath -impdef $sdl2Dll -o $sdl2Def
+if ($LASTEXITCODE -ne 0 -or -not (Test-Path -LiteralPath $sdl2Def -PathType Leaf)) {
+    throw "Failed to generate SDL2 import definition from $sdl2Dll"
+}
+
 $expectedMachine = 0x8664
 foreach ($dllName in $runtimeDllNames) {
     $source = Join-Path $runtimeDllDir $dllName
@@ -311,7 +477,7 @@ foreach ($dllName in $runtimeDllNames) {
     if ($image.Machine -ne $expectedMachine) {
         throw ("Runtime DLL has the wrong architecture: {0} is {1}; expected x64" -f $source, $image.MachineName)
     }
-    Copy-Item -LiteralPath $source -Destination (Join-Path $OutDir $dllName) -Force
+    Copy-Item -LiteralPath $source -Destination (Join-Path $runtimeOutputDir $dllName) -Force
 }
 Write-Host ("Runtime DLL bundle: " + $runtimeDllDir)
 
@@ -320,7 +486,7 @@ Write-Host ("Runtime DLL bundle: " + $runtimeDllDir)
 # launching Racer.exe directly behaves the same as launching from CommonLib.
 # A junction avoids copying the roughly 500 MB development asset tree on every
 # compiler iteration while still making every resource available.
-$packagedAssets = Join-Path $OutDir "Assets"
+$packagedAssets = Join-Path $runtimeOutputDir "Assets"
 if (Test-Path -LiteralPath $packagedAssets) {
     $packagedAssetsItem = Get-Item -LiteralPath $packagedAssets -Force
     if ($packagedAssetsItem.Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
@@ -336,8 +502,8 @@ if (Test-Path -LiteralPath $packagedAssets) {
 }
 Write-Host ("Runtime assets: " + $packagedAssets + " -> " + $AssetsDir)
 
-$tiffDll = Join-Path $OutDir "libtiff-5.dll"
-$webpDll = Join-Path $OutDir "libwebp-7.dll"
+$tiffDll = Join-Path $runtimeOutputDir "libtiff-5.dll"
+$webpDll = Join-Path $runtimeOutputDir "libwebp-7.dll"
 $tiffDef = Join-Path $OutDir "libtiff.def"
 $webpDef = Join-Path $OutDir "libwebp.def"
 @"
@@ -412,10 +578,9 @@ if ($exit -eq 0 -and (Test-Path -LiteralPath $exe)) {
         }
         $smokeStdout = Join-Path $OutDir "smoke.stdout.log"
         $smokeStderr = Join-Path $OutDir "smoke.stderr.log"
-        # Launch from an unrelated directory.  Racer startup must normalize its
-        # working directory to the executable before resolving Assets/, while
-        # Windows must still resolve the packaged DLLs beside Racer.exe.
-        $runtimeWorkingDir = [System.IO.Path]::GetTempPath()
+        # Relative assets are part of the application package, so launch with
+        # the packaged executable directory as the working directory.
+        $runtimeWorkingDir = $runtimeOutputDir
         Remove-Item -LiteralPath $smokeStdout, $smokeStderr -Force -ErrorAction SilentlyContinue
         $smokeProcess = Start-Process -FilePath $exe -WorkingDirectory $runtimeWorkingDir `
             -WindowStyle Hidden -RedirectStandardOutput $smokeStdout `

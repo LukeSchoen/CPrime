@@ -135,6 +135,13 @@ __BUILTIN_EXTERN(clrsb,)
 __BUILTIN_EXTERN(popcount, unsigned)
 __BUILTIN_EXTERN(parity, unsigned)
 #undef __BUILTIN_EXTERN
+
+#if defined _WIN32
+unsigned char _BitScanForward64(unsigned long *index,
+                                unsigned long long mask);
+long _InterlockedExchangeAdd(volatile long *target, long value);
+void __debugbreak(void);
+#endif
 #endif
 
 

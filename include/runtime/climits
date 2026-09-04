@@ -1,0 +1,6 @@
+#ifndef _CPC_CLIMITS
+#define _CPC_CLIMITS
+
+#include <limits.h>
+
+#endif

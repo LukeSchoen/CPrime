@@ -15,6 +15,9 @@ if errorlevel 1 exit /b %ERRORLEVEL%
 call "%SCRIPT_DIR%run.cmd" -Suite "features/All" %*
 if errorlevel 1 exit /b %ERRORLEVEL%
 
+call "%SCRIPT_DIR%run.cmd" -Suite "features/Includes" %*
+if errorlevel 1 exit /b %ERRORLEVEL%
+
 call "%SCRIPT_DIR%test_MultiSource.cmd" %*
 if errorlevel 1 exit /b %ERRORLEVEL%
 

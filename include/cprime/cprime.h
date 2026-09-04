@@ -355,7 +355,8 @@ struct SymAttr {
     is_class_tag : 1,
     lifecycle_ctor : 1,
     lifecycle_dtor : 1,
-    xxxx        : 14;
+    integral_constexpr : 1,
+    xxxx        : 13;
 };
 
 struct FuncAttr {
@@ -405,6 +406,7 @@ typedef struct Sym {
         struct Sym *cleanup_label;
     };
     struct TokenString *default_arg;
+    long long const_value;
 } Sym;
 
 typedef struct Section {
@@ -879,6 +881,7 @@ struct filespec {
 #define VT_REFERENCE 0x00010000
 #define VT_RVALUE_REFERENCE 0x00020000
 #define VT_WCHAR_T 0x00040000
+#define VT_NULLPTR_TYPE 0x00080000 /* overload-probe null pointer constant */
 
 #define VT_STRUCT_SHIFT 20
 #define VT_STRUCT_MASK (((1U << (6+6)) - 1) << VT_STRUCT_SHIFT | VT_BITFIELD)

@@ -633,6 +633,13 @@ do_init_list:
           expect("string constant");
         parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
       }
+      if (p->capture_integral_constexpr
+          && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
+          && is_integer_btype(vtop->type.t & VT_BTYPE))
+      {
+        p->integral_constexpr_value = vtop->c.i;
+        p->integral_constexpr_valid = 1;
+      }
       if (!p->sec && (flags & DIF_CLEAR) // Container Was Already Zero'D
           && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
           && vtop->c.i == 0
@@ -1081,7 +1088,46 @@ err_size:
   else if (has_init)
   {
     p.sec = sec;
+    p.capture_integral_constexpr = is_cpp_translation_unit() && sym
+                                   && (type->t & VT_CONSTANT)
+                                   && is_integer_btype(type->t & VT_BTYPE)
+                                   && !(type->t & (VT_ARRAY | VT_VLA));
     decl_initializer(&p, type, addr, DIF_FIRST);
+    if (p.capture_integral_constexpr && p.integral_constexpr_valid)
+    {
+      uint64_t raw = (uint64_t)p.integral_constexpr_value;
+      if (type->t & VT_UNSIGNED)
+        sym->const_value = (long long)raw;
+      else if (size == 1)
+        sym->const_value = (int8_t)raw;
+      else if (size == 2)
+        sym->const_value = (int16_t)raw;
+      else if (size == 4)
+        sym->const_value = (int32_t)raw;
+      else
+        sym->const_value = (int64_t)raw;
+      sym->a.integral_constexpr = 1;
+    }
+    else if (is_cpp_translation_unit() && sym && decl_scope == VT_CONST
+             && (type->t & VT_CONSTANT)
+             && is_integer_btype(type->t & VT_BTYPE)
+             && !(type->t & (VT_ARRAY | VT_VLA))
+             && sec && sec->data && size > 0 && size <= 8)
+    {
+      uint64_t raw = 0;
+      memcpy(&raw, sec->data + addr, size);
+      if (type->t & VT_UNSIGNED)
+        sym->const_value = (long long)raw;
+      else if (size == 1)
+        sym->const_value = (int8_t)raw;
+      else if (size == 2)
+        sym->const_value = (int16_t)raw;
+      else if (size == 4)
+        sym->const_value = (int32_t)raw;
+      else
+        sym->const_value = (int64_t)raw;
+      sym->a.integral_constexpr = 1;
+    }
     // Patch Flexible Array Member Size Back To -1,
     // For Possible Subsequent Similar Declarations
     if (flexible_array)

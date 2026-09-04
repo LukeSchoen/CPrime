@@ -1,0 +1,20 @@
+#ifndef _CPC_CHRONO
+#define _CPC_CHRONO
+
+namespace std
+{
+  namespace chrono
+  {
+    class milliseconds
+    {
+    public:
+      explicit milliseconds(long long value) : m_value(value) {}
+      long long count() const { return m_value; }
+
+    private:
+      long long m_value;
+    };
+  }
+}
+
+#endif

@@ -10,6 +10,8 @@
 
 namespace std
 {
+  inline double exp(double value) { return ::exp(value); }
+
   template<typename T>
   int isnan(T value) { return value != value; }
 

@@ -130,14 +130,8 @@ static void call_explicit_destructor(CType *type, int name_tok)
   }
 
   struct_tok = get_struct_type_name_tok(type);
-  if (struct_tok && name_tok != struct_tok)
-  {
-    char expected[512];
-    snprintf(expected, sizeof(expected), "%s__",
-             get_tok_str(name_tok, NULL));
-    if (strncmp(get_tok_str(struct_tok, NULL), expected, strlen(expected)))
-      cprime_error("destructor name must match class name");
-  }
+  if (struct_tok && !class_tok_matches_unqualified_name(struct_tok, name_tok))
+    cprime_error("destructor name must match class name");
 
   func_sym = resolve_lifecycle_func(type, TOK_DESTRUCTOR1);
   if (!func_sym)
@@ -1242,6 +1236,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
         copy_construct_struct_memberwise_from_base_ptr(
           type, &base_ptr, &source_ptr, 0,
           (call_arg_types[0].t & VT_RVALUE_REFERENCE) != 0);
+        initialize_virtual_tables_for_pointer(type, &base_ptr, 0);
         free_saved_placement_args(placement, call_args, call_arg_count);
         return;
       }
@@ -1250,6 +1245,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
       cprime_error("no matching constructor for placement new");
     base_ptr = *vtop;
     call_lifecycle_constructor_members_base_ptr(type, &base_ptr, 0);
+    initialize_virtual_tables_for_pointer(type, &base_ptr, 0);
     free_saved_placement_args(placement, call_args, call_arg_count);
     return;
   }
@@ -1337,6 +1333,10 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   drop_leaked_call_target(ctor_func);
   if ((vtop->type.t & VT_BTYPE) == VT_VOID)
     vpop();
+  {
+    SValue base_ptr = *vtop;
+    initialize_virtual_tables_for_pointer(type, &base_ptr, 0);
+  }
   free_saved_placement_args(placement, call_args, call_arg_count);
 }
 
@@ -1353,47 +1353,62 @@ static int try_parse_cpp_placement_new_after_name(void)
     CType ptr_type;
     Sym *malloc_sym;
     int align, size;
+    CValue size_value;
 
     memset(&ad, 0, sizeof(ad));
     if (!parse_btype(&type, &ad, 0))
       return 0;
-    if (tok != '[')
-      cprime_error("non-placement new currently requires an array bound");
-    next();
-    expr_eq();
-    skip(']');
     size = type_size(&type, &align);
     if (size < 0)
       cprime_error("new requires a complete element type");
-    vpushi(size);
-    gen_op('*');
+    if (tok == '[')
+    {
+      next();
+      expr_eq();
+      skip(']');
+      vpushi(size);
+      gen_op('*');
 
-    malloc_sym = sym_find(tok_alloc_const("malloc"));
-    if (!malloc_sym)
-      malloc_sym = global_symbol_find(tok_alloc_const("malloc"));
-    if (!malloc_sym)
-      malloc_sym = external_global_sym(tok_alloc_const("malloc"),
-                                       &func_old_type);
-    vpushsym(&malloc_sym->type, malloc_sym);
-    vswap();
-    gfunc_param_typed(malloc_sym->type.ref,
-                      malloc_sym->type.ref
-                        ? malloc_sym->type.ref->next : NULL);
-    gfunc_call(1);
-    ptr_type = type;
-    mk_pointer(&ptr_type);
-    vpush(&ptr_type);
-    PUT_R_RET(vtop, ptr_type.t);
-    return 1;
+      malloc_sym = sym_find(tok_alloc_const("malloc"));
+      if (!malloc_sym)
+        malloc_sym = global_symbol_find(tok_alloc_const("malloc"));
+      if (!malloc_sym)
+        malloc_sym = external_global_sym(tok_alloc_const("malloc"),
+                                         &func_old_type);
+      vpushsym(&malloc_sym->type, malloc_sym);
+      vswap();
+      gfunc_param_typed(malloc_sym->type.ref,
+                        malloc_sym->type.ref
+                          ? malloc_sym->type.ref->next : NULL);
+      gfunc_call(1);
+      ptr_type = type;
+      mk_pointer(&ptr_type);
+      vpush(&ptr_type);
+      PUT_R_RET(vtop, ptr_type.t);
+      return 1;
+    }
+
+    /* Lower scalar allocation to the same path as placement new so class
+       constructors, constructor arguments, and scalar initialization share
+       one implementation. */
+    placement = tok_str_alloc();
+    tok_str_add(placement, tok_alloc_const("malloc"));
+    tok_str_add(placement, '(');
+    size_value.i = size;
+    tok_str_add2(placement, TOK_CINT, &size_value);
+    tok_str_add(placement, ')');
+    tok_str_add(placement, TOK_EOF);
   }
+  else
+  {
+    next();
+    skip_or_save_block(&placement);
+    skip(')');
 
-  next();
-  skip_or_save_block(&placement);
-  skip(')');
-
-  memset(&ad, 0, sizeof(ad));
-  if (!parse_btype(&type, &ad, 0))
-    cprime_error("placement new requires a type");
+    memset(&ad, 0, sizeof(ad));
+    if (!parse_btype(&type, &ad, 0))
+      cprime_error("placement new requires a type");
+  }
 
   if (tok == '(')
   {
@@ -1568,7 +1583,7 @@ static Sym *resolve_member_func_by_arg_count(CType *type, int method_tok,
   {
     MemberFuncOverload *next_o = o->bucket_next;
     Sym *s;
-    ++profile_other_overload_scans[0];
+    if (profile_scans_enabled) ++profile_other_overload_scans[0];
     if (getenv("CPC_TRACE_CLBITREF")
         && struct_tok >= TOK_UIDENT
         && strstr(get_tok_str(struct_tok, NULL), "clBitRef")
@@ -1661,7 +1676,7 @@ static int member_overload_exists_for_call(CType *type, int method_tok,
   for (o = member_func_candidates(struct_tok, method_tok);
        o; o = o->bucket_next)
   {
-    ++profile_other_overload_scans[1];
+    if (profile_scans_enabled) ++profile_other_overload_scans[1];
     if (o->struct_tok == struct_tok && o->method_tok == method_tok
         && explicit_arg_count >= o->min_arg_count
         && explicit_arg_count <= o->explicit_arg_count)
@@ -1696,7 +1711,7 @@ static int member_func_owner_for_call(CType *type, int method_tok,
   for (o = member_func_candidates(struct_tok, method_tok);
        o; o = o->bucket_next)
   {
-    ++profile_other_overload_scans[2];
+    if (profile_scans_enabled) ++profile_other_overload_scans[2];
     if (o->struct_tok == struct_tok && o->method_tok == method_tok
         && explicit_arg_count >= o->min_arg_count
         && explicit_arg_count <= o->explicit_arg_count)
@@ -1733,7 +1748,7 @@ static int member_overload_count_for_call(CType *type, int method_tok,
   for (o = member_func_candidates(struct_tok, method_tok);
        o; o = o->bucket_next)
   {
-    ++profile_other_overload_scans[3];
+    if (profile_scans_enabled) ++profile_other_overload_scans[3];
     if (o->struct_tok == struct_tok && o->method_tok == method_tok
         && explicit_arg_count >= o->min_arg_count
         && explicit_arg_count <= o->explicit_arg_count)
@@ -1820,7 +1835,7 @@ static int class_has_single_arg_constructor_for(CType *class_type,
        o; o = o->bucket_next)
   {
     Sym *s;
-    ++profile_other_overload_scans[4];
+    if (profile_scans_enabled) ++profile_other_overload_scans[4];
     if (o->struct_tok != class_tok || o->method_tok != TOK_CONSTRUCTOR1
         || o->min_arg_count > 1 || o->explicit_arg_count < 1)
       continue;
@@ -2369,7 +2384,7 @@ static Sym *resolve_member_func_by_arg_types(CType *type, int method_tok,
     for (o = member_func_candidates(struct_tok, method_tok);
          o; o = o->bucket_next)
     {
-      ++profile_overload_scans;
+      if (profile_scans_enabled) ++profile_overload_scans;
       Sym *s;
       CType source_type = arg_types[0];
       int source_struct_tok;
@@ -2434,7 +2449,7 @@ static Sym *resolve_member_func_by_arg_types(CType *type, int method_tok,
   {
     MemberFuncOverload *next_o = o->bucket_next;
     Sym *s;
-    ++profile_overload_scans;
+    if (profile_scans_enabled) ++profile_overload_scans;
     if (getenv("CPC_TRACE_CLBITREF")
         && struct_tok >= TOK_UIDENT
         && strstr(get_tok_str(struct_tok, NULL), "clBitRef")
@@ -2638,7 +2653,7 @@ static Sym *resolve_member_func_by_param_signature(CType *type, int method_tok,
        o; o = o->bucket_next)
   {
     Sym *s;
-    ++profile_other_overload_scans[5];
+    if (profile_scans_enabled) ++profile_other_overload_scans[5];
     if (o->struct_tok != struct_tok || o->method_tok != method_tok)
       continue;
     if (!member_overload_receiver_ok(o, receiver_const))
@@ -2830,6 +2845,7 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
                                     CType *func_type, TokenString *body)
 {
   int struct_tok, mangled_tok, i;
+  int is_local_class_member = local_stack || local_scope;
   int this_tok, public_this_tok;
   Sym *arg;
   PendingMemberFunc *pm;
@@ -2853,8 +2869,11 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   }
 
   str = tok_str_alloc();
-  tok_str_add(str, TOK_STATIC);
-  tok_str_add(str, TOK_INLINE1);
+  if (!is_local_class_member)
+  {
+    tok_str_add(str, TOK_STATIC);
+    tok_str_add(str, TOK_INLINE1);
+  }
   if (!add_ctype_tokens(str, &func_type->ref->type))
     cprime_error("unsupported member function return type");
   tok_str_add(str, mangled_tok);
@@ -2915,6 +2934,20 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
       {
         if (!tok_str_add_integer_const_sym(str, static_member))
           tok_str_add(str, make_static_member_tok(struct_tok, body->str[i]));
+        continue;
+      }
+    }
+    if (body->str[i] >= TOK_UIDENT
+        && prev_body_tok != '.' && prev_body_tok != TOK_ARROW
+        && prev_body_tok != ':')
+    {
+      int prev_i = tok_str_prev_token_index(body->str, body->len, i);
+      int next_i = tok_str_next_non_linenum_index(body->str, body->len, i + 1);
+      int namespace_tok = find_current_namespace_tok(body->str[i]);
+      if (namespace_tok != body->str[i]
+          && !body_identifier_is_decl_target(body, i, prev_i, next_i))
+      {
+        tok_str_add(str, namespace_tok);
         continue;
       }
     }
@@ -2999,6 +3032,7 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
   pm->struct_tok = struct_tok;
+  pm->is_local_class_member = is_local_class_member;
   dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
 }
 
@@ -3029,7 +3063,7 @@ static Sym *declare_static_member_func(CType *struct_type, int method_tok,
   base_tok = make_static_member_tok(struct_tok, method_tok);
   static_type = *func_type;
   static_type.t &= ~VT_STATIC;
-  mangled_tok = make_free_func_tok_for_type(base_tok, &static_type);
+  mangled_tok = make_static_member_func_tok_for_type(base_tok, &static_type);
   note_free_func_overload(base_tok, mangled_tok, &static_type);
   if (!sym_find(base_tok) && !global_symbol_find(base_tok))
     external_global_sym(base_tok, &static_type);
@@ -3041,6 +3075,7 @@ static void add_pending_static_member_func(CType *struct_type, int method_tok,
                                             int is_auto_return)
 {
   int struct_tok, base_tok, mangled_tok, i;
+  int is_local_class_member = local_stack || local_scope;
   Sym *arg;
   CType static_type;
   PendingMemberFunc *pm;
@@ -3084,11 +3119,16 @@ static void add_pending_static_member_func(CType *struct_type, int method_tok,
   base_tok = make_static_member_tok(struct_tok, method_tok);
   static_type = *func_type;
   static_type.t &= ~VT_STATIC;
-  mangled_tok = make_free_func_tok_for_type(base_tok, &static_type);
+  mangled_tok = make_static_member_func_tok_for_type(base_tok, &static_type);
+  if (is_auto_return && mangled_tok == base_tok)
+    mark_unmangled_free_func_overload_provisional(base_tok);
 
   str = tok_str_alloc();
-  tok_str_add(str, TOK_STATIC);
-  tok_str_add(str, TOK_INLINE1);
+  if (!is_local_class_member)
+  {
+    tok_str_add(str, TOK_STATIC);
+    tok_str_add(str, TOK_INLINE1);
+  }
   if (!add_ctype_tokens(str, &func_type->ref->type))
     cprime_error("unsupported static member function return type");
   tok_str_add(str, mangled_tok);
@@ -3159,6 +3199,10 @@ static void add_pending_static_member_func(CType *struct_type, int method_tok,
 
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
+  pm->func_tok = mangled_tok;
+  pm->struct_tok = struct_tok;
+  pm->is_static_member = 1;
+  pm->is_local_class_member = is_local_class_member;
   dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
 }
 
@@ -3219,6 +3263,7 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
 {
   int struct_tok, mangled_tok, i;
   int empty_body;
+  int is_local_class_member = local_stack || local_scope;
   CType ret_type, func_type, lowered_type;
   PendingMemberFunc *pm;
   TokenString *str;
@@ -3243,7 +3288,7 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
   empty_body = token_string_contains_tok(body, tok_alloc_const("begin"));
 
   str = tok_str_alloc();
-  if (internal)
+  if (internal && !is_local_class_member)
   {
     tok_str_add(str, TOK_STATIC);
     tok_str_add(str, TOK_INLINE1);
@@ -3286,6 +3331,7 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
   pm->func_tok = mangled_tok;
   pm->struct_tok = struct_tok;
   pm->is_lifecycle_member = 1;
+  pm->is_local_class_member = is_local_class_member;
   dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
 }
 
@@ -3293,6 +3339,7 @@ static void add_pending_lifecycle_decl(CType *struct_type, int method_tok,
                                        TokenString *params)
 {
   int struct_tok, mangled_tok;
+  int is_local_class_member = local_stack || local_scope;
   CType ret_type, func_type, lowered_type;
   PendingMemberFunc *pm;
   TokenString *str;
@@ -3336,6 +3383,7 @@ static void add_pending_lifecycle_decl(CType *struct_type, int method_tok,
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
   pm->struct_tok = struct_tok;
+  pm->is_local_class_member = is_local_class_member;
   dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
 }
 
@@ -3473,7 +3521,7 @@ static Sym *resolve_initializer_list_constructor(CType *type)
   for (o = member_func_overloads; o; o = o->next)
   {
     Sym *param, *s;
-    ++profile_other_overload_scans[6];
+    if (profile_scans_enabled) ++profile_other_overload_scans[6];
     CType *param_type;
 
     if (o->struct_tok != struct_tok || o->method_tok != TOK_CONSTRUCTOR1
@@ -3516,7 +3564,7 @@ static int class_has_initializer_list_constructor_candidate(CType *type)
   for (o = member_func_overloads; o; o = o->next)
   {
     Sym *param;
-    ++profile_other_overload_scans[7];
+    if (profile_scans_enabled) ++profile_other_overload_scans[7];
     CType *param_type;
 
     if (o->struct_tok != struct_tok || o->method_tok != TOK_CONSTRUCTOR1
@@ -4051,6 +4099,18 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
       }
     }
 keep_field_assignment:
+    if (t >= TOK_UIDENT && t != this_tok
+        && (i == 0 || (pm->str->str[i - 1] != '.'
+                       && pm->str->str[i - 1] != TOK_ARROW
+                       && pm->str->str[i - 1] != ':')))
+    {
+      int nested_type_tok = make_static_member_tok(pm->struct_tok, t);
+      if (struct_find(nested_type_tok))
+      {
+        tok_str_add(dst, nested_type_tok);
+        continue;
+      }
+    }
     if (t >= TOK_UIDENT
         && !strncmp(get_tok_str(t, NULL), "operator", 8)
         && (i == 0 || (pm->str->str[i - 1] != '.'
@@ -4091,13 +4151,65 @@ keep_field_assignment:
   pm->str = dst;
 }
 
+static void rewrite_pending_static_member_calls(PendingMemberFunc *pm)
+{
+  int i, in_body = 0;
+  TokenString *dst;
+
+  if (!pm || !pm->is_static_member || !pm->struct_tok || !pm->str)
+    return;
+  dst = tok_str_alloc();
+  for (i = 0; i < pm->str->len && pm->str->str[i] != TOK_EOF; ++i)
+  {
+    int t = pm->str->str[i];
+    int prev_i, next_i;
+    if (TOK_HAS_VALUE(t))
+    {
+      tok_str_add_record(dst, pm->str->str, pm->str->len, &i);
+      continue;
+    }
+    if (!in_body)
+    {
+      tok_str_add(dst, t);
+      if (t == '{')
+        in_body = 1;
+      continue;
+    }
+    prev_i = tok_str_prev_token_index(pm->str->str, pm->str->len, i);
+    next_i = tok_str_next_non_linenum_index(pm->str->str, pm->str->len,
+                                             i + 1);
+    if (t >= TOK_UIDENT
+        && (prev_i < 0 || (pm->str->str[prev_i] != '.'
+                           && pm->str->str[prev_i] != TOK_ARROW
+                           && pm->str->str[prev_i] != ':'))
+        && next_i < pm->str->len
+        && (pm->str->str[next_i] == '('
+            || pm->str->str[next_i] == TOK_LT
+            || pm->str->str[next_i] == '<')
+        && !body_identifier_is_decl_target(pm->str, i, prev_i, next_i)
+        && class_has_static_member_func(pm->struct_tok, t))
+    {
+      tok_str_add(dst, pm->struct_tok);
+      tok_str_add(dst, ':');
+      tok_str_add(dst, ':');
+    }
+    tok_str_add(dst, t);
+  }
+  tok_str_add(dst, TOK_EOF);
+  tok_str_free(pm->str);
+  pm->str = dst;
+}
+
 static void compile_pending_member_funcs(int start)
 {
   int i, saved_tok, out, len_tok, array_tok;
   int saved_local_scope;
   int saved_defer_pending_member_funcs;
+  int saved_vstack_depth;
+  int isolate_local_scope;
   CValue saved_tokc;
   Sym *saved_local_stack;
+  SValue *saved_vstack = NULL;
 
   /* Re-entrancy guard: compiling a replayed member body can itself resolve
      member calls that queue and flush pending members.  A nested flush would
@@ -4115,6 +4227,28 @@ static void compile_pending_member_funcs(int start)
   saved_local_stack = local_stack;
   saved_local_scope = local_scope;
   saved_defer_pending_member_funcs = defer_pending_member_funcs;
+  isolate_local_scope = compile_local_member_funcs_now
+                        && (saved_local_stack || saved_local_scope);
+  saved_vstack_depth = (int)(vtop - vstack + 1);
+  if (saved_vstack_depth > 0)
+  {
+    saved_vstack = cprime_malloc(saved_vstack_depth * sizeof(SValue));
+    memcpy(saved_vstack, vstack, saved_vstack_depth * sizeof(SValue));
+  }
+  vtop = vstack - 1;
+  if (isolate_local_scope && saved_local_stack)
+  {
+    /* Replayed member definitions are emitted as global functions.  Hide
+       automatic locals while retaining local type bindings so an inline
+       member of a local class can still name its lowered class type. */
+    sym_pop(&local_stack, NULL, 1);
+    sym_relink_local_types(saved_local_stack);
+  }
+  if (isolate_local_scope)
+  {
+    local_stack = NULL;
+    local_scope = 0;
+  }
   len_tok = tok_alloc_const("_len");
   array_tok = tok_alloc_const("_array");
   out = start;
@@ -4126,7 +4260,6 @@ static void compile_pending_member_funcs(int start)
     int guard_non_lifecycle =
       pm->is_template_member
       && !pm->is_lifecycle_member;
-    int compile_in_global_scope = 0;
     TokenString *member_macro_parent;
     const int *member_macro_ptr;
     if (compile_lifecycle_member_funcs_only && !pm->is_lifecycle_member)
@@ -4134,7 +4267,12 @@ static void compile_pending_member_funcs(int start)
       pending_member_funcs[out++] = pm;
       continue;
     }
-    if ((local_stack || local_scope) && !compile_in_global_scope)
+    if (compile_local_member_funcs_now && !pm->is_local_class_member)
+    {
+      pending_member_funcs[out++] = pm;
+      continue;
+    }
+    if ((local_stack || local_scope) && !compile_local_member_funcs_now)
     {
       pending_member_funcs[out++] = pm;
       continue;
@@ -4163,6 +4301,7 @@ static void compile_pending_member_funcs(int start)
       continue;
     }
     rewrite_pending_member_field_access(pm);
+    rewrite_pending_static_member_calls(pm);
     if (getenv("CPC_TRACE_PENDING"))
     {
       const char *filter = getenv("CPC_TRACE_PENDING");
@@ -4203,11 +4342,6 @@ static void compile_pending_member_funcs(int start)
     member_macro_ptr = macro_ptr;
     begin_macro(pm->str, 1);
     next();
-    if (compile_in_global_scope)
-    {
-      local_stack = NULL;
-      local_scope = 0;
-    }
     defer_pending_member_funcs = 1;
     decl(VT_CONST);
     defer_pending_member_funcs = saved_defer_pending_member_funcs;
@@ -4233,8 +4367,11 @@ static void compile_pending_member_funcs(int start)
        scope before the next queued member is inspected; otherwise a member
        appended mid-flush (e.g. a constructor needed by a static member's
        body) is wrongly deferred forever. */
-    local_stack = saved_local_stack;
-    local_scope = saved_local_scope;
+    if (isolate_local_scope)
+    {
+      local_stack = NULL;
+      local_scope = 0;
+    }
     while (macro_stack && macro_stack != member_macro_parent)
       end_macro();
     macro_ptr = member_macro_ptr;
@@ -4250,9 +4387,20 @@ static void compile_pending_member_funcs(int start)
        member queue while it is being compacted. */
   }
   nb_pending_member_funcs = out;
+  if (isolate_local_scope && saved_local_stack)
+  {
+    sym_unlink_local_types(saved_local_stack);
+    sym_relink_stack(saved_local_stack);
+  }
   local_stack = saved_local_stack;
   local_scope = saved_local_scope;
   defer_pending_member_funcs = saved_defer_pending_member_funcs;
+  if (saved_vstack_depth > 0)
+  {
+    memcpy(vstack, saved_vstack, saved_vstack_depth * sizeof(SValue));
+    cprime_free(saved_vstack);
+  }
+  vtop = vstack + saved_vstack_depth - 1;
   tok = saved_tok;
   tokc = saved_tokc;
   compiling_pending_member_funcs--;
@@ -4288,4 +4436,54 @@ static void parse_namespace_decl(void)
   --nb_namespace_stack;
   if (tok == ';')
     next();
+}
+
+static int try_parse_using_namespace_directive(void)
+{
+  int parts[16], nb_parts = 0, namespace_tok, i;
+  TokenString *replay;
+
+  if (tok < TOK_UIDENT || strcmp(get_tok_str(tok, NULL), "using"))
+    return 0;
+  replay = tok_str_alloc();
+  tok_str_add2(replay, tok, &tokc);
+  next();
+  if (tok != TOK_NAMESPACE)
+  {
+    restore_cpp_lifecycle_probe(replay);
+    return 0;
+  }
+  tok_str_free(replay);
+  next();
+  if (tok < TOK_UIDENT)
+    cprime_error("namespace name expected in using directive");
+  for (;;)
+  {
+    if (nb_parts >= (int)(sizeof(parts) / sizeof(parts[0])))
+      cprime_error("namespace name too deep in using directive");
+    parts[nb_parts++] = tok;
+    next();
+    if (tok != ':')
+      break;
+    next();
+    if (tok != ':')
+      cprime_error("':' expected in using directive");
+    next();
+    if (tok < TOK_UIDENT)
+      cprime_error("namespace name expected in using directive");
+  }
+  skip(';');
+  namespace_tok = make_namespace_tok_from_parts(parts, nb_parts);
+  for (i = 0; i < nb_using_namespace_toks; ++i)
+    if (using_namespace_toks[i] == namespace_tok)
+      return 1;
+  if (nb_using_namespace_toks >= al_using_namespace_toks)
+  {
+    al_using_namespace_toks = al_using_namespace_toks
+                                ? al_using_namespace_toks * 2 : 8;
+    using_namespace_toks = cprime_realloc(
+      using_namespace_toks, al_using_namespace_toks * sizeof(int));
+  }
+  using_namespace_toks[nb_using_namespace_toks++] = namespace_tok;
+  return 1;
 }

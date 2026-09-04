@@ -114,11 +114,16 @@ static void new_scope(struct scope *o)
   // Record Local Declaration Stack Position
   o->lstk = local_stack;
   o->llstk = local_label_stack;
+  o->stack_loc = loc;
+  o->stack_min = loc;
   ++local_scope;
 }
 
 static void prev_scope(struct scope *o, int is_expr)
 {
+  int keep_local_member_types = 0;
+  int pending_i;
+
   vla_leave(o->prev);
 
   if (o->cl.s != o->prev->cl.s)
@@ -138,8 +143,29 @@ static void prev_scope(struct scope *o, int is_expr)
      do that.  We do have to remove such symbols from the lookup
      tables, though.  sym_pop will do that.  */
 
+  /* A local class's lowered member helpers are emitted after the enclosing
+     function body is complete.  Keep this scope's symbol storage alive until
+     then, while still unlinking its names from ordinary lookup. */
+  for (pending_i = 0; pending_i < nb_pending_member_funcs; ++pending_i)
+    if (pending_member_funcs[pending_i]
+        && pending_member_funcs[pending_i]->is_local_class_member)
+    {
+      keep_local_member_types = 1;
+      break;
+    }
+
   // Pop Locally Defined Symbols
-  sym_pop(&local_stack, o->lstk, is_expr);
+  sym_pop(&local_stack, o->lstk, is_expr || keep_local_member_types);
+  if (loc < o->stack_min)
+    o->stack_min = loc;
+  if (o->prev && o->stack_min < o->prev->stack_min)
+    o->prev->stack_min = o->stack_min;
+  loc = o->stack_loc;
+  /* Stack slots below this point can be reused by the next sibling scope.
+     Cached spills carry allocator indices as well as offsets, so retire the
+     scope's cache as a unit before later locals occupy the same storage. */
+  if (!is_expr)
+    nb_temp_local_vars = 0;
   cur_scope = o->prev;
   --local_scope;
 }
@@ -297,6 +323,52 @@ static void skip_or_save_statement(TokenString **str)
     tok_str_add(*str, TOK_EOF);
 }
 
+static int for_header_starts_range_declaration(void)
+{
+  TokenString *replay = tok_str_alloc();
+  int paren = 0, bracket = 0, brace = 0;
+  int saw_initializer = 0;
+  int is_range = 0;
+
+  while (tok != TOK_EOF)
+  {
+    int at_top = paren == 0 && bracket == 0 && brace == 0;
+    if (at_top && (tok == ';' || tok == ')'))
+      break;
+    if (at_top && tok == '=')
+      saw_initializer = 1;
+    if (at_top && tok == ':' && !saw_initializer)
+    {
+      tok_str_add(replay, tok);
+      next();
+      if (tok == ':')
+      {
+        tok_str_add(replay, tok);
+        next();
+        continue;
+      }
+      is_range = 1;
+      break;
+    }
+    if (tok == '(')
+      ++paren;
+    else if (tok == ')' && paren > 0)
+      --paren;
+    else if (tok == '[')
+      ++bracket;
+    else if (tok == ']' && bracket > 0)
+      --bracket;
+    else if (tok == '{')
+      ++brace;
+    else if (tok == '}' && brace > 0)
+      --brace;
+    tok_str_add_tok(replay);
+    next();
+  }
+  restore_cpp_lifecycle_probe(replay);
+  return is_range;
+}
+
 static int try_parse_range_for(void)
 {
   char tmp_name[64];
@@ -313,6 +385,11 @@ static int try_parse_range_for(void)
   TokenString *body, *lowered, *var_decl, *range_expr;
 
   var_decl = tok_str_alloc();
+  if (!for_header_starts_range_declaration())
+  {
+    tok_str_free(var_decl);
+    return 0;
+  }
   while (tok == TOK_LINENUM)
     next();
   if (tok == TOK_AUTO)

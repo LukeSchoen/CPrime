@@ -1,0 +1,6 @@
+#ifndef _CPRIME_CERRNO
+#define _CPRIME_CERRNO
+
+#include <errno.h>
+
+#endif

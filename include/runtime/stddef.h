@@ -13,7 +13,11 @@ typedef union { long long __ll; long double __ld; } max_align_t;
 #endif
 
 #ifndef NULL
+#ifdef __cplusplus
+#define NULL 0
+#else
 #define NULL ((void*)0)
+#endif
 #endif
 
 #ifndef nullptr

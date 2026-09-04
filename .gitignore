@@ -20,6 +20,23 @@
 /build/scripts/windows/cpc.exe
 /BuildProfile/out/asm-compare-*.csv
 
+# Generated compiler/test outputs. Keep the checked-in packaging inputs under
+# build/scripts, but never commit ad-hoc probes, traces, screenshots, or test
+# executables from the build workspace.
+/build/*
+!/build/scripts/
+/build/scripts/windows/*.exe
+/build/scripts/windows/*.dll
+/build/scripts/windows/*.pdb
+/build/scripts/windows/*.log
+/Tests/**/*.exe
+/Tests/**/*.obj
+/Tests/**/*.s
+/Tests/**/*.err
+/cpc-*.exe
+/racer_stack_trace.*
+/vc140.pdb
+
 # Local compiler debugging artifacts
 *.log
 *.err

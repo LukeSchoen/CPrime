@@ -1,6 +1,11 @@
 #ifndef _CPC_THREAD
 #define _CPC_THREAD
 
+#include <chrono>
+
+extern "C" unsigned int __cpc_windows_hardware_concurrency();
+extern "C" void __cpc_windows_sleep_for_milliseconds(long long milliseconds);
+
 namespace std
 {
   class thread
@@ -10,7 +15,20 @@ namespace std
     bool joinable() const { return false; }
     void join() {}
     void detach() {}
+    static unsigned int hardware_concurrency()
+    {
+      return __cpc_windows_hardware_concurrency();
+    }
   };
+
+  namespace this_thread
+  {
+    template<typename Duration>
+    inline void sleep_for(Duration duration)
+    {
+      __cpc_windows_sleep_for_milliseconds(duration.count());
+    }
+  }
 }
 
 #endif

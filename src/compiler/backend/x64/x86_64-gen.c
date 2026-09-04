@@ -1060,6 +1060,12 @@ void gfunc_call(int nb_args)
 {
   int size, r, args_size, i, d, bt, struct_size;
   int arg;
+  int is_alloca_call;
+
+  is_alloca_call = nb_args == 1
+                   && (vtop[-nb_args].r & VT_SYM)
+                   && vtop[-nb_args].sym
+                   && vtop[-nb_args].sym->v == TOK_alloca;
 
 #ifdef CONFIG_CPRIME_BCHECK
   if (cprime_state->do_bounds_check)
@@ -1216,6 +1222,16 @@ void gfunc_call(int nb_args)
       o(0xda894c); // Mov %R11, %Rdx
       x86_64_asm_body("movq %%r11, %%rdx");
     }
+  }
+
+  if (is_alloca_call)
+  {
+    /* The runtime alloca trampoline moves the caller's RSP.  Include the
+       eventual outgoing argument area in the amount it reserves; the linked
+       immediates are patched once the function's maximum scratch size is
+       known. */
+    func_alloca = oad(0xc18148, func_alloca); /* add $NN, %rcx */
+    x86_64_asm_body("addq $<scratch>, %%rcx");
   }
 
   gcall_or_jmp(0);

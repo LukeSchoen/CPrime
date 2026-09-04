@@ -1,0 +1,6 @@
+#ifndef _CPC_CSTDARG
+#define _CPC_CSTDARG
+
+#include <stdarg.h>
+
+#endif

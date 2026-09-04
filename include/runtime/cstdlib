@@ -1,0 +1,6 @@
+#ifndef _CPC_CSTDLIB
+#define _CPC_CSTDLIB
+
+#include <stdlib.h>
+
+#endif

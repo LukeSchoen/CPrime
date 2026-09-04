@@ -588,4 +588,15 @@ extern "C" {
 #include <sec_api/stdlib_s.h>
 #include <malloc.h>
 
+#ifdef __cplusplus
+namespace std
+{
+  inline void qsort(void *base, size_t count, size_t width,
+                    int (*compare)(const void *, const void *))
+  {
+    ::qsort(base, count, width, compare);
+  }
+}
+#endif
+
 #endif
