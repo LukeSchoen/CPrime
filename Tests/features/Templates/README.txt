@@ -1,14 +1,10 @@
 Template feature suite
 
 Scope:
-- Only `template<typename T>` syntax is valid.
-- Single type parameter only.
-- Function templates only.
-- Explicit instantiation required at call site.
-
-Call shape under test:
-- `name(int)(args...)`
+- C++ class and function templates, deduction, specialization, and member templates.
+- Self-contained executable regressions and explicit external CommonLib compile probes.
 
 Run:
-- powershell -NoProfile -ExecutionPolicy Bypass -File Tests\\run.ps1 -Suite features/Templates
+- powershell -NoProfile -ExecutionPolicy Bypass -File Tests\run.ps1 -Suite features/Templates -BuildManifestPath path\to\cl\builds\manifest\Release-x64.json
+- See Tests/README.md for metadata and manifest setup.
 

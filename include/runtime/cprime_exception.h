@@ -84,6 +84,15 @@ typedef struct CpcEhCatchContext {
 
 typedef void (*CpcEhDestructor)(void *);
 typedef void (*CpcEhTerminateHandler)(void);
+typedef struct CpcEhArray {
+    void *data;
+    unsigned long long count;
+    unsigned long long element_size;
+    CpcEhDestructor destructor;
+} CpcEhArray;
+
+void __cpc_eh_destroy_array(void *context);
+void __cpc_eh_shutdown(void);
 
 void *__cpc_eh_allocate(const CpcEhType *type, unsigned alignment,
                         CpcEhDestructor destructor);

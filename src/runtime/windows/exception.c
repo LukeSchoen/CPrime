@@ -6,6 +6,15 @@
 #include <stdint.h>
 #include "cprime_exception.h"
 
+void __cpc_eh_destroy_array(void *context)
+{
+    CpcEhArray *array = (CpcEhArray *)context;
+    while (array->count) {
+        --array->count;
+        array->destructor((char *)array->data + array->count * array->element_size);
+    }
+}
+
 /* The bundled SDK predates this declaration, although its x64 context types
    and the operating-system entry point are present. */
 NTSYSAPI PEXCEPTION_ROUTINE NTAPI RtlVirtualUnwind(DWORD, DWORD64, DWORD64,
@@ -63,6 +72,19 @@ static CpcEhThread *cpc_eh_thread(void)
             abort();
     }
     return state;
+}
+
+/* An in-memory compiler image must release OS callbacks before its code is
+   unmapped. FlsFree visits the remaining thread/fiber values while this
+   module's callback and allocator imports are still valid. The embedding
+   caller has finished executing the image before requesting its deletion. */
+void __cpc_eh_shutdown(void)
+{
+    if (cpc_eh_tls_init == 2) {
+        FlsFree(cpc_eh_tls);
+        cpc_eh_tls = FLS_OUT_OF_INDEXES;
+        InterlockedExchange(&cpc_eh_tls_init, 0);
+    }
 }
 
 void __cpc_eh_terminate(void)

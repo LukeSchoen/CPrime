@@ -1,11 +1,17 @@
 param(
     [string]$ExporterPath = 'C:\Luke\Src\OT\cl\export_build_manifest.ps1',
     [ValidateSet('Prime', 'Clang')][string]$Toolchain = 'Prime',
-    [string]$CompilerPath = (Join-Path $PSScriptRoot '..\cpc.exe')
+    [string]$CompilerPath = (Join-Path $PSScriptRoot '..\cpc.exe'),
+    [string]$NativeCompilerPath = ''
 )
 $ErrorActionPreference = 'Stop'
 $driver = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\build_project.ps1'))
 $CompilerPath = [IO.Path]::GetFullPath($CompilerPath)
+if (-not $NativeCompilerPath) {
+    $NativeCompilerPath = if ($Toolchain -eq 'Clang') { $CompilerPath }
+        else { Join-Path (Split-Path $ExporterPath -Parent) 'CommonLib\Assets\Programs\Clang\clang.exe' }
+}
+if (-not (Test-Path -LiteralPath $NativeCompilerPath -PathType Leaf)) { throw 'Pass -NativeCompilerPath for the Clang compiler used to create native COFF inputs.' }
 $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
 $fixture = Join-Path $temporaryRoot ('CPrime manifest ' + [guid]::NewGuid().ToString('N'))
 if (-not $fixture.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Fixture must be under the temporary directory' }
@@ -31,6 +37,7 @@ EndProject
   <PropertyGroup><OutputLabel>Selected</OutputLabel><BuildTag>$(OutputLabel) App</BuildTag></PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ConfigurationType>Application</ConfigurationType><TargetName>$(BuildTag)</TargetName><TargetExt>.exe</TargetExt>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
     <OutDir>$(ProjectDir)custom output\</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
@@ -38,7 +45,7 @@ EndProject
       <AdditionalIncludeDirectories>base includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <TreatWarningAsError>true</TreatWarningAsError></ClCompile>
     <ClCompile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"><PreprocessorDefinitions>WRONG_CONFIGURATION</PreprocessorDefinitions></ClCompile>
-    <Link><AdditionalDependencies>lib folder\extra.obj;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <Link><AdditionalDependencies>lib folder\extra.obj;lib folder\other.obj;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies></Link>
     <ResourceCompile><PreprocessorDefinitions>RESOURCE_ID=101;RESOURCE_VALUE=1234</PreprocessorDefinitions></ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -112,6 +119,8 @@ EndProject
     '#define ORDER 3' | Set-Content -LiteralPath (Join-Path $fixture 'override includes\selected.h')
     @'
 #include <windows.h>
+extern "C" const GUID IID_IDirectInput8A;
+extern "C" const int *native_address(void), *native_other_address(void);
 int helper();
 extern "C" int override_value(void), ordered_value(void), empty_value(void), extra_value(void), library_value(void), resource_linkage_value(void);
 static int resource_value(int id) {
@@ -123,7 +132,9 @@ int main() {
     return helper() != 42 || override_value() != 10 || ordered_value() != 43
         || empty_value() != 1 || extra_value() != 9 || library_value() != 77
         || resource_value(101) != 1234 || resource_value(202) != 4321
-        || resource_value(303) != 5053 || resource_linkage_value() != 99;
+        || resource_value(303) != 5053 || resource_linkage_value() != 99
+        || IID_IDirectInput8A.Data1 != 0xbf798030
+        || native_address() != native_other_address() || *native_address() != 23;
 }
 '@ | Set-Content -LiteralPath (Join-Path $fixture 'main file.cpp')
     @'
@@ -147,9 +158,25 @@ int override_value(void) { return BASE + ORDER; }
 #endif
 int empty_value(void) { return 1; }
 '@ | Set-Content -LiteralPath (Join-Path $fixture 'empty.c')
-    'int extra_value(void) { return 9; }' | Set-Content -LiteralPath (Join-Path $fixture 'lib folder\extra.c')
-    & $CompilerPath -c (Join-Path $fixture 'lib folder\extra.c') -o (Join-Path $fixture 'lib folder\extra.obj')
+    @'
+__declspec(selectany) int native_shared_value = 23;
+#pragma comment(lib, "LIBCMT")
+#pragma comment(lib, "OLDNAMES")
+static int native_value = 8;
+static int *native_pointer = &native_value;
+static int native_bss[8];
+extern int empty_value(void);
+int extra_value(void) { native_bss[3] = *native_pointer + empty_value(); return native_bss[3]; }
+const int *native_address(void) { return &native_shared_value; }
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'lib folder\extra.c')
+    @'
+__declspec(selectany) int native_shared_value = 23;
+const int *native_other_address(void) { return &native_shared_value; }
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'lib folder\other.c')
+    & $NativeCompilerPath -c (Join-Path $fixture 'lib folder\extra.c') -o (Join-Path $fixture 'lib folder\extra.obj')
     if ($LASTEXITCODE -ne 0) { throw 'Failed to compile the fixture link dependency' }
+    & $NativeCompilerPath -c (Join-Path $fixture 'lib folder\other.c') -o (Join-Path $fixture 'lib folder\other.obj')
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to compile the second native COFF dependency' }
     '#error Excluded source was compiled' | Set-Content -LiteralPath (Join-Path $fixture 'excluded.cpp')
     & $ExporterPath -ProjectRoot $fixture
     $manifestPath = Join-Path $fixture 'builds\manifest\Release-x64.json'
@@ -157,6 +184,30 @@ int empty_value(void) { return 1; }
     if ($manifest.projects[0].sources.Count -ne 6) { throw 'Source selection did not preserve item-group conditions and ExcludedFromBuild' }
     if ($manifest.projects[0].sources[2].defines -notcontains 'EXTRA=2') { throw 'Per-file definitions were lost' }
     if ($manifest.projects[0].resources.Count -ne 2) { throw 'Resource selection was not preserved' }
+    if ($manifest.projects[0].windowsSdkVersion -ne '10.0') { throw 'Windows SDK selection was not preserved' }
+    # An explicit tool version is authoritative; an unavailable selection
+    # must not silently use whichever Visual Studio happens to be installed.
+    $appProjectPath = Join-Path $fixture 'App.vcxproj'
+    $appProjectText = Get-Content -LiteralPath $appProjectPath -Raw
+    $selectedProject = $appProjectText.Replace('<WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>',
+        '<WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion><VCToolsVersion>0.0.0</VCToolsVersion>')
+    $selectedProject | Set-Content -LiteralPath $appProjectPath
+    & $ExporterPath -ProjectRoot $fixture
+    $selectedManifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    if ($selectedManifest.projects[0].msvcToolsVersion -ne '0.0.0') { throw 'MSVC tools selection was not preserved' }
+    $selectionLog = Join-Path $fixture 'missing-toolset.log'
+    $savedErrorAction = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & powershell -NoProfile -ExecutionPolicy Bypass -File $driver -CompilerPath $CompilerPath -Toolchain $Toolchain `
+            -ProjectRoot $fixture -OutDir (Join-Path $fixture 'missing-toolset') -Jobs 2 *> $selectionLog
+        $selectionExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $savedErrorAction }
+    if ($selectionExit -eq 0 -or (Get-Content -LiteralPath $selectionLog -Raw) -notmatch 'Visual C\+\+ tools 0\.0\.0') {
+        throw 'An unavailable explicit MSVC toolset selection was ignored'
+    }
+    $appProjectText | Set-Content -LiteralPath $appProjectPath
+    & $ExporterPath -ProjectRoot $fixture
     foreach ($unity in @($false, $true)) {
         $output = Join-Path $fixture $(if ($unity) { 'unity' } else { 'separate' })
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-CompilerPath', $CompilerPath,
@@ -203,7 +254,7 @@ int empty_value(void) { return 1; }
     if ($LASTEXITCODE -ne 0) { throw 'Legacy manifest build failed' }
     & (Join-Path $fixture 'builds\Legacy.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Legacy manifest executable failed' }
-    Write-Host 'Build manifest: conditional selection, effective settings/warning policy, expanded output, archive dependencies, resource data, spaced paths, unity, and legacy compatibility passed.'
+    Write-Host 'Build manifest: conditional selection, effective settings/warning policy, expanded output, archive dependencies, resource data, native COFF/COMDAT/default libraries, selected MSVC/SDK libraries, spaced paths, unity, and legacy compatibility passed.'
 } finally {
     $resolvedFixture = [IO.Path]::GetFullPath($fixture)
     if ($resolvedFixture.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -and

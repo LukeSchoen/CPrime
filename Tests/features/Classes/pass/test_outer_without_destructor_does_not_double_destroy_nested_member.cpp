@@ -16,8 +16,8 @@ struct NestedCleanupOwner
 
   ~NestedCleanupOwner()
   {
-    // Model an owning field destructor: once the owner destructor is selected,
-    // the outer aggregate must not also register the nested leaf separately.
+    // The owner body and its implicit member destruction each run once.
+    // The enclosing aggregate must not independently destroy this leaf again.
     ++NestedCleanupLeaf::destructorCalls;
   }
 };
@@ -32,7 +32,7 @@ int main()
   {
     NestedCleanupOuter value;
   }
-  return NestedCleanupLeaf::destructorCalls == 1 ? 0 : 1;
+  return NestedCleanupLeaf::destructorCalls == 2 ? 0 : 1;
 }
 
 // EXPECT_EXIT: 0

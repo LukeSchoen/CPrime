@@ -138,6 +138,19 @@ ST_FUNC void cprime_run_free(CPRIMEState *s1)
   void *ptr;
   int i;
 
+#ifdef _WIN64
+  if (s1->run_ptr && s1->run_function_table)
+  {
+    void (*shutdown_eh)(void) = cprime_get_symbol(s1, "__cpc_eh_shutdown");
+    addr_t address = (addr_t)shutdown_eh;
+    /* Only tear down the runtime owned by this image. A host-supplied
+       shared runtime has a longer lifetime than the generated code. */
+    if (address >= (addr_t)s1->run_ptr
+        && address - (addr_t)s1->run_ptr < s1->run_size)
+      shutdown_eh();
+  }
+#endif
+
   // free any loaded DLLs
   for ( i = 0; i < s1->nb_loaded_dlls; i++)
   {

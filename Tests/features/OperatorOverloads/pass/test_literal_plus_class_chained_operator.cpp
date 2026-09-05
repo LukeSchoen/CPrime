@@ -27,9 +27,14 @@ SmallString SmallString::operator+(const SmallString &rhs) const
 
 int SmallString::Length() const { return len; }
 
+SmallString operator+(const char *left, const SmallString &right)
+{
+  return SmallString(left) + right;
+}
+
 int main()
 {
   SmallString middle("data");
   SmallString result = "No " + middle + ": " + SmallString("name");
-  return result.Length() == 14 ? 0 : 1;
+  return result.Length() == 13 ? 0 : 1;
 }

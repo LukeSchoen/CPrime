@@ -187,6 +187,22 @@ no_designator:
   return al;
 }
 
+/* Initializer offsets can refer to a stack allocation or to an existing
+   object reached through a placement address. */
+static void init_push_lvalue(init_params *p, CType *type, unsigned long offset)
+{
+  if (p->indirect_base)
+  {
+    vset(&char_pointer_type, VT_LOCAL | VT_LVAL, p->indirect_base);
+    if (offset) { vpushi(offset); gen_op('+'); }
+    vtop->type = *type;
+    mk_pointer(&vtop->type);
+    indir();
+  }
+  else
+    vset(type, VT_LOCAL | VT_LVAL, offset);
+}
+
 // Store A Value Or An Expression Directly In Global Data Or In Local Array
 static void init_putv(init_params *p, CType *type, unsigned long c)
 {
@@ -201,6 +217,7 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
   dtype.t &= ~VT_CONSTANT; // need to do that to avoid false warning
   if (is_reference_type(&dtype))
   {
+    cpp_temp_extend_lifetime(vtop);
     decay_reference_type(&dtype);
     if (is_reference_type(&vtop->type))
       decay_reference_type(&vtop->type);
@@ -393,6 +410,12 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
   }
   else
   {
+    if (p->elided_value)
+    {
+      p->elided_value = 0;
+      vpop();
+      return;
+    }
     if ((dtype.t & VT_BTYPE) == VT_STRUCT
         && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_LOCAL | VT_LVAL)
         && (int)vtop->c.i == (int)c
@@ -408,7 +431,7 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       SValue dst_ptr, src_ptr, source;
       source = *vtop;
       vtop--;
-      vset(&dtype, VT_LOCAL | VT_LVAL, c);
+      init_push_lvalue(p, &dtype, c);
       mk_pointer(&vtop->type);
       gaddrof();
       dst_ptr = *vtop;
@@ -428,7 +451,7 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
     }
     else
     {
-      vset(&dtype, VT_LOCAL | VT_LVAL, c);
+      init_push_lvalue(p, &dtype, c);
       vswap();
       vstore();
       vpop();
@@ -457,6 +480,15 @@ static int saved_initializer_close(TokenString *expression, int start,
 static int saved_initializer_is_direct_constructor(TokenString *expression,
                                                     CType *type)
 {
+  TokenString *yes = NULL, *no = NULL;
+  if (cpp_saved_conditional_at(expression, &yes, &no)) {
+    int result = (cpp_saved_arm_is_throw(yes)
+                   || saved_initializer_is_direct_constructor(yes, type))
+              && (cpp_saved_arm_is_throw(no)
+                   || saved_initializer_is_direct_constructor(no, type));
+    tok_str_free(yes); tok_str_free(no);
+    return result;
+  }
   int first = tok_str_next_non_linenum_index(expression->str, expression->len, 0);
   int end = tok_str_prev_token_index(expression->str, expression->len,
                                      expression->len);
@@ -583,14 +615,15 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
   }
 }
 
-static void emit_class_initializer_expression(TokenString *expression,
-                                               CType *type,
-                                               unsigned long address)
+static int emit_class_initializer_expression_at(TokenString *expression,
+                                                 CType *type,
+                                                 unsigned long address,
+                                                 int storage)
 {
   TokenString macro, *parent;
   const int *parent_ptr;
   CppConstructionDestination destination, *saved_destination;
-  int saved_tok;
+  int saved_tok, forwarding;
   CValue saved_tokc;
   prepare_saved_cpp_lambdas(expression);
   saved_tok = tok;
@@ -600,8 +633,10 @@ static void emit_class_initializer_expression(TokenString *expression,
   saved_destination = cpp_construction_destination;
   destination.type = *type;
   destination.address = address;
-  destination.storage = VT_LOCAL | VT_LVAL;
+  destination.storage = storage;
   destination.available = saved_initializer_is_direct_constructor(expression, type);
+  forwarding = destination.available;
+  destination.conditional_marker = cpp_prepare_conditional_destination(expression);
   cpp_construction_destination = &destination;
   macro = *expression;
   begin_macro(&macro, 0);
@@ -612,9 +647,19 @@ static void emit_class_initializer_expression(TokenString *expression,
   cpp_construction_destination = saved_destination;
   tok = saved_tok;
   tokc = saved_tokc;
+  return forwarding && !destination.available;
 }
 
-static int parse_direct_class_initializer(CType *type, unsigned long address)
+static void emit_class_initializer_expression(TokenString *expression,
+                                               CType *type,
+                                               unsigned long address)
+{
+  emit_class_initializer_expression_at(expression, type, address,
+                                        VT_LOCAL | VT_LVAL);
+}
+
+static int parse_direct_class_initializer(init_params *p, CType *type,
+                                           unsigned long address)
 {
   TokenString *expression;
   if (tok != '(' && tok != '[' && tok < TOK_UIDENT)
@@ -622,9 +667,56 @@ static int parse_direct_class_initializer(CType *type, unsigned long address)
   /* Inspect the complete expression before forwarding storage. For example,
      in T value = T(1) + T(2), neither operand is value's result object. */
   skip_or_save_block_ex(&expression, 1);
-  emit_class_initializer_expression(expression, type, address);
+  if (p->indirect_base)
+  {
+    int slot;
+    init_push_lvalue(p, type, address);
+    mk_pointer(&vtop->type); gaddrof();
+    vtop->type = char_pointer_type;
+    loc = (loc - PTR_SIZE) & -PTR_SIZE;
+    slot = loc;
+    vset(&char_pointer_type, VT_LOCAL | VT_LVAL, slot);
+    vswap(); vstore(); vpop();
+    p->elided_value = emit_class_initializer_expression_at(expression, type,
+                         slot, VT_LLOCAL | VT_LVAL);
+  }
+  else
+    emit_class_initializer_expression(expression, type, address);
   tok_str_free(expression);
   return 1;
+}
+
+static void emit_placement_aggregate_initializer(CType *type, TokenString *placement,
+                                                 TokenString *initializer)
+{
+  init_params p = {0};
+  TokenString macro = *initializer, *parent;
+  const int *parent_ptr;
+  int saved_tok = tok, alignment;
+  CValue saved_tokc = tokc;
+  Sym *old_cleanup = cur_scope->cl.s;
+  int old_cleanup_depth = cur_scope->cl.n;
+  CType pointer = *type;
+  mk_pointer(&pointer);
+  replay_saved_placement_expr(placement);
+  gen_cast(&pointer);
+  loc = (loc - PTR_SIZE) & -PTR_SIZE;
+  p.indirect_base = loc;
+  p.local_offset = type_size(type, &alignment);
+  p.track_partial_cleanups = 1;
+  vdup();
+  vset(&pointer, VT_LOCAL | VT_LVAL, p.indirect_base);
+  vswap(); vstore(); vpop();
+  parent = macro_stack;
+  parent_ptr = macro_ptr;
+  begin_macro(&macro, 0);
+  next();
+  decl_initializer(&p, type, 0, DIF_FIRST);
+  while (macro_stack && macro_stack != parent) end_macro();
+  macro_ptr = parent_ptr;
+  cur_scope->cl.s = old_cleanup;
+  cur_scope->cl.n = old_cleanup_depth;
+  tok = saved_tok; tokc = saved_tokc;
 }
 
 /* 't' contains the type and storage info. 'c' is the offset of the
@@ -639,6 +731,8 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
   Sym *s, *f;
   Sym indexsym;
   CType *t1;
+  Sym *old_cleanup = cur_scope ? cur_scope->cl.s : NULL;
+  int old_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
 
   // Generate Line Number Info
   if (debug_modes && !(flags & DIF_SIZE_ONLY) && !p->sec)
@@ -662,7 +756,7 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
       ++nocode_wanted;
     if (!(!p->sec && !(flags & DIF_SIZE_ONLY)
           && is_cpp_translation_unit() && (type->t & VT_BTYPE) == VT_STRUCT
-          && parse_direct_class_initializer(type, c)))
+          && parse_direct_class_initializer(p, type, c)))
       parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
     nocode_wanted = ncw_prev;
     flags |= DIF_HAVE_ELEM;
@@ -1015,6 +1109,76 @@ do_init_list:
         init_putv(p, type, c);
     }
   }
+  if (p->track_partial_cleanups && !(flags & DIF_SIZE_ONLY)
+      && (type->t & VT_BTYPE) == VT_STRUCT && !nocode_wanted)
+  {
+    Sym *destructor = resolve_autodtor_func(type);
+    if (destructor)
+    {
+      int pointer_slot;
+      /* Replace completed subobject cleanups with the complete object's
+         destructor. While later fields initialize, an exception unwinds only
+         those subobjects whose initialization has already succeeded. */
+      cur_scope->cl.s = old_cleanup;
+      cur_scope->cl.n = old_cleanup_depth;
+      loc = (loc - PTR_SIZE) & -PTR_SIZE;
+      pointer_slot = loc;
+      init_push_lvalue(p, type, c);
+      mk_pointer(&vtop->type); gaddrof();
+      vtop->type = char_pointer_type;
+      vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
+      vswap(); vstore(); vpop();
+      cpp_eh_register_parameter_copy(type, VT_LLOCAL | VT_LVAL, pointer_slot);
+      if (cur_scope->cl.s != old_cleanup)
+        cur_scope->cl.s->a.cleanup_exception_only = 1;
+    }
+  }
+}
+
+static void emit_automatic_class_array_initialization(Sym *symbol,
+                                                      TokenString *initializer)
+{
+  CType element = symbol->type;
+  TokenString *body = tok_str_alloc(), *path = tok_str_alloc(), *parent;
+  const int *parent_ptr;
+  Sym *destructor;
+  int counter_tok = 0, saved_tok = tok;
+  CValue saved_tokc = tokc;
+  while ((element.t & VT_ARRAY) && element.ref)
+    element = *pointed_type(&element);
+  destructor = resolve_autodtor_func(&element);
+  if (destructor && !nocode_wanted)
+  {
+    char name[64];
+    CType count_type = {VT_LLONG | VT_UNSIGNED, NULL};
+    int pointer_slot, context, alignment;
+    loc = (loc - PTR_SIZE) & -PTR_SIZE;
+    pointer_slot = loc;
+    vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
+    vset(&symbol->type, symbol->r, symbol->c);
+    mk_pointer(&vtop->type); gaddrof();
+    vtop->type = char_pointer_type;
+    vstore(); vpop();
+    cpp_eh_register_array_cleanup(pointer_slot, 0,
+        type_size(&element, &alignment), destructor, &context);
+    snprintf(name, sizeof(name), "__cpc_array_constructed_%u", anon_sym++);
+    counter_tok = tok_alloc_const(name);
+    sym_push(counter_tok, &count_type, VT_LOCAL | VT_LVAL,
+               context + offsetof(CpcEhArray, count));
+  }
+  tok_str_add(body, '{');
+  tok_str_add(path, symbol->v);
+  append_counted_class_initialization(body, &symbol->type, path, initializer,
+                                       counter_tok);
+  tok_str_add(body, '}');
+  tok_str_add(body, TOK_EOF);
+  tok_str_free(path);
+  parent = macro_stack; parent_ptr = macro_ptr;
+  begin_macro(body, 1);
+  next(); block(STMT_COMPOUND);
+  while (macro_stack && macro_stack != parent) end_macro();
+  macro_ptr = parent_ptr;
+  tok = saved_tok; tokc = saved_tokc;
 }
 
 /* parse an initializer for type 't' if 'has_init' is non zero, and
@@ -1030,18 +1194,31 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 {
   int size, align, addr;
   TokenString *init_str = NULL;
+  TokenString *class_array_initializer = NULL;
   Sym *ctor_func = NULL;
-  int has_expr_struct_init;
+  int has_expr_struct_init, initialize_class_array;
   int initialize_nonlocal_vtables = 0;
 
   Section *sec;
   Sym *flexible_array;
   Sym *sym = NULL;
   int saved_nocode_wanted = nocode_wanted;
+  int temporary_mark = cpp_temp_mark();
 #ifdef CONFIG_CPRIME_BCHECK
   int bcheck = cprime_state->do_bounds_check && !NODATA_WANTED;
 #endif
   init_params p = {0};
+  initialize_class_array = is_cpp_translation_unit() && v
+      && (r & VT_VALMASK) == VT_LOCAL && (type->t & VT_ARRAY)
+      && !(type->t & VT_VLA)
+      && (type_requires_class_construction(type)
+          || type_requires_class_destruction(type));
+  if (initialize_class_array && has_init)
+  {
+    skip_or_save_block(&class_array_initializer);
+    complete_global_class_array_bound(type, class_array_initializer);
+    has_init = 0;
+  }
   has_expr_struct_init = has_init
                          && (type->t & VT_BTYPE) == VT_STRUCT
                          && (tok != '{' || type_is_std_initializer_list(type));
@@ -1377,7 +1554,9 @@ err_size:
       ctor_func = resolve_lifecycle_func(type, TOK_CONSTRUCTOR1);
     else
       ctor_func = resolve_autoctor_func(type);
-    if (copy_ctor_init)
+    if (initialize_class_array)
+      emit_automatic_class_array_initialization(sym, class_array_initializer);
+    else if (copy_ctor_init)
     {
       TokenString *call_args[1];
       prepare_saved_cpp_lambdas(copy_ctor_init);
@@ -1435,6 +1614,8 @@ no_alloc:
     initialize_virtual_tables_for_object(&sym->type, sym->r, sym->c, sym);
   if (sym && (r & VT_VALMASK) == VT_LOCAL && !NODATA_WANTED)
     cpp_eh_finish_local_initialization(sym);
+  cpp_temp_end(temporary_mark);
+  if (class_array_initializer) tok_str_free(class_array_initializer);
 }
 
 // Generate Vla Code Saved In Post_Type()
@@ -1490,18 +1671,24 @@ ST_FUNC Sym *gfunc_set_param(Sym *s, int c, int byref)
   return s;
 }
 
-// Push Parameters (And Their Types), Last First
+/* Publish parameter-scope types, then the actual formal parameter list.
+   Deferred template work can allocate unrelated symbols between the function
+   prototype and its formals. Allocation order is not parameter ownership. */
 static void sym_push_params(Sym *ref)
 {
   Sym *s = ref;
   while (s->next)
     s = s->next;
-  while (s != ref)
+  while (s && s != ref)
   {
-    if (s->v & ~SYM_FIELD)
+    if ((s->sym_scope && sym_is_local_type_binding(s))
+        || IS_ENUM_VAL(s->type.t))
       sym_copy(s, &local_stack);
     s = s->prev;
   }
+  for (s = ref->next; s; s = s->next)
+    if (s->v & ~SYM_FIELD)
+      sym_copy(s, &local_stack);
 }
 
 /* parse a function defined by symbol 'sym' and generate its code in

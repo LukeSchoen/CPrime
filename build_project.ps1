@@ -82,39 +82,91 @@ function Invoke-BuildTool([string]$ToolPath, [string[]]$Arguments, [string]$Dire
     } finally { $started.Process.Dispose() }
 }
 
+function Find-MsvcToolchain([string]$RequestedVersion, [switch]$Required) {
+    if (-not $RequestedVersion) { $RequestedVersion = [string]$env:VCToolsVersion }
+    $RequestedVersion = $RequestedVersion.TrimEnd('\', '/')
+    $roots = [Collections.Generic.List[string]]::new()
+    if ($env:VCToolsInstallDir) { $roots.Add($env:VCToolsInstallDir.TrimEnd('\', '/')) }
+    # A developer shell may publish tools on PATH without VCToolsInstallDir.
+    $command = Get-Command 'cl.exe' -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) {
+        $directory = Split-Path $command.Source -Parent
+        for ($level = 0; $level -lt 3 -and $directory; ++$level) { $directory = Split-Path $directory -Parent }
+        if ($directory) { $roots.Add($directory) }
+    }
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path -LiteralPath $vswhere) {
+        $installations = @(& $vswhere -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -sort -property installationPath)
+        foreach ($installation in $installations) {
+            $version = $RequestedVersion
+            if (-not $version) {
+                $versionFile = Join-Path $installation 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt'
+                if (-not (Test-Path -LiteralPath $versionFile -PathType Leaf)) { continue }
+                $version = (Get-Content -LiteralPath $versionFile -Raw).Trim()
+            }
+            $roots.Add((Join-Path $installation "VC\Tools\MSVC\$version"))
+        }
+    }
+    foreach ($candidate in $roots | Select-Object -Unique) {
+        if ($RequestedVersion -and (Split-Path $candidate -Leaf) -ne $RequestedVersion) {
+            $candidate = Join-Path (Split-Path $candidate -Parent) $RequestedVersion
+        }
+        $libraryDirectory = Join-Path $candidate 'lib\x64'
+        if (-not (Test-Path -LiteralPath $libraryDirectory -PathType Container)) { continue }
+        return @{
+            Root = $candidate; Version = (Split-Path $candidate -Leaf)
+            Tools = Join-Path $candidate 'bin\Hostx64\x64'; Libraries = @($libraryDirectory)
+        }
+    }
+    if ($Required -or $RequestedVersion) { throw "Visual C++ tools $RequestedVersion with x64 libraries were not found." }
+    return $null
+}
+
 function Find-MsvcTool([string]$Name) {
     $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($command) { return $command.Source }
-    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-    if (Test-Path -LiteralPath $vswhere) {
-        $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-        if ($installation) {
-            $version = (Get-Content -LiteralPath (Join-Path $installation 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
-            $tool = Join-Path $installation "VC\Tools\MSVC\$version\bin\Hostx64\x64\$Name"
-            if (Test-Path -LiteralPath $tool -PathType Leaf) { return $tool }
-        }
+    $toolchain = Find-MsvcToolchain
+    if ($toolchain) {
+        $tool = Join-Path $toolchain.Tools $Name
+        if (Test-Path -LiteralPath $tool -PathType Leaf) { return $tool }
     }
     throw "Required build tool $Name was not found. Install the Visual C++ build tools or make the tool available on PATH."
 }
 
-function Find-ResourceTools {
+function Find-WindowsSdk([string]$RequestedVersion, [switch]$Required) {
     $kitRoot = $env:WindowsSdkDir
     if (-not $kitRoot) {
         $kits = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' -ErrorAction SilentlyContinue
         if ($kits) { $kitRoot = $kits.KitsRoot10 }
     }
     if (-not $kitRoot) { $kitRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10' }
-    $versions = @(Get-ChildItem -LiteralPath (Join-Path $kitRoot 'bin') -Directory |
+    if (-not $RequestedVersion) { $RequestedVersion = [string]$env:WindowsSDKVersion }
+    $RequestedVersion = $RequestedVersion.TrimEnd('\', '/')
+    $versions = @(Get-ChildItem -LiteralPath (Join-Path $kitRoot 'Lib') -Directory -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending)
     foreach ($version in $versions) {
-        $rc = Join-Path $version.FullName 'x64\rc.exe'
-        if (-not (Test-Path -LiteralPath $rc -PathType Leaf)) { continue }
+        # MSBuild's 10.0 selection means the latest installed Windows 10 SDK.
+        if ($RequestedVersion -and $RequestedVersion -ne '10.0' -and $version.Name -ne $RequestedVersion) { continue }
+        $um = Join-Path $version.FullName 'um\x64'
+        $ucrt = Join-Path $version.FullName 'ucrt\x64'
+        if (-not (Test-Path -LiteralPath $um -PathType Container) -or
+            -not (Test-Path -LiteralPath $ucrt -PathType Container)) { continue }
         return @{
-            Compiler = $rc; Converter = (Find-MsvcTool 'cvtres.exe')
+            Version = $version.Name
+            Compiler = Join-Path $kitRoot "bin\$($version.Name)\x64\rc.exe"
             Includes = @((Join-Path $kitRoot "Include\$($version.Name)\um"), (Join-Path $kitRoot "Include\$($version.Name)\shared"))
+            Libraries = @($um, $ucrt)
         }
     }
-    throw 'Windows SDK resource compiler rc.exe was not found.'
+    if ($Required -or $RequestedVersion) { throw "Windows SDK $RequestedVersion with x64 libraries was not found." }
+    return $null
+}
+
+function Find-ResourceTools($Sdk) {
+    if (-not $Sdk -or -not (Test-Path -LiteralPath $Sdk.Compiler -PathType Leaf)) {
+        throw 'The selected Windows SDK resource compiler rc.exe was not found.'
+    }
+    return @{ Compiler = $Sdk.Compiler; Converter = (Find-MsvcTool 'cvtres.exe'); Includes = $Sdk.Includes }
 }
 
 function Get-EffectiveSettings($ProjectSettings, $SourceSettings) {
@@ -301,9 +353,12 @@ if ($manifest.schemaVersion -ge 2) {
     $resourceTools = $null
     foreach ($build in $projectBuilds) {
         $project = $build.Project
+        $sdk = Find-WindowsSdk $project.windowsSdkVersion -Required:([bool]$project.resources.Count)
+        $build.Sdk = $sdk
+        $build.Msvc = Find-MsvcToolchain $project.msvcToolsVersion
+        if ($project.resources.Count) { $resourceTools = Find-ResourceTools $sdk }
         if ($project.kind -notin @('Application', 'StaticLibrary')) { throw "Unsupported project kind: $($project.kind)" }
         foreach ($resource in $project.resources) {
-            if (-not $resourceTools) { $resourceTools = Find-ResourceTools }
             $label = $build.Label + '_resource_' + $build.Resources.Count
             $resFile = Join-Path $OutDir ($label + '.res')
             $resourceArgs = @('/nologo', '/fo', $resFile)
@@ -357,6 +412,12 @@ foreach ($build in $linkedBuilds) {
 }
 if ($linkedResourceObject) { $linkArguments += $linkedResourceObject }
 foreach ($directory in @($linkedBuilds | ForEach-Object { $_.Project.libraryDirectories } | Select-Object -Unique)) {
+    $linkArguments += '-L' + $directory
+}
+# Native inputs retain their compiler's DEFAULTLIB directives. Resolve those
+# against the selected MSVC toolset as well as the selected Windows SDK.
+foreach ($directory in @($linkedBuilds | ForEach-Object { $_.Msvc.Libraries; $_.Sdk.Libraries } |
+        Where-Object { $_ } | Select-Object -Unique)) {
     $linkArguments += '-L' + $directory
 }
 foreach ($library in @($linkedBuilds | ForEach-Object { $_.Project.linkLibraries } | Select-Object -Unique)) {

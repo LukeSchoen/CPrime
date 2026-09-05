@@ -5,8 +5,10 @@ static void try_call_scope_cleanup(Sym *stop)
   {
     Sym *fs = cls->cleanup_func;
     Sym *vs = cls->cleanup_sym;
+    int temporary_skip;
     if (!fs || !vs || cls->a.cleanup_exception_only)
       continue;
+    temporary_skip = cpp_temp_guard_cleanup(cls);
     cpp_eh_set_cleanup_state(cls->next);
     if (vs && (vs->type.t & VT_BTYPE) == VT_STRUCT)
     {
@@ -27,6 +29,7 @@ static void try_call_scope_cleanup(Sym *stop)
     drop_leaked_call_target(fs);
     if (vtop >= vstack && (vtop->type.t & VT_BTYPE) == VT_VOID)
       vpop();
+    gsym(temporary_skip);
   }
   cpp_eh_restore_cleanup_state();
 }
@@ -956,6 +959,7 @@ static void gexpr_decl(void)
 static void block(int flags)
 {
   int a, b, c, d, e, t;
+  int temporary_mark = cpp_temp_mark();
   struct scope o;
   Sym *s;
   CType ref_ret_type;
@@ -1007,6 +1011,7 @@ again:
     new_scope_s(&o);
     skip('(');
     gexpr_decl();
+    cpp_temp_end_condition(temporary_mark);
     a = gvtst(1, 0);
     skip(')');
     block(0);
@@ -1029,6 +1034,7 @@ again:
     d = gind();
     skip('(');
     gexpr();
+    cpp_temp_end_condition(temporary_mark);
     a = gvtst(1, 0);
     skip(')');
     b = 0;
@@ -1145,9 +1151,13 @@ again:
         {
           CType ret_ptr = func_vt;
           decay_reference_type(&ret_ptr);
-          test_lvalue();
-          mk_pointer(&vtop->type);
-          gaddrof();
+          if (is_reference_type(&vtop->type))
+            decay_reference_type(&vtop->type);
+          else {
+            test_lvalue();
+            mk_pointer(&vtop->type);
+            gaddrof();
+          }
           gen_assign_cast(&ret_ptr);
           ref_ret_type = ret_ptr;
           e = 1;
@@ -1196,6 +1206,7 @@ again:
         a = 1;
       }
     }
+    cpp_temp_end(temporary_mark);
     leave_scope(root_scope);
     if (b && !a)
       gfunc_return(e ? &ref_ret_type : &func_vt);
@@ -1249,6 +1260,7 @@ again:
         // No, Regular For-Loop Init Expr
         gexpr();
         vpop();
+        cpp_temp_end(temporary_mark);
       }
     }
     skip(';');
@@ -1257,6 +1269,7 @@ again:
     if (tok != ';')
     {
       gexpr();
+      cpp_temp_end_condition(temporary_mark);
       a = gvtst(1, 0);
     }
     skip(';');
@@ -1266,6 +1279,7 @@ again:
       d = gind();
       gexpr();
       vpop();
+      cpp_temp_end(temporary_mark);
       gjmp_addr(c);
       gsym(e);
     }
@@ -1287,6 +1301,7 @@ again:
     skip(TOK_WHILE);
     skip('(');
     gexpr();
+    cpp_temp_end_condition(temporary_mark);
     c = gvtst(0, 0);
     skip(')');
     skip(';');
@@ -1309,6 +1324,7 @@ again:
     new_scope_s(&o);
     skip('(');
     gexpr_decl();
+    cpp_temp_end(temporary_mark);
     if (!is_integer_btype(vtop->type.t & VT_BTYPE))
       cprime_error("switch value not an integer");
     skip(')');
@@ -1498,6 +1514,7 @@ expr:
           gexpr();
           vpop();
         }
+        cpp_temp_end(temporary_mark);
         skip(';');
       }
     }
@@ -1632,7 +1649,13 @@ static void init_putz(init_params *p, unsigned long c, int size)
   else
   {
     vpush_helper_func(TOK_memset);
-    vseti(VT_LOCAL, c);
+    if (p->indirect_base)
+    {
+      vset(&char_pointer_type, VT_LOCAL | VT_LVAL, p->indirect_base);
+      if (c) { vpushi(c); gen_op('+'); }
+    }
+    else
+      vseti(VT_LOCAL, c);
     vpushi(0);
     vpushs(size);
 #if defined CPRIME_TARGET_ARM && defined CPRIME_ARM_EABI

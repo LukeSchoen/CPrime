@@ -3,6 +3,15 @@
 
 namespace std
 {
+  template<class T, T Value> struct integral_constant {
+    static constexpr T value = Value;
+    typedef T value_type;
+    typedef integral_constant type;
+  };
+  typedef integral_constant<bool, true> true_type;
+  typedef integral_constant<bool, false> false_type;
+  template<bool Value> using bool_constant = integral_constant<bool, Value>;
+
   template<class T> struct is_integral { static const bool value = false; };
   template<> struct is_integral<bool> { static const bool value = true; };
   template<> struct is_integral<char> { static const bool value = true; };
@@ -18,6 +27,21 @@ namespace std
   template<> struct is_floating_point<double> { static const bool value = true; };
 
   template<class T> struct is_signed { static const bool value = false; };
+  typedef signed char __cpc_signed_char;
+  typedef long long __cpc_signed_long_long;
+  typedef long double __cpc_long_double;
+  template<> struct is_signed<__cpc_signed_char> { static const bool value = true; };
+  template<> struct is_signed<char> { static const bool value = char(-1) < char(0); };
+  template<> struct is_signed<short> { static const bool value = true; };
+  template<> struct is_signed<int> { static const bool value = true; };
+  template<> struct is_signed<long> { static const bool value = true; };
+  template<> struct is_signed<__cpc_signed_long_long> { static const bool value = true; };
+  template<> struct is_signed<float> { static const bool value = true; };
+  template<> struct is_signed<double> { static const bool value = true; };
+  template<> struct is_signed<__cpc_long_double> { static const bool value = true; };
+  template<class T> struct is_signed<const T> : is_signed<T> {};
+  template<class T> struct is_signed<volatile T> : is_signed<T> {};
+  template<class T> struct is_signed<const volatile T> : is_signed<T> {};
   typedef unsigned char __cpc_unsigned_char;
   typedef unsigned short __cpc_unsigned_short;
   typedef unsigned int __cpc_unsigned_int;

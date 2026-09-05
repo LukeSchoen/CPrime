@@ -56,6 +56,7 @@ static CType make_lifecycle_func_type(CType *struct_type)
   fref->f.func_type = FUNC_NEW;
 
   this_type = *struct_type;
+  this_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
   mk_pointer(&this_type);
   param = sym_push(SYM_FIELD, &this_type, VT_LOCAL | VT_LVAL, 0);
   param->v = tok_alloc_const("this");
@@ -124,6 +125,9 @@ static int lifecycle_has_only_this_param(Sym *func_sym)
 
 static Sym *resolve_autodtor_func(CType *type)
 {
+  CType destroying_type = *type;
+  destroying_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  type = &destroying_type;
   Sym *s = resolve_lifecycle_func(type, TOK_DESTRUCTOR1);
   if (!s && is_cpp_translation_unit()
       && (type->t & VT_BTYPE) == VT_STRUCT && type->ref
@@ -211,7 +215,13 @@ static void call_explicit_destructor(CType *type, int name_tok)
 
   struct_tok = get_struct_type_name_tok(type);
   if (struct_tok && !class_tok_matches_unqualified_name(struct_tok, name_tok))
-    cprime_error("destructor name must match class name");
+  {
+    Sym *alias = sym_find(name_tok);
+    if (!alias) alias = global_symbol_find(name_tok);
+    if (!alias || !(alias->type.t & VT_TYPEDEF)
+        || get_struct_type_name_tok(&alias->type) != struct_tok)
+      cprime_error("destructor name must match class name");
+  }
 
   func_sym = resolve_lifecycle_func(type, TOK_DESTRUCTOR1);
   if (!func_sym)
@@ -235,6 +245,10 @@ static void call_explicit_destructor(CType *type, int name_tok)
 static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sym,
                                            Sym *ctor_func)
 {
+  /* Constructors address the unqualified object during its lifetime start. */
+  CType constructing_type = *type;
+  constructing_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  type = &constructing_type;
   Sym *func_type, *sa;
   TokenString *call_args[32];
   CType call_arg_types[32];
@@ -339,6 +353,10 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
 static void call_lifecycle_constructor_noargs(CType *type, int r, int addr, Sym *sym,
                                               Sym *ctor_func)
 {
+  /* Constructors address the unqualified object during its lifetime start. */
+  CType constructing_type = *type;
+  constructing_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  type = &constructing_type;
   Sym *func_type, *sa;
   int nb_args, saved_tok;
   CValue saved_tokc;
@@ -482,6 +500,7 @@ static void call_lifecycle_constructor_noargs_expr(CType *type, Sym *ctor_func)
   if ((ctor_func->type.t & VT_BTYPE) != VT_FUNC || !ctor_func->type.ref)
     cprime_error("constructor target is not declared as function");
 
+  vtop->type.t &= ~(VT_CONSTANT | VT_VOLATILE);
   mk_pointer(&vtop->type);
   gaddrof();
   vpushsym(&ctor_func->type, ctor_func);
@@ -896,6 +915,10 @@ static void call_lifecycle_constructor_saved_args(CType *type, int r, int addr,
                                                   TokenString **call_args,
                                                   int call_arg_count)
 {
+  /* Constructors address the unqualified object during its lifetime start. */
+  CType constructing_type = *type;
+  constructing_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  type = &constructing_type;
   Sym *func_type, *sa;
   CType call_arg_types[32];
   int nb_args, ai, saved_delim;
@@ -1037,6 +1060,7 @@ static int try_materialize_same_template_family_conversion(CType *type);
 typedef struct CppConstructionDestination {
   CType type;
   int address, storage, available;
+  int conditional_marker;
 } CppConstructionDestination;
 
 static CppConstructionDestination *cpp_construction_destination;
@@ -1046,6 +1070,7 @@ static int take_cpp_construction_destination(CType *type, int *address,
 {
   if (nocode_wanted || !cpp_construction_destination
       || !cpp_construction_destination->available
+      || cpp_construction_destination->conditional_marker
       || !is_compatible_unqualified_types(
            type, &cpp_construction_destination->type))
     return 0;
@@ -1124,6 +1149,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
     TokenString macro = *call_args[0];
     TokenString *saved_macro_stack = macro_stack;
     const int *saved_macro_ptr = macro_ptr;
+    CppConstructionDestination forwarded, *saved_destination = cpp_construction_destination;
 
     if (getenv("CPC_TRACE_SHALLOW")
         && token_string_contains_tok(&macro, tok_alloc_const("clVector2")))
@@ -1131,7 +1157,16 @@ static int try_parse_cpp_functional_constructor(int type_tok)
               funcname ? funcname : "<none>", macro.len);
     begin_macro(&macro, 0);
     next();
+    if (direct_destination) {
+      forwarded.type = type;
+      forwarded.address = direct_address;
+      forwarded.storage = storage;
+      forwarded.available = 1;
+      forwarded.conditional_marker = 0;
+      cpp_construction_destination = &forwarded;
+    }
     materialize_braced_temporary(&type);
+    cpp_construction_destination = saved_destination;
     while (macro_stack && macro_stack != saved_macro_stack)
       end_macro();
     macro_ptr = saved_macro_ptr;
@@ -1175,6 +1210,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
       initialize_virtual_tables_for_pointer(&type, &destination, 0);
       if (tok == TOK_EOF) next();
       else skip(')');
+      if (!direct_destination) cpp_register_class_temporary(vtop);
       return 1;
     }
   }
@@ -1189,6 +1225,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
       next();
     else
       skip(')');
+    if (!direct_destination) cpp_register_class_temporary(vtop);
     return 1;
   }
   ctor_func = resolve_member_func_by_arg_types(&type, TOK_CONSTRUCTOR1,
@@ -1218,6 +1255,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
       next();
     else
       skip(')');
+    if (!direct_destination) cpp_register_class_temporary(vtop);
     return 1;
   }
 
@@ -1234,6 +1272,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
   else
     skip(')');
 
+  if (!direct_destination) cpp_register_class_temporary(vtop);
   return 1;
 }
 
@@ -1319,6 +1358,54 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   CType call_arg_types[32], ptr_type;
   int nb_args, ai, saved_tok, use_implicit_memberwise_copy = 0;
   CValue saved_tokc;
+
+  if (call_arg_count == 1 && saved_arg_is_braced(call_args[0])
+      && type->ref && !type->ref->a.lifecycle_ctor)
+  {
+    emit_placement_aggregate_initializer(type, placement, call_args[0]);
+    free_saved_placement_args(placement, call_args, call_arg_count);
+    return;
+  }
+
+  if (call_arg_count == 1
+      && saved_initializer_is_direct_constructor(call_args[0], type))
+  {
+    CppConstructionDestination destination, *previous;
+    int slot;
+    saved_tok = tok; saved_tokc = tokc;
+    replay_saved_placement_expr(placement);
+    ptr_type = *type;
+    mk_pointer(&ptr_type);
+    gen_cast(&ptr_type);
+    /* Evaluate the placement address once and keep both new's pointer result
+       and an indirect destination for constructor/return-value forwarding. */
+    /* The destination outlives argument conversion temporaries and is held
+       outside the value stack, so reserve a local slot that their allocator
+       cannot recycle. */
+    loc = (loc - PTR_SIZE) & -PTR_SIZE;
+    slot = loc;
+    vdup();
+    vset(&ptr_type, VT_LOCAL | VT_LVAL, slot);
+    vswap(); vstore(); vpop();
+    destination.type = *type;
+    destination.address = slot;
+    destination.storage = VT_LLOCAL | VT_LVAL;
+    destination.available = 1;
+    destination.conditional_marker = cpp_prepare_conditional_destination(call_args[0]);
+    previous = cpp_construction_destination;
+    cpp_construction_destination = &destination;
+    replay_saved_placement_expr(call_args[0]);
+    cpp_construction_destination = previous;
+    if (destination.available)
+    {
+      vset(type, VT_LLOCAL | VT_LVAL, slot);
+      vswap(); vstore();
+    }
+    vpop();
+    tok = saved_tok; tokc = saved_tokc;
+    free_saved_placement_args(placement, call_args, call_arg_count);
+    return;
+  }
 
   if (getenv("CPC_TRACE_PLACEMENT"))
   {
@@ -1425,6 +1512,9 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   ptr_type = *type;
   mk_pointer(&ptr_type);
   gen_cast(&ptr_type);
+  /* Keep the value returned by new stable while individual subobjects are
+     addressed and constructed through their own receiver pointers. */
+  save_regs(0);
 
   if (!ctor_func)
   {
@@ -1621,22 +1711,7 @@ static int try_parse_cpp_placement_new_after_name(void)
     malloc_sym = cpp_allocation_function();
     if (tok == '[')
     {
-      next();
-      expr_eq();
-      skip(']');
-      vpushi(size);
-      gen_op('*');
-
-      vpushsym(&malloc_sym->type, malloc_sym);
-      vswap();
-      gfunc_param_typed(malloc_sym->type.ref,
-                        malloc_sym->type.ref
-                          ? malloc_sym->type.ref->next : NULL);
-      gfunc_call(1);
-      ptr_type = type;
-      mk_pointer(&ptr_type);
-      vpush(&ptr_type);
-      PUT_R_RET(vtop, ptr_type.t);
+      cpp_new_array(&type, malloc_sym, size, align);
       return 1;
     }
 
@@ -2283,6 +2358,7 @@ static int try_materialize_same_template_family_conversion(CType *type)
   convert_same_family_fields(type, &src_type, &dst_ptr, &src_ptr);
   vset(type, VT_LOCAL | VT_LVAL, addr);
   vtop->r2 = r2;
+  cpp_register_class_temporary(vtop);
   return 1;
 }
 
@@ -2367,6 +2443,7 @@ static int try_materialize_constructor_conversion(CType *type)
 
   vset(type, VT_LOCAL | VT_LVAL, addr);
   vtop->r2 = r2;
+  cpp_register_class_temporary(vtop);
   return 1;
 }
 
@@ -2612,6 +2689,31 @@ static int same_lowered_member_func_signature(CType *type1, CType *type2)
   }
 }
 
+/* Explicit template arguments select specializations before ordinary
+   conversion ranking. Previously instantiated siblings can have identical
+   function parameter types while denoting different bodies. */
+static int member_function_matches_explicit_arguments(int function_tok,
+                                                       int argument_key)
+{
+  MemberFunctionScope *scope;
+  if (!argument_key) return 1;
+  for (scope = member_function_scopes[(unsigned)function_tok & 1023];
+       scope; scope = scope->next)
+    if (scope->function_tok == function_tok)
+    {
+      TemplateMemberDef *definition = scope->template_definition;
+      int i;
+      if (!scope->is_function_template || !definition) return 0;
+      for (i = 0; i < definition->nb_inst; ++i)
+        if (definition->inst_func_toks[i] == function_tok
+            && definition->inst_pack_toks
+            && definition->inst_pack_toks[i] == argument_key)
+          return 1;
+      return 0;
+    }
+  return 0;
+}
+
 static Sym *resolve_member_func_by_arg_types(CType *type, int method_tok,
                                              CType *arg_types,
                                              int explicit_arg_count)
@@ -2715,6 +2817,9 @@ static Sym *resolve_member_func_by_arg_types(CType *type, int method_tok,
         || explicit_arg_count < o->min_arg_count
         || explicit_arg_count > o->explicit_arg_count)
       goto next_overload;
+    if (!member_function_matches_explicit_arguments(o->mangled_tok,
+                                                     explicit_member_template_arg_tok))
+      goto next_overload;
     if (!member_overload_receiver_ok(o, receiver_const))
     {
       if (getenv("CPC_TRACE_CLBITREF")
@@ -2762,9 +2867,33 @@ static Sym *resolve_member_func_by_arg_types(CType *type, int method_tok,
       goto next_overload;
     {
       Sym **slot = o->is_const ? &const_match : &match;
-      if (*slot && *slot != s
-          && same_lowered_member_func_signature(&(*slot)->type, &s->type))
-        goto next_overload;
+      if (*slot && *slot != s)
+      {
+        int previous_template = member_function_is_template((*slot)->v);
+        int candidate_template = member_function_is_template(s->v);
+        /* Equal implicit-object and explicit-argument conversion sequences
+           prefer an ordinary member over a function-template specialization. */
+        if (!previous_template && candidate_template)
+          goto next_overload;
+        if (previous_template && !candidate_template)
+        {
+          *slot = s;
+          goto next_overload;
+        }
+        if (previous_template && candidate_template)
+        {
+          int order = compare_member_function_template_order(s->v, (*slot)->v);
+          if (order > 0)
+          {
+            *slot = s;
+            goto next_overload;
+          }
+          if (order < 0)
+            goto next_overload;
+        }
+        if (same_lowered_member_func_signature(&(*slot)->type, &s->type))
+          goto next_overload;
+      }
     }
     member_overload_note_ranked_match(&match, &const_match,
                                       &best_omitted_defaults, s,
@@ -2934,11 +3063,14 @@ static int add_ctype_tokens(TokenString *str, CType *type)
   int bt = t &VT_BTYPE;
   CType pt;
 
-  if ((t & VT_ARRAY) || bt == VT_FUNC)
+  if ((t & VT_ARRAY) || bt == VT_FUNC
+      || (IS_ENUM(t) && type->ref
+          && (type->ref->v & ~SYM_STRUCT) >= SYM_FIRST_ANOM))
   {
     /* Array and function suffixes belong after the declarator. A stable
        alias preserves nested extents and signatures through pointers and
-       references, including references to captured function pointers. */
+       references, including references to captured function pointers. An
+       anonymous enum likewise has no tag that can be replayed as source. */
     int alias = template_ctype_typedef_tok(type);
     if (!alias)
       return 0;
@@ -3080,6 +3212,8 @@ static CType make_lowered_member_func_type(CType *struct_type, CType *func_type)
 
   return_type = func_type->ref->type;
   lowered_type.t = VT_FUNC;
+  if (template_type_has_internal_linkage(struct_type, 0))
+    lowered_type.t |= VT_STATIC;
   /* Same as make_lifecycle_func_type: keep these type symbols off a live
      local scope so scope pops cannot unlink the 'this' parameter symbols. */
   saved_ls = local_stack;
@@ -3158,8 +3292,8 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   public_this_tok = tok_alloc_const("this");
   {
     CType lowered_type = make_lowered_member_func_type(struct_type, func_type);
-    external_global_sym(mangled_tok, &lowered_type);
-    note_member_func_overload(struct_tok, method_tok, mangled_tok, &lowered_type);
+  external_global_sym(mangled_tok, &lowered_type);
+  note_member_func_overload(struct_tok, method_tok, mangled_tok, &lowered_type);
   }
 
   str = tok_str_alloc();
@@ -3232,20 +3366,6 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
       {
         if (!tok_str_add_integer_const_sym(str, static_member))
           tok_str_add(str, make_static_member_tok(struct_tok, body->str[i]));
-        continue;
-      }
-    }
-    if (body->str[i] >= TOK_UIDENT
-        && prev_body_tok != '.' && prev_body_tok != TOK_ARROW
-        && prev_body_tok != ':')
-    {
-      int prev_i = tok_str_prev_token_index(body->str, body->len, i);
-      int next_i = tok_str_next_non_linenum_index(body->str, body->len, i + 1);
-      int namespace_tok = find_current_namespace_tok(body->str[i]);
-      if (namespace_tok != body->str[i]
-          && !body_identifier_is_decl_target(body, i, prev_i, next_i))
-      {
-        tok_str_add(str, namespace_tok);
         continue;
       }
     }
@@ -3361,6 +3481,8 @@ static Sym *declare_static_member_func(CType *struct_type, int method_tok,
   base_tok = make_static_member_tok(struct_tok, method_tok);
   static_type = *func_type;
   static_type.t &= ~VT_STATIC;
+  if (template_type_has_internal_linkage(struct_type, 0))
+    static_type.t |= VT_STATIC;
   mangled_tok = make_static_member_func_tok_for_type(base_tok, &static_type);
   note_member_function_scope(mangled_tok, struct_tok);
   note_free_func_overload(base_tok, mangled_tok, &static_type);
@@ -3598,7 +3720,18 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
   if (pending_member_func_has_body_tok(mangled_tok))
     return;
   note_raw_lifecycle_overload(struct_tok, method_tok, mangled_tok, params);
-  external_global_sym(mangled_tok, &lowered_type);
+  {
+    Sym *function = external_global_sym(mangled_tok, &lowered_type);
+    /* In-class and implicitly generated lifecycle definitions obey the
+       inline ODR even when first needed while compiling a caller body.
+       Body scheduling (which can depend on the active scope) must not
+       turn a header definition into a strong external symbol. */
+    if (internal)
+    {
+      function->a.weak = 1;
+      update_storage(function);
+    }
+  }
   note_member_func_overload(struct_tok, method_tok, mangled_tok,
                             &lowered_type);
   if (is_defaulted)
@@ -3607,7 +3740,6 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
   str = tok_str_alloc();
   if (internal && !is_local_class_member)
   {
-    tok_str_add(str, TOK_STATIC);
     tok_str_add(str, TOK_INLINE1);
   }
   tok_str_add(str, TOK_VOID);
@@ -3702,10 +3834,13 @@ static void add_pending_lifecycle_decl(CType *struct_type, int method_tok,
 static int type_requires_class_construction(CType *type)
 {
   Sym *field;
+  VirtualTableInfo *table;
   if ((type->t & VT_ARRAY) && type->ref)
     return type_requires_class_construction(&type->ref->type);
   if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref) return 0;
   if (type->ref->a.lifecycle_ctor) return 1;
+  for (table = virtual_table_infos; table; table = table->next)
+    if (table->class_tok == get_struct_type_name_tok(type)) return 1;
   if (IS_UNION(type->t)) return 0;
   for (field = type->ref->next; field; field = field->next)
     if (type_requires_class_construction(&field->type)) return 1;
@@ -3831,13 +3966,135 @@ static int can_lower_global_dynamic_init(CType *type, int l, int has_init)
   return bt != VT_FUNC && bt != VT_VOID;
 }
 
+static int type_requires_class_destruction(CType *type);
+
 static int can_lower_local_static_dynamic_init(CType *type, int l,
                                                int has_init)
 {
-  return l != VT_CONST && has_init && (type->t & VT_STATIC)
-         && (type->t & VT_BTYPE) == VT_STRUCT
-         && get_struct_type_name_tok(type) && type->ref
-         && type->ref->a.lifecycle_ctor;
+  CType *element = type;
+  while ((element->t & VT_ARRAY) && element->ref)
+    element = &element->ref->type;
+  return is_cpp_translation_unit() && l != VT_CONST && (type->t & VT_STATIC)
+         && (element->t & VT_BTYPE) == VT_STRUCT
+         && get_struct_type_name_tok(element) && element->ref
+         && (has_init || type_requires_class_construction(type)
+             || type_requires_class_destruction(type));
+}
+
+static void append_global_class_initialization(TokenString *body, CType *type,
+                                                TokenString *path,
+                                                TokenString *initializer);
+static void append_counted_class_initialization(TokenString *body, CType *type,
+                                                TokenString *path,
+                                                TokenString *initializer,
+                                                int counter_tok);
+
+static int static_runtime_helper(const char *name, int registration, int acquire)
+{
+  int helper = tok_alloc_const(name);
+  if (!global_symbol_find(helper))
+  {
+    CType result = { acquire ? VT_INT : VT_VOID, NULL }, function;
+    TokenString *parameters = tok_str_alloc();
+    tok_str_add(parameters, TOK_VOID);
+    tok_str_add(parameters, '*');
+    if (registration)
+    {
+      tok_str_add(parameters, ',');
+      tok_str_add(parameters, TOK_VOID);
+      tok_str_add(parameters, '(');
+      tok_str_add(parameters, '*');
+      tok_str_add(parameters, ')');
+      tok_str_add(parameters, '(');
+      tok_str_add(parameters, TOK_VOID);
+      tok_str_add(parameters, '*');
+      tok_str_add(parameters, ')');
+      tok_str_add(parameters, ',');
+      tok_str_add(parameters, TOK_UNSIGNED);
+      tok_str_add(parameters, TOK_LONG);
+      tok_str_add(parameters, TOK_LONG);
+      tok_str_add(parameters, ',');
+      tok_str_add(parameters, TOK_UNSIGNED);
+      tok_str_add(parameters, TOK_LONG);
+      tok_str_add(parameters, TOK_LONG);
+    }
+    tok_str_add(parameters, TOK_EOF);
+    function = make_func_type_from_saved_params(&result, parameters);
+    external_global_sym(helper, &function);
+    tok_str_free(parameters);
+  }
+  return helper;
+}
+
+static void append_static_destructor_operation(TokenString *body, int var_tok,
+                                                CType *type, const char *name,
+                                                int counter_tok)
+{
+  CType element = *type;
+  Sym *destructor;
+  CValue value;
+  unsigned long long count = 1;
+  int alignment, helper;
+  while ((element.t & VT_ARRAY) && element.ref)
+  {
+    count *= element.ref->c;
+    element = element.ref->type;
+  }
+  destructor = resolve_autodtor_func(&element);
+  if (!destructor) return;
+  helper = static_runtime_helper(name, 1, 0);
+  tok_str_add(body, helper);
+  tok_str_add(body, '(');
+  tok_str_add(body, '(');
+  tok_str_add(body, TOK_VOID);
+  tok_str_add(body, '*');
+  tok_str_add(body, ')');
+  tok_str_add(body, '&');
+  tok_str_add(body, var_tok);
+  tok_str_add(body, ',');
+  tok_str_add(body, '(');
+  tok_str_add(body, TOK_VOID);
+  tok_str_add(body, '(');
+  tok_str_add(body, '*');
+  tok_str_add(body, ')');
+  tok_str_add(body, '(');
+  tok_str_add(body, TOK_VOID);
+  tok_str_add(body, '*');
+  tok_str_add(body, ')');
+  tok_str_add(body, ')');
+  tok_str_add(body, destructor->v);
+  tok_str_add(body, ',');
+  if (counter_tok)
+    tok_str_add(body, counter_tok);
+  else
+  {
+    value.i = count;
+    tok_str_add2(body, TOK_CULLONG, &value);
+  }
+  tok_str_add(body, ',');
+  value.i = type_size(&element, &alignment);
+  tok_str_add2(body, TOK_CULLONG, &value);
+  tok_str_add(body, ')');
+  tok_str_add(body, ';');
+}
+
+static void append_static_destructor_registration(TokenString *body, int var_tok,
+                                                   CType *type)
+{
+  append_static_destructor_operation(body, var_tok, type,
+                                      "__cpc_register_static_destructor", 0);
+}
+
+static void append_static_guard_call(TokenString *body, const char *name,
+                                     int guard_tok)
+{
+  int helper = static_runtime_helper(name, 0,
+                                      !strcmp(name, "__cpc_static_acquire"));
+  tok_str_add(body, helper);
+  tok_str_add(body, '(');
+  tok_str_add(body, '&');
+  tok_str_add(body, guard_tok);
+  tok_str_add(body, ')');
 }
 
 static void emit_local_static_dynamic_init(int var_tok, CType *type,
@@ -3845,23 +4102,25 @@ static void emit_local_static_dynamic_init(int var_tok, CType *type,
 {
   static int local_static_guard_counter;
   char name[64];
-  int guard_tok, struct_tok, i;
+  int guard_tok, counter_tok = 0;
   int saved_tok = tok;
   CValue saved_tokc = tokc;
   TokenString *saved_macro_stack = macro_stack;
   const int *saved_macro_ptr = macro_ptr;
-  TokenString *str;
+  TokenString *str, *path;
 
-  struct_tok = get_struct_type_name_tok(type);
-  if (!struct_tok)
-    cprime_error("local static class initializer requires a named class");
   snprintf(name, sizeof(name), "__cpc_local_static_guard_%d",
            ++local_static_guard_counter);
   guard_tok = tok_alloc_const(name);
+  if (type->t & VT_ARRAY)
+  {
+    snprintf(name, sizeof(name), "__cpc_local_static_count_%d",
+             local_static_guard_counter);
+    counter_tok = tok_alloc_const(name);
+  }
 
-  /* Lower to a guarded placement construction in the declaring function.
-     This preserves the required once-only initialization without asking the
-     data initializer to encode a non-constant class construction. */
+  /* Construction happens at the declaration. Publish completion only after
+     construction succeeds, and reset the guard if an exception escapes. */
   str = tok_str_alloc();
   tok_str_add(str, '{');
   tok_str_add(str, TOK_STATIC);
@@ -3870,37 +4129,43 @@ static void emit_local_static_dynamic_init(int var_tok, CType *type,
   tok_str_add(str, ';');
   tok_str_add(str, TOK_IF);
   tok_str_add(str, '(');
-  tok_str_add(str, '!');
-  tok_str_add(str, guard_tok);
+  append_static_guard_call(str, "__cpc_static_acquire", guard_tok);
   tok_str_add(str, ')');
   tok_str_add(str, '{');
-  tok_str_add(str, tok_alloc_const("new"));
-  tok_str_add(str, '(');
-  tok_str_add(str, '&');
-  tok_str_add(str, var_tok);
-  tok_str_add(str, ')');
-  tok_str_add(str, struct_tok);
-  tok_str_add(str, '(');
-  for (i = 0; i < init->len && init->str[i] != TOK_EOF; ++i)
+  if (counter_tok)
   {
-    if (TOK_HAS_VALUE(init->str[i]))
-    {
-      tok_str_add_record(str, init->str, init->len, &i);
-      continue;
-    }
-    tok_str_add(str, init->str[i]);
+    CValue zero = {0};
+    tok_str_add(str, TOK_UNSIGNED);
+    tok_str_add(str, TOK_LONG);
+    tok_str_add(str, TOK_LONG);
+    tok_str_add(str, counter_tok);
+    tok_str_add(str, '=');
+    tok_str_add2(str, TOK_CINT, &zero);
+    tok_str_add(str, ';');
   }
+  tok_str_add(str, tok_alloc_const("try"));
+  tok_str_add(str, '{');
+  path = tok_str_alloc();
+  tok_str_add(path, var_tok);
+  append_counted_class_initialization(str, type, path, init, counter_tok);
+  tok_str_free(path);
+  append_static_destructor_registration(str, var_tok, type);
+  append_static_guard_call(str, "__cpc_static_release", guard_tok);
+  tok_str_add(str, ';');
+  tok_str_add(str, '}');
+  tok_str_add(str, tok_alloc_const("catch"));
+  tok_str_add(str, '(');
+  tok_str_add(str, TOK_DOTS);
   tok_str_add(str, ')');
+  tok_str_add(str, '{');
+  if (counter_tok)
+    append_static_destructor_operation(str, var_tok, type,
+                                       "__cpc_static_destroy_elements", counter_tok);
+  append_static_guard_call(str, "__cpc_static_abort", guard_tok);
   tok_str_add(str, ';');
-  tok_str_add(str, guard_tok);
-  tok_str_add(str, '=');
-  {
-    CValue one;
-    memset(&one, 0, sizeof(one));
-    one.i = 1;
-    tok_str_add2(str, TOK_CINT, &one);
-  }
+  tok_str_add(str, tok_alloc_const("throw"));
   tok_str_add(str, ';');
+  tok_str_add(str, '}');
   tok_str_add(str, '}');
   tok_str_add(str, '}');
   tok_str_add(str, TOK_EOF);
@@ -4077,9 +4342,10 @@ static int saved_initializer_last_token(TokenString *initializer)
   return last;
 }
 
-static void append_global_class_initialization(TokenString *body, CType *type,
+static void append_counted_class_initialization(TokenString *body, CType *type,
                                                 TokenString *path,
-                                                TokenString *initializer)
+                                                TokenString *initializer,
+                                                int counter_tok)
 {
   if (type->t & VT_ARRAY)
   {
@@ -4109,7 +4375,8 @@ static void append_global_class_initialization(TokenString *body, CType *type,
         element = grouped;
       }
       old_length = append_global_array_index(path, i, 0);
-      append_global_class_initialization(body, &type->ref->type, path, element);
+      append_counted_class_initialization(body, &type->ref->type, path, element,
+                                           counter_tok);
       path->len = old_length;
       if (grouped) tok_str_free(grouped);
       ++i;
@@ -4141,7 +4408,8 @@ static void append_global_class_initialization(TokenString *body, CType *type,
       tok_str_add(body, ')');
       tok_str_add(body, '{');
       old_length = append_global_array_index(path, index, 1);
-      append_global_class_initialization(body, &type->ref->type, path, NULL);
+      append_counted_class_initialization(body, &type->ref->type, path, NULL,
+                                           counter_tok);
       path->len = old_length;
       tok_str_add(body, '}');
     }
@@ -4157,6 +4425,7 @@ static void append_global_class_initialization(TokenString *body, CType *type,
       first = tok_str_next_non_linenum_index(initializer->str, initializer->len, 0);
       end = saved_initializer_last_token(initializer);
       if (first <= end && initializer->str[first] == '{'
+          && type->ref && type->ref->a.lifecycle_ctor
           && !class_has_initializer_list_constructor_candidate(type))
       {
         ++first;
@@ -4179,7 +4448,20 @@ static void append_global_class_initialization(TokenString *body, CType *type,
     }
     tok_str_add(body, ')');
     tok_str_add(body, ';');
+    if (counter_tok)
+    {
+      tok_str_add(body, TOK_INC);
+      tok_str_add(body, counter_tok);
+      tok_str_add(body, ';');
+    }
   }
+}
+
+static void append_global_class_initialization(TokenString *body, CType *type,
+                                                TokenString *path,
+                                                TokenString *initializer)
+{
+  append_counted_class_initialization(body, type, path, initializer, 0);
 }
 
 static int type_requires_class_destruction(CType *type)
@@ -4192,66 +4474,6 @@ static int type_requires_class_destruction(CType *type)
   for (field = type->ref->next; field; field = field->next)
     if (type_requires_class_destruction(&field->type)) return 1;
   return 0;
-}
-
-static void append_global_class_destruction(TokenString *body, CType *type,
-                                             TokenString *path)
-{
-  if (!type_requires_class_destruction(type)) return;
-  if (type->t & VT_ARRAY)
-  {
-    char name[64];
-    int index, old_length;
-    CValue value;
-    snprintf(name, sizeof(name), "__cpc_global_array_index_%u", anon_sym++);
-    index = tok_alloc_const(name);
-    tok_str_add(body, TOK_FOR);
-    tok_str_add(body, '(');
-    tok_str_add(body, TOK_INT);
-    tok_str_add(body, index);
-    tok_str_add(body, '=');
-    value.i = type->ref->c;
-    tok_str_add2(body, TOK_CINT, &value);
-    tok_str_add(body, ';');
-    tok_str_add(body, index);
-    tok_str_add(body, ';');
-    tok_str_add(body, ')');
-    tok_str_add(body, '{');
-    tok_str_add(body, TOK_DEC);
-    tok_str_add(body, index);
-    tok_str_add(body, ';');
-    old_length = append_global_array_index(path, index, 1);
-    append_global_class_destruction(body, &type->ref->type, path);
-    path->len = old_length;
-    tok_str_add(body, '}');
-  }
-  else if (type->ref->a.lifecycle_dtor)
-  {
-    tok_str_append_without_eof(body, path);
-    tok_str_add(body, '.');
-    tok_str_add(body, '~');
-    tok_str_add(body, get_struct_type_name_tok(type));
-    tok_str_add(body, '(');
-    tok_str_add(body, ')');
-    tok_str_add(body, ';');
-  }
-  else
-  {
-    Sym *field, **fields = NULL;
-    int count = 0, i, old_length;
-    for (field = type->ref->next; field; field = field->next)
-      if (type_requires_class_destruction(&field->type))
-        dynarray_add(&fields, &count, field);
-    for (i = count - 1; i >= 0; --i)
-    {
-      old_length = path->len;
-      tok_str_add(path, '.');
-      tok_str_add(path, fields[i]->v & ~SYM_FIELD);
-      append_global_class_destruction(body, &fields[i]->type, path);
-      path->len = old_length;
-    }
-    cprime_free(fields);
-  }
 }
 
 static void add_pending_global_dynamic_init(int var_tok, CType *type,
@@ -4318,38 +4540,13 @@ static void add_pending_global_dynamic_init(int var_tok, CType *type,
     tok_str_add(str, ')');
   tok_str_add(str, ';');
 close_initializer:
+  append_static_destructor_registration(str, var_tok, type);
   tok_str_add(str, '}');
   tok_str_add(str, TOK_EOF);
 
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
   dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
-  if (type_requires_class_destruction(type))
-  {
-    TokenString *path = tok_str_alloc();
-    snprintf(name, sizeof(name), "__cpc_global_dynamic_fini_%d", nb_pending_global_inits);
-    str = tok_str_alloc();
-    tok_str_add(str, TOK_STATIC);
-    tok_str_add(str, TOK_VOID);
-    tok_str_add(str, tok_alloc_const(name));
-    tok_str_add(str, '(');
-    tok_str_add(str, ')');
-    tok_str_add(str, TOK_ATTRIBUTE1);
-    tok_str_add(str, '(');
-    tok_str_add(str, '(');
-    tok_str_add(str, TOK_DESTRUCTOR1);
-    tok_str_add(str, ')');
-    tok_str_add(str, ')');
-    tok_str_add(str, '{');
-    tok_str_add(path, var_tok);
-    append_global_class_destruction(str, type, path);
-    tok_str_free(path);
-    tok_str_add(str, '}');
-    tok_str_add(str, TOK_EOF);
-    pm = cprime_mallocz(sizeof(*pm));
-    pm->str = str;
-    dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
-  }
 }
 
 static int pending_lifecycle_is_constructor(PendingMemberFunc *pm)
@@ -4729,8 +4926,7 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
     if (t == this_tok && i + 3 < pm->str->len
         && pm->str->str[i + 1] == TOK_ARROW
         && pm->str->str[i + 2] >= TOK_UIDENT
-        && (pm->str->str[i + 3] == '='
-            || pm->str->str[i + 3] == TOK_INIT_MEMBER))
+        && pm->str->str[i + 3] == TOK_INIT_MEMBER)
     {
       int field_tok = pm->str->str[i + 2], dummy_ofs, field_struct_tok, j;
       int rhs_i = i + 4;
@@ -4757,10 +4953,6 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
         i = rhs_i;
         continue;
       }
-      if (rhs_i + 1 < pm->str->len
-          && pm->str->str[rhs_i] >= TOK_UIDENT
-          && pm->str->str[rhs_i + 1] == TOK_ARROW)
-        goto keep_field_assignment;
       if (field && (field->type.t & VT_BTYPE) == VT_STRUCT && field_struct_tok)
       {
         tok_str_add(dst, tok_alloc_const("new"));
@@ -4790,7 +4982,6 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
         continue;
       }
     }
-keep_field_assignment:
     if (t >= TOK_UIDENT && t != this_tok
         && (i == 0 || (pm->str->str[i - 1] != '.'
                        && pm->str->str[i - 1] != TOK_ARROW

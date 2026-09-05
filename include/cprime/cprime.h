@@ -359,11 +359,12 @@ struct SymAttr {
     dtor_noexcept : 1,
     dtor_noexcept_specified : 1,
     cleanup_exception_only : 1,
+    cleanup_temporary : 1,
     virtual_destructor : 1,
     integral_constexpr : 1,
     scoped_enum : 1,
     local_tag_alias : 1,
-    xxxx        : 7;
+    xxxx        : 6;
 };
 
 struct FuncAttr {
@@ -378,7 +379,11 @@ struct FuncAttr {
     func_noexcept : 1,
     func_noexcept_specified : 1,
     func_cxx_destructor : 1,
-    xxxx        : 12;
+    func_language_linkage : 2,
+    func_linkage_explicit : 1,
+    func_cpp_conversion : 1,
+    func_cpp_explicit : 1,
+    xxxx        : 7;
 };
 
 typedef struct Sym {
@@ -524,6 +529,7 @@ typedef struct AttributeDef {
     int alias_target;
     int asm_label;
     char attr_mode;
+    char is_constexpr;
 } AttributeDef;
 
 typedef struct InlineFunc {
@@ -852,6 +858,7 @@ struct filespec {
 #define VT_CMP       0x0033
 #define VT_JMP       0x0034
 #define VT_JMPI      0x0035
+#define VT_CXX_PRVALUE 0x0040 /* materialized C++ class prvalue */
 #define VT_CXX_PARAMETER 0x0080 /* constructed C++ by-value argument storage */
 #define VT_LVAL      0x0100
 #define VT_SYM       0x0200
@@ -1113,6 +1120,7 @@ ST_FUNC void cprime_add_bcheck(CPRIMEState *s1);
 ST_FUNC void cprime_add_btstub(CPRIMEState *s1);
 #endif
 ST_FUNC void cprime_add_pragma_libs(CPRIMEState *s1);
+ST_FUNC void cprime_add_pragma_library(CPRIMEState *s1, const char *library);
 PUB_FUNC int cprime_add_library_err(CPRIMEState *s, const char *f);
 PUB_FUNC void cprime_print_stats(CPRIMEState *s, unsigned total_time);
 PUB_FUNC int cprime_parse_args(CPRIMEState *s, int *argc, char ***argv);
@@ -1228,6 +1236,8 @@ ST_DATA int rsym, anon_sym, ind, loc;
 ST_DATA char debug_modes;
 
 ST_DATA int nocode_wanted;
+/* Recovery is active only while substituting an immediate template context. */
+ST_DATA jmp_buf *cpp_substitution_jump;
 ST_DATA int global_expr;
 ST_DATA CType func_vt;
 ST_DATA int func_var;
@@ -1539,6 +1549,9 @@ ST_FUNC void asm_clobber(uint8_t *clobber_regs, const char *str);
 
 #ifdef CPRIME_TARGET_PE
 ST_FUNC int pe_load_file(struct CPRIMEState *s1, int fd, const char *filename);
+ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long file_offset);
+ST_FUNC void pe_parse_linker_directives(CPRIMEState *s1, char *directives);
+ST_FUNC void pe_store_pragma_libraries(CPRIMEState *s1);
 ST_FUNC int pe_output_file(CPRIMEState * s1, const char *filename);
 ST_FUNC int pe_putimport(CPRIMEState *s1, int dllindex, const char *name, addr_t value);
 ST_FUNC int pe_setsubsy(CPRIMEState *s1, const char *arg);

@@ -70,7 +70,9 @@ typedef struct {
     atomic_store_explicit(object, desired, __ATOMIC_RELAXED)
 
 #define __atomic_store_n(ptr, val, order)                                 \
-    (*(ptr) = (val), __atomic_store((ptr), &(typeof(*(ptr))){val}, (order)))
+    ({ __typeof__(ptr) __cpc_atomic_ptr = (ptr);                          \
+       __typeof__(*__cpc_atomic_ptr) __cpc_atomic_value = (val);           \
+       __atomic_store(__cpc_atomic_ptr, &__cpc_atomic_value, (order)); })
 #define atomic_store_explicit(object, desired, order)                     \
     ({ __typeof__ (object) ptr = (object);                                \
        __typeof__ (*ptr) tmp = (desired);                                 \
@@ -146,7 +148,7 @@ extern void atomic_thread_fence (memory_order);
 extern void atomic_signal_fence (memory_order);
 #define __atomic_signal_fence(order) atomic_signal_fence(order)
 #define atomic_signal_fence(order) __atomic_signal_fence  (order)
-extern bool __atomic_is_lock_free(size_t size, void *ptr);
+extern bool __atomic_is_lock_free(size_t size, const volatile void *ptr);
 #define atomic_is_lock_free(OBJ) __atomic_is_lock_free (sizeof (*(OBJ)), (OBJ))
 
 extern bool atomic_flag_test_and_set(void *object);

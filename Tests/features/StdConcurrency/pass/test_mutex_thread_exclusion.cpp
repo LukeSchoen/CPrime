@@ -1,4 +1,5 @@
 // EXPECT_EXIT: 0
+// EXPECT_COMPILE_ARGS: -Werror
 #include <mutex>
 #include <thread>
 

@@ -149,7 +149,7 @@ namespace std
     -> future<decltype((object->*function)(args...))>
   {
     typedef decltype((object->*function)(args...)) result_type;
-    auto task = [=]() mutable { return (object->*function)(args...); };
+    auto task = [=]() mutable -> result_type { return (object->*function)(args...); };
     return __cpc_start_async<result_type>(policy, std::move(task));
   }
 
@@ -158,7 +158,7 @@ namespace std
     -> future<decltype(function(args...))>
   {
     typedef decltype(function(args...)) result_type;
-    auto task = [=]() mutable { return function(args...); };
+    auto task = [=]() mutable -> result_type { return function(args...); };
     return __cpc_start_async<result_type>(policy, std::move(task));
   }
 

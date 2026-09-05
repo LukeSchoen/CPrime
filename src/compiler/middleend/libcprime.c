@@ -973,6 +973,8 @@ static void error1(int mode, const char *fmt, va_list ap)
   CString cs;
   int line = 0;
 
+  if (mode == ERROR_ERROR && cpp_substitution_jump)
+    longjmp(*cpp_substitution_jump, 1);
   cprime_exit_state(s1);
 
   if (mode == ERROR_WARN)
@@ -1286,6 +1288,11 @@ LIBCPRIMEAPI CPRIMEState *cprime_new(void)
 
 LIBCPRIMEAPI void cprime_delete(CPRIMEState *s1)
 {
+#ifdef CPRIME_IS_NATIVE
+  /* Runtime teardown may look up image-owned cleanup functions, so retain
+     the symbol table until callbacks and executable memory are released. */
+  cprime_run_free(s1);
+#endif
   // Free Sections
   cprimeelf_delete(s1);
 
@@ -1320,10 +1327,6 @@ LIBCPRIMEAPI void cprime_delete(CPRIMEState *s1)
   cstr_free(&s1->cmdline_defs);
   cstr_free(&s1->cmdline_incl);
   cprime_free(s1->dState);
-#ifdef CPRIME_IS_NATIVE
-  // Free Runtime Memory
-  cprime_run_free(s1);
-#endif
   // Free Loaded Dlls Array
   dynarray_reset(&s1->loaded_dlls, &s1->nb_loaded_dlls);
   cprime_free(s1);
@@ -1680,13 +1683,13 @@ ST_FUNC int cprime_add_crt(CPRIMEState *s1, const char *filename)
 }
 #endif
 
-// The Library Name Is The Same As The Argument Of The '-L' Option
+// The library name is the argument of the '-l' option.
 LIBCPRIMEAPI int cprime_add_library(CPRIMEState *s, const char *libraryname)
 {
   static const char * const libs[] =
   {
 #if defined CPRIME_TARGET_PE
-    "%s/%s.def", "%s/lib%s.def", "%s/%s.dll", "%s/lib%s.dll",
+    "%s/%s.lib", "%s/%s.def", "%s/lib%s.def", "%s/%s.dll", "%s/lib%s.dll",
 #elif defined CPRIME_TARGET_MACHO
     "%s/lib%s.dylib", "%s/lib%s.tbd",
 #elif defined TARGETOS_OpenBSD
@@ -1706,7 +1709,15 @@ LIBCPRIMEAPI int cprime_add_library(CPRIMEState *s, const char *libraryname)
   {
     const char * const *pp = libs;
     if (s->static_link)
+    {
+#if defined CPRIME_TARGET_PE
+      int ret = cprime_add_library_internal(s, "%s/%s.lib", libraryname,
+                                            flags, s->library_paths, s->nb_library_paths);
+      if (ret != FILE_NOT_FOUND)
+        return ret;
+#endif
       pp += sizeof(libs) / sizeof(*libs) - 2; // Only "%S/Lib%S.A"
+    }
     while (*pp)
     {
       int ret = cprime_add_library_internal(s, *pp,
@@ -1721,6 +1732,16 @@ LIBCPRIMEAPI int cprime_add_library(CPRIMEState *s, const char *libraryname)
 }
 
 // Handle #Pragma Comment(Lib,)
+ST_FUNC void cprime_add_pragma_library(CPRIMEState *s1, const char *library)
+{
+  int i;
+  for (i = 0; i < s1->nb_pragma_libs; ++i)
+    if (!PATHCMP(library, s1->pragma_libs[i]))
+      return;
+  if (*library)
+    dynarray_add(&s1->pragma_libs, &s1->nb_pragma_libs, cprime_strdup(library));
+}
+
 ST_FUNC void cprime_add_pragma_libs(CPRIMEState *s1)
 {
   int i;
@@ -1729,6 +1750,14 @@ ST_FUNC void cprime_add_pragma_libs(CPRIMEState *s1)
     const char *library = s1->pragma_libs[i];
     size_t len = strlen(library);
     char normalized[1024];
+
+    /* Explicit paths are linker inputs, relative to the link working
+       directory just as they are for MSVC/Clang. Preserve their suffix. */
+    if (strchr(library, '/') || strchr(library, '\\'))
+    {
+      cprime_add_file_internal(s1, library, AFF_TYPE_LIB | AFF_PRINT_ERROR);
+      continue;
+    }
 
     /* MSVC source commonly spells pragma libraries as "Name.lib".  CPC's
        library resolver accepts logical names and supplies the platform's

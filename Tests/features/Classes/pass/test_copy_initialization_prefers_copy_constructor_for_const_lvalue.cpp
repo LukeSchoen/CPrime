@@ -1,3 +1,5 @@
+static int wrong_constructor;
+
 struct Value
 {
   int selected;
@@ -10,6 +12,8 @@ struct Value
 Value copy_const_lvalue(const Value &source)
 {
   Value result = source;
+  // Check the copy before the optional NRVO/implicit move at the return.
+  if (result.selected != 1) ++wrong_constructor;
   return result;
 }
 
@@ -17,7 +21,7 @@ int main()
 {
   Value source;
   Value result = copy_const_lvalue(source);
-  return result.selected == 1 ? 0 : 1;
+  return wrong_constructor || (result.selected != 1 && result.selected != 2);
 }
 
 // EXPECT_EXIT: 0

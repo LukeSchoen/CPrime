@@ -38,10 +38,29 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
                                                     CType *type);
 static void skip_or_save_block_ex(TokenString **str, int allow_eof);
 
+static int cpp_return_operand_is_move_eligible(TokenString *expression)
+{
+  int first = tok_str_next_non_linenum_index(expression->str, expression->len, 0);
+  int last = tok_str_prev_token_index(expression->str, expression->len,
+                                      expression->len);
+  Sym *object;
+  while (first < last && expression->str[first] == '('
+         && expression->str[last] == ')') {
+    first = tok_str_next_non_linenum_index(expression->str, expression->len, first + 1);
+    last = tok_str_prev_token_index(expression->str, expression->len, last);
+  }
+  if (first != last || first < 0 || expression->str[first] < TOK_UIDENT)
+    return 0;
+  object = sym_find(expression->str[first]);
+  return object && object->sym_scope && !(object->type.t & (VT_STATIC | VT_VOLATILE))
+         && !is_reference_type(&object->type)
+         && (object->type.t & VT_BTYPE) == VT_STRUCT;
+}
+
 static int cpp_parse_class_return_expression(void)
 {
   CType register_type;
-  int alignment, register_size, saved_tok;
+  int alignment, register_size, saved_tok, move_eligible;
   CValue saved_tokc;
   TokenString *expression, *parent, macro;
   const int *parent_pointer;
@@ -59,15 +78,22 @@ static int cpp_parse_class_return_expression(void)
     tok_str_free(part);
   }
   construction.type = func_vt;
+  move_eligible = cpp_return_operand_is_move_eligible(expression);
   construction.storage = VT_LLOCAL | VT_LVAL;
   construction.address = func_vc;
   construction.available = saved_initializer_is_direct_constructor(expression, &func_vt);
+  construction.conditional_marker = cpp_prepare_conditional_destination(expression);
   saved_destination = cpp_construction_destination;
   cpp_construction_destination = &construction;
   saved_tok = tok; saved_tokc = tokc;
   parent = macro_stack; parent_pointer = macro_ptr;
   macro = *expression;
   begin_macro(&macro, 0); next(); gexpr();
+  /* A returned automatic object (including a by-value parameter) participates
+     in constructor overload resolution as an rvalue when copy elision is not
+     performed. The named object still owns its normal scope cleanup. */
+  if (move_eligible && (vtop->type.t & VT_BTYPE) == VT_STRUCT)
+    vtop->type.t |= VT_RVALUE_REFERENCE;
   while (macro_stack && macro_stack != parent) end_macro();
   macro_ptr = parent_pointer;
   tok = saved_tok; tokc = saved_tokc;
@@ -328,14 +354,14 @@ static void cpp_eh_restore_cleanup_state(void)
   cpp_eh_function.has_cleanup_override = 0;
 }
 
-static void cpp_eh_register_parameter_copy(CType *type, int address)
+static void cpp_eh_register_parameter_copy(CType *type, int storage, int address)
 {
   Sym *destructor, *object, *cleanup;
   if (!cpp_eh_function.enabled || nocode_wanted) return;
   destructor = resolve_autodtor_func(type);
   if (!destructor) return;
   object = sym_push2(&local_stack, SYM_FIELD, 0, address);
-  object->type = *type; object->r = VT_LOCAL | VT_LVAL;
+  object->type = *type; object->r = storage;
   cleanup = sym_push2(&all_cleanups, SYM_FIELD | ++cur_scope->cl.n, 0, 0);
   cleanup->cleanup_sym = object; cleanup->cleanup_func = destructor;
   cleanup->next = cur_scope->cl.s; cur_scope->cl.s = cleanup;
@@ -362,6 +388,7 @@ static int cpp_eh_cleanup_index(Sym *symbol)
   node->action = symbol->cleanup_func;
   node->data.parent = parent;
   node->data.object_offset = symbol->cleanup_sym->c;
+  node->data.active_flag_offset = cpp_temp_cleanup_active_offset(symbol);
   if ((symbol->cleanup_sym->r & VT_VALMASK) == VT_LLOCAL)
     node->data.flags |= CPC_EH_CLEANUP_INDIRECT;
   return i;
@@ -557,6 +584,7 @@ allocate_exception:
     construction.storage = VT_LLOCAL | VT_LVAL;
     construction.address = object_slot;
     construction.available = 1;
+    construction.conditional_marker = cpp_prepare_conditional_destination(operand);
     cpp_construction_destination = &construction;
     cpp_eh_replay_operand(operand);
     cpp_construction_destination = saved;
@@ -585,6 +613,249 @@ static Sym *cpp_eh_register_local_cleanup(Sym *object, const char *helper)
   cleanup->next = cur_scope->cl.s;
   cur_scope->cl.s = cleanup;
   return cleanup;
+}
+
+static int cpp_array_cookie_size(CType *type, Sym *destructor)
+{
+  int alignment;
+  if (!destructor) return 0;
+  type_size(type, &alignment);
+  return alignment > PTR_SIZE ? alignment : PTR_SIZE;
+}
+
+static Sym *cpp_eh_register_array_cleanup(int pointer_slot, int count_slot,
+                                          int element_size, Sym *destructor,
+                                          int *context_slot)
+{
+  CType count_type = { VT_LLONG | VT_UNSIGNED, NULL };
+  Sym *object;
+  int context;
+  loc = (loc - sizeof(CpcEhArray)) & -PTR_SIZE;
+  context = loc;
+  vset(&char_pointer_type, VT_LOCAL | VT_LVAL, context + offsetof(CpcEhArray, data));
+  vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
+  vstore(); vpop();
+  vset(&count_type, VT_LOCAL | VT_LVAL, context + offsetof(CpcEhArray, count));
+  if (count_slot) vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
+  else vpushi(0);
+  vstore(); vpop();
+  vset(&count_type, VT_LOCAL | VT_LVAL, context + offsetof(CpcEhArray, element_size));
+  vpushi(element_size); vstore(); vpop();
+  vset(&char_pointer_type, VT_LOCAL | VT_LVAL, context + offsetof(CpcEhArray, destructor));
+  vpushsym(&destructor->type, destructor);
+  vtop->type = char_pointer_type;
+  vstore(); vpop();
+  object = sym_push2(&local_stack, SYM_FIELD, 0, context);
+  object->type = cpp_eh_void_type; object->r = VT_LOCAL | VT_LVAL;
+  *context_slot = context;
+  return cpp_eh_register_local_cleanup(object, "__cpc_eh_destroy_array");
+}
+
+static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment)
+{
+  CType pointer = *type, count_type = { VT_LLONG | VT_UNSIGNED, NULL };
+  Sym *destructor = resolve_autodtor_func(type), *constructor;
+  Sym *old_cleanup = cur_scope->cl.s, *object, *cleanup;
+  int old_depth = cur_scope->cl.n, count_slot, pointer_slot, allocation_slot;
+  int cookie = cpp_array_cookie_size(type, destructor), context = 0;
+  int index_slot, loop, done, value_initialize = 0;
+  (void)alignment;
+  mk_pointer(&pointer);
+  next(); expr_eq(); skip(']');
+  loc = (loc - 8) & -8; count_slot = loc;
+  vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
+  vswap(); vstore(); vpop();
+  if (tok == '(' || tok == '{') {
+    int end = tok == '(' ? ')' : '}';
+    next(); skip(end); value_initialize = 1;
+  }
+  vpushsym(&allocation->type, allocation);
+  vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
+  vpushi(size); gen_op('*');
+  if (cookie) { vpushi(cookie); gen_op('+'); }
+  gfunc_param_typed(allocation->type.ref, allocation->type.ref->next);
+  gfunc_call(1);
+  loc = (loc - PTR_SIZE) & -PTR_SIZE; allocation_slot = loc;
+  vset(&pointer, VT_LOCAL | VT_LVAL, allocation_slot);
+  vpush(&pointer); PUT_R_RET(vtop, pointer.t);
+  vstore(); vpop();
+  pointer_slot = allocation_slot;
+  if (cookie) {
+    loc = (loc - PTR_SIZE) & -PTR_SIZE; pointer_slot = loc;
+    vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+    vset(&char_pointer_type, VT_LOCAL | VT_LVAL, allocation_slot);
+    vpushi(cookie); gen_op('+'); vtop->type = pointer;
+    vstore(); vpop();
+    vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
+    vpushi(PTR_SIZE); gen_op('-');
+    vtop->type = count_type; vtop->r |= VT_LVAL;
+    vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
+    vstore(); vpop();
+  }
+  if (!type_requires_class_construction(type)
+      && (!value_initialize || (type->t & VT_BTYPE) != VT_STRUCT)) {
+    if (value_initialize) {
+      vpush_helper_func(tok_alloc_const("memset"));
+      vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+      vpushi(0);
+      vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
+      vpushi(size); gen_op('*');
+      gfunc_call(3);
+    }
+    vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+    return;
+  }
+  object = sym_push2(&local_stack, SYM_FIELD, 0, allocation_slot);
+  object->type = cpp_eh_void_type; object->r = VT_LLOCAL | VT_LVAL;
+  cleanup = cpp_eh_register_local_cleanup(object, "free");
+  cleanup->a.cleanup_exception_only = 1;
+  if (destructor) {
+    cleanup = cpp_eh_register_array_cleanup(pointer_slot, 0, size, destructor, &context);
+    cleanup->a.cleanup_exception_only = 1;
+    index_slot = context + offsetof(CpcEhArray, count);
+  } else {
+    loc = (loc - 8) & -8; index_slot = loc;
+    vset(&count_type, VT_LOCAL | VT_LVAL, index_slot);
+    vpushi(0); vstore(); vpop();
+  }
+  constructor = resolve_autoctor_func(type);
+  loop = ind;
+  vset(&count_type, VT_LOCAL | VT_LVAL, index_slot);
+  vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
+  gen_op(TOK_LT); done = gvtst(1, 0);
+  vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
+  vset(&count_type, VT_LOCAL | VT_LVAL, index_slot);
+  vpushi(size); gen_op('*'); gen_op('+');
+  vtop->type = *type; vtop->r |= VT_LVAL;
+  if (constructor)
+    call_lifecycle_constructor_noargs_expr(type, constructor);
+  else if ((type->t & VT_BTYPE) == VT_STRUCT) {
+    SValue base_pointer;
+    mk_pointer(&vtop->type); gaddrof(); save_regs(0);
+    base_pointer = *vtop;
+    call_lifecycle_constructor_members_base_ptr(type, &base_pointer, 0);
+    initialize_virtual_tables_for_pointer(type, &base_pointer, 0);
+    vpop();
+  } else {
+    if (value_initialize) { vpushi(0); vstore(); }
+    vpop();
+  }
+  vset(&count_type, VT_LOCAL | VT_LVAL, index_slot);
+  vdup(); vpushi(1); gen_op('+'); vstore(); vpop();
+  gjmp_addr(loop); gsym(done);
+  cur_scope->cl.s = old_cleanup; cur_scope->cl.n = old_depth;
+  vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+}
+
+static void cpp_delete_pointer(int array_delete)
+{
+  CType pointer = vtop->type, object_type = *pointed_type(&pointer);
+  Sym *destructor = resolve_autodtor_func(&object_type);
+  Sym *free_function, *cleanup = NULL, *object;
+  VirtualMethodInfo *virtual_destructor = NULL;
+  int pointer_slot, allocation_slot, skip_null, class_name, cleanup_depth;
+  int free_name = tok_alloc_const("free");
+  if (!array_delete && destructor && class_has_virtual_destructor(&object_type))
+    virtual_destructor = find_virtual_method_for_symbol(
+        get_struct_type_name_tok(&object_type), destructor->v);
+  free_function = global_symbol_find(free_name);
+  if (!free_function || IS_ASM_SYM(free_function))
+    free_function = external_global_sym(free_name, &func_old_type);
+  loc = (loc - PTR_SIZE) & -PTR_SIZE;
+  pointer_slot = loc;
+  vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+  vswap(); vstore(); vpop();
+  vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+  skip_null = gvtst(1, 0);
+  allocation_slot = pointer_slot;
+  if (array_delete && destructor) {
+    loc = (loc - PTR_SIZE) & -PTR_SIZE;
+    allocation_slot = loc;
+    vset(&char_pointer_type, VT_LOCAL | VT_LVAL, allocation_slot);
+    vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
+    vpushi(cpp_array_cookie_size(&object_type, destructor)); gen_op('-');
+    vstore(); vpop();
+  }
+  if (virtual_destructor) {
+    int root_offset, field_offset;
+    class_name = get_struct_type_name_tok(&object_type);
+    field_offset = virtual_vptr_offset(class_name, virtual_destructor->root_tok);
+    if (!class_subobject_offset(class_name, virtual_destructor->root_tok, &root_offset))
+      cprime_internal_error("virtual destructor root is missing");
+    loc = (loc - PTR_SIZE) & -PTR_SIZE;
+    allocation_slot = loc;
+    vset(&char_pointer_type, VT_LOCAL | VT_LVAL, allocation_slot);
+    vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+    vtop->type = char_pointer_type;
+    if (root_offset) { vpushi(root_offset); gen_op('+'); }
+    vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+    vtop->type = char_pointer_type;
+    if (field_offset) { vpushi(field_offset); gen_op('+'); }
+    vtop->r |= VT_LVAL; gv(RC_INT);
+    vpushi(PTR_SIZE); gen_op('-');
+    vtop->type.t = VT_PTRDIFF_T; vtop->type.ref = NULL;
+    vtop->r |= VT_LVAL;
+    gen_op('+'); vstore(); vpop();
+  }
+  if (destructor) {
+    /* Deallocation remains required when an explicitly throwing destructor
+       exits exceptionally. The saved complete-object pointer also handles
+       deletion through a secondary base subobject. */
+    object = sym_push2(&local_stack, SYM_FIELD, 0, allocation_slot);
+    object->type = cpp_eh_void_type; object->r = VT_LLOCAL | VT_LVAL;
+    cleanup_depth = cur_scope->cl.n;
+    cleanup = cpp_eh_register_local_cleanup(object, "free");
+    cleanup->a.cleanup_exception_only = 1;
+    if (array_delete) {
+      CType count_type = { VT_LLONG | VT_UNSIGNED, NULL };
+      Sym *array_cleanup;
+      int context, count_slot, loop, done, size, alignment;
+      size = type_size(&object_type, &alignment);
+      loc = (loc - 8) & -8; count_slot = loc;
+      vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
+      vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
+      vpushi(PTR_SIZE); gen_op('-');
+      vtop->type = count_type; vtop->r |= VT_LVAL;
+      vstore(); vpop();
+      array_cleanup = cpp_eh_register_array_cleanup(pointer_slot, count_slot,
+          size, destructor, &context);
+      array_cleanup->a.cleanup_exception_only = 1;
+      count_slot = context + offsetof(CpcEhArray, count);
+      loop = ind;
+      vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
+      done = gvtst(1, 0);
+      vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
+      vdup(); vpushi(1); gen_op('-'); vstore(); vpop();
+      vpushsym(&destructor->type, destructor);
+      vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
+      vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
+      vpushi(size); gen_op('*'); gen_op('+');
+      vtop->type = pointer;
+      gfunc_param_typed(destructor->type.ref, destructor->type.ref->next);
+      gfunc_call(1); drop_leaked_call_target(destructor);
+      gjmp_addr(loop); gsym(done);
+    } else {
+    vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+    if (virtual_destructor)
+      push_virtual_call_target(get_struct_type_name_tok(&object_type),
+                               virtual_destructor, destructor);
+    else
+      vpushsym(&destructor->type, destructor);
+    vswap();
+    gfunc_param_typed(destructor->type.ref, destructor->type.ref->next);
+    gfunc_call(1);
+    drop_leaked_call_target(destructor);
+    }
+    cur_scope->cl.s = cleanup->next;
+    cur_scope->cl.n = cleanup_depth;
+  }
+  vpushsym(&free_function->type, free_function);
+  vset(&char_pointer_type, VT_LOCAL | VT_LVAL, allocation_slot);
+  gfunc_param_typed(free_function->type.ref,
+      free_function->type.ref ? free_function->type.ref->next : NULL);
+  gfunc_call(1);
+  gsym(skip_null);
+  vset(&cpp_eh_void_type, VT_CONST, 0);
 }
 
 static void cpp_eh_parse_try(void)

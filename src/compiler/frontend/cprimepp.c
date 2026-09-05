@@ -2054,7 +2054,10 @@ pack_set:
     if (tok != ')')
       goto pragma_err;
     if (t == TOK_lib)
-      dynarray_add(&s1->pragma_libs, &s1->nb_pragma_libs, p);
+    {
+      cprime_add_pragma_library(s1, p);
+      cprime_free(p);
+    }
     else
     {
       if (t == TOK_option)

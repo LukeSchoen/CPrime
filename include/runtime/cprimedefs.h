@@ -86,6 +86,10 @@
 #define __builtin_va_copy(dest, src) (dest) = (src)
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #define __RENAME(X) __asm__(X)
 #define __BUILTINBC(ret,name,params) ret __builtin_##name params __RENAME(#name);
 #define __BOUND(ret,name,params) ret name params __RENAME(#name);
@@ -141,6 +145,9 @@ unsigned char _BitScanForward64(unsigned long *index,
                                 unsigned long long mask);
 long _InterlockedExchangeAdd(volatile long *target, long value);
 void __debugbreak(void);
+#endif
+#ifdef __cplusplus
+}
 #endif
 #endif
 

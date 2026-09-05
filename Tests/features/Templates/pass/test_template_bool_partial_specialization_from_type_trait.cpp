@@ -2,7 +2,7 @@ namespace std
 {
   template<typename T> struct is_signed
   {
-    static constexpr bool value = false;
+    static constexpr bool value = T(-1) < T(0);
   };
 }
 

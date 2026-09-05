@@ -1,9 +1,6 @@
-typedef unsigned long size_t;
-typedef unsigned short wchar_t;
-
-void *malloc(size_t size);
-void free(void *ptr);
-size_t wcslen(const wchar_t *text);
+#include <stddef.h>
+#include <stdlib.h>
+#include <wchar.h>
 
 namespace std
 {

@@ -1980,6 +1980,8 @@ static int pe_load_dll(CPRIMEState *s1, int fd, const char *filename)
   return 0;
 }
 
+#include "cprimepe_coff.inc"
+
 ST_FUNC int pe_load_file(struct CPRIMEState *s1, int fd, const char *filename)
 {
   int ret = -1;
@@ -1990,6 +1992,8 @@ ST_FUNC int pe_load_file(struct CPRIMEState *s1, int fd, const char *filename)
     ret = 0;
   else if (read_mem(fd, 0, buf, 4) && 0 == memcmp(buf, "MZ", 2))
     ret = pe_load_dll(s1, fd, filename);
+  else if (read_mem(fd, 0, buf, 2) && read16le((unsigned char *)buf) == IMAGE_FILE_MACHINE)
+    ret = pe_load_coff_object(s1, fd, 0);
   return ret;
 }
 
@@ -2225,7 +2229,16 @@ static void pe_add_runtime(CPRIMEState *s1, struct pe_info *pe)
     for (pp = libs; 0 != (p = *pp); ++pp)
     {
       if (*p)
-        cprime_add_library(s1, p);
+      {
+        char definition[64];
+        /* The compiler's startup objects use its packaged DLL import
+           definitions. An external toolchain can ship a different runtime
+           archive with the same basename (for example MSVC's msvcrt.lib).
+           Explicit user -l options still use the ordinary library search. */
+        snprintf(definition, sizeof(definition), "%s.def", p);
+        if (cprime_add_dll(s1, definition, AFF_TYPE_LIB) == FILE_NOT_FOUND)
+          cprime_add_library(s1, p);
+      }
       else if (PE_DLL != pe_type && PE_GUI != pe_type)
         break;
     }

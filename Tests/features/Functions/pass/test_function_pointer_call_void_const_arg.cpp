@@ -1,3 +1,4 @@
+// EXPECT_COMPILE_ONLY: 1
 typedef void (*BufferFn)(unsigned int, long long, const void *, unsigned int);
 typedef unsigned char ui8;
 

@@ -27,6 +27,70 @@ static int ar_usage(int ret)
   return ret;
 }
 
+static void ar_index_symbol(const char *name, int object_offset,
+                             char **names, int *names_size,
+                             int **positions, int *count, int *capacity)
+{
+  int length = strlen(name) + 1;
+  *names = cprime_realloc(*names, *names_size + length);
+  memcpy(*names + *names_size, name, length);
+  *names_size += length;
+  if (++*count >= *capacity)
+  {
+    *capacity += 250;
+    *positions = cprime_realloc(*positions, *capacity * sizeof **positions);
+  }
+  (*positions)[*count] = object_offset;
+}
+
+#ifdef CPRIME_TARGET_PE
+static int ar_index_coff(const unsigned char *data, unsigned size,
+                          int object_offset, char **names, int *names_size,
+                          int **positions, int *count, int *capacity)
+{
+  unsigned table, symbols, strings, string_size, i;
+  if (size < 20) return -1;
+  table = read32le(data + 8);
+  symbols = read32le(data + 12);
+  if (table > size || symbols > (size - table) / 18) return -1;
+  strings = table + symbols * 18;
+  if (strings > size || size - strings < 4) return -1;
+  string_size = read32le(data + strings);
+  if (string_size < 4 || string_size > size - strings) return -1;
+  for (i = 0; i < symbols;)
+  {
+    const unsigned char *symbol = data + table + i * 18;
+    int section = (short)read16le(symbol + 12);
+    unsigned auxiliary = symbol[17];
+    if (auxiliary >= symbols - i) return -1;
+    if (symbol[16] == 2 && (section > 0 || section == -1
+                            || (!section && read32le(symbol + 8))))
+    {
+      const char *name;
+      char short_name[9];
+      if (!read32le(symbol))
+      {
+        unsigned offset = read32le(symbol + 4);
+        if (offset < 4 || offset >= string_size
+            || !memchr(data + strings + offset, 0, string_size - offset))
+          return -1;
+        name = (const char *)data + strings + offset;
+      }
+      else
+      {
+        memcpy(short_name, symbol, 8);
+        short_name[8] = 0;
+        name = short_name;
+      }
+      ar_index_symbol(name, object_offset, names, names_size,
+                       positions, count, capacity);
+    }
+    i += 1 + auxiliary;
+  }
+  return 0;
+}
+#endif
+
 ST_FUNC int cprime_tool_ar(int argc, char **argv)
 {
   static const ArHdr arhdr_init =
@@ -196,6 +260,19 @@ finish:
     fread(buf, fsize, 1, fi);
     fclose(fi);
 
+#ifdef CPRIME_TARGET_PE
+    if (fsize >= 20 && read16le((unsigned char *)buf) == 0x8664)
+    {
+      if (ar_index_coff((unsigned char *)buf, fsize, fpos,
+                        &anames, &strpos, &afpos, &funccnt, &funcmax) < 0)
+      {
+        fprintf(stderr, "cpc: ar: invalid AMD64 COFF object: %s\n", argv[i_obj]);
+        cprime_free(buf);
+        goto the_end;
+      }
+      goto write_object;
+    }
+#endif
     // Elf Header
     ehdr = (ObjW(Ehdr) *)buf;
     if (ehdr->e_ident[4] != OBJ_CLASSW)
@@ -244,20 +321,13 @@ finish:
             ))
         {
           //printf("symtab: %2Xh %4Xh %2Xh %s\n", sym->st_info, sym->st_size, sym->st_shndx, strtab + sym->st_name);
-          istrlen = strlen(strtab + sym->st_name) + 1;
-          anames = cprime_realloc(anames, strpos + istrlen);
-          strcpy(anames + strpos, strtab + sym->st_name);
-          strpos += istrlen;
-          if (++funccnt >= funcmax)
-          {
-            funcmax += 250;
-            afpos = cprime_realloc(afpos, funcmax *sizeof *afpos);  // 250 Func More
-          }
-          afpos[funccnt] = fpos;
+          ar_index_symbol(strtab + sym->st_name, fpos,
+                          &anames, &strpos, &afpos, &funccnt, &funcmax);
         }
       }
     }
 
+write_object:
     file = argv[i_obj];
     for (name = strchr(file, 0);
          name > file && name[-1] != '/' && name[-1] != '\\';

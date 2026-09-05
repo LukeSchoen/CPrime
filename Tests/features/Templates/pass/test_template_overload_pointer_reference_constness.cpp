@@ -1,3 +1,4 @@
+// EXPECT_EXIT: 0
 template<typename T> int pick(T * const &p)
 {
   (void)p;

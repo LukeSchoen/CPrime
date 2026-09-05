@@ -81,7 +81,7 @@ ATOMIC_GEN(uint64_t, 8)
 #define ATOMIC(x)      __cprime_atomic_##x
 #endif
 
-bool ATOMIC(is_lock_free) (unsigned long size, const volatile void *ptr)
+bool ATOMIC(is_lock_free) (size_t size, const volatile void *ptr)
 {
     bool ret;
 
@@ -96,11 +96,11 @@ bool ATOMIC(is_lock_free) (unsigned long size, const volatile void *ptr)
 #endif
     default: ret = false; break;
     }
-    return ret;
+    return ret && (!ptr || ((size_t)ptr & (size - 1)) == 0);
 }
 
 #ifndef __TINYC__
-bool __atomic_is_lock_free(unsigned long size, const volatile void *ptr) __attribute__((alias("__cprime_atomic_is_lock_free")));
+bool __atomic_is_lock_free(size_t size, const volatile void *ptr) __attribute__((alias("__cprime_atomic_is_lock_free")));
 #endif
 
 

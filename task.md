@@ -1,37 +1,89 @@
-## Paused at user request (2026-09-05)
+## Implementation resumed (2026-09-06)
 
-The task is not complete. The canonical CPC Racer executable has not been
-produced. CodeClip now exports the selected solution/project graph to a shared
-manifest consumed by the Prime and Clang drivers. MSVC and Clang both compiled
-and linked the selected Racer application using that graph; Prime uses original
-CL sources without the legacy driver's source substitutions or ABI shims.
+The task is active. The canonical CPC application executable has not yet been
+produced by this implementation wave. The historical successful builds below
+used workarounds and do not establish that the current build is ready.
 
-Retained compiler work includes namespace and local-type lifetime fixes,
-array-reference overload viability, initializer-list replay and ordinary member
-bodies, reference-member initialization, lambda closure/capture lowering, and
-complete explicit member-template argument lists. The latest packed compiler
-self-bootstraps and passes the new lambda, local-class, reference-initialization,
-and explicit-member-argument regressions. The Expressions suite passes 9/9.
-The most recent surrounding run (before the explicit-member-argument change)
-reported Templates 273 passed/13 failed, Classes 133/4, Constructors 48/1.
-Those remaining failures have not been declared resolved.
+CodeClip exports one selected solution/project graph to a schema-2 manifest.
+Prime and Clang consume the same original sources, effective per-file settings,
+project dependencies, static libraries, resource inputs, and target metadata.
+The shared driver has passed separate-source and unity compile/link/runtime
+fixtures with 13 sources, five archives, and three resource-bearing targets.
+The canonical Clang reference linked all 66 selected sources in 43.013 seconds
+and produced build/manifest-real-clang/Racer.exe with its icon/version resources.
 
-The latest full Prime build attempted 66 original translation units in 4.867s
-and failed in xBRZ, clRenderObjectCore and clKNN3; the full-run log is
-build/canonical-wave21.log.
-clAssert and clRenderObjectCore now also compile individually. xBRZ now parses
-lambdas but still fails in member-template calls: static member templates are
-materialized before their arguments are typed, and deduction must use later
-function parameters. clKNN3 still needs real C++ throw/exception support.
+The retained compiler wave now includes:
 
-The unfinished later-argument deduction experiment was removed when pausing.
-Its source reproducer is saved at build/repro_member_template_deduction_later_argument.cpp,
-outside passing coverage. No expected-failure conversion was made.
-Resume with that general deduction problem, then rerun the actual project and
-continue exception support and linking. Runtime-significant warnings, global
-class-array initialization, STL compatibility and retirement of cpcString/
-legacy shims still require work. The historical milestone notes below describe
-older builds with workarounds and are not evidence that this build is ready.
+- Typed member-template deduction across arguments, static member overloads,
+  nested aliases, namespace replay in its original lexical context, and stable
+  bound type identities across caller/definition namespaces.
+- Ordinary nested class lookup, data and function member pointers, virtual
+  dispatch through multiple base subobjects, and null-preserving conversions.
+- Native Windows exception search/unwind, complete object destruction,
+  partial-construction cleanup, by-value class parameter lifetimes, scalar and
+  array delete, and exception_ptr ownership. Native exception interoperability
+  across separate DLLs or MSVC-generated frames remains unsupported.
+- Lambda captures, move/copy selection, direct prvalue destination construction,
+  global class arrays, and full-expression temporary cleanup, including
+  conditional activation and lifetime extension.
+- Real threads, mutexes, condition variables, and async/deferred futures with
+  value, reference, void, and exception results. Integration regressions are
+  still being checked against the packed compiler.
+
+Latest packed measurement: build/canonical-resume27.log compiled all 66 original
+manifest sources in 7.986 seconds, then failed at link. No CPC application
+executable was produced. This includes the original camera, Racer, xBRZ, string,
+histogram, and image sources. Remaining link diagnostics concern in-class
+defaulted assignment linkage, namespace const object linkage, native archive
+code-label relocations, and native CRT library discovery. Compiler/native C++
+ABI interoperability still requires work; pointer warnings in nanoflann's
+reference_wrapper/async calls remain runtime-significant.
+
+The next integrated wave addresses these causes with general compiler changes:
+
+- Immediate-context substitution failure for detection idioms and dependent
+  return types, default arguments before partial-specialization matching,
+  inherited constants, qualified bases, and declaration-context lookup.
+- Static member-template declaration/definition matching; complete class
+  interfaces before attaching out-of-class template members; preservation of
+  anonymous enum types through member replay.
+- Weak ODR linkage for instantiated member definitions. Removed linker
+  exceptions based on constructor/destructor spelling or identical code bytes.
+- Implicit moves from returned automatic objects and qualification-sensitive
+  rvalue-reference ranking; inline constructor specifiers separated from types.
+- Preservation of pragma library dependencies through separate objects,
+  archives, and relocatable links; native Win64 atomic primitives and correct
+  postfix overload dispatch. Atomic publication and contended operations pass.
+- Thread-safe function-static initialization, retry after exceptions, arrays,
+  reverse completion-order destruction, and direct prvalue destination lifetime.
+- Deterministic C++ free-function linkage with explicit C language linkage;
+  external weak template definitions and internal template argument identities;
+  class partial-specialization ordering through deduction in both directions.
+- Forwarding-reference cv preservation and reference collapsing, repeated member
+  pack calls with distinct value categories, and character literal categories.
+- Actual formal parameter lists control function-scope bindings; incidental
+  allocations made by dependent probes cannot replace function parameters.
+
+Packed resume27 verification: Templates 338/0. Scratch surrounding verification
+includes Constructors 69/0, Destructors 17/0, Exceptions 31/0, StdConcurrency 6/0,
+Namespaces 32/0, OperatorOverloads 36/0, and ten MultiSource groups. The newly
+combined wave still requires surrounding packed checks. The manifest fixture
+passes original-source selection, resources, native COFF/COMDAT, SDK libraries,
+separate/unity builds, and runtime checks. MultiSource's nine groups pass after
+removing the linker coalescing exceptions. New language regressions are checked
+with Clang. External CL probes now obtain their configuration from the same
+CodeClip manifest; multi-input and compile-only fixtures have explicit metadata.
+Response-file runner fixtures cover quoted paths and more than 32 KiB of flags.
+Repeated in-process exception images now release their runtime callbacks before
+unloading; all 31 exception tests and 24 repeated image lifetimes pass with -run.
+
+Continue through full application link/startup validation and the broader
+removal of fallback runtime/STL and CPC-specific CL components. A successful
+measurement build remains a compatibility milestone, not full C++ conformance.
+
+Continue through a complete original-source application compile and link,
+verify the executable and runtime behavior, then preserve the implementation,
+passing regressions, and these task notes as coherent commit-sized changes.
 
 ## Architectural clarification (2026-09-05)
 

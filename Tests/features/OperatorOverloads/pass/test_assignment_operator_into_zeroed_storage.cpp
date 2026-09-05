@@ -2,6 +2,7 @@
 
 #include <stdlib.h>
 #include <string.h>
+#include <new>
 
 class OwnedText
 {
@@ -73,6 +74,7 @@ int main(void)
 
   target = (Material *)malloc(sizeof(Material));
   memset(target, 0, sizeof(Material));
+  new (target) Material;
   *target = source;
 
   if (!target->name.equals("mat"))

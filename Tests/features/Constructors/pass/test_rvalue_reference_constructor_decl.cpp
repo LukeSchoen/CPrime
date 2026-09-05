@@ -23,6 +23,6 @@ Test::Test(Test &&rhs)
 int main(void)
 {
   Test a;
-  Test b(a);
+  Test b(static_cast<Test &&>(a));
   return b.value == 7 ? 0 : 1;
 }

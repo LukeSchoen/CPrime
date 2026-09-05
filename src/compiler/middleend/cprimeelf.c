@@ -764,29 +764,6 @@ ST_FUNC int set_elf_sym(Section *s, addr_t value, unsigned long size,
       {
         // Data Symbol Keeps Precedence Over Common/Bss
       }
-      else if ((strstr(name, "_constructor") || strstr(name, "_destructor"))
-               && strstr(name, "__"))
-      {
-        /* Lifecycle functions instantiated for a mangled template class are
-           ODR entities. Object formats without COMDAT metadata retain the
-           first instantiation, matching weak-template semantics. */
-      }
-      else if (size > 0 && size == esym->st_size
-               && shndx == esym->st_shndx
-               && shndx < s1->nb_sections
-               && s1->sections[shndx]
-               && value <= s1->sections[shndx]->data_offset
-               && esym->st_value <= s1->sections[shndx]->data_offset
-               && size <= s1->sections[shndx]->data_offset - value
-               && size <= s1->sections[shndx]->data_offset - esym->st_value
-               && !memcmp(s1->sections[shndx]->data + value,
-                          s1->sections[shndx]->data + esym->st_value,
-                          size))
-      {
-        /* Header-defined inline/template entities may arrive from separate
-           objects without COMDAT metadata. Coalesce only byte-identical
-           definitions; differing definitions remain a hard link error. */
-      }
       else if (s->sh_flags & SHF_DYNSYM)
       {
         // we accept that two DLL define the same symbol
@@ -3739,6 +3716,10 @@ LIBCPRIMEAPI int cprime_output_file(CPRIMEState *s, const char *filename)
   s->nb_errors = 0;
   if (s->test_coverage)
     cprime_tcov_add_file(s, filename);
+#ifdef CPRIME_TARGET_PE
+  if (s->output_type == CPRIME_OUTPUT_OBJ || s->output_type == CPRIME_OUTPUT_ASM)
+    pe_store_pragma_libraries(s);
+#endif
   if (s->output_type == CPRIME_OUTPUT_ASM)
     return cprime_output_asm(s, filename);
   if (s->output_type == CPRIME_OUTPUT_OBJ)
@@ -3824,7 +3805,13 @@ ST_FUNC int cprime_load_object_file(CPRIMEState *s1,
 
   lseek(fd, file_offset, SEEK_SET);
   if (cprime_object_type(fd, &ehdr) != AFF_BINTYPE_REL)
+  {
+#ifdef CPRIME_TARGET_PE
+    return pe_load_coff_object(s1, fd, file_offset);
+#else
     goto invalid;
+#endif
+  }
   // test CPU specific stuff
   if (ehdr.e_ident[5] != ELFDATA2LSB ||
       ehdr.e_machine != EM_CPRIME_TARGET)
@@ -3879,6 +3866,23 @@ invalid:
     if (i == ehdr.e_shstrndx)
       continue;
     sh = &shdr[i];
+#ifdef CPRIME_TARGET_PE
+    if (sh->sh_type == SHT_PROGBITS && !strcmp(strsec + sh->sh_name, ".drectve"))
+    {
+      char *directives = cprime_malloc(sh->sh_size + 1);
+      lseek(fd, file_offset + sh->sh_offset, SEEK_SET);
+      if (full_read(fd, directives, sh->sh_size) != sh->sh_size)
+      {
+        cprime_free(directives);
+        cprime_error_noabort("invalid object linker directives");
+        goto the_end;
+      }
+      directives[sh->sh_size] = 0;
+      pe_parse_linker_directives(s1, directives);
+      cprime_free(directives);
+      continue;
+    }
+#endif
     if (sh->sh_type == SHT_RELX)
       sh = &shdr[sh->sh_info];
     // ignore sections types we do not handle (plus relocs to those)
@@ -4155,18 +4159,21 @@ static int cprime_load_alacarte(CPRIMEState *s1, int fd, int size, int entrysize
 {
   int i, bound, nsyms, sym_index, len, ret = -1;
   unsigned long long off;
-  uint8_t *data;
+  uint8_t *data, *loaded = NULL;
   const char *ar_names, *p;
   const uint8_t *ar_index;
   ObjW(Sym) *sym;
   ArchiveHeader hdr;
 
   data = cprime_malloc(size);
-  if (full_read(fd, data, size) != size)
+  if (size < entrysize || full_read(fd, data, size) != size)
     goto invalid;
   nsyms = get_be(data, entrysize);
+  if (nsyms < 0 || nsyms > (size - entrysize) / entrysize)
+    goto invalid;
   ar_index = data + entrysize;
   ar_names = (char *) ar_index + nsyms * entrysize;
+  loaded = cprime_mallocz(nsyms);
 
   do
   {
@@ -4174,6 +4181,9 @@ static int cprime_load_alacarte(CPRIMEState *s1, int fd, int size, int entrysize
     for (p = ar_names, i = 0; i < nsyms; i++, p += strlen(p) + 1)
     {
       Section *s = symtab_section;
+      if (p >= (const char *)data + size
+          || !memchr(p, 0, (const char *)data + size - p))
+        goto invalid;
       sym_index = find_elf_sym(s, p);
       if (!sym_index)
         continue;
@@ -4181,6 +4191,14 @@ static int cprime_load_alacarte(CPRIMEState *s1, int fd, int size, int entrysize
       if (sym->st_shndx != SHN_UNDEF)
         continue;
       off = get_be(ar_index + i *entrysize, entrysize);
+      if (loaded[i])
+        continue;
+      /* Import members publish dynamic symbols, which remain undefined in
+         the ordinary symbol table until PE imports are assigned. Extract
+         each archive member once even when it exports several symbols. */
+      for (len = 0; len < nsyms; ++len)
+        if (get_be(ar_index + len * entrysize, entrysize) == off)
+          loaded[len] = 1;
       len = read_ar_header(fd, off, &hdr);
       if (len <= 0 || memcmp(hdr.ar_fmag, ARFMAG, 2))
       {
@@ -4199,6 +4217,7 @@ invalid:
   while (bound);
   ret = 0;
 the_end:
+  cprime_free(loaded);
   cprime_free(data);
   return ret;
 }
@@ -4233,7 +4252,14 @@ ST_FUNC int cprime_load_archive(CPRIMEState *s1, int fd, int alacarte)
       if (!strcmp(hdr.ar_name, "/SYM64/"))
         return cprime_load_alacarte(s1, fd, size, 8);
     }
-    else if (cprime_object_type(fd, &ehdr) == AFF_BINTYPE_REL)
+    else if (cprime_object_type(fd, &ehdr) == AFF_BINTYPE_REL
+#ifdef CPRIME_TARGET_PE
+             || (strcmp(hdr.ar_name, "/") && strcmp(hdr.ar_name, "//")
+                 && strcmp(hdr.ar_name, "/SYM64/")
+                 && (read16le((unsigned char *)&ehdr) == 0x8664
+                     || read32le((unsigned char *)&ehdr) == 0xffff0000U))
+#endif
+            )
     {
       if (s1->verbose == 2)
         printf("   -> %s\n", hdr.ar_name);

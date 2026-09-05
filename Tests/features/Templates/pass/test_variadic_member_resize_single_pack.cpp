@@ -1,5 +1,5 @@
 // EXPECT_STDOUT: 20
-// EXPECT_COMPILE_ARGS: -I"C:\Luke\Src\OT\cl\CommonLib\commonLib\include\Strings" -I"C:\Luke\Src\OT\cl\CommonLib\commonLib\include\Math" -I"C:\Luke\Src\OT\cl\CommonLib\commonLib\include\Streams" -I"C:\Luke\Src\OT\cl\CommonLib\commonLib\include\Containers" -I"C:\Luke\Src\OT\cl\CommonLib\commonLib\include" -I"C:\Luke\Src\OT\cl\CommonLib\commonLib\include\Platform" -I"C:\Luke\Src\OT\cl\CommonLib\commonLib\include\Utility"
+// EXPECT_MANIFEST_SOURCE: CommonLib/CommonLib/src/Strings/clString.cpp
 #include "clScan.h"
 #include "clSort.h"
 #include "clStream.h"

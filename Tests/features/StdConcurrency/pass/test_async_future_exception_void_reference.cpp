@@ -1,4 +1,5 @@
 // EXPECT_EXIT: 0
+// EXPECT_COMPILE_ARGS: -Werror
 #include <future>
 struct Failure { int value; Failure(int n) : value(n) {} };
 int fail() { throw Failure(37); }

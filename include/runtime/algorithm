@@ -62,24 +62,24 @@ namespace std
     }
   }
 
-  template<class T>
-  T *lower_bound(T *begin, T *end, const T &value)
+  template<class Iterator, class T>
+  Iterator lower_bound(Iterator begin, Iterator end, const T &value)
   {
     while (begin < end)
     {
-      T *middle = begin + (end - begin) / 2;
+      Iterator middle = begin + (end - begin) / 2;
       if (*middle < value) begin = middle + 1;
       else end = middle;
     }
     return begin;
   }
 
-  template<class T>
-  T *upper_bound(T *begin, T *end, const T &value)
+  template<class Iterator, class T>
+  Iterator upper_bound(Iterator begin, Iterator end, const T &value)
   {
     while (begin < end)
     {
-      T *middle = begin + (end - begin) / 2;
+      Iterator middle = begin + (end - begin) / 2;
       if (!(value < *middle)) begin = middle + 1;
       else end = middle;
     }

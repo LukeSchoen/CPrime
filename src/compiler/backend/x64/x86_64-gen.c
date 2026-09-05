@@ -1125,6 +1125,14 @@ void gfunc_call(int nb_args)
     if (is_cpp_translation_unit() && win64_class_requires_indirect_argument(&sv->type)) {
       SValue destination, source;
       int alignment, address;
+      if (sv->r & VT_CXX_PRVALUE) {
+        cpp_adopt_class_temporary(sv);
+        sv->r &= ~VT_CXX_PRVALUE;
+        sv->r |= VT_CXX_PARAMETER;
+        cpp_eh_register_parameter_copy(&sv->type,
+            sv->r & (VT_VALMASK | VT_LVAL | VT_SYM), sv->c.i);
+        continue;
+      }
       type_size(&sv->type, &alignment);
       loc = (loc - size) & -alignment;
       address = loc;
@@ -1139,7 +1147,7 @@ void gfunc_call(int nb_args)
             &source, 0, (sv->type.t & VT_RVALUE_REFERENCE) != 0);
       sv->r = VT_LOCAL | VT_LVAL | VT_CXX_PARAMETER;
       sv->r2 = VT_CONST; sv->c.i = address; sv->sym = NULL;
-      cpp_eh_register_parameter_copy(&sv->type, address);
+      cpp_eh_register_parameter_copy(&sv->type, VT_LOCAL | VT_LVAL, address);
       continue;
     }
 

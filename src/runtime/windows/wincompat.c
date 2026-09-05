@@ -26,6 +26,95 @@ long long _ftelli64(FILE *stream)
 #include <stdlib.h>
 #include <cprime_thread.h>
 
+/* Compiler-owned static initialization guards. A completed guard needs only
+   an atomic load; waiting and exception retries share a process-local lock. */
+static SRWLOCK cpc_static_lock = SRWLOCK_INIT;
+static CONDITION_VARIABLE cpc_static_condition = CONDITION_VARIABLE_INIT;
+
+int __cpc_static_acquire(void *storage)
+{
+    volatile LONG *guard = storage;
+    int initialize;
+    if (InterlockedCompareExchange(guard, 2, 2) == 2) return 0;
+    AcquireSRWLockExclusive(&cpc_static_lock);
+    while (*guard == 1)
+        SleepConditionVariableSRW(&cpc_static_condition, &cpc_static_lock,
+                                 INFINITE, 0);
+    initialize = *guard == 0;
+    if (initialize) *guard = 1;
+    ReleaseSRWLockExclusive(&cpc_static_lock);
+    return initialize;
+}
+
+static void cpc_static_finish(volatile LONG *guard, LONG state)
+{
+    AcquireSRWLockExclusive(&cpc_static_lock);
+    InterlockedExchange(guard, state);
+    WakeAllConditionVariable(&cpc_static_condition);
+    ReleaseSRWLockExclusive(&cpc_static_lock);
+}
+
+void __cpc_static_release(void *guard) { cpc_static_finish(guard, 2); }
+void __cpc_static_abort(void *guard) { cpc_static_finish(guard, 0); }
+
+typedef struct CpcStaticDestructor {
+    struct CpcStaticDestructor *previous;
+    void *object;
+    void (*destroy)(void *);
+    unsigned long long count, size;
+} CpcStaticDestructor;
+static CpcStaticDestructor *cpc_static_destructors;
+static int cpc_static_exit_registered;
+
+void __cpc_static_destroy_elements(void *object, void (*destroy)(void *),
+                                    unsigned long long count,
+                                    unsigned long long size)
+{
+    while (count) destroy((char *)object + --count * size);
+}
+
+void __cpc_run_static_destructors(void)
+{
+    for (;;) {
+        CpcStaticDestructor *entry;
+        AcquireSRWLockExclusive(&cpc_static_lock);
+        entry = cpc_static_destructors;
+        if (entry) cpc_static_destructors = entry->previous;
+        ReleaseSRWLockExclusive(&cpc_static_lock);
+        if (!entry) return;
+        __cpc_static_destroy_elements(entry->object, entry->destroy,
+                                       entry->count, entry->size);
+        free(entry);
+    }
+}
+
+void __cpc_register_static_destructor(void *object, void (*destroy)(void *),
+                                      unsigned long long count,
+                                      unsigned long long size)
+{
+    CpcStaticDestructor *entry = malloc(sizeof(*entry));
+    if (!entry) abort();
+    entry->object = object;
+    entry->destroy = destroy;
+    entry->count = count;
+    entry->size = size;
+    AcquireSRWLockExclusive(&cpc_static_lock);
+    if (!cpc_static_exit_registered) {
+        HMODULE module;
+        /* DLL detach drains its own registry. Do not leave a callback into
+           an unloaded DLL in the process CRT's atexit list. */
+        if (!GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+                                  | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+                               (LPCSTR)__cpc_run_static_destructors, &module)
+            || module == GetModuleHandleA(NULL))
+            if (atexit(__cpc_run_static_destructors)) abort();
+        cpc_static_exit_registered = 1;
+    }
+    entry->previous = cpc_static_destructors;
+    cpc_static_destructors = entry;
+    ReleaseSRWLockExclusive(&cpc_static_lock);
+}
+
 typedef struct CpcWindowsMutex {
     int recursive;
     union { SRWLOCK lock; CRITICAL_SECTION recursive_lock; } native;

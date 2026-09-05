@@ -312,6 +312,56 @@ if errorlevel 1 (
 )
 
 echo PASS defaulted assignment multi-source
+
+"%COMPILER%" -c "%SRC_DIR%\header_implicit_lifecycle_a.cpp" -o "%WORK_DIR%\implicit_lifecycle_a.o" >"%WORK_DIR%\implicit_lifecycle_a.out" 2>&1
+if errorlevel 1 (
+  type "%WORK_DIR%\implicit_lifecycle_a.out"
+  goto fail
+)
+"%COMPILER%" -c "%SRC_DIR%\header_implicit_lifecycle_main.cpp" -o "%WORK_DIR%\implicit_lifecycle_main.o" >"%WORK_DIR%\implicit_lifecycle_main.out" 2>&1
+if errorlevel 1 (
+  type "%WORK_DIR%\implicit_lifecycle_main.out"
+  goto fail
+)
+"%COMPILER%" "%WORK_DIR%\implicit_lifecycle_a.o" "%WORK_DIR%\implicit_lifecycle_main.o" -o "%WORK_DIR%\implicit_lifecycle.exe" >"%WORK_DIR%\implicit_lifecycle_link.out" 2>&1
+if errorlevel 1 (
+  type "%WORK_DIR%\implicit_lifecycle_link.out"
+  goto fail
+)
+findstr /I /C:"defined twice" "%WORK_DIR%\implicit_lifecycle_link.out" >nul 2>nul
+if not errorlevel 1 (
+  type "%WORK_DIR%\implicit_lifecycle_link.out"
+  goto fail
+)
+"%WORK_DIR%\implicit_lifecycle.exe"
+if errorlevel 1 (
+  echo FAIL implicit destructor and constructor template executable returned %ERRORLEVEL%.
+  goto fail
+)
+echo PASS implicit destructor and constructor template multi-source
+for %%S in (language_linkage_a.cpp language_linkage_c.c language_linkage_main.cpp) do (
+  "%COMPILER%" -Werror -c "%SRC_DIR%\%%S" -o "%WORK_DIR%\%%S.o" >"%WORK_DIR%\%%S.out" 2>&1
+  if errorlevel 1 (
+    type "%WORK_DIR%\%%S.out"
+    goto fail
+  )
+)
+"%COMPILER%" "%WORK_DIR%\language_linkage_a.cpp.o" "%WORK_DIR%\language_linkage_c.c.o" "%WORK_DIR%\language_linkage_main.cpp.o" -o "%WORK_DIR%\language_linkage.exe" >"%WORK_DIR%\language_linkage.out" 2>&1
+if errorlevel 1 (
+  type "%WORK_DIR%\language_linkage.out"
+  goto fail
+)
+findstr /I /C:"defined twice" "%WORK_DIR%\language_linkage.out" >nul 2>nul
+if not errorlevel 1 (
+  type "%WORK_DIR%\language_linkage.out"
+  goto fail
+)
+"%WORK_DIR%\language_linkage.exe"
+if errorlevel 1 (
+  echo FAIL C and C++ language linkage executable returned %ERRORLEVEL%.
+  goto fail
+)
+echo PASS C and C++ language linkage multi-source
 rmdir /s /q "%WORK_DIR%" >nul 2>nul
 exit /b 0
 
