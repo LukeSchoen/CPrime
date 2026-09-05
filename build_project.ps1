@@ -8,7 +8,8 @@ param(
     [ValidateRange(1, 64)][int]$Jobs = [Environment]::ProcessorCount,
     [ValidateRange(1, 3600)][int]$CompileTimeoutSeconds = 60,
     [switch]$Unity,
-    [switch]$SkipLink
+    [switch]$SkipLink,
+    [switch]$AllowWarnings
 )
 
 $ErrorActionPreference = 'Stop'
@@ -26,10 +27,13 @@ if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
     throw "CodeClip manifest not found: $ManifestPath. Run CodeClip.exe to regenerate the selected project."
 }
 $manifest = Get-Content -Raw -LiteralPath $ManifestPath | ConvertFrom-Json
-if ($manifest.schemaVersion -ne 1 -or $manifest.platform -ne 'x64') { throw 'Unsupported build manifest schema or platform' }
+if ($manifest.schemaVersion -notin @(1, 2) -or $manifest.platform -ne 'x64') { throw 'Unsupported build manifest schema or platform' }
 $applications = @($manifest.projects | Where-Object { $_.kind -eq 'Application' })
 if ($applications.Count -ne 1) { throw 'The manifest must select one application project.' }
-if (-not $ExePath) { $ExePath = Join-Path $ProjectRoot ('builds\' + $applications[0].targetName + '.exe') }
+if (-not $ExePath) {
+    $ExePath = if ($manifest.schemaVersion -ge 2) { $applications[0].targetPath }
+        else { Join-Path $ProjectRoot ('builds\' + $applications[0].targetName + '.exe') }
+}
 $ExePath = [IO.Path]::GetFullPath($ExePath)
 New-Item -ItemType Directory -Force -Path $OutDir, (Split-Path $ExePath -Parent) | Out-Null
 if (-not $SkipLink -and (Test-Path -LiteralPath $ExePath -PathType Leaf)) { Remove-Item -LiteralPath $ExePath -Force }
@@ -40,9 +44,9 @@ function Quote-Native([string]$Argument) {
     return '"' + [regex]::Replace([regex]::Replace($Argument, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1') + '"'
 }
 
-function Start-Compiler([string[]]$Arguments, [string]$Directory) {
+function Start-BuildTool([string]$ToolPath, [string[]]$Arguments, [string]$Directory) {
     $start = [Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $CompilerPath
+    $start.FileName = $ToolPath
     $start.Arguments = ($Arguments | ForEach-Object { Quote-Native $_ }) -join ' '
     $start.WorkingDirectory = $Directory
     $start.UseShellExecute = $false
@@ -61,29 +65,130 @@ function Start-Compiler([string[]]$Arguments, [string]$Directory) {
     }
 }
 
-function Get-CompileFlags($Project, $Source) {
-    if ($Toolchain -eq 'Clang') {
-        if ([IO.Path]::GetExtension($Source.path) -ne '.c') { '-std=c++17' }
-        '-fms-extensions'
+function Invoke-BuildTool([string]$ToolPath, [string[]]$Arguments, [string]$Directory, [string]$Label) {
+    $started = Start-BuildTool $ToolPath $Arguments $Directory
+    try {
+        $timedOut = -not $started.Process.WaitForExit($CompileTimeoutSeconds * 1000)
+        if ($timedOut) { $started.Process.Kill(); $started.Process.WaitForExit() }
+        $stdout = $started.Output.GetAwaiter().GetResult()
+        $stderr = $started.Error.GetAwaiter().GetResult()
+        $stdout | Set-Content -LiteralPath (Join-Path $OutDir ($Label + '.log'))
+        $stderr | Set-Content -LiteralPath (Join-Path $OutDir ($Label + '.err.log'))
+        if ($timedOut -or $started.Process.ExitCode -ne 0) {
+            Write-Host $stdout
+            Write-Host $stderr
+            throw "$Label failed$(if ($timedOut) { ' (timed out)' })"
+        }
+    } finally { $started.Process.Dispose() }
+}
+
+function Find-MsvcTool([string]$Name) {
+    $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($command) { return $command.Source }
+    $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+    if (Test-Path -LiteralPath $vswhere) {
+        $installation = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+        if ($installation) {
+            $version = (Get-Content -LiteralPath (Join-Path $installation 'VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt') -Raw).Trim()
+            $tool = Join-Path $installation "VC\Tools\MSVC\$version\bin\Hostx64\x64\$Name"
+            if (Test-Path -LiteralPath $tool -PathType Leaf) { return $tool }
+        }
     }
-    foreach ($include in @($Project.includeDirectories) + @($Source.includeDirectories)) { '-I' + $include }
-    foreach ($define in @($Project.defines) + @($Source.defines)) { '-D' + $define }
+    throw "Required build tool $Name was not found. Install the Visual C++ build tools or make the tool available on PATH."
+}
+
+function Find-ResourceTools {
+    $kitRoot = $env:WindowsSdkDir
+    if (-not $kitRoot) {
+        $kits = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows Kits\Installed Roots' -ErrorAction SilentlyContinue
+        if ($kits) { $kitRoot = $kits.KitsRoot10 }
+    }
+    if (-not $kitRoot) { $kitRoot = Join-Path ${env:ProgramFiles(x86)} 'Windows Kits\10' }
+    $versions = @(Get-ChildItem -LiteralPath (Join-Path $kitRoot 'bin') -Directory |
+        Where-Object { $_.Name -match '^\d+\.\d+\.\d+\.\d+$' } | Sort-Object { [version]$_.Name } -Descending)
+    foreach ($version in $versions) {
+        $rc = Join-Path $version.FullName 'x64\rc.exe'
+        if (-not (Test-Path -LiteralPath $rc -PathType Leaf)) { continue }
+        return @{
+            Compiler = $rc; Converter = (Find-MsvcTool 'cvtres.exe')
+            Includes = @((Join-Path $kitRoot "Include\$($version.Name)\um"), (Join-Path $kitRoot "Include\$($version.Name)\shared"))
+        }
+    }
+    throw 'Windows SDK resource compiler rc.exe was not found.'
+}
+
+function Get-EffectiveSettings($ProjectSettings, $SourceSettings) {
+    $settings = @{}
+    foreach ($group in @($ProjectSettings, $SourceSettings)) {
+        if ($null -eq $group) { continue }
+        foreach ($property in $group.PSObject.Properties) { $settings[$property.Name] = $property.Value }
+    }
+    return $settings
+}
+
+function Get-CompileFlags($Project, $Source) {
+    $settings = Get-EffectiveSettings $Project.compileSettings $Source.settings
+    if ($Toolchain -eq 'Clang') {
+        if ([IO.Path]::GetExtension($Source.path) -ne '.c') {
+            $standard = switch ($settings.LanguageStandard) {
+                'stdcpp14' { 'c++14' }; 'stdcpp17' { 'c++17' }; 'stdcpp20' { 'c++20' }; 'stdcpplatest' { 'c++2b' }
+                default { 'c++17' }
+            }
+            '-std=' + $standard
+        }
+        '-fms-extensions'
+        if ($settings.BufferSecurityCheck -eq 'false') { '-fno-stack-protector' }
+    }
+    switch ($settings.Optimization) {
+        'Disabled' { '-O0' }; 'MinSpace' { '-Os' }; 'MaxSpeed' { '-O2' }; 'Full' { '-O2' }
+    }
+    if ($settings.TreatWarningAsError -eq 'true' -and -not $AllowWarnings) { '-Werror' }
+    foreach ($undefine in ([string]$settings.UndefinePreprocessorDefinitions).Split(';')) { if ($undefine) { '-U' + $undefine } }
+    foreach ($include in ([string]$settings.ForcedIncludeFiles).Split(';')) {
+        if ($include) {
+            '-include'
+            if ([IO.Path]::IsPathRooted($include)) { [IO.Path]::GetFullPath($include) }
+            else { [IO.Path]::GetFullPath((Join-Path $Project.directory $include)) }
+        }
+    }
+    # Version 2 records effective per-source overrides after MSBuild
+    # inheritance/replacement; absent overrides use the project defaults.
+    # Version 1 recorded only per-source additions.
+    if ($manifest.schemaVersion -eq 1) {
+        foreach ($include in $Project.includeDirectories) { '-I' + $include }
+        foreach ($define in $Project.defines) { '-D' + $define }
+        foreach ($include in $Source.includeDirectories) { '-I' + $include }
+        foreach ($define in $Source.defines) { '-D' + $define }
+    } else {
+        $includes = if ($Source.PSObject.Properties['includeDirectories']) { $Source.includeDirectories } else { $Project.includeDirectories }
+        $defines = if ($Source.PSObject.Properties['defines']) { $Source.defines } else { $Project.defines }
+        foreach ($include in $includes) { '-I' + $include }
+        foreach ($define in $defines) { '-D' + $define }
+    }
 }
 
 $jobsToRun = @()
 $objects = @()
+$projectBuilds = @()
+$projectsByPath = @{}
 $index = 0
 foreach ($project in $manifest.projects) {
     # The generated graph is authoritative. No exclusions, renamed sources,
     # application macros, or replacement implementations belong here.
-    $groups = @{}
+    $groups = [ordered]@{}
+    $projectBuild = @{
+        Project = $project; Objects = [Collections.ArrayList]::new(); Resources = [Collections.ArrayList]::new()
+        Label = 'project_{0:d4}' -f $projectBuilds.Count
+    }
+    $projectBuilds += $projectBuild
+    if ($project.projectFile) { $projectsByPath[$project.projectFile] = $projectBuild }
     foreach ($source in $project.sources) {
         if (-not (Test-Path -LiteralPath $source.path -PathType Leaf)) { throw "Selected source is missing: $($source.path)" }
         $flags = @(Get-CompileFlags $project $source)
         $key = if ($Unity -and [IO.Path]::GetExtension($source.path) -in @('.cpp', '.cxx', '.cc')) {
             $flags -join "`n"
         } else { 'single:' + $index }
-        if (-not $groups.ContainsKey($key)) { $groups[$key] = [Collections.ArrayList]::new() }
+        if (-not $groups.Contains($key)) { $groups[$key] = [Collections.ArrayList]::new() }
         [void]$groups[$key].Add(@{ Source = $source.path; Flags = $flags; Index = $index++ })
     }
     foreach ($group in $groups.Values) {
@@ -101,8 +206,9 @@ foreach ($project in $manifest.projects) {
             $object = Join-Path $OutDir ($label + '.obj')
             if (Test-Path -LiteralPath $object) { Remove-Item -LiteralPath $object -Force }
             $objects += $object
+            [void]$projectBuild.Objects.Add($object)
             $jobsToRun += @{
-                Label = $label; Source = $inputSource; Object = $object
+                Label = $label; Source = $inputSource; Object = $object; Directory = $project.directory
                 Flags = $chunk[0].Flags; Inputs = @($chunk | ForEach-Object { $_.Source })
             }
         }
@@ -146,7 +252,7 @@ foreach ($job in $jobsToRun) {
     $arguments = @($job.Flags) + @('-c', $job.Source, '-o', $job.Object)
     $job.ErrorLog = Join-Path $OutDir ($job.Label + '.err.log')
     $job.Timer = [Diagnostics.Stopwatch]::StartNew()
-    $started = Start-Compiler $arguments $ProjectRoot
+    $started = Start-BuildTool $CompilerPath $arguments $job.Directory
     $job.Process = $started.Process
     $job.Output = $started.Output
     $job.Error = $started.Error
@@ -157,27 +263,122 @@ Write-Host ('Compile elapsed: {0:n3}s; {1} source files' -f $timer.Elapsed.Total
 if ($script:failed) { Write-Host 'Executable: NOT PRODUCED'; exit 1 }
 if ($SkipLink) { exit 0 }
 
-$linkArguments = @($objects)
-foreach ($directory in @($manifest.projects | ForEach-Object { $_.libraryDirectories } | Select-Object -Unique)) {
+$linkedBuilds = @($projectBuilds)
+$linkedResourceObject = $null
+if ($manifest.schemaVersion -ge 2) {
+    $linked = [ordered]@{}
+    function Visit-ProjectReferences($Build, [string[]]$Ancestors) {
+        $key = $Build.Project.projectFile
+        if ($Ancestors -contains $key) { throw "Project reference cycle involving $key" }
+        if ($linked.Contains($key)) { return }
+        $linked[$key] = $Build
+        foreach ($reference in $Build.Project.projectReferences) {
+            if (-not $projectsByPath.ContainsKey($reference.projectFile)) { throw "Referenced project is missing from the manifest: $($reference.projectFile)" }
+            if (-not $reference.linkLibraryDependencies) { continue }
+            $dependency = $projectsByPath[$reference.projectFile]
+            if ($reference.useLibraryDependencyInputs) { $dependency.UseObjects = $true }
+            Visit-ProjectReferences $dependency (@($Ancestors) + @($key))
+        }
+    }
+    $appBuild = $projectsByPath[$applications[0].projectFile]
+    Visit-ProjectReferences $appBuild @()
+    # A dependency archive must follow every selected project which uses it.
+    # Keep declaration order when several projects are ready at the same time.
+    $linkedBuilds = @()
+    $remaining = @($linked.Values)
+    while ($remaining.Count) {
+        $ready = @($remaining | Where-Object {
+            $candidate = $_.Project.projectFile
+            -not @($remaining | Where-Object { @($_.Project.projectReferences | Where-Object {
+                $_.linkLibraryDependencies -and $_.projectFile -eq $candidate
+            }).Count }).Count
+        })
+        if (-not $ready.Count) { throw 'Project dependency graph could not be ordered' }
+        foreach ($build in $ready) { $linkedBuilds += $build }
+        $remaining = @($remaining | Where-Object { $ready -notcontains $_ })
+    }
+
+    $resourceTools = $null
+    foreach ($build in $projectBuilds) {
+        $project = $build.Project
+        if ($project.kind -notin @('Application', 'StaticLibrary')) { throw "Unsupported project kind: $($project.kind)" }
+        foreach ($resource in $project.resources) {
+            if (-not $resourceTools) { $resourceTools = Find-ResourceTools }
+            $label = $build.Label + '_resource_' + $build.Resources.Count
+            $resFile = Join-Path $OutDir ($label + '.res')
+            $resourceArgs = @('/nologo', '/fo', $resFile)
+            $includes = if ($resource.PSObject.Properties['includeDirectories']) { $resource.includeDirectories } else { $project.resourceIncludeDirectories }
+            $defines = if ($resource.PSObject.Properties['defines']) { $resource.defines } else { $project.resourceDefines }
+            foreach ($include in @($includes) + @($resourceTools.Includes)) { if ($include) { $resourceArgs += '/I', $include } }
+            foreach ($define in $defines) { $resourceArgs += '/D', $define }
+            $settings = Get-EffectiveSettings $project.resourceSettings $resource.settings
+            if ($settings.Culture) { $resourceArgs += '/l', $settings.Culture }
+            if ($settings.CodePage) { $resourceArgs += '/c', $settings.CodePage }
+            $resourceArgs += $resource.path
+            Invoke-BuildTool $resourceTools.Compiler $resourceArgs $project.directory $label
+            [void]$build.Resources.Add($resFile)
+        }
+        $archiveObjects = @($build.Objects)
+        if ($build.Resources.Count -and $project.kind -eq 'StaticLibrary') {
+            $resourceObject = Join-Path $OutDir ($build.Label + '_resources.obj')
+            Invoke-BuildTool $resourceTools.Converter (@('/NOLOGO', '/MACHINE:X64', ('/OUT:' + $resourceObject)) + @($build.Resources)) $project.directory ($build.Label + '_resources')
+            if ($Toolchain -eq 'Prime') {
+                $archiveResource = Join-Path $OutDir ($build.Label + '_resources.o')
+                Invoke-BuildTool $CompilerPath @('-r', $resourceObject, '-o', $archiveResource) $project.directory ($build.Label + '_resource_object')
+                $resourceObject = $archiveResource
+            }
+            $archiveObjects += $resourceObject
+        }
+        if ($project.kind -eq 'StaticLibrary') {
+            $build.Archive = Join-Path $OutDir ($build.Label + '_' + $project.targetName + '.lib')
+            if (Test-Path -LiteralPath $build.Archive) { Remove-Item -LiteralPath $build.Archive -Force }
+            if ($Toolchain -eq 'Prime') {
+                Invoke-BuildTool $CompilerPath (@('-ar', 'rcs', $build.Archive) + $archiveObjects) $project.directory ($build.Label + '_archive')
+            } else {
+                Invoke-BuildTool (Find-MsvcTool 'lib.exe') (@('/NOLOGO', ('/OUT:' + $build.Archive)) + $archiveObjects) $project.directory ($build.Label + '_archive')
+            }
+            Write-Host "Library: $($build.Archive)"
+        }
+    }
+    $linkedResources = @($linkedBuilds | Where-Object { $_.Project.kind -eq 'Application' -or $_.UseObjects } |
+        ForEach-Object { $_.Resources })
+    if ($linkedResources.Count) {
+        # Resource directories must be merged by the resource tool. Merely
+        # concatenating .rsrc sections loses resources from later projects.
+        $linkedResourceObject = Join-Path $OutDir 'linked_resources.obj'
+        Invoke-BuildTool $resourceTools.Converter (@('/NOLOGO', '/MACHINE:X64', ('/OUT:' + $linkedResourceObject)) + $linkedResources) $applications[0].directory 'linked_resources'
+    }
+}
+
+$linkArguments = @()
+foreach ($build in $linkedBuilds) {
+    if ($build.Archive -and -not $build.UseObjects) { $linkArguments += $build.Archive }
+    else { $linkArguments += @($build.Objects) }
+}
+if ($linkedResourceObject) { $linkArguments += $linkedResourceObject }
+foreach ($directory in @($linkedBuilds | ForEach-Object { $_.Project.libraryDirectories } | Select-Object -Unique)) {
     $linkArguments += '-L' + $directory
 }
-foreach ($library in @($manifest.projects | ForEach-Object { $_.linkLibraries } | Select-Object -Unique)) {
+foreach ($library in @($linkedBuilds | ForEach-Object { $_.Project.linkLibraries } | Select-Object -Unique)) {
     if ($library -match '[/\\]') { $linkArguments += $library }
     elseif ($Toolchain -eq 'Prime') { $linkArguments += '-l' + [IO.Path]::GetFileNameWithoutExtension($library) }
     else { $linkArguments += '-Xlinker', $library }
 }
+if ($applications[0].subsystem) {
+    if ($Toolchain -eq 'Prime') { $linkArguments += '-Wl,-subsystem=' + $applications[0].subsystem.ToLowerInvariant() }
+    else { $linkArguments += '-Xlinker', ('/SUBSYSTEM:' + $applications[0].subsystem) }
+}
+if ($applications[0].entryPoint) {
+    if ($Toolchain -eq 'Prime') { $linkArguments += '-Wl,-e=' + $applications[0].entryPoint }
+    else { $linkArguments += '-Xlinker', ('/ENTRY:' + $applications[0].entryPoint) }
+}
 $linkArguments += '-o', $ExePath
-$linkLog = Join-Path $OutDir 'link.log'
-$link = Start-Compiler $linkArguments $applications[0].directory
-$linkProcess = $link.Process
-$linkProcess.WaitForExit()
-$link.Output.GetAwaiter().GetResult() | Set-Content -LiteralPath $linkLog
-$link.Error.GetAwaiter().GetResult() | Set-Content -LiteralPath (Join-Path $OutDir 'link.err.log')
-if ($linkProcess.ExitCode -ne 0 -or -not (Test-Path -LiteralPath $ExePath -PathType Leaf)) {
-    Get-Content -LiteralPath $linkLog
-    Get-Content -LiteralPath (Join-Path $OutDir 'link.err.log')
+try {
+    Invoke-BuildTool $CompilerPath $linkArguments $applications[0].directory 'link'
+    if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) { throw 'The linker did not produce the selected executable' }
+} catch {
     if (Test-Path -LiteralPath $ExePath -PathType Leaf) { Remove-Item -LiteralPath $ExePath -Force }
     Write-Host 'Executable: NOT PRODUCED'
-    exit 1
+    throw
 }
 Write-Host "Executable: $ExePath"

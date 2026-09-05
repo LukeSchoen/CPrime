@@ -328,6 +328,7 @@ typedef union CValue {
 
 typedef struct SValue {
     CType type;
+    int bound_member_receiver;
     unsigned short r;
     unsigned short r2;
     union {
@@ -355,10 +356,14 @@ struct SymAttr {
     is_class_tag : 1,
     lifecycle_ctor : 1,
     lifecycle_dtor : 1,
+    dtor_noexcept : 1,
+    dtor_noexcept_specified : 1,
+    cleanup_exception_only : 1,
+    virtual_destructor : 1,
     integral_constexpr : 1,
     scoped_enum : 1,
     local_tag_alias : 1,
-    xxxx        : 11;
+    xxxx        : 7;
 };
 
 struct FuncAttr {
@@ -370,7 +375,10 @@ struct FuncAttr {
     func_dtor   : 1,
     func_args   : 8,
     func_alwinl : 1,
-    xxxx        : 15;
+    func_noexcept : 1,
+    func_noexcept_specified : 1,
+    func_cxx_destructor : 1,
+    xxxx        : 12;
 };
 
 typedef struct Sym {
@@ -844,10 +852,12 @@ struct filespec {
 #define VT_CMP       0x0033
 #define VT_JMP       0x0034
 #define VT_JMPI      0x0035
+#define VT_CXX_PARAMETER 0x0080 /* constructed C++ by-value argument storage */
 #define VT_LVAL      0x0100
 #define VT_SYM       0x0200
 #define VT_MUSTCAST  0x0C00
 #define VT_NONCONST  0x1000
+#define VT_THROW     0x2000 /* a C++ throw-expression, which has type void */
 #define VT_MUSTBOUND 0x4000
 #define VT_BOUNDED   0x8000
 

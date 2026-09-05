@@ -1,0 +1,75 @@
+#ifndef _CPC_EXCEPTION
+#define _CPC_EXCEPTION
+
+#include <cprime_exception.h>
+
+namespace std {
+  typedef void (*terminate_handler)();
+
+  inline terminate_handler set_terminate(terminate_handler handler) noexcept {
+    return __cpc_eh_set_terminate(handler);
+  }
+
+  inline void terminate() noexcept { __cpc_eh_terminate(); }
+  inline int uncaught_exceptions() noexcept { return __cpc_eh_uncaught_exceptions(); }
+  inline bool uncaught_exception() noexcept { return uncaught_exceptions() != 0; }
+
+  class exception_ptr {
+  public:
+    void *_M_exception;
+    exception_ptr() noexcept : _M_exception(0) {}
+    exception_ptr(const exception_ptr& other) noexcept
+      : _M_exception(other._M_exception) { __cpc_eh_retain_exception(_M_exception); }
+    exception_ptr(exception_ptr&& other) noexcept
+      : _M_exception(other._M_exception) { other._M_exception = 0; }
+    exception_ptr(void *handle, bool adopt) noexcept : _M_exception(handle) {
+      if (!adopt) __cpc_eh_retain_exception(handle);
+    }
+    ~exception_ptr() noexcept { __cpc_eh_release_exception(_M_exception); }
+    exception_ptr& operator=(const exception_ptr& other) noexcept {
+      __cpc_eh_retain_exception(other._M_exception);
+      __cpc_eh_release_exception(_M_exception);
+      _M_exception = other._M_exception;
+      return *this;
+    }
+    exception_ptr& operator=(exception_ptr&& other) noexcept {
+      if (this != &other) {
+        __cpc_eh_release_exception(_M_exception);
+        _M_exception = other._M_exception;
+        other._M_exception = 0;
+      }
+      return *this;
+    }
+    explicit operator bool() const noexcept { return _M_exception != 0; }
+    void swap(exception_ptr& other) noexcept {
+      void *saved = _M_exception; _M_exception = other._M_exception;
+      other._M_exception = saved;
+    }
+  };
+
+  inline bool operator==(const exception_ptr& left, const exception_ptr& right) noexcept {
+    return left._M_exception == right._M_exception;
+  }
+  inline bool operator!=(const exception_ptr& left, const exception_ptr& right) noexcept {
+    return !(left == right);
+  }
+  inline exception_ptr current_exception() noexcept {
+    return exception_ptr(__cpc_eh_current_exception(), true);
+  }
+  inline void rethrow_exception(exception_ptr exception) {
+    __cpc_eh_rethrow_exception(exception._M_exception);
+  }
+  template<class E> exception_ptr make_exception_ptr(E value) noexcept {
+    try { throw value; }
+    catch (...) { return current_exception(); }
+  }
+
+  class exception {
+  public:
+    exception() noexcept {}
+    virtual ~exception() noexcept {}
+    virtual const char *what() const noexcept { return "std::exception"; }
+  };
+}
+
+#endif

@@ -1,24 +1,41 @@
 #ifndef _CPC_MUTEX
 #define _CPC_MUTEX
 
-/* Minimal synchronization primitives for code that only needs the types
-   (CommonLibrary's clMutex/clScopeLock declarations). */
+#include <cprime_thread.h>
+#include <new>
+
 namespace std
 {
   class mutex
   {
   public:
-    mutex() {}
-    void lock() {}
-    void unlock() {}
+    typedef void *native_handle_type;
+    mutex() : m_mutex(__cpc_windows_mutex_create(0)) { if (!m_mutex) throw bad_alloc(); }
+    ~mutex() { __cpc_windows_mutex_destroy(m_mutex); }
+    mutex(const mutex &) = delete;
+    mutex &operator=(const mutex &) = delete;
+    void lock() { __cpc_windows_mutex_lock(m_mutex); }
+    bool try_lock() { return __cpc_windows_mutex_try_lock(m_mutex) != 0; }
+    void unlock() { __cpc_windows_mutex_unlock(m_mutex); }
+    native_handle_type native_handle() { return m_mutex; }
+  private:
+    void *m_mutex;
   };
 
   class recursive_mutex
   {
   public:
-    recursive_mutex() {}
-    void lock() {}
-    void unlock() {}
+    typedef void *native_handle_type;
+    recursive_mutex() : m_mutex(__cpc_windows_mutex_create(1)) { if (!m_mutex) throw bad_alloc(); }
+    ~recursive_mutex() { __cpc_windows_mutex_destroy(m_mutex); }
+    recursive_mutex(const recursive_mutex &) = delete;
+    recursive_mutex &operator=(const recursive_mutex &) = delete;
+    void lock() { __cpc_windows_mutex_lock(m_mutex); }
+    bool try_lock() { return __cpc_windows_mutex_try_lock(m_mutex) != 0; }
+    void unlock() { __cpc_windows_mutex_unlock(m_mutex); }
+    native_handle_type native_handle() { return m_mutex; }
+  private:
+    void *m_mutex;
   };
 
   template<class T>
@@ -33,24 +50,54 @@ namespace std
     T &m_mutex;
   };
 
-  class condition_variable
-  {
-  public:
-    condition_variable() {}
-    void notify_one() {}
-    void notify_all() {}
-  };
-
   template<class T>
   class unique_lock
   {
   public:
-    explicit unique_lock(T &m) : m_mutex(&m) { m_mutex->lock(); }
-    ~unique_lock() { if (m_mutex) m_mutex->unlock(); }
+    unique_lock() : m_mutex(0), m_owns(false) {}
+    explicit unique_lock(T &m) : m_mutex(&m), m_owns(true) { m_mutex->lock(); }
+    ~unique_lock() { if (m_owns) m_mutex->unlock(); }
     unique_lock(const unique_lock &) = delete;
     unique_lock &operator=(const unique_lock &) = delete;
+    unique_lock(unique_lock &&other) : m_mutex(other.m_mutex), m_owns(other.m_owns)
+    { other.m_mutex = 0; other.m_owns = false; }
+    unique_lock &operator=(unique_lock &&other)
+    {
+      if (this != &other) {
+        if (m_owns) m_mutex->unlock();
+        m_mutex = other.m_mutex; m_owns = other.m_owns;
+        other.m_mutex = 0; other.m_owns = false;
+      }
+      return *this;
+    }
+    void lock() { m_mutex->lock(); m_owns = true; }
+    bool try_lock() { m_owns = m_mutex->try_lock(); return m_owns; }
+    void unlock() { m_mutex->unlock(); m_owns = false; }
+    bool owns_lock() const { return m_owns; }
+    explicit operator bool() const { return m_owns; }
+    T *mutex() const { return m_mutex; }
+    T *release() { T *result = m_mutex; m_mutex = 0; m_owns = false; return result; }
   private:
     T *m_mutex;
+    bool m_owns;
+  };
+
+  class condition_variable
+  {
+  public:
+    condition_variable() : m_condition(__cpc_windows_condition_create())
+    { if (!m_condition) throw bad_alloc(); }
+    ~condition_variable() { __cpc_windows_condition_destroy(m_condition); }
+    condition_variable(const condition_variable &) = delete;
+    condition_variable &operator=(const condition_variable &) = delete;
+    void notify_one() { __cpc_windows_condition_notify(m_condition, 0); }
+    void notify_all() { __cpc_windows_condition_notify(m_condition, 1); }
+    void wait(unique_lock<mutex> &lock)
+    { __cpc_windows_condition_wait(m_condition, lock.mutex()->native_handle()); }
+    template<class Predicate> void wait(unique_lock<mutex> &lock, Predicate ready)
+    { while (!ready()) wait(lock); }
+  private:
+    void *m_condition;
   };
 }
 

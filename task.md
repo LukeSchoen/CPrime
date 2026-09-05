@@ -1,3 +1,38 @@
+## Paused at user request (2026-09-05)
+
+The task is not complete. The canonical CPC Racer executable has not been
+produced. CodeClip now exports the selected solution/project graph to a shared
+manifest consumed by the Prime and Clang drivers. MSVC and Clang both compiled
+and linked the selected Racer application using that graph; Prime uses original
+CL sources without the legacy driver's source substitutions or ABI shims.
+
+Retained compiler work includes namespace and local-type lifetime fixes,
+array-reference overload viability, initializer-list replay and ordinary member
+bodies, reference-member initialization, lambda closure/capture lowering, and
+complete explicit member-template argument lists. The latest packed compiler
+self-bootstraps and passes the new lambda, local-class, reference-initialization,
+and explicit-member-argument regressions. The Expressions suite passes 9/9.
+The most recent surrounding run (before the explicit-member-argument change)
+reported Templates 273 passed/13 failed, Classes 133/4, Constructors 48/1.
+Those remaining failures have not been declared resolved.
+
+The latest full Prime build attempted 66 original translation units in 4.867s
+and failed in xBRZ, clRenderObjectCore and clKNN3; the full-run log is
+build/canonical-wave21.log.
+clAssert and clRenderObjectCore now also compile individually. xBRZ now parses
+lambdas but still fails in member-template calls: static member templates are
+materialized before their arguments are typed, and deduction must use later
+function parameters. clKNN3 still needs real C++ throw/exception support.
+
+The unfinished later-argument deduction experiment was removed when pausing.
+Its source reproducer is saved at build/repro_member_template_deduction_later_argument.cpp,
+outside passing coverage. No expected-failure conversion was made.
+Resume with that general deduction problem, then rerun the actual project and
+continue exception support and linking. Runtime-significant warnings, global
+class-array initialization, STL compatibility and retirement of cpcString/
+legacy shims still require work. The historical milestone notes below describe
+older builds with workarounds and are not evidence that this build is ready.
+
 ## Architectural clarification (2026-09-05)
 
 This clarification supersedes the target/mode terminology in historical notes

@@ -155,10 +155,30 @@ static void lambda_note_return(void)
   skip(';');
 }
 
+static int lambda_lexical_owner(void)
+{
+  LambdaExpression *enclosing;
+  const char *function_name = funcname ? funcname : "";
+  if (lambda_probe)
+    return lambda_probe->owner;
+  /* A lambda body is probed in its enclosing function, then emitted as the
+     closure's call operator. Nested expressions retain their lexical owner
+     across both parses, including separate function-template instances. */
+  for (enclosing = lambda_expressions; enclosing; enclosing = enclosing->next)
+  {
+    const char *class_name = get_tok_str(enclosing->class_tok, NULL);
+    size_t length = strlen(class_name);
+    if (!strncmp(function_name, class_name, length)
+        && function_name[length] == '_')
+      return enclosing->owner;
+  }
+  return tok_alloc_const(function_name);
+}
+
 static void parse_cpp_lambda_expression(void)
 {
   int marker = tok == '[' ? new_lambda_marker() : tok;
-  int owner = tok_alloc_const(funcname ? funcname : "");
+  int owner = lambda_lexical_owner();
   int i, depth, saved_tok;
   CValue saved_tokc;
   LambdaExpression current, *lambda;
@@ -170,6 +190,8 @@ static void parse_cpp_lambda_expression(void)
   current.owner = owner;
   current.outer_scope = local_scope;
   current.return_type.t = VT_VOID;
+  for (lambda = lambda_expressions; lambda; lambda = lambda->next)
+    if (lambda->marker == marker && lambda->owner == owner) break;
   next();
   if (tok == '=' || tok == '&')
   {
@@ -193,11 +215,17 @@ static void parse_cpp_lambda_expression(void)
     Sym *source;
     if (tok == '&') { by_reference = 1; next(); }
     if (tok < TOK_UIDENT) cprime_error("lambda capture name expected");
-    source = sym_find(tok);
-    if (!source || !source->sym_scope)
-      cprime_error("lambda capture '%s' must name an automatic variable (function '%s', scope %d)",
-                   get_tok_str(tok, NULL), funcname, local_scope);
-    add_lambda_capture(&current, source, by_reference);
+    if (!lambda)
+    {
+      for (i = 0; i < current.count; ++i)
+        if (current.captures[i].name == tok)
+          cprime_error("duplicate lambda capture '%s'", get_tok_str(tok, NULL));
+      source = sym_find(tok);
+      if (!source || !source->sym_scope)
+        cprime_error("lambda capture '%s' must name an automatic variable (function '%s', scope %d)",
+                     get_tok_str(tok, NULL), funcname, local_scope);
+      add_lambda_capture(&current, source, by_reference);
+    }
     next();
     if (tok == ']') break;
     skip(',');
@@ -209,6 +237,8 @@ static void parse_cpp_lambda_expression(void)
     depth = 1;
     while (depth && tok != TOK_EOF)
     {
+      if (tok == TOK_AUTO)
+        cprime_error("generic lambda parameters are not supported");
       if (tok == '(') ++depth;
       if (tok == ')' && !--depth) { next(); break; }
       tok_str_add_tok(parameters);
@@ -233,8 +263,6 @@ static void parse_cpp_lambda_expression(void)
   skip_or_save_block(&body);
   saved_tok = tok;
   saved_tokc = tokc;
-  for (lambda = lambda_expressions; lambda; lambda = lambda->next)
-    if (lambda->marker == marker && lambda->owner == owner) break;
   if (!lambda)
   {
     char class_name[96];
@@ -270,7 +298,8 @@ static void parse_cpp_lambda_expression(void)
         mk_pointer(&param_type);
         param_type.t |= VT_REFERENCE;
       }
-      add_ctype_declarator_tokens(declaration, &param_type, arg);
+      if (!add_ctype_declarator_tokens(declaration, &param_type, arg))
+        cprime_error("unsupported lambda capture parameter type");
     }
     tok_str_add(declaration, ')');
     for (i = 0; i < lambda->count; ++i)
@@ -297,7 +326,7 @@ static void parse_cpp_lambda_expression(void)
     tok_str_add(declaration, '}');
     tok_str_add(declaration, ';');
     tok_str_add(declaration, TOK_EOF);
-    publish_template_member_proto(declaration);
+    publish_template_member_proto(declaration, -1);
     lambda->class_tok = find_current_namespace_tok(lambda->class_tok);
   }
   tok_str_free(parameters);

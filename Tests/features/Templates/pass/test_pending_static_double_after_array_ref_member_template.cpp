@@ -22,6 +22,7 @@ template<> struct StaticDoubleHelper<double>
   static double Value() { return 2.718281828459045; }
 };
 
-static void pending_static_double_after_array_ref_member_template()
+int main()
 {
+  return StaticDoubleHelper<double>::Value() != 2.718281828459045;
 }

@@ -1,21 +1,15 @@
 #ifndef _CPC_STDEXCEPT
 #define _CPC_STDEXCEPT
 
+#include <exception>
+
 namespace std
 {
-  class exception
-  {
-  public:
-    exception() {}
-    virtual ~exception() {}
-    virtual const char *what() const { return "std::exception"; }
-  };
-
   class logic_error : public exception
   {
   public:
     explicit logic_error(const char *message) : m_message(message) {}
-    const char *what() const override { return m_message; }
+    const char *what() const noexcept override { return m_message; }
   private:
     const char *m_message;
   };
@@ -24,7 +18,7 @@ namespace std
   {
   public:
     explicit runtime_error(const char *message) : m_message(message) {}
-    const char *what() const override { return m_message; }
+    const char *what() const noexcept override { return m_message; }
   private:
     const char *m_message;
   };

@@ -20,6 +20,6 @@ public:
 int main(void)
 {
   Box<int> original(8);
-  Box<int> moved(original);
+  Box<int> moved(static_cast<Box<int>&&>(original));
   return moved.value == 13 ? 0 : 1;
 }

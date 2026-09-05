@@ -31,8 +31,17 @@ static int find_current_class_nested_type_tok(int name_tok)
 {
   int class_i;
 
-  if (nb_defining_class_stack <= 0 || name_tok < TOK_UIDENT)
+  if (name_tok < TOK_UIDENT)
     return name_tok;
+  if (active_member_class_tok)
+  {
+    int nested_tok;
+    if (class_tok_matches_unqualified_name(active_member_class_tok, name_tok))
+      return active_member_class_tok;
+    nested_tok = make_static_member_tok(active_member_class_tok, name_tok);
+    if (struct_find(nested_tok))
+      return nested_tok;
+  }
   for (class_i = nb_defining_class_stack - 1; class_i >= 0; --class_i)
   {
     if (class_tok_matches_unqualified_name(defining_class_stack[class_i], name_tok))
@@ -47,18 +56,28 @@ static int find_current_class_nested_type_tok(int name_tok)
 
 static int make_namespace_tok_from_parts(const int *parts, int nb_parts)
 {
-  char name[512];
-  int i;
+  CString name;
+  int i = 0, result;
 
   if (nb_parts <= 0)
     return 0;
-  pstrcpy(name, sizeof(name), "__cpc_ns");
-  for (i = 0; i < nb_parts; ++i)
+  cstr_new(&name);
+  if (!strncmp(get_tok_str(parts[0], NULL), "__cpc_ns_", 9))
   {
-    pstrcat(name, sizeof(name), "_");
-    pstrcat(name, sizeof(name), get_tok_str(parts[i], NULL));
+    cstr_cat(&name, get_tok_str(parts[0], NULL), -1);
+    i = 1;
   }
-  return tok_alloc_const(name);
+  else
+    cstr_cat(&name, "__cpc_ns", -1);
+  for (; i < nb_parts; ++i)
+  {
+    cstr_ccat(&name, '_');
+    cstr_cat(&name, get_tok_str(parts[i], NULL), -1);
+  }
+  cstr_ccat(&name, 0);
+  result = tok_alloc_const(name.data);
+  cstr_free(&name);
+  return result;
 }
 
 static int make_current_namespace_tok(int name_tok)
@@ -99,14 +118,14 @@ static void note_current_namespace_scope(void)
   memcpy(scope->parts, namespace_stack, sizeof(namespace_stack));
 }
 
-static void enter_symbol_namespace(int symbol_tok)
+static int symbol_namespace_scope_tok(int symbol_tok)
 {
   const char *name = get_tok_str(symbol_tok, NULL);
   size_t name_len = strlen(name), best_len = 0;
   NamespaceScope *best = NULL;
   int i;
   if (strncmp(name, "__cpc_ns_", 9))
-    return;
+    return 0;
   for (i = 0; i < nb_namespace_scopes; ++i)
   {
     NamespaceScope *scope = &namespace_scopes[i];
@@ -116,15 +135,40 @@ static void enter_symbol_namespace(int symbol_tok)
         && !strncmp(name, prefix, len))
       best = scope, best_len = len;
   }
-  if (best)
-  {
-    nb_namespace_stack = best->depth;
-    memcpy(namespace_stack, best->parts, sizeof(namespace_stack));
-  }
+  return best ? best->name_tok : 0;
+}
+
+static int current_namespace_scope_tok(void)
+{
+  return make_namespace_tok_from_parts(namespace_stack, nb_namespace_stack);
+}
+
+static void enter_namespace_scope(int namespace_tok)
+{
+  int i;
+  nb_namespace_stack = 0;
+  for (i = 0; i < nb_namespace_scopes; ++i)
+    if (namespace_scopes[i].name_tok == namespace_tok)
+    {
+      nb_namespace_stack = namespace_scopes[i].depth;
+      memcpy(namespace_stack, namespace_scopes[i].parts, sizeof(namespace_stack));
+      return;
+    }
+}
+
+static void enter_symbol_namespace(int symbol_tok)
+{
+  int namespace_tok = symbol_namespace_scope_tok(symbol_tok);
+  if (namespace_tok)
+    enter_namespace_scope(namespace_tok);
 }
 
 static int namespace_member_exists(int t)
 {
+  int i;
+  for (i = 0; i < nb_namespace_scopes; ++i)
+    if (namespace_scopes[i].name_tok == t)
+      return 1;
   return sym_find(t) || global_symbol_find(t) || struct_find(t)
          || find_class_template_def(t) || find_function_template_def(t);
 }
@@ -479,6 +523,7 @@ static void note_member_func_overload(int struct_tok, int method_tok,
   int is_const = 0;
   Sym *this_arg;
 
+  note_member_function_scope(mangled_tok, struct_tok);
   overload_tok_set_note(member_func_mangled_toks, mangled_tok);
 
   if (lowered_type && lowered_type->ref)
@@ -583,6 +628,33 @@ static Sym *find_global_symbol(int tok)
   return s;
 }
 
+static void note_member_function_scope(int function_tok, int class_tok)
+{
+  unsigned bucket = (unsigned)function_tok & 1023;
+  MemberFunctionScope *scope;
+  for (scope = member_function_scopes[bucket]; scope; scope = scope->next)
+    if (scope->function_tok == function_tok)
+    {
+      scope->class_tok = class_tok;
+      return;
+    }
+  scope = cprime_mallocz(sizeof(*scope));
+  scope->function_tok = function_tok;
+  scope->class_tok = class_tok;
+  scope->next = member_function_scopes[bucket];
+  member_function_scopes[bucket] = scope;
+}
+
+static int member_function_class_tok(int function_tok)
+{
+  MemberFunctionScope *scope;
+  for (scope = member_function_scopes[(unsigned)function_tok & 1023];
+       scope; scope = scope->next)
+    if (scope->function_tok == function_tok)
+      return scope->class_tok;
+  return 0;
+}
+
 static void note_free_func_overload(int name_tok, int mangled_tok,
                                     CType *func_type)
 {
@@ -608,14 +680,6 @@ static void note_free_func_overload(int name_tok, int mangled_tok,
           o->func_type = *func_type;
         }
       }
-      return;
-    }
-    if (o->name_tok == name_tok && func_type
-        && same_func_param_signature(&o->func_type, func_type))
-    {
-      o->explicit_arg_count = func_explicit_arg_count(func_type);
-      o->min_arg_count = func_min_arg_count(func_type);
-      o->func_type = *func_type;
       return;
     }
   }
@@ -1347,6 +1411,13 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
   {
     param_pointed = pointed_type(param_type);
     arg_pointed = pointed_type(&arg_value_type);
+    /* An object pointer converts to cv void* without discarding any of the
+       pointed-to object's qualifiers. Function pointers do not. */
+    if ((param_pointed->t & VT_BTYPE) == VT_VOID
+        && (arg_pointed->t & VT_BTYPE) != VT_FUNC
+        && !(arg_pointed->t & (VT_CONSTANT | VT_VOLATILE)
+             & ~(param_pointed->t & (VT_CONSTANT | VT_VOLATILE))))
+      return 1;
     if (is_compatible_unqualified_types(param_pointed, arg_pointed)
         && !(arg_pointed->t & (VT_CONSTANT | VT_VOLATILE)
              & ~(param_pointed->t & (VT_CONSTANT | VT_VOLATILE))))
@@ -1484,9 +1555,10 @@ static int call_arg_match_rank(CType *param_type, CType *arg_type)
   return call_arg_matches_param_type(param_type, arg_type) ? 3 : -1;
 }
 
-static Sym *resolve_free_func_by_arg_types(int name_tok, CType *arg_types,
+static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_types,
                                            int explicit_arg_count,
-                                           int template_deduction_failed)
+                                           int template_deduction_failed,
+                                           int *candidates, int candidate_count)
 {
   FreeFuncOverload *o;
   Sym *s, *arg, *match = NULL;
@@ -1501,6 +1573,14 @@ static Sym *resolve_free_func_by_arg_types(int name_tok, CType *arg_types,
     if (o->name_tok != name_tok || explicit_arg_count < o->min_arg_count
         || explicit_arg_count > o->explicit_arg_count)
       continue;
+    if (candidates)
+    {
+      for (i = 0; i < candidate_count; ++i)
+        if (candidates[i] == o->mangled_tok)
+          break;
+      if (i == candidate_count)
+        continue;
+    }
     if (template_deduction_failed
         && find_template_inst_owner_entry(o->mangled_tok))
       continue;
@@ -1593,6 +1673,14 @@ static Sym *resolve_free_func_by_arg_types(int name_tok, CType *arg_types,
             get_tok_str(name_tok, NULL), explicit_arg_count,
             get_tok_str(match->v, NULL));
   return match;
+}
+
+static Sym *resolve_free_func_by_arg_types(int name_tok, CType *arg_types,
+                                           int explicit_arg_count,
+                                           int template_deduction_failed)
+{
+  return resolve_free_func_by_arg_types_filtered(name_tok, arg_types,
+                   explicit_arg_count, template_deduction_failed, NULL, 0);
 }
 
 static int call_arg_exact_param_type(CType *param_type, CType *arg_type)
@@ -2169,7 +2257,7 @@ static void finish_cpp_member_func_call(Sym *func_type, int nb_args)
       cprime_tcov_block_end(cprime_state, -1);
     CODE_OFF();
   }
-  maybe_indir_reference();
+  maybe_indir_call_result();
 }
 
 static int try_call_cpp_binary_operator(int op)

@@ -7,7 +7,7 @@ class OwnedText
 public:
   OwnedText();
   OwnedText(const char *text);
-  OwnedText(const OwnedText other);
+  OwnedText(const OwnedText &other);
   ~OwnedText();
 
 public:
@@ -35,7 +35,7 @@ OwnedText::OwnedText(const char *text)
   this->data = copy_text(text, this->length);
 }
 
-OwnedText::OwnedText(const OwnedText other)
+OwnedText::OwnedText(const OwnedText &other)
 {
   this->length = other.length;
   this->data = copy_text(other.data, other.length);

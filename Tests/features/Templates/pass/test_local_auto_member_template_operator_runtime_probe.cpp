@@ -21,5 +21,5 @@ int main()
   LocalAutoRuntimeVec<int> lhs = { 7, 8 };
   LocalAutoRuntimeVec<int> rhs = { 1, 2 };
   auto result = lhs - rhs;
-  return result.x;
+  return result.x != 6 || result.y != 6;
 }

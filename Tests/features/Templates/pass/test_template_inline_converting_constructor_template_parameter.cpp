@@ -15,8 +15,8 @@ struct InlineConvertingCtorList {
             value = T(o);
     }
 
-    const T *begin() const { return 0; }
-    const T *end() const { return 0; }
+    const T *begin() const { return &value; }
+    const T *end() const { return &value + 1; }
     int Size() const { return 1; }
     const T &operator[](int index) const { return value; }
 };

@@ -5,8 +5,9 @@ static void try_call_scope_cleanup(Sym *stop)
   {
     Sym *fs = cls->cleanup_func;
     Sym *vs = cls->cleanup_sym;
-    if (!fs || !vs)
+    if (!fs || !vs || cls->a.cleanup_exception_only)
       continue;
+    cpp_eh_set_cleanup_state(cls->next);
     if (vs && (vs->type.t & VT_BTYPE) == VT_STRUCT)
     {
       int struct_tok = get_struct_type_name_tok(&vs->type);
@@ -27,6 +28,7 @@ static void try_call_scope_cleanup(Sym *stop)
     if (vtop >= vstack && (vtop->type.t & VT_BTYPE) == VT_VOID)
       vpop();
   }
+  cpp_eh_restore_cleanup_state();
 }
 
 
@@ -992,6 +994,14 @@ again:
       merge_funcattr(&alias_sym->type.ref->f, &alias_ad.f);
     skip(';');
   }
+  else if (t == TOK_TRY)
+  {
+    cpp_eh_parse_try();
+  }
+  else if (t == TOK_CXX_EH_CONSTRUCTED)
+    cpp_eh_constructed_member();
+  else if (t == TOK_CXX_CTOR_BODY)
+    cpp_eh_constructor_body();
   else if (t == TOK_IF)
   {
     new_scope_s(&o);
@@ -1036,6 +1046,7 @@ again:
     new_scope(&o);
 
     // Handle Local Labels Declarations
+    cpp_eh_enter_function_body();
     while (tok == TOK_LABEL)
     {
       do
@@ -1126,7 +1137,7 @@ again:
         tok = saved_tok;
         tokc = saved_tokc;
       }
-      else
+      else if (!cpp_parse_class_return_expression())
         gexpr();
       if (b)
       {
@@ -1501,12 +1512,13 @@ expr:
    with a '{').  If STR then allocates and stores the skipped tokens
    in *STR.  This doesn't check if () and {} are nested correctly,
    i.e. "({)}" is accepted.  */
-static void skip_or_save_block(TokenString **str)
+static void skip_or_save_block_ex(TokenString **str, int allow_eof)
 {
   int braces = tok == '{';
   int level = 0;
   int angle = 0;
   int prev_sig = 0;
+  int prev_prev_sig = 0;
   if (str)
     *str = tok_str_alloc();
 
@@ -1522,7 +1534,7 @@ static void skip_or_save_block(TokenString **str)
       break;
     if (t == TOK_EOF)
     {
-      if (str || level > 0)
+      if ((str && !allow_eof) || level > 0)
         cprime_error("unexpected end of file");
       else
         break;
@@ -1532,7 +1544,9 @@ static void skip_or_save_block(TokenString **str)
     next();
     if ((t == TOK_LT || t == '<')
         && (angle > 0
-            || (prev_sig >= TOK_UIDENT && find_template_def(prev_sig))))
+            || (prev_sig >= TOK_UIDENT
+                && (find_template_def(prev_sig)
+                    || is_template_keyword_tok(prev_prev_sig)))))
       ++angle;
     else if ((t == TOK_SAR || t == TOK_SHR) && angle > 0)
     {
@@ -1551,10 +1565,18 @@ static void skip_or_save_block(TokenString **str)
         break;
     }
     if (t != TOK_LINENUM && !TOK_HAS_VALUE(t))
+    {
+      prev_prev_sig = prev_sig;
       prev_sig = t;
+    }
   }
   if (str)
     tok_str_add(*str, TOK_EOF);
+}
+
+static void skip_or_save_block(TokenString **str)
+{
+  skip_or_save_block_ex(str, 0);
 }
 
 #define EXPR_CONST 1

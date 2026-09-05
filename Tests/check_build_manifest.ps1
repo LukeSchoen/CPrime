@@ -1,5 +1,6 @@
 param(
     [string]$ExporterPath = 'C:\Luke\Src\OT\cl\export_build_manifest.ps1',
+    [ValidateSet('Prime', 'Clang')][string]$Toolchain = 'Prime',
     [string]$CompilerPath = (Join-Path $PSScriptRoot '..\cpc.exe')
 )
 $ErrorActionPreference = 'Stop'
@@ -13,48 +14,196 @@ try {
     @'
 Project("{fixture}") = "App", "App.vcxproj", "{app}"
 EndProject
+Project("{fixture}") = "Library", "library\Library.vcxproj", "{library}"
+EndProject
+Project("{fixture}") = "Unreferenced", "library\Unreferenced.vcxproj", "{unreferenced}"
+EndProject
+Project("{fixture}") = "Leaf", "library\Leaf.vcxproj", "{leaf}"
+EndProject
+Project("{fixture}") = "Right", "library\Right.vcxproj", "{right}"
+EndProject
+Project("{fixture}") = "Resources", "library\Resources.vcxproj", "{resources}"
+EndProject
 '@ | Set-Content -LiteralPath (Join-Path $fixture 'commonTool.sln')
     @'
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup><ProjectConfiguration Include="Release|x64" /></ItemGroup>
+  <PropertyGroup><OutputLabel>Selected</OutputLabel><BuildTag>$(OutputLabel) App</BuildTag></PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <ConfigurationType>Application</ConfigurationType><TargetName>Selected App</TargetName><TargetExt>.exe</TargetExt>
+    <ConfigurationType>Application</ConfigurationType><TargetName>$(BuildTag)</TargetName><TargetExt>.exe</TargetExt>
+    <OutDir>$(ProjectDir)custom output\</OutDir>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
-    <ClCompile><PreprocessorDefinitions>BASE=40;%(PreprocessorDefinitions)</PreprocessorDefinitions>
-      <AdditionalIncludeDirectories>$(ProjectDir);%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
+    <ClCompile><PreprocessorDefinitions>BASE=40;PROJECT_ONLY;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>base includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <TreatWarningAsError>true</TreatWarningAsError></ClCompile>
+    <ClCompile Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"><PreprocessorDefinitions>WRONG_CONFIGURATION</PreprocessorDefinitions></ClCompile>
+    <Link><AdditionalDependencies>lib folder\extra.obj;%(AdditionalDependencies)</AdditionalDependencies></Link>
+    <ResourceCompile><PreprocessorDefinitions>RESOURCE_ID=101;RESOURCE_VALUE=1234</PreprocessorDefinitions></ResourceCompile>
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="main file.cpp" />
     <ClCompile Include="helper.cpp" />
     <ClCompile Include="per_file.c"><PreprocessorDefinitions>EXTRA=2;%(PreprocessorDefinitions)</PreprocessorDefinitions></ClCompile>
+    <ClCompile Include="override.c"><PreprocessorDefinitions>BASE=7</PreprocessorDefinitions>
+      <AdditionalIncludeDirectories>override includes</AdditionalIncludeDirectories></ClCompile>
+    <ClCompile Include="ordered.c"><AdditionalIncludeDirectories>override includes;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories></ClCompile>
+    <ClCompile Include="empty.c"><PreprocessorDefinitions></PreprocessorDefinitions><AdditionalIncludeDirectories></AdditionalIncludeDirectories></ClCompile>
     <ClCompile Include="excluded.cpp"><ExcludedFromBuild Condition="'$(Configuration)|$(Platform)'=='Release|x64'">true</ExcludedFromBuild></ClCompile>
+  </ItemGroup>
+  <ItemGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'"><ClCompile Include="excluded.cpp" /></ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="library\Library.vcxproj" />
+    <ProjectReference Include="library\Right.vcxproj" />
+    <ProjectReference Include="library\Unreferenced.vcxproj"><LinkLibraryDependencies>false</LinkLibraryDependencies></ProjectReference>
+    <ProjectReference Include="library\Resources.vcxproj"><UseLibraryDependencyInputs>true</UseLibraryDependencyInputs></ProjectReference>
+    <ResourceCompile Include="first.rc" />
+    <ResourceCompile Include="second.rc"><PreprocessorDefinitions>RESOURCE_ID=202;RESOURCE_VALUE=4321</PreprocessorDefinitions></ResourceCompile>
+    <ResourceCompile Include="excluded.rc"><ExcludedFromBuild>true</ExcludedFromBuild></ResourceCompile>
   </ItemGroup>
 </Project>
 '@ | Set-Content -LiteralPath (Join-Path $fixture 'App.vcxproj')
-    'int helper(); int main() { return helper() != 42; }' | Set-Content -LiteralPath (Join-Path $fixture 'main file.cpp')
+    New-Item -ItemType Directory -Path (Join-Path $fixture 'base includes'), (Join-Path $fixture 'override includes'), (Join-Path $fixture 'lib folder'), (Join-Path $fixture 'library') | Out-Null
+    @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><ProjectConfiguration Include="Release|x64" /></ItemGroup>
+  <PropertyGroup><ConfigurationType>StaticLibrary</ConfigurationType><TargetName>Selected Library</TargetName></PropertyGroup>
+  <ItemGroup><ClCompile Include="used.c" /><ClCompile Include="unused.c" /></ItemGroup>
+  <ItemGroup><ProjectReference Include="Leaf.vcxproj" /></ItemGroup>
+</Project>
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'library\Library.vcxproj')
+    @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><ProjectConfiguration Include="Release|x64" /></ItemGroup>
+  <PropertyGroup><ConfigurationType>StaticLibrary</ConfigurationType><TargetName>Unreferenced Library</TargetName></PropertyGroup>
+  <ItemGroup><ClCompile Include="unreferenced.c" /></ItemGroup>
+</Project>
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'library\Unreferenced.vcxproj')
+    @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><ProjectConfiguration Include="Release|x64" /></ItemGroup>
+  <PropertyGroup><ConfigurationType>StaticLibrary</ConfigurationType><TargetName>Leaf Library</TargetName></PropertyGroup>
+  <ItemGroup><ClCompile Include="leaf_one.c" /><ClCompile Include="leaf_two.c" /></ItemGroup>
+</Project>
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'library\Leaf.vcxproj')
+    @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><ProjectConfiguration Include="Release|x64" /></ItemGroup>
+  <PropertyGroup><ConfigurationType>StaticLibrary</ConfigurationType><TargetName>Right Library</TargetName></PropertyGroup>
+  <ItemGroup><ClCompile Include="right.c" /><ProjectReference Include="Leaf.vcxproj" /></ItemGroup>
+</Project>
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'library\Right.vcxproj')
+    @'
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <ItemGroup><ProjectConfiguration Include="Release|x64" /></ItemGroup>
+  <PropertyGroup><ConfigurationType>StaticLibrary</ConfigurationType><TargetName>Resource Library</TargetName></PropertyGroup>
+  <ItemDefinitionGroup><ResourceCompile><PreprocessorDefinitions>RESOURCE_ID=303;RESOURCE_VALUE=5053</PreprocessorDefinitions></ResourceCompile></ItemDefinitionGroup>
+  <ItemGroup><ResourceCompile Include="..\first.rc" /><ClCompile Include="resource_value.c" /></ItemGroup>
+</Project>
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'library\Resources.vcxproj')
+    'extern int leaf_one(void), right_value(void); int library_value(void) { return leaf_one() + right_value(); }' | Set-Content -LiteralPath (Join-Path $fixture 'library\used.c')
+    'extern int leaf_two(void); int right_value(void) { return leaf_two(); }' | Set-Content -LiteralPath (Join-Path $fixture 'library\right.c')
+    'int leaf_one(void) { return 30; }' | Set-Content -LiteralPath (Join-Path $fixture 'library\leaf_one.c')
+    'int leaf_two(void) { return 47; }' | Set-Content -LiteralPath (Join-Path $fixture 'library\leaf_two.c')
+    'int resource_linkage_value(void) { return 99; }' | Set-Content -LiteralPath (Join-Path $fixture 'library\resource_value.c')
+    'extern int missing(void); int unused(void) { return missing(); }' | Set-Content -LiteralPath (Join-Path $fixture 'library\unused.c')
+    'int library_value(void) { return -99; }' | Set-Content -LiteralPath (Join-Path $fixture 'library\unreferenced.c')
+    '#define ORDER 1' | Set-Content -LiteralPath (Join-Path $fixture 'base includes\selected.h')
+    '#define ORDER 3' | Set-Content -LiteralPath (Join-Path $fixture 'override includes\selected.h')
+    @'
+#include <windows.h>
+int helper();
+extern "C" int override_value(void), ordered_value(void), empty_value(void), extra_value(void), library_value(void), resource_linkage_value(void);
+static int resource_value(int id) {
+    HRSRC resource = FindResourceA(0, MAKEINTRESOURCEA(id), MAKEINTRESOURCEA(10));
+    if (!resource || SizeofResource(0, resource) != 2) return -1;
+    return *(const unsigned short *)LockResource(LoadResource(0, resource));
+}
+int main() {
+    return helper() != 42 || override_value() != 10 || ordered_value() != 43
+        || empty_value() != 1 || extra_value() != 9 || library_value() != 77
+        || resource_value(101) != 1234 || resource_value(202) != 4321
+        || resource_value(303) != 5053 || resource_linkage_value() != 99;
+}
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'main file.cpp')
+    @'
+LANGUAGE 9, 1
+RESOURCE_ID RCDATA BEGIN RESOURCE_VALUE END
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'first.rc'), (Join-Path $fixture 'second.rc')
+    '#error Excluded resource was compiled' | Set-Content -LiteralPath (Join-Path $fixture 'excluded.rc')
     'extern "C" int value(void); int helper() { return value(); }' | Set-Content -LiteralPath (Join-Path $fixture 'helper.cpp')
     'int value(void) { return BASE + EXTRA; }' | Set-Content -LiteralPath (Join-Path $fixture 'per_file.c')
+    @'
+#include "selected.h"
+#ifdef PROJECT_ONLY
+#error A replacement per-file definition inherited project definitions
+#endif
+int override_value(void) { return BASE + ORDER; }
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'override.c')
+    "#include `"selected.h`"`nint ordered_value(void) { return BASE + ORDER; }" | Set-Content -LiteralPath (Join-Path $fixture 'ordered.c')
+    @'
+#ifdef BASE
+#error Empty per-file definitions must clear the project defaults
+#endif
+int empty_value(void) { return 1; }
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'empty.c')
+    'int extra_value(void) { return 9; }' | Set-Content -LiteralPath (Join-Path $fixture 'lib folder\extra.c')
+    & $CompilerPath -c (Join-Path $fixture 'lib folder\extra.c') -o (Join-Path $fixture 'lib folder\extra.obj')
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to compile the fixture link dependency' }
     '#error Excluded source was compiled' | Set-Content -LiteralPath (Join-Path $fixture 'excluded.cpp')
     & $ExporterPath -ProjectRoot $fixture
     $manifestPath = Join-Path $fixture 'builds\manifest\Release-x64.json'
     $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-    if ($manifest.projects[0].sources.Count -ne 3) { throw 'Source selection did not preserve ExcludedFromBuild' }
+    if ($manifest.projects[0].sources.Count -ne 6) { throw 'Source selection did not preserve item-group conditions and ExcludedFromBuild' }
     if ($manifest.projects[0].sources[2].defines -notcontains 'EXTRA=2') { throw 'Per-file definitions were lost' }
+    if ($manifest.projects[0].resources.Count -ne 2) { throw 'Resource selection was not preserved' }
     foreach ($unity in @($false, $true)) {
         $output = Join-Path $fixture $(if ($unity) { 'unity' } else { 'separate' })
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-CompilerPath', $CompilerPath,
-            '-ProjectRoot', $fixture, '-OutDir', $output, '-Jobs', '2')
+            '-Toolchain', $Toolchain, '-ProjectRoot', $fixture, '-OutDir', $output, '-Jobs', '2')
         if ($unity) { $arguments += '-Unity' }
         & powershell @arguments
         if ($LASTEXITCODE -ne 0) { throw "Manifest build failed (Unity=$unity)" }
-        $executable = Join-Path $fixture 'builds\Selected App.exe'
+        $executable = Join-Path $fixture 'custom output\Selected App.exe'
         & $executable
         if ($LASTEXITCODE -ne 0) { throw "Manifest executable failed (Unity=$unity)" }
         $inputs = Get-Content -Raw -LiteralPath (Join-Path $output 'compile_inputs.json') | ConvertFrom-Json
-        if (@($inputs | ForEach-Object { $_.Inputs }).Count -ne 3) { throw 'Driver changed the selected source list' }
+        if (@($inputs | ForEach-Object { $_.Inputs }).Count -ne 13) { throw 'Driver changed the selected source list' }
+        $archives = @(Get-ChildItem -LiteralPath $output -Filter '*.lib')
+        if ($archives.Count -ne 5) { throw 'Static-library projects did not produce separate archives' }
+        foreach ($archive in $archives) {
+            if ([Text.Encoding]::ASCII.GetString([IO.File]::ReadAllBytes($archive.FullName), 0, 8) -ne "!<arch>`n") {
+                throw 'Static-library output is not an archive'
+            }
+        }
     }
-    Write-Host 'Build manifest: source selection, per-file flags, spaced paths, compile/link, and unity passed.'
+    # The selected warning policy is enforced, and a diagnostic build can
+    # explicitly relax it without changing CodeClip's project settings.
+    Add-Content -LiteralPath (Join-Path $fixture 'empty.c') -Value '#warning manifest_fixture_warning'
+    $warningOutput = Join-Path $fixture 'warnings'
+    $warningArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-CompilerPath', $CompilerPath,
+        '-Toolchain', $Toolchain, '-ProjectRoot', $fixture, '-OutDir', $warningOutput, '-Jobs', '2', '-SkipLink')
+    & powershell @warningArgs
+    if ($LASTEXITCODE -eq 0) { throw 'The manifest warning-as-error policy was ignored' }
+    & powershell @warningArgs -AllowWarnings
+    if ($LASTEXITCODE -ne 0) { throw 'The explicit warning-policy override was ignored' }
+    # A manifest generated before effective per-source overrides were added
+    # must still combine its project flags and per-source additions.
+    'int main(void) { return BASE + EXTRA != 42; }' | Set-Content -LiteralPath (Join-Path $fixture 'legacy.c')
+    $legacyManifest = @{
+        schemaVersion = 1; platform = 'x64'; projects = @(@{
+            kind = 'Application'; targetName = 'Legacy'; directory = $fixture
+            defines = @('BASE=40'); includeDirectories = @(); linkLibraries = @(); libraryDirectories = @()
+            sources = @(@{path = (Join-Path $fixture 'legacy.c'); defines = @('EXTRA=2'); includeDirectories = @()})
+        })
+    }
+    $legacyPath = Join-Path $fixture 'legacy.json'
+    $legacyManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $legacyPath
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $driver -CompilerPath $CompilerPath -Toolchain $Toolchain -ProjectRoot $fixture -ManifestPath $legacyPath -OutDir (Join-Path $fixture 'legacy')
+    if ($LASTEXITCODE -ne 0) { throw 'Legacy manifest build failed' }
+    & (Join-Path $fixture 'builds\Legacy.exe')
+    if ($LASTEXITCODE -ne 0) { throw 'Legacy manifest executable failed' }
+    Write-Host 'Build manifest: conditional selection, effective settings/warning policy, expanded output, archive dependencies, resource data, spaced paths, unity, and legacy compatibility passed.'
 } finally {
     $resolvedFixture = [IO.Path]::GetFullPath($fixture)
     if ($resolvedFixture.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -and

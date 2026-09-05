@@ -44,7 +44,7 @@ struct clMatrix4x4
 
   clMatrix4x4<T> Scaled() const
   {
-    return (*this) * 2;
+    return (*this) * T(2);
   }
 };
 

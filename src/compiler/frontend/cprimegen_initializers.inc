@@ -394,6 +394,15 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
   else
   {
     if ((dtype.t & VT_BTYPE) == VT_STRUCT
+        && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_LOCAL | VT_LVAL)
+        && (int)vtop->c.i == (int)c
+        && is_compatible_unqualified_types(&dtype, &vtop->type))
+    {
+      /* A same-type class prvalue can already occupy the final object. */
+      vpop();
+      return;
+    }
+    if ((dtype.t & VT_BTYPE) == VT_STRUCT
         && struct_needs_memberwise_copy(&dtype))
     {
       SValue dst_ptr, src_ptr, source;
@@ -409,9 +418,13 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       gaddrof();
       src_ptr = *vtop;
       vtop--;
-      copy_construct_struct_memberwise_from_base_ptr(&dtype, &dst_ptr,
-                                                     &src_ptr, 0,
-        (source.type.t & VT_RVALUE_REFERENCE) != 0);
+      if (resolve_copy_constructor_func(&dtype, &source.type))
+        copy_construct_one_lvalue_pair(&dtype, &dst_ptr, &src_ptr, 0,
+          (source.type.t & VT_RVALUE_REFERENCE) != 0);
+      else
+        copy_construct_struct_memberwise_from_base_ptr(&dtype, &dst_ptr,
+                                                       &src_ptr, 0,
+          (source.type.t & VT_RVALUE_REFERENCE) != 0);
     }
     else
     {
@@ -421,6 +434,197 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       vpop();
     }
   }
+}
+
+static int saved_initializer_close(TokenString *expression, int start,
+                                    int opening, int closing)
+{
+  int i, depth = 0;
+  for (i = start; i < expression->len; ++i)
+  {
+    int token = expression->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      i += tok_str_value_extra_words(expression->str, expression->len, i);
+      continue;
+    }
+    if (token == opening) ++depth;
+    else if (token == closing && !--depth) return i;
+  }
+  return -1;
+}
+
+static int saved_initializer_is_direct_constructor(TokenString *expression,
+                                                    CType *type)
+{
+  int first = tok_str_next_non_linenum_index(expression->str, expression->len, 0);
+  int end = tok_str_prev_token_index(expression->str, expression->len,
+                                     expression->len);
+  int close, next_token;
+  if (end >= 0 && expression->str[end] == TOK_EOF)
+    end = tok_str_prev_token_index(expression->str, expression->len, end);
+  while (first < end && expression->str[first] == '(')
+  {
+    close = saved_initializer_close(expression, first, '(', ')');
+    if (close != end) break;
+    first = tok_str_next_non_linenum_index(expression->str, expression->len,
+                                           first + 1);
+    end = tok_str_prev_token_index(expression->str, expression->len, end);
+  }
+  if (first >= end) return 0;
+  if ((expression->str[first] < TOK_UIDENT && expression->str[first] != ':')
+      || TOK_HAS_VALUE(expression->str[first]))
+    return 0;
+  if (is_cpp_lambda_marker(expression->str[first]))
+  {
+    int i;
+    for (i = first + 1; i <= end; ++i)
+    {
+      int token = expression->str[i];
+      if (TOK_HAS_VALUE(token))
+      {
+        i += tok_str_value_extra_words(expression->str, expression->len, i);
+        continue;
+      }
+      if (token == '{')
+        return saved_initializer_close(expression, i, '{', '}') == end;
+    }
+    return 0;
+  }
+  next_token = tok_str_next_non_linenum_index(expression->str, expression->len,
+                                              first + 1);
+  if (next_token <= end && expression->str[next_token] == TOK_LT
+      && find_class_template_def(find_current_namespace_tok(expression->str[first])))
+  {
+    int i, depth = 0, parentheses = 0, type_end = -1;
+    TokenString *type_tokens, *parent;
+    const int *parent_ptr;
+    CType constructed_type;
+    AttributeDef ad;
+    int saved_tok, unused_name = 0, parsed;
+    CValue saved_tokc;
+    for (i = next_token; i <= end; ++i)
+    {
+      int token = expression->str[i];
+      if (TOK_HAS_VALUE(token))
+      {
+        i += tok_str_value_extra_words(expression->str, expression->len, i);
+        continue;
+      }
+      if (token == '(' || token == '[') ++parentheses;
+      else if (token == ')' || token == ']') --parentheses;
+      else if (!parentheses)
+      {
+        if (token == TOK_LT) ++depth;
+        else if (token == TOK_GT) --depth;
+        else if (token == TOK_SAR) depth -= 2;
+        if (!depth) { type_end = i; break; }
+      }
+    }
+    if (type_end < 0) return 0;
+    next_token = tok_str_next_non_linenum_index(expression->str, expression->len,
+                                                type_end + 1);
+    if (next_token > end || expression->str[next_token] != '('
+        || saved_initializer_close(expression, next_token, '(', ')') != end)
+      return 0;
+    type_tokens = tok_str_alloc();
+    for (i = first; i <= type_end; ++i)
+      if (TOK_HAS_VALUE(expression->str[i]))
+        tok_str_add_record(type_tokens, expression->str, expression->len, &i);
+      else tok_str_add(type_tokens, expression->str[i]);
+    tok_str_add(type_tokens, TOK_EOF);
+    saved_tok = tok;
+    saved_tokc = tokc;
+    parent = macro_stack;
+    parent_ptr = macro_ptr;
+    memset(&ad, 0, sizeof(ad));
+    begin_macro(type_tokens, 1);
+    next();
+    parsed = parse_btype(&constructed_type, &ad, 0);
+    if (parsed) type_decl(&constructed_type, &ad, &unused_name, TYPE_ABSTRACT);
+    while (macro_stack && macro_stack != parent) end_macro();
+    macro_ptr = parent_ptr;
+    tok = saved_tok;
+    tokc = saved_tokc;
+    return parsed && is_compatible_unqualified_types(type, &constructed_type);
+  }
+  if (class_tok_matches_unqualified_name(get_struct_type_name_tok(type),
+                                          expression->str[first])
+      && next_token <= end && expression->str[next_token] == '('
+      && saved_initializer_close(expression, next_token, '(', ')') == end)
+    return 1;
+  {
+    int index, angles = 0, call = -1;
+    CType result;
+    /* A single call can have a qualified/member name and explicit template
+       arguments. Reject operators and earlier calls before claiming storage;
+       make().convert() must not give make() the final result object. */
+    for (index = first; index <= end; ++index) {
+      int token = expression->str[index];
+      if (TOK_HAS_VALUE(token)) {
+        if (!angles && token != TOK_LINENUM) return 0;
+        index += tok_str_value_extra_words(expression->str, expression->len, index);
+        continue;
+      }
+      if (!angles && token == '(') { call = index; break; }
+      if (token == '<' || token == TOK_LT) ++angles;
+      else if (token == TOK_GT && angles) --angles;
+      else if ((token == TOK_SAR || token == TOK_SHR) && angles)
+        angles = angles > 1 ? angles - 2 : 0;
+      else if (!angles && token < TOK_UIDENT && token != ':'
+               && token != '.' && token != TOK_ARROW) return 0;
+    }
+    if (call < 0 || saved_initializer_close(expression, call, '(', ')') != end)
+      return 0;
+    infer_saved_arg_types(&expression, &result, 1);
+    if (is_reference_type(&result)) return 0;
+    result.t &= ~VT_RVALUE_REFERENCE;
+    return is_compatible_unqualified_types(type, &result);
+  }
+}
+
+static void emit_class_initializer_expression(TokenString *expression,
+                                               CType *type,
+                                               unsigned long address)
+{
+  TokenString macro, *parent;
+  const int *parent_ptr;
+  CppConstructionDestination destination, *saved_destination;
+  int saved_tok;
+  CValue saved_tokc;
+  prepare_saved_cpp_lambdas(expression);
+  saved_tok = tok;
+  saved_tokc = tokc;
+  parent = macro_stack;
+  parent_ptr = macro_ptr;
+  saved_destination = cpp_construction_destination;
+  destination.type = *type;
+  destination.address = address;
+  destination.storage = VT_LOCAL | VT_LVAL;
+  destination.available = saved_initializer_is_direct_constructor(expression, type);
+  cpp_construction_destination = &destination;
+  macro = *expression;
+  begin_macro(&macro, 0);
+  next();
+  parse_init_elem(EXPR_ANY);
+  while (macro_stack && macro_stack != parent) end_macro();
+  macro_ptr = parent_ptr;
+  cpp_construction_destination = saved_destination;
+  tok = saved_tok;
+  tokc = saved_tokc;
+}
+
+static int parse_direct_class_initializer(CType *type, unsigned long address)
+{
+  TokenString *expression;
+  if (tok != '(' && tok != '[' && tok < TOK_UIDENT)
+    return 0;
+  /* Inspect the complete expression before forwarding storage. For example,
+     in T value = T(1) + T(2), neither operand is value's result object. */
+  skip_or_save_block_ex(&expression, 1);
+  emit_class_initializer_expression(expression, type, address);
+  tok_str_free(expression);
+  return 1;
 }
 
 /* 't' contains the type and storage info. 'c' is the offset of the
@@ -456,9 +660,34 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
     int ncw_prev = nocode_wanted;
     if ((flags & DIF_SIZE_ONLY) && !p->sec)
       ++nocode_wanted;
-    parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
+    if (!(!p->sec && !(flags & DIF_SIZE_ONLY)
+          && is_cpp_translation_unit() && (type->t & VT_BTYPE) == VT_STRUCT
+          && parse_direct_class_initializer(type, c)))
+      parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
     nocode_wanted = ncw_prev;
     flags |= DIF_HAVE_ELEM;
+  }
+
+  if (find_cpp_member_pointer_type(type))
+  {
+    if (!(flags & DIF_HAVE_ELEM))
+    {
+      skip('{');
+      if (tok == '}')
+        vpushi(0);
+      else
+        parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
+      if (tok == ',') next();
+      skip('}');
+    }
+    if (flags & DIF_SIZE_ONLY)
+      vpop();
+    else
+    {
+      convert_cpp_member_pointer(type, 0);
+      init_putv(p, type, c);
+    }
+    return;
   }
 
   if (type->t & VT_ARRAY)
@@ -962,6 +1191,8 @@ err_size:
       }
 #endif
       sym = sym_push(v, type, r, addr);
+      if (!NODATA_WANTED)
+        cpp_eh_mark_local_initializing(sym);
       if (!ad->cleanup_func)
         ad->cleanup_func = resolve_autodtor_func(type);
       if (ad->cleanup_func)
@@ -995,7 +1226,9 @@ err_size:
       CType *tp = type;
       while ((tp->t & (VT_BTYPE | VT_ARRAY)) == (VT_PTR | VT_ARRAY))
         tp = &tp->ref->type;
-      if (tp->t & VT_CONSTANT)
+      if (!has_init && type_requires_class_construction(type))
+        sec = bss_section;
+      else if (tp->t & VT_CONSTANT)
         sec = rodata_section;
       else if (has_init)
       {
@@ -1147,12 +1380,21 @@ err_size:
     if (copy_ctor_init)
     {
       TokenString *call_args[1];
-      call_args[0] = copy_ctor_init;
-      if (!ctor_func)
-        ctor_func = resolve_lifecycle_func(type, TOK_CONSTRUCTOR1);
-      call_lifecycle_constructor_saved_args(&sym->type, sym->r, sym->c,
-                                            VT_CONST, sym, ctor_func,
-                                            call_args, 1);
+      prepare_saved_cpp_lambdas(copy_ctor_init);
+      if (saved_initializer_is_direct_constructor(copy_ctor_init, type))
+      {
+        emit_class_initializer_expression(copy_ctor_init, type, sym->c);
+        init_putv(&p, type, sym->c);
+      }
+      else
+      {
+        call_args[0] = copy_ctor_init;
+        if (!ctor_func)
+          ctor_func = resolve_lifecycle_func(type, TOK_CONSTRUCTOR1);
+        call_lifecycle_constructor_saved_args(&sym->type, sym->r, sym->c,
+                                              VT_CONST, sym, ctor_func,
+                                              call_args, 1);
+      }
     }
     else if (has_ctor_init)
       call_lifecycle_constructor(&sym->type, sym->r, sym->c, sym, ctor_func);
@@ -1191,6 +1433,8 @@ no_alloc:
   nocode_wanted = saved_nocode_wanted;
   if (initialize_nonlocal_vtables)
     initialize_virtual_tables_for_object(&sym->type, sym->r, sym->c, sym);
+  if (sym && (r & VT_VALMASK) == VT_LOCAL && !NODATA_WANTED)
+    cpp_eh_finish_local_initialization(sym);
 }
 
 // Generate Vla Code Saved In Post_Type()

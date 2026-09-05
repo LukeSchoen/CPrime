@@ -1,0 +1,4 @@
+#ifndef _CPC_CONDITION_VARIABLE
+#define _CPC_CONDITION_VARIABLE
+#include <mutex>
+#endif

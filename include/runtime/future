@@ -3,53 +3,169 @@
 
 #include <utility>
 #include <mutex>
+#include <thread>
+#include <exception>
+#include <stdexcept>
 
 namespace std
 {
-  namespace launch
+  enum class launch { async = 1, deferred = 2 };
+  inline launch operator|(launch left, launch right)
+  { return static_cast<launch>(static_cast<int>(left) | static_cast<int>(right)); }
+  inline launch operator&(launch left, launch right)
+  { return static_cast<launch>(static_cast<int>(left) & static_cast<int>(right)); }
+
+  class future_error : public logic_error
   {
-    enum type
+  public:
+    explicit future_error(const char *message) : logic_error(message) {}
+  };
+
+  template<class T> struct __cpc_future_result
+  {
+    T *value;
+    __cpc_future_result() : value(0) {}
+    ~__cpc_future_result() { delete value; }
+    template<class Function> void evaluate(Function &function) { value = new T(function()); }
+    T take() { return std::move(*value); }
+  };
+  template<class T> struct __cpc_future_result<T &>
+  {
+    T *value;
+    __cpc_future_result() : value(0) {}
+    template<class Function> void evaluate(Function &function) { value = &function(); }
+    T &take() { return *value; }
+  };
+  template<> struct __cpc_future_result<void>
+  {
+    template<class Function> void evaluate(Function &function) { function(); }
+    void take() {}
+  };
+
+  template<class T> struct __cpc_future_state : __cpc_future_result<T>
+  {
+    void *worker;
+    bool deferred;
+    exception_ptr exception;
+    mutex completion;
+    __cpc_future_state() : worker(0), deferred(false) {}
+    virtual ~__cpc_future_state() {}
+    virtual void invoke() = 0;
+    void execute()
     {
-      async = 1,
-      deferred = 2
-    };
-  }
+      try { invoke(); }
+      catch (...) { exception = current_exception(); }
+    }
+    static void entry(void *argument)
+    { static_cast<__cpc_future_state *>(argument)->execute(); }
+    void wait()
+    {
+      lock_guard<mutex> lock(completion);
+      if (deferred) { deferred = false; execute(); }
+      if (worker) { __cpc_windows_thread_join(worker); worker = 0; }
+    }
+  };
+
+  template<class T, class Function> struct __cpc_async_state : __cpc_future_state<T>
+  {
+    Function function;
+    explicit __cpc_async_state(Function input) : function(std::move(input)) {}
+    void invoke() { this->evaluate(function); }
+  };
+
+  template<class T> struct __cpc_future_cleanup
+  {
+    __cpc_future_state<T> *state;
+    explicit __cpc_future_cleanup(__cpc_future_state<T> *input) : state(input) {}
+    ~__cpc_future_cleanup() { delete state; }
+  };
 
   template<class T>
   class future
   {
   public:
-    future() : m_value(), m_valid(false) {}
-    explicit future(const T &value) : m_value(value), m_valid(true) {}
-    future(future &&other) : m_value(other.m_value), m_valid(other.m_valid)
+    future() : m_state(0) {}
+    explicit future(__cpc_future_state<T> *state) : m_state(state) {}
+    future(future &&other) : m_state(other.m_state)
     {
-      other.m_valid = false;
+      other.m_state = 0;
     }
+    ~future() { release(); }
     future &operator=(future &&other)
     {
-      m_value = other.m_value;
-      m_valid = other.m_valid;
-      other.m_valid = false;
+      if (this != &other) {
+        release(); m_state = other.m_state; other.m_state = 0;
+      }
       return *this;
     }
     future(const future &) = delete;
     future &operator=(const future &) = delete;
 
-    bool valid() const { return m_valid; }
-    T get() { m_valid = false; return m_value; }
+    bool valid() const { return m_state != 0; }
+    void wait() const
+    {
+      if (!m_state) throw future_error("future has no state");
+      m_state->wait();
+    }
+    T get()
+    {
+      if (!m_state) throw future_error("future has no state");
+      __cpc_future_cleanup<T> cleanup(m_state);
+      m_state = 0;
+      cleanup.state->wait();
+      if (cleanup.state->exception) rethrow_exception(cleanup.state->exception);
+      return cleanup.state->take();
+    }
 
   private:
-    T m_value;
-    bool m_valid;
+    __cpc_future_state<T> *m_state;
+    void release()
+    {
+      if (m_state) {
+        if (!m_state->deferred) m_state->wait();
+        delete m_state; m_state = 0;
+      }
+    }
   };
 
+  template<class T, class Function>
+  future<T> __cpc_start_async(launch policy, Function function)
+  {
+    __cpc_async_state<T, Function> *state = new __cpc_async_state<T, Function>(std::move(function));
+    int flags = static_cast<int>(policy);
+    if (flags & static_cast<int>(launch::async))
+      state->worker = __cpc_windows_thread_create(&__cpc_future_state<T>::entry, state);
+    if (!state->worker) {
+      if (!(flags & static_cast<int>(launch::deferred))) {
+        delete state; throw runtime_error("could not launch asynchronous work");
+      }
+      state->deferred = true;
+    }
+    return future<T>(state);
+  }
+
   template<class Function, class Object, class... Args>
-  auto async(launch::type, Function function, Object *object, Args... args)
+  auto async(launch policy, Function function, Object *object, Args... args)
     -> future<decltype((object->*function)(args...))>
   {
     typedef decltype((object->*function)(args...)) result_type;
-    return future<result_type>((object->*function)(args...));
+    auto task = [=]() mutable { return (object->*function)(args...); };
+    return __cpc_start_async<result_type>(policy, std::move(task));
   }
+
+  template<class Function, class... Args>
+  auto async(launch policy, Function function, Args... args)
+    -> future<decltype(function(args...))>
+  {
+    typedef decltype(function(args...)) result_type;
+    auto task = [=]() mutable { return function(args...); };
+    return __cpc_start_async<result_type>(policy, std::move(task));
+  }
+
+  template<class Function, class... Args>
+  auto async(Function function, Args... args)
+    -> decltype(async(launch::async | launch::deferred, function, args...))
+  { return async(launch::async | launch::deferred, function, args...); }
 }
 
 #endif

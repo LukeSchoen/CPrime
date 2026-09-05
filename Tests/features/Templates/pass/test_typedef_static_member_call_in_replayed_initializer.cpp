@@ -25,6 +25,8 @@ public:
   {
   }
 
+  int sum() const { return m_size.x + m_size.y; }
+
 private:
   Vector2I m_size = Vector2I::Zero();
 };
@@ -32,5 +34,5 @@ private:
 int main()
 {
   Array2<float> values(Vector2I::Zero());
-  return 0;
+  return values.sum() != 0;
 }

@@ -1,3 +1,6 @@
+template<typename T> struct Vec2;
+template<typename T> Vec2<T> clCreateVector(const T &x, const T &y);
+
 template<typename T> struct Vec2
 {
   T x, y;
@@ -10,10 +13,10 @@ template<typename T> template<typename U>
 auto Vec2<T>::operator-(const U &val) const { return clCreateVector(x - val, y - val); }
 template<typename T> template<typename U>
 auto Vec2<T>::operator-(const Vec2<U> &o) const { return clCreateVector(x - o.x, y - o.y); }
-template<typename T> auto clCreateVector(const T &x, const T &y) { return Vec2<T>(x, y); }
+template<typename T> Vec2<T> clCreateVector(const T &x, const T &y) { return Vec2<T>(x, y); }
 int main()
 {
   Vec2<int> a(1,2), b(0,0);
   Vec2<int> c = a - 1;
-  return c.x == 1 ? 0 : 1;
+  return c.x != 0 || c.y != 1;
 }

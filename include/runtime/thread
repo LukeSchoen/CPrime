@@ -2,27 +2,73 @@
 #define _CPC_THREAD
 
 #include <chrono>
-
-extern "C" unsigned int __cpc_windows_hardware_concurrency();
-extern "C" void __cpc_windows_sleep_for_milliseconds(long long milliseconds);
+#include <cprime_thread.h>
+#include <utility>
+#include <stdexcept>
 
 namespace std
 {
+  template<class Function> struct __cpc_thread_task
+  {
+    Function function;
+    explicit __cpc_thread_task(Function input) : function(std::move(input)) {}
+    static void run(void *argument)
+    {
+      __cpc_thread_task *task = static_cast<__cpc_thread_task *>(argument);
+      try { task->function(); }
+      catch (...) { delete task; std::terminate(); }
+      delete task;
+    }
+  };
+
   class thread
   {
   public:
-    thread() {}
-    bool joinable() const { return false; }
-    void join() {}
-    void detach() {}
+    typedef unsigned int id;
+    typedef void *native_handle_type;
+    thread() : m_thread(0) {}
+    template<class Function> explicit thread(Function function) : m_thread(0)
+    {
+      __cpc_thread_task<Function> *task = new __cpc_thread_task<Function>(std::move(function));
+      m_thread = __cpc_windows_thread_create(&__cpc_thread_task<Function>::run, task);
+      if (!m_thread) { delete task; throw runtime_error("could not create thread"); }
+    }
+    ~thread() { if (joinable()) std::terminate(); }
+    thread(const thread &) = delete;
+    thread &operator=(const thread &) = delete;
+    thread(thread &&other) : m_thread(other.m_thread) { other.m_thread = 0; }
+    thread &operator=(thread &&other)
+    {
+      if (joinable()) std::terminate();
+      m_thread = other.m_thread; other.m_thread = 0;
+      return *this;
+    }
+    bool joinable() const { return m_thread != 0; }
+    void join()
+    {
+      if (!joinable() || get_id() == __cpc_windows_thread_id())
+        throw runtime_error("thread cannot be joined");
+      __cpc_windows_thread_join(m_thread); m_thread = 0;
+    }
+    void detach()
+    {
+      if (!joinable()) throw runtime_error("thread is not joinable");
+      __cpc_windows_thread_detach(m_thread); m_thread = 0;
+    }
+    id get_id() const { return m_thread ? __cpc_windows_thread_handle_id(m_thread) : 0; }
+    native_handle_type native_handle() { return m_thread; }
     static unsigned int hardware_concurrency()
     {
       return __cpc_windows_hardware_concurrency();
     }
+  private:
+    void *m_thread;
   };
 
   namespace this_thread
   {
+    inline thread::id get_id() { return __cpc_windows_thread_id(); }
+    inline void yield() { __cpc_windows_sleep_for_milliseconds(0); }
     template<typename Duration>
     inline void sleep_for(Duration duration)
     {

@@ -20,5 +20,5 @@ ExplicitRuntimeVec<T>::operator-(const ExplicitRuntimeVec<U> &other) const
 int main()
 {
   auto result = ExplicitRuntimeVec<int>(7, 8) - ExplicitRuntimeVec<int>(1, 2);
-  return result.x;
+  return result.x != 6 || result.y != 6;
 }

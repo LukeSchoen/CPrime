@@ -242,6 +242,9 @@ static void x86_64_asm_func_finish(int stack_size)
 
 static unsigned long func_sub_sp_offset;
 static int func_ret_sub;
+#ifdef CPRIME_TARGET_PE
+static int func_cpp_temp_init_jump;
+#endif
 
 #if defined(CONFIG_CPRIME_BCHECK)
 static addr_t func_bound_offset;
@@ -463,7 +466,7 @@ void load(int r, SValue *sv)
   SValue v1;
 
   fr = sv->r;
-  ft = sv->type.t & ~VT_DEFSIGN;
+  ft = sv->type.t & ~(VT_DEFSIGN | VT_RVALUE_REFERENCE);
   fc = sv->c.i;
   if (fc != sv->c.i && (fr & VT_SYM))
     cprime_error("64 bit addend in load");
@@ -1021,13 +1024,40 @@ static int using_regs(int size)
 
 /* Return the number of registers needed to return the struct, or 0 if
    returning via struct pointer. */
+static int win64_class_requires_indirect_return(CType *type)
+{
+  Sym *field;
+  if (type->t & VT_ARRAY)
+    return win64_class_requires_indirect_return(&type->ref->type);
+  if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref)
+    return 0;
+  if (type->ref->a.lifecycle_ctor || type->ref->a.lifecycle_dtor)
+    return 1;
+  for (field = type->ref->next; field; field = field->next)
+    if (win64_class_requires_indirect_return(&field->type))
+      return 1;
+  return 0;
+}
+
+static int win64_class_requires_indirect_argument(CType *type)
+{
+  Sym *field;
+  if (type->t & VT_ARRAY)
+    return win64_class_requires_indirect_argument(&type->ref->type);
+  if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref) return 0;
+  if (type->ref->a.lifecycle_dtor || resolve_copy_constructor_func(type, type)) return 1;
+  for (field = type->ref->next; field; field = field->next)
+    if (win64_class_requires_indirect_argument(&field->type)) return 1;
+  return 0;
+}
+
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *ret_align, int *regsize)
 {
   int size, align;
   *ret_align = 1; // Never have to re-align return values for x86-64
   *regsize = 8;
   size = type_size(vt, &align);
-  if (!using_regs(size))
+  if (!using_regs(size) || win64_class_requires_indirect_return(vt))
     return 0;
   if (size == 8)
     ret->t = VT_LLONG;
@@ -1061,6 +1091,8 @@ void gfunc_call(int nb_args)
   int size, r, args_size, i, d, bt, struct_size;
   int arg;
   int is_alloca_call;
+  Sym *argument_cleanup_stop = cur_scope ? cur_scope->cl.s : NULL;
+  int argument_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
 
   is_alloca_call = nb_args == 1
                    && (vtop[-nb_args].r & VT_SYM)
@@ -1089,6 +1121,27 @@ void gfunc_call(int nb_args)
     sv = &vtop[-i];
     bt = (sv->type.t &VT_BTYPE);
     size = gfunc_arg_size(&sv->type);
+
+    if (is_cpp_translation_unit() && win64_class_requires_indirect_argument(&sv->type)) {
+      SValue destination, source;
+      int alignment, address;
+      type_size(&sv->type, &alignment);
+      loc = (loc - size) & -alignment;
+      address = loc;
+      vset(&sv->type, VT_LOCAL | VT_LVAL, address);
+      mk_pointer(&vtop->type); gaddrof(); destination = *vtop--;
+      vpushv(sv); mk_pointer(&vtop->type); gaddrof(); source = *vtop--;
+      if (resolve_copy_constructor_func(&sv->type, &sv->type))
+        copy_construct_one_lvalue_pair(&sv->type, &destination, &source, 0,
+            (sv->type.t & VT_RVALUE_REFERENCE) != 0);
+      else
+        copy_construct_struct_memberwise_from_base_ptr(&sv->type, &destination,
+            &source, 0, (sv->type.t & VT_RVALUE_REFERENCE) != 0);
+      sv->r = VT_LOCAL | VT_LVAL | VT_CXX_PARAMETER;
+      sv->r2 = VT_CONST; sv->c.i = address; sv->sym = NULL;
+      cpp_eh_register_parameter_copy(&sv->type, address);
+      continue;
+    }
 
     if (using_regs(size))
       continue; // Arguments Smaller Than 8 Bytes Passed In Registers Or On Stack
@@ -1138,12 +1191,23 @@ void gfunc_call(int nb_args)
   if (func_scratch < struct_size)
     func_scratch = struct_size;
 
+  /* Argument initialization has finished. The called function now owns the
+     parameter objects, including their cleanup on an exceptional exit. */
+  if (cur_scope) {
+    cur_scope->cl.s = argument_cleanup_stop;
+    cur_scope->cl.n = argument_cleanup_depth;
+  }
+
   arg = nb_args;
   struct_size = args_size;
 
   for (i = 0; i < nb_args; i++)
   {
     --arg;
+    if (vtop->r & VT_CXX_PARAMETER) {
+      vtop->r &= ~VT_CXX_PARAMETER;
+      mk_pointer(&vtop->type); gaddrof();
+    }
     bt = (vtop->type.t &VT_BTYPE);
 
     size = gfunc_arg_size(&vtop->type);
@@ -1236,6 +1300,8 @@ void gfunc_call(int nb_args)
 
   gcall_or_jmp(0);
 
+  cpp_eh_note_call();
+
   if ((vtop->r & VT_SYM) && vtop->sym->v == TOK_alloca)
   {
     // Need To Add The "Func_Scratch" Area After Alloca
@@ -1273,7 +1339,7 @@ void gfunc_prolog(Sym *func_sym)
   /* if the function returns a structure, then add an
      implicit pointer parameter */
   size = gfunc_arg_size(&func_vt);
-  if (!using_regs(size))
+  if (!using_regs(size) || win64_class_requires_indirect_return(&func_vt))
   {
     gen_modrm64(0x89, arg_regs[reg_param_index], VT_LOCAL, NULL, addr);
     x86_64_asm_body("movq %%%s, %d(%%rbp)",
@@ -1289,7 +1355,7 @@ void gfunc_prolog(Sym *func_sym)
     type = &sym->type;
     bt = type->t &VT_BTYPE;
     size = gfunc_arg_size(type);
-    if (!using_regs(size))
+    if (!using_regs(size) || win64_class_requires_indirect_argument(type))
     {
       if (reg_param_index < REGN)
       {
@@ -1335,6 +1401,15 @@ void gfunc_prolog(Sym *func_sym)
     }
     reg_param_index++;
   }
+  func_cpp_temp_init_jump = 0;
+  if (is_cpp_translation_unit())
+  {
+    /* The initialization block is generated after all temporary flags are
+       known. Registers holding incoming arguments have already been saved. */
+    func_cpp_temp_init_jump = ind;
+    o(0x90909090);
+    o(0x90);
+  }
 #ifdef CONFIG_CPRIME_BCHECK
   if (cprime_state->do_bounds_check)
     gen_bounds_prolog();
@@ -1368,6 +1443,15 @@ void gfunc_epilog(void)
     g(func_ret_sub);
     g(func_ret_sub >> 8);
     x86_64_asm_body("ret $%d", func_ret_sub);
+  }
+
+  if (func_cpp_temp_init_jump && cpp_temp_has_flags())
+  {
+    int body = func_cpp_temp_init_jump + 5;
+    cur_text_section->data[func_cpp_temp_init_jump] = 0xe9;
+    write32le(cur_text_section->data + func_cpp_temp_init_jump + 1, ind - body);
+    cpp_temp_emit_flag_initializers();
+    gjmp_addr(body);
   }
 
   v = -loc;
