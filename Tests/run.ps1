@@ -112,18 +112,6 @@ if (-not (Test-Path -LiteralPath $testsRoot)) {
 $passDir = Join-Path $testsRoot "pass"
 $failDir = Join-Path $testsRoot "fail"
 
-function Remove-StaleTempDirs {
-    param([string]$Root)
-
-    Get-ChildItem -LiteralPath $Root -Force -Directory -ErrorAction SilentlyContinue |
-        Where-Object { $_.Name -like ".tmp-*" } |
-        ForEach-Object {
-            Remove-Item -Recurse -Force -LiteralPath $_.FullName -ErrorAction SilentlyContinue
-        }
-}
-
-Remove-StaleTempDirs -Root $scriptDir
-
 $workDir = Join-Path ([System.IO.Path]::GetTempPath()) ("cprime-language-tests-" + $PID + "-" + ([guid]::NewGuid().ToString("N")))
 
 if (Test-Path -LiteralPath $workDir) {
@@ -257,5 +245,4 @@ exit 0
     if (Test-Path -LiteralPath $workDir) {
         Remove-Item -Recurse -Force -LiteralPath $workDir -ErrorAction SilentlyContinue
     }
-    Remove-StaleTempDirs -Root $scriptDir
 }

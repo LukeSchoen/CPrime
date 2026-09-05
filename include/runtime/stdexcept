@@ -1,0 +1,33 @@
+#ifndef _CPC_STDEXCEPT
+#define _CPC_STDEXCEPT
+
+namespace std
+{
+  class exception
+  {
+  public:
+    exception() {}
+    virtual ~exception() {}
+    virtual const char *what() const { return "std::exception"; }
+  };
+
+  class logic_error : public exception
+  {
+  public:
+    explicit logic_error(const char *message) : m_message(message) {}
+    const char *what() const override { return m_message; }
+  private:
+    const char *m_message;
+  };
+
+  class runtime_error : public exception
+  {
+  public:
+    explicit runtime_error(const char *message) : m_message(message) {}
+    const char *what() const override { return m_message; }
+  private:
+    const char *m_message;
+  };
+}
+
+#endif

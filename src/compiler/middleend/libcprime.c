@@ -1725,7 +1725,24 @@ ST_FUNC void cprime_add_pragma_libs(CPRIMEState *s1)
 {
   int i;
   for (i = 0; i < s1->nb_pragma_libs; i++)
-    cprime_add_library(s1, s1->pragma_libs[i]);
+  {
+    const char *library = s1->pragma_libs[i];
+    size_t len = strlen(library);
+    char normalized[1024];
+
+    /* MSVC source commonly spells pragma libraries as "Name.lib".  CPC's
+       library resolver accepts logical names and supplies the platform's
+       .def/.dll/lib*.a suffix itself, so remove only that conventional PE
+       suffix before lookup. */
+    if (len > 4 && PATHCMP(library + len - 4, ".lib") == 0
+        && len - 4 < sizeof(normalized))
+    {
+      memcpy(normalized, library, len - 4);
+      normalized[len - 4] = '\0';
+      library = normalized;
+    }
+    cprime_add_library(s1, library);
+  }
 }
 
 //******************************************************

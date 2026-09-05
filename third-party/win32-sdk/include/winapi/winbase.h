@@ -1321,6 +1321,8 @@ extern "C" {
   WINBASEAPI WINBOOL WINAPI IsDebuggerPresent(VOID);
   WINBASEAPI WINBOOL WINAPI CheckRemoteDebuggerPresent(HANDLE hProcess,PBOOL pbDebuggerPresent);
   WINBASEAPI VOID WINAPI DebugBreak(VOID);
+  WINBASEAPI USHORT WINAPI RtlCaptureStackBackTrace(ULONG FramesToSkip,ULONG FramesToCapture,PVOID *BackTrace,PULONG BackTraceHash);
+#define CaptureStackBackTrace RtlCaptureStackBackTrace
   WINBASEAPI WINBOOL WINAPI WaitForDebugEvent(LPDEBUG_EVENT lpDebugEvent,DWORD dwMilliseconds);
   WINBASEAPI WINBOOL WINAPI ContinueDebugEvent(DWORD dwProcessId,DWORD dwThreadId,DWORD dwContinueStatus);
   WINBASEAPI WINBOOL WINAPI DebugActiveProcess(DWORD dwProcessId);

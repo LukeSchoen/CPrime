@@ -10,17 +10,21 @@ static int is_current_class_qualified_nested_tok(int name_tok)
 {
   const char *owner_name, *name;
   size_t owner_len, name_len;
+  int class_i;
 
   if (nb_defining_class_stack <= 0 || name_tok < TOK_UIDENT)
     return 0;
-  owner_name = get_tok_str(defining_class_stack[nb_defining_class_stack - 1],
-                           NULL);
   name = get_tok_str(name_tok, NULL);
-  owner_len = strlen(owner_name);
   name_len = strlen(name);
-  return name_len > owner_len
-         && !strncmp(name, owner_name, owner_len)
-         && name[owner_len] == '_';
+  for (class_i = nb_defining_class_stack - 1; class_i >= 0; --class_i)
+  {
+    owner_name = get_tok_str(defining_class_stack[class_i], NULL);
+    owner_len = strlen(owner_name);
+    if (name_len > owner_len && !strncmp(name, owner_name, owner_len)
+        && name[owner_len] == '_')
+      return 1;
+  }
+  return 0;
 }
 
 static int find_current_class_nested_type_tok(int name_tok)
@@ -31,6 +35,8 @@ static int find_current_class_nested_type_tok(int name_tok)
     return name_tok;
   for (class_i = nb_defining_class_stack - 1; class_i >= 0; --class_i)
   {
+    if (class_tok_matches_unqualified_name(defining_class_stack[class_i], name_tok))
+      return defining_class_stack[class_i];
     int nested_tok = make_static_member_tok(defining_class_stack[class_i],
                                             name_tok);
     if (struct_find(nested_tok))
@@ -77,18 +83,93 @@ static int make_current_namespace_tok(int name_tok)
   return make_namespace_tok_from_parts(parts, nb_namespace_stack + 1);
 }
 
+static void note_current_namespace_scope(void)
+{
+  int name = make_namespace_tok_from_parts(namespace_stack, nb_namespace_stack);
+  int i;
+  NamespaceScope *scope;
+  for (i = 0; i < nb_namespace_scopes; ++i)
+    if (namespace_scopes[i].name_tok == name)
+      return;
+  namespace_scopes = cprime_realloc(namespace_scopes,
+                       (nb_namespace_scopes + 1) * sizeof(*namespace_scopes));
+  scope = &namespace_scopes[nb_namespace_scopes++];
+  scope->name_tok = name;
+  scope->depth = nb_namespace_stack;
+  memcpy(scope->parts, namespace_stack, sizeof(namespace_stack));
+}
+
+static void enter_symbol_namespace(int symbol_tok)
+{
+  const char *name = get_tok_str(symbol_tok, NULL);
+  size_t name_len = strlen(name), best_len = 0;
+  NamespaceScope *best = NULL;
+  int i;
+  if (strncmp(name, "__cpc_ns_", 9))
+    return;
+  for (i = 0; i < nb_namespace_scopes; ++i)
+  {
+    NamespaceScope *scope = &namespace_scopes[i];
+    const char *prefix = get_tok_str(scope->name_tok, NULL);
+    size_t len = strlen(prefix);
+    if (len > best_len && name_len > len && name[len] == '_'
+        && !strncmp(name, prefix, len))
+      best = scope, best_len = len;
+  }
+  if (best)
+  {
+    nb_namespace_stack = best->depth;
+    memcpy(namespace_stack, best->parts, sizeof(namespace_stack));
+  }
+}
+
+static int namespace_member_exists(int t)
+{
+  return sym_find(t) || global_symbol_find(t) || struct_find(t)
+         || find_class_template_def(t) || find_function_template_def(t);
+}
+
+static int find_namespace_tok_from_parts(const int *parts, int nb_parts)
+{
+  int t = make_namespace_tok_from_parts(parts, nb_parts);
+  int expanded[18], i, candidate;
+  if (!unnamed_namespace_tok || namespace_member_exists(t) || nb_parts < 1)
+    return t;
+  /* An unnamed namespace supplies an implicit using-directive in its parent,
+     including for qualified lookup into that parent. */
+  for (i = 0; i < nb_parts - 1; ++i)
+    expanded[i] = parts[i];
+  expanded[nb_parts - 1] = unnamed_namespace_tok;
+  expanded[nb_parts] = parts[nb_parts - 1];
+  candidate = make_namespace_tok_from_parts(expanded, nb_parts + 1);
+  return namespace_member_exists(candidate) ? candidate : t;
+}
+
 static int find_current_namespace_tok(int name_tok)
 {
-  int t, i;
+  int t, i, depth, parts[17];
+  Sym *local;
 
   if (name_tok < TOK_UIDENT)
     return name_tok;
-  if (nb_namespace_stack)
+  local = sym_find(name_tok);
+  if (local && local->sym_scope)
+    return name_tok;
+  for (i = 0; i < nb_namespace_stack; ++i)
+    parts[i] = namespace_stack[i];
+  for (depth = nb_namespace_stack; depth >= 0; --depth)
   {
-    t = make_current_namespace_tok(name_tok);
-    if (sym_find(t) || global_symbol_find(t) || struct_find(t)
-        || find_class_template_def(t) || find_function_template_def(t))
+    parts[depth] = name_tok;
+    t = depth ? find_namespace_tok_from_parts(parts, depth + 1) : name_tok;
+    if (namespace_member_exists(t))
       return t;
+    if (!depth && unnamed_namespace_tok)
+    {
+      int anonymous_parts[2] = { unnamed_namespace_tok, name_tok };
+      t = make_namespace_tok_from_parts(anonymous_parts, 2);
+      if (namespace_member_exists(t))
+        return t;
+    }
   }
   for (i = nb_using_namespace_toks - 1; i >= 0; --i)
   {
@@ -178,7 +259,7 @@ static void note_namespace_tok(int ns_tok)
   namespace_toks[nb_namespace_toks++] = ns_tok;
 }
 
-static int append_type_mangle(char *name, int name_size, CType *type)
+static int append_type_mangle_string(CString *name, CType *type)
 {
   int bt = type->t & VT_BTYPE;
   CType pt;
@@ -187,27 +268,27 @@ static int append_type_mangle(char *name, int name_size, CType *type)
   if (bt == VT_PTR)
   {
     pt = *pointed_type(type);
-    if (!append_type_mangle(name, name_size, &pt))
+    if (!append_type_mangle_string(name, &pt))
       return 0;
     if (type->t & VT_RVALUE_REFERENCE)
-      pstrcat(name, name_size, "_rref");
+      cstr_cat(name, "_rref", -1);
     else
-      pstrcat(name, name_size, (type->t & VT_REFERENCE) ? "_ref" : "_ptr");
+      cstr_cat(name, (type->t & VT_REFERENCE) ? "_ref" : "_ptr", -1);
     return 1;
   }
 
   if (bt == VT_FUNC)
   {
     Sym *arg;
-    pstrcat(name, name_size, "_func");
-    if (!type->ref || !append_type_mangle(name, name_size,
+    cstr_cat(name, "_func", -1);
+    if (!type->ref || !append_type_mangle_string(name,
                                           &type->ref->type))
       return 0;
     for (arg = type->ref->next; arg; arg = arg->next)
-      if (!append_type_mangle(name, name_size, &arg->type))
+      if (!append_type_mangle_string(name, &arg->type))
         return 0;
     if (type->ref->f.func_type == FUNC_ELLIPSIS)
-      pstrcat(name, name_size, "_vararg");
+      cstr_cat(name, "_vararg", -1);
     return 1;
   }
 
@@ -243,38 +324,73 @@ static int append_type_mangle(char *name, int name_size, CType *type)
   else if (bt == VT_FLOAT)
     pstrcpy(part, sizeof(part), "float");
   else if (bt == VT_DOUBLE)
-    pstrcpy(part, sizeof(part), "double");
+    pstrcpy(part, sizeof(part), (type->t & VT_LONG) ? "ldouble" : "double");
+  else if (bt == VT_LDOUBLE)
+    pstrcpy(part, sizeof(part), "ldouble");
   else if (bt == VT_STRUCT)
   {
     int struct_tok = get_struct_type_name_tok(type);
     if (!struct_tok)
       return 0;
-    snprintf(part, sizeof(part), "struct_%s", get_tok_str(struct_tok, NULL));
+    cstr_cat(name, "_struct_", -1);
+    cstr_cat(name, get_tok_str(struct_tok, NULL), -1);
+    return 1;
   }
   else
     return 0;
 
-  pstrcat(name, name_size, "_");
-  pstrcat(name, name_size, part);
+  cstr_cat(name, "_", -1);
+  cstr_cat(name, part, -1);
   return 1;
+}
+
+/* Bounded callers can choose a different stable identifier on overflow;
+   never accept a truncated type spelling as an overload identity. */
+static int append_type_mangle(char *name, int name_size, CType *type)
+{
+  CString suffix;
+  int ok, len = strlen(name);
+  cstr_new(&suffix);
+  ok = append_type_mangle_string(&suffix, type);
+  if (ok && len + suffix.size < name_size)
+  {
+    memcpy(name + len, suffix.data, suffix.size);
+    name[len + suffix.size] = 0;
+  }
+  else
+    ok = 0;
+  cstr_free(&suffix);
+  return ok;
+}
+
+static int make_parameter_mangled_tok(int base_tok, Sym *first_arg)
+{
+  CString name;
+  Sym *arg;
+  int result;
+  cstr_new(&name);
+  cstr_cat(&name, get_tok_str(base_tok, NULL), -1);
+  if (!first_arg)
+    cstr_cat(&name, "_void", -1);
+  for (arg = first_arg; arg; arg = arg->next)
+    if (!append_type_mangle_string(&name, &arg->type))
+      cprime_error("unsupported overloaded function parameter type");
+  cstr_ccat(&name, 0);
+  result = tok_alloc_const(name.data);
+  cstr_free(&name);
+  return result;
 }
 
 static int make_member_func_tok_for_type(int struct_tok, int method_tok,
                                           CType *func_type)
 {
-  char name[512];
-  Sym *arg;
   int base_tok;
 
-  snprintf(name, sizeof(name), "%s_%s",
-           get_tok_str(struct_tok, NULL),
-           get_tok_str(method_tok, NULL));
-  if (func_type && (func_type->t & VT_CONSTANT))
-    pstrcat(name, sizeof(name), "_const");
+  base_tok = make_member_func_tok_with_cv(struct_tok, method_tok,
+                                         func_type ? func_type->t : 0);
   if (!func_type || !func_type->ref || !func_type->ref->next)
   {
     MemberFuncOverload *o;
-    base_tok = tok_alloc_const(name);
     for (o = member_func_candidates(struct_tok, method_tok);
          o; o = o->bucket_next)
       if (o->struct_tok == struct_tok && o->method_tok == method_tok
@@ -283,33 +399,25 @@ static int make_member_func_tok_for_type(int struct_tok, int method_tok,
         return o->mangled_tok;
     if (sym_find(base_tok) || global_symbol_find(base_tok))
     {
-      pstrcat(name, sizeof(name), "_void");
-      return tok_alloc_const(name);
+      return make_parameter_mangled_tok(base_tok, NULL);
     }
     return base_tok;
   }
-  base_tok = tok_alloc_const(name);
   if (!sym_find(base_tok) && !global_symbol_find(base_tok))
     return base_tok;
-  for (arg = func_type->ref->next; arg; arg = arg->next)
-    if (!append_type_mangle(name, sizeof(name), &arg->type))
-      cprime_error("unsupported overloaded member function parameter type");
-  return tok_alloc_const(name);
+  return make_parameter_mangled_tok(base_tok, func_type->ref->next);
 }
 
 static int make_lifecycle_func_tok_for_type(int struct_tok, int method_tok,
                                             CType *lowered_type,
                                             int prefer_existing)
 {
-  char name[512];
+  int base_tok = make_member_func_tok(struct_tok, method_tok);
   Sym *arg;
   int same_count = 0, other_count = 0, same_mangled_tok = 0;
   int explicit_arg_count = member_func_explicit_arg_count(lowered_type);
   MemberFuncOverload *o;
 
-  snprintf(name, sizeof(name), "%s_%s",
-           get_tok_str(struct_tok, NULL),
-           get_tok_str(method_tok, NULL));
   for (o = member_func_overloads; o; o = o->next)
     if (o->struct_tok == struct_tok && o->method_tok == method_tok
         && o->explicit_arg_count == explicit_arg_count)
@@ -320,20 +428,17 @@ static int make_lifecycle_func_tok_for_type(int struct_tok, int method_tok,
     }
     else if (o->struct_tok == struct_tok && o->method_tok == method_tok)
       other_count++;
-  if (same_count == 1 && prefer_existing)
+  if (same_count == 1 && (prefer_existing || explicit_arg_count == 0))
     return same_mangled_tok;
   if (!lowered_type || !lowered_type->ref || !lowered_type->ref->next)
-    return tok_alloc_const(name);
-  if (!same_count && !other_count && !sym_find(tok_alloc_const(name))
-      && !global_symbol_find(tok_alloc_const(name)))
-    return tok_alloc_const(name);
+    return base_tok;
+  if (!same_count && !other_count && !sym_find(base_tok)
+      && !global_symbol_find(base_tok))
+    return base_tok;
   arg = lowered_type->ref->next;
   if (arg)
     arg = arg->next;
-  for (; arg; arg = arg->next)
-    if (!append_type_mangle(name, sizeof(name), &arg->type))
-      cprime_error("unsupported overloaded lifecycle parameter type");
-  return tok_alloc_const(name);
+  return arg ? make_parameter_mangled_tok(base_tok, arg) : base_tok;
 }
 
 static int member_func_explicit_arg_count(CType *lowered_type)
@@ -623,8 +728,7 @@ static int is_cpp_translation_unit(void)
 static int make_free_func_tok_for_type_ex(int name_tok, CType *func_type,
                                           int allow_member_base)
 {
-  char name[512];
-  Sym *arg, *base;
+  Sym *base;
 
   if (!func_type || (func_type->t & VT_BTYPE) != VT_FUNC || !func_type->ref)
     return name_tok;
@@ -655,13 +759,7 @@ static int make_free_func_tok_for_type_ex(int name_tok, CType *func_type,
       && !(allow_member_base && is_member_func_mangled_tok(name_tok)))
     note_free_func_overload(name_tok, name_tok, &base->type);
 
-  pstrcpy(name, sizeof(name), get_tok_str(name_tok, NULL));
-  if (!func_type->ref->next)
-    pstrcat(name, sizeof(name), "_void");
-  for (arg = func_type->ref->next; arg; arg = arg->next)
-    if (!append_type_mangle(name, sizeof(name), &arg->type))
-      cprime_error("unsupported overloaded function parameter type");
-  return tok_alloc_const(name);
+  return make_parameter_mangled_tok(name_tok, func_type->ref->next);
 }
 
 static int make_free_func_tok_for_type(int name_tok, CType *func_type)
@@ -869,6 +967,7 @@ static int probe_template_call_args(TokenString **args, CType *types,
       if (n >= max_args)
         cprime_error("too many template call arguments");
       skip_or_save_block(&args[n]);
+      prepare_saved_cpp_lambdas(args[n]);
       tok_str_append_without_eof(replay, args[n]);
       n++;
       if (tok == ')')
@@ -989,6 +1088,7 @@ static void infer_saved_arg_type(TokenString *arg, CType *type)
   if (saved_arg_functional_temporary_type(arg, type))
     return;
 
+  prepare_saved_cpp_lambdas(arg);
   nocode_wanted++;
   if (getenv("CPC_TRACE_SHALLOW")
       && token_string_contains_tok(arg, tok_alloc_const("clVector2")))
@@ -1157,6 +1257,22 @@ static int class_value_is_derived_from(CType *derived, CType *base)
 
 static int call_arg_exact_param_type(CType *param_type, CType *arg_type);
 
+static int call_arg_array_reference_compatible(CType *param_type, CType *arg_type)
+{
+  CType *array;
+  CType argument = *arg_type;
+  if (!is_reference_type(param_type))
+    return 1;
+  array = pointed_type(param_type);
+  if (!(array->t & VT_ARRAY))
+    return 1;
+  argument.t &= ~VT_RVALUE_REFERENCE;
+  if (is_reference_type(&argument))
+    argument = *pointed_type(&argument);
+  return (argument.t & VT_ARRAY) && array->ref && argument.ref
+         && (array->ref->c < 0 || array->ref->c == argument.ref->c);
+}
+
 static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
 {
   CType decayed_arg, arg_value_type;
@@ -1172,6 +1288,8 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
   param_value_type.t &= ~VT_RVALUE_REFERENCE;
   if (is_reference_type(&param_value_type))
     param_value_type = *pointed_type(&param_value_type);
+  if (!call_arg_array_reference_compatible(param_type, arg_type))
+    return 0;
   if (arg_type->t & VT_NULLPTR_TYPE)
   {
     if ((param_value_type.t & VT_BTYPE) == VT_PTR)
@@ -1209,6 +1327,11 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
       return 0;
     if (is_compatible_unqualified_types(param_pointed, &arg_value_type)
         || class_value_is_derived_from(&arg_value_type, param_pointed))
+      return 1;
+    if (!(param_type->t & VT_RVALUE_REFERENCE)
+        && (param_pointed->t & VT_CONSTANT)
+        && btype_is_arithmetic_scalar(param_pointed->t & VT_BTYPE)
+        && btype_is_arithmetic_scalar(arg_value_type.t & VT_BTYPE))
       return 1;
     if (!(param_type->t & VT_RVALUE_REFERENCE)
         && (param_pointed->t & VT_CONSTANT)
@@ -1260,6 +1383,9 @@ static int call_arg_match_rank(CType *param_type, CType *arg_type)
   CType normalized_arg;
   CType *param_pointed;
 
+  if (!call_arg_array_reference_compatible(param_type, arg_type))
+    return -1;
+
   arg_value_type = *arg_type;
   arg_value_type.t &= ~VT_RVALUE_REFERENCE;
   if (is_reference_type(&arg_value_type))
@@ -1268,6 +1394,16 @@ static int call_arg_match_rank(CType *param_type, CType *arg_type)
   param_value_type.t &= ~VT_RVALUE_REFERENCE;
   if (is_reference_type(&param_value_type))
     param_value_type = *pointed_type(&param_value_type);
+  if (is_reference_type(param_type) && (param_value_type.t & VT_ARRAY))
+  {
+    CType *target_element = pointed_type(&param_value_type);
+    CType *source_element = pointed_type(&arg_value_type);
+    int cv = VT_CONSTANT | VT_VOLATILE;
+    if ((source_element->t & cv & ~target_element->t)
+        || !is_compatible_unqualified_types(target_element, source_element))
+      return -1;
+    return ((target_element->t ^ source_element->t) & cv) ? 2 : 1;
+  }
   if (arg_type->t & VT_NULLPTR_TYPE)
   {
     if ((param_value_type.t & VT_BTYPE) == VT_PTR)
@@ -1321,6 +1457,11 @@ static int call_arg_match_rank(CType *param_type, CType *arg_type)
     }
     if (class_value_is_derived_from(&arg_value_type, param_pointed))
       return 3;
+    if (!(param_type->t & VT_RVALUE_REFERENCE)
+        && (param_pointed->t & VT_CONSTANT)
+        && btype_is_arithmetic_scalar(param_pointed->t & VT_BTYPE)
+        && btype_is_arithmetic_scalar(arg_value_type.t & VT_BTYPE))
+      return 4;
     if (!(param_type->t & VT_RVALUE_REFERENCE)
         && (param_pointed->t & VT_CONSTANT)
         && class_has_single_arg_constructor_for(param_pointed, &arg_value_type))
@@ -1458,6 +1599,9 @@ static int call_arg_exact_param_type(CType *param_type, CType *arg_type)
 {
   CType param = *param_type;
   CType arg = *arg_type;
+
+  if (!call_arg_array_reference_compatible(param_type, arg_type))
+    return 0;
 
   if (param.t & VT_NULLPTR_TYPE)
     return 0;
@@ -2113,13 +2257,6 @@ static int try_call_cpp_binary_operator(int op)
   stable_func_type = *func_sym->type.ref;
   func_type = &stable_func_type;
   saved_ret_type = func_type->type;
-  if ((saved_ret_type.t & VT_BTYPE) != VT_STRUCT
-      && (op == '+' || op == '-' || op == '*' || op == '/'
-          || op == TOK_SHL || op == TOK_SAR))
-  {
-    vpop();
-    return 1;
-  }
   sa = func_type->next;
   if (!sa || !sa->next || sa->next->next)
     cprime_error("operator overload must have exactly one explicit parameter");

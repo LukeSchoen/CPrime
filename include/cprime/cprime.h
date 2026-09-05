@@ -356,7 +356,9 @@ struct SymAttr {
     lifecycle_ctor : 1,
     lifecycle_dtor : 1,
     integral_constexpr : 1,
-    xxxx        : 13;
+    scoped_enum : 1,
+    local_tag_alias : 1,
+    xxxx        : 11;
 };
 
 struct FuncAttr {
@@ -985,6 +987,8 @@ struct filespec {
 #define TOK_PPNUM   0xcd
 #define TOK_PPSTR   0xce
 #define TOK_LINENUM 0xcf
+/* Internal operator used only in lowered constructor member initializers. */
+#define TOK_INIT_MEMBER 0xd0
 
 #define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_LINENUM)
 

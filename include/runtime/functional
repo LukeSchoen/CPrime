@@ -1,0 +1,39 @@
+#ifndef _CPC_FUNCTIONAL
+#define _CPC_FUNCTIONAL
+
+#include <type_traits>
+
+namespace std
+{
+  template<class T>
+  class reference_wrapper
+  {
+  public:
+    reference_wrapper(T &value) : m_pointer(&value) {}
+    reference_wrapper(const reference_wrapper &other) : m_pointer(other.m_pointer) {}
+    reference_wrapper &operator=(const reference_wrapper &other)
+    {
+      m_pointer = other.m_pointer;
+      return *this;
+    }
+    operator T &() const { return *m_pointer; }
+    T &get() const { return *m_pointer; }
+
+  private:
+    T *m_pointer;
+  };
+
+  template<class T>
+  reference_wrapper<T> ref(T &value)
+  {
+    return reference_wrapper<T>(value);
+  }
+
+  template<class T>
+  reference_wrapper<const T> cref(const T &value)
+  {
+    return reference_wrapper<const T>(value);
+  }
+}
+
+#endif

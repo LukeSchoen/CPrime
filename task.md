@@ -1,3 +1,66 @@
+## Architectural clarification (2026-09-05)
+
+This clarification supersedes the target/mode terminology in historical notes
+below. Racer and FreeLancer are ordinary functions selected by uncommenting
+their includes and calls in ModelViewer.cpp, not build modes or target names.
+CodeClip.exe directs the canonical source manifest for MSVC, Clang, and Prime.
+Compiler selection belongs in toolchain configuration and must not substitute
+sources or select a separate application graph.
+
+The primary objective is general C++ support in CPC, preserving its excellent
+compile speed. CL and pristine upstream projects expose compiler limitations;
+a Racer build is a measurement and compatibility check, not proof of full C++
+conformance. Replace fallback STL implementations, ABI shims, source rewrites,
+and compiler-specific components with correct general compiler/runtime support.
+Compare cpcString and other fallback components with canonical CL components,
+preserve useful improvements, then migrate consumers and retire the forks.
+
+Current implementation wave: reproduce the original CL translation-unit
+failures, fix them with passing regressions, and progressively remove source
+substitutions while keeping the CodeClip-selected application buildable.
+
+--Current State (historical; reverify before relying on these results)
+- CPC currently rebuilds itself in about 1.1–2.0 seconds; the latest bootstrap took 1.3 seconds.
+  - clPrint.cpp and clAssert.cpp have compiled successfully as real object files.
+  - clKNN3.cpp progressed through numerous genuine template-language failures and now reaches nanoflann’s real
+    implementation.
+
+  - I added seven passing template regressions covering:
+      - mixed type/non-type template arguments
+      - dependent nested types
+      - nested templates used as template arguments
+      - CRTP with an incomplete derived class
+      - default template arguments
+      - typename-less qualified template members
+      - reference-parameter member-template deduction and runtime behavior
+
+  - The current failure is a CPC access violation, not a source diagnostic. I narrowed it precisely to CPC saving
+    this nanoflann member-template declaration:
+
+    template <class... Args>
+    explicit KDTreeSingleIndexAdaptor(..., Args&&... args)
+    The crash happens immediately upon processing template, inside skip_or_save_template_member_decl().
+
+  - This is now a small compiler-internal variadic member-template reproducer territory—not a vague failure somewhere
+    in the large header.
+
+  - The working tree also contains the runtime/header compatibility additions needed by these projects, including
+    array, streams, atomics, futures, assertions, exceptions, functional support, unordered_set, and Windows dbghelp
+    declarations.
+
+  - Racer still uses temporary substitutions for KNN/printing/assertion in its current build script. Those have not
+    been declared complete; they must be removed after the originals compile and link.
+
+  Next is to reduce and fix that member-template crash, promote it to a passing regression, compile all three
+  original files again, then remove their Racer substitutions and complete the real Racer compile/link.
+--End of Current State
+
+
+
+
+
+
+
 # CPrime CL Compatibility and Unification Task
 
 Last updated: 2026-08-26

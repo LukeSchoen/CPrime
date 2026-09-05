@@ -11,6 +11,11 @@ namespace std
   class vector
   {
   public:
+    typedef T value_type;
+    typedef size_t size_type;
+    typedef T *iterator;
+    typedef const T *const_iterator;
+
     vector() : m_data(0), m_size(0), m_capacity(0) {}
 
     explicit vector(size_t count) : m_data(0), m_size(0), m_capacity(0)
@@ -68,6 +73,11 @@ namespace std
     size_t size() const { return this->m_size; }
     bool empty() const { return this->m_size == 0; }
 
+    T &front() { return this->m_data[0]; }
+    const T &front() const { return this->m_data[0]; }
+    T &back() { return this->m_data[this->m_size - 1]; }
+    const T &back() const { return this->m_data[this->m_size - 1]; }
+
     void clear()
     {
       size_t i;
@@ -99,6 +109,55 @@ namespace std
       if (this->m_size == this->m_capacity)
         this->reserve(this->m_capacity ? this->m_capacity * 2 : 4);
       this->m_data[this->m_size] = value;
+      this->m_size = this->m_size + 1;
+    }
+
+    void pop_back()
+    {
+      if (this->m_size)
+      {
+        this->m_size = this->m_size - 1;
+        this->m_data[this->m_size].~T();
+      }
+    }
+
+    void resize(size_t count)
+    {
+      size_t i;
+      if (count < this->m_size)
+      {
+        for (i = count; i < this->m_size; ++i)
+          this->m_data[i].~T();
+      }
+      else if (count > this->m_size)
+      {
+        this->reserve(count);
+        for (i = this->m_size; i < count; ++i)
+          this->m_data[i] = T();
+      }
+      this->m_size = count;
+    }
+
+    void resize(size_t count, const T &value)
+    {
+      size_t old_size = this->m_size;
+      this->resize(count);
+      for (size_t i = old_size; i < count; ++i)
+        this->m_data[i] = value;
+    }
+
+    void assign(size_t count, const T &value)
+    {
+      this->clear();
+      this->resize(count, value);
+    }
+
+    template<class First, class Second>
+    void emplace_back(First first, Second second)
+    {
+      if (this->m_size == this->m_capacity)
+        this->reserve(this->m_capacity ? this->m_capacity * 2 : 4);
+      this->m_data[this->m_size] = T(first, second);
       this->m_size = this->m_size + 1;
     }
 

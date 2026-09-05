@@ -974,12 +974,48 @@ static int try_parse_cpp_functional_constructor(int type_tok)
     return 1;
   }
   infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
+  if (call_arg_count == 1)
+  {
+    CType source_type = call_arg_types[0];
+    if (is_reference_type(&source_type))
+      source_type = *pointed_type(&source_type);
+    source_type.t &= ~VT_RVALUE_REFERENCE;
+    if (is_compatible_unqualified_types(&type, &source_type)
+        && !resolve_copy_constructor_func(&type, &call_arg_types[0]))
+    {
+      SValue destination, source;
+      /* Functional syntax also invokes an implicit copy/move constructor.
+         Copy subobjects through their constructors, retaining the temporary
+         destination on the value stack while the source is evaluated. */
+      size = type_size(&type, &align);
+      addr = get_temp_local_var(size, align, &r2);
+      vset(&type, VT_LOCAL | VT_LVAL, addr);
+      vtop->r2 = r2;
+      emit_saved_arg_for_param(call_args[0], NULL);
+      maybe_indir_reference();
+      mk_pointer(&vtop->type);
+      gaddrof();
+      source = *vtop--;
+      vpushv(vtop);
+      mk_pointer(&vtop->type);
+      gaddrof();
+      destination = *vtop--;
+      copy_construct_struct_memberwise_from_base_ptr(
+        &type, &destination, &source, 0,
+        (call_arg_types[0].t & VT_RVALUE_REFERENCE) != 0);
+      initialize_virtual_tables_for_pointer(&type, &destination, 0);
+      if (tok == TOK_EOF) next();
+      else skip(')');
+      return 1;
+    }
+  }
   if (call_arg_count == 1
       && same_template_family_instantiations(&type, &call_arg_types[0]))
   {
     emit_saved_arg_for_param(call_args[0], NULL);
     if (!try_materialize_same_template_family_conversion(&type))
-      cprime_error("no matching constructor for functional-style construction");
+      cprime_error("no matching constructor for '%s' with %d argument(s)",
+                   get_tok_str(type_tok, NULL), call_arg_count);
     if (tok == TOK_EOF)
       next();
     else
@@ -1001,7 +1037,8 @@ static int try_parse_cpp_functional_constructor(int type_tok)
   if (!ctor_func)
   {
     if (call_arg_count != 0)
-      cprime_error("no matching constructor for functional-style construction");
+      cprime_error("no matching constructor for '%s' with %d argument(s)",
+                   get_tok_str(type_tok, NULL), call_arg_count);
     size = type_size(&type, &align);
     addr = get_temp_local_var(size, align, &r2);
     vset(&type, VT_LOCAL | VT_LVAL, addr);
@@ -2597,21 +2634,27 @@ static int same_concrete_template_instantiation(CType *type1, CType *type2)
   return 0;
 }
 
+static int exact_template_signature_type_inner(CType *type1, CType *type2,
+                                                int compare_qualifiers)
+{
+  int bt = type1->t & VT_BTYPE;
+  if (bt != (type2->t & VT_BTYPE)
+      || ((type1->t ^ type2->t) & (VT_REFERENCE | VT_RVALUE_REFERENCE)))
+    return 0;
+  if (compare_qualifiers
+      && ((type1->t ^ type2->t) & (VT_CONSTANT | VT_VOLATILE)))
+    return 0;
+  if (bt == VT_PTR)
+    return exact_template_signature_type_inner(pointed_type(type1),
+                                                pointed_type(type2), 1);
+  if (bt == VT_STRUCT)
+    return same_concrete_template_instantiation(type1, type2);
+  return is_compatible_unqualified_types(type1, type2);
+}
+
 static int exact_template_signature_type(CType *type1, CType *type2)
 {
-  CType value1 = *type1, value2 = *type2;
-
-  if ((type1->t & (VT_REFERENCE | VT_RVALUE_REFERENCE))
-      != (type2->t & (VT_REFERENCE | VT_RVALUE_REFERENCE)))
-    return 0;
-  if (is_reference_type(&value1))
-    value1 = *pointed_type(&value1);
-  if (is_reference_type(&value2))
-    value2 = *pointed_type(&value2);
-  if ((value1.t & VT_BTYPE) != VT_STRUCT
-      || (value2.t & VT_BTYPE) != VT_STRUCT)
-    return is_compatible_types(type1, type2);
-  return same_concrete_template_instantiation(&value1, &value2);
+  return exact_template_signature_type_inner(type1, type2, 0);
 }
 
 static int member_func_has_param_signature(Sym *s, CType *func_type)
@@ -2855,12 +2898,8 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   if (!struct_tok)
     cprime_error("inline member functions require a named struct/class");
   mangled_tok = make_member_func_tok_for_type(struct_tok, method_tok, func_type);
-  {
-    char this_name[256];
-    snprintf(this_name, sizeof this_name, "__cprime_this_%s",
-             get_tok_str(mangled_tok, NULL));
-    this_tok = tok_alloc_const(this_name);
-  }
+  this_tok = make_joined_name_tok(tok_alloc_const("__cprime_this"),
+                                   mangled_tok, "_", "");
   public_this_tok = tok_alloc_const("this");
   {
     CType lowered_type = make_lowered_member_func_type(struct_type, func_type);
@@ -3087,6 +3126,12 @@ static void add_pending_static_member_func(CType *struct_type, int method_tok,
 
   if (is_auto_return && func_type && func_type->ref && body)
     for (i = 0; i + 1 < body->len; ++i)
+    {
+      if (TOK_HAS_VALUE(body->str[i]))
+      {
+        i += tok_str_value_extra_words(body->str, body->len, i);
+        continue;
+      }
       if (body->str[i] == TOK_RETURN)
       {
         int ri = i + 1;
@@ -3113,6 +3158,7 @@ static void add_pending_static_member_func(CType *struct_type, int method_tok,
           func_type->ref->type = return_func->type.ref->type;
         break;
       }
+    }
 
   declare_static_member_func(struct_type, method_tok, func_type);
 
@@ -3147,6 +3193,11 @@ static void add_pending_static_member_func(CType *struct_type, int method_tok,
     int bt = body->str[i];
     int prev_i = tok_str_prev_token_index(body->str, body->len, i);
     int next_i = tok_str_next_non_linenum_index(body->str, body->len, i + 1);
+    if (TOK_HAS_VALUE(bt))
+    {
+      tok_str_add_record(str, body->str, body->len, &i);
+      continue;
+    }
     if (bt >= TOK_UIDENT
         && (prev_i < 0 || (body->str[prev_i] != '.'
                            && body->str[prev_i] != TOK_ARROW
@@ -3238,7 +3289,10 @@ static void add_lifecycle_param_tokens(TokenString *str, TokenString *params,
       if (is_self)
       {
         int level = 1;
-        tok_str_add(str, params->str[i]);
+        if (class_tok_matches_unqualified_name(struct_tok, params->str[i]))
+      tok_str_add(str, struct_tok);
+    else
+      tok_str_add(str, params->str[i]);
         i = lt + 1;
         while (i < params->len && params->str[i] != TOK_EOF && level > 0)
         {
@@ -3252,7 +3306,10 @@ static void add_lifecycle_param_tokens(TokenString *str, TokenString *params,
         continue;
       }
     }
-    tok_str_add(str, params->str[i]);
+    if (class_tok_matches_unqualified_name(struct_tok, params->str[i]))
+      tok_str_add(str, struct_tok);
+    else
+      tok_str_add(str, params->str[i]);
   }
 }
 
@@ -3882,7 +3939,8 @@ static void inject_omitted_constructor_member_initializers(
         && pm->str->str[prefix_end] == this_tok
         && pm->str->str[prefix_end + 1] == TOK_ARROW
         && pm->str->str[prefix_end + 2] >= TOK_UIDENT
-        && pm->str->str[prefix_end + 3] == '=')
+        && (pm->str->str[prefix_end + 3] == '='
+            || pm->str->str[prefix_end + 3] == TOK_INIT_MEMBER))
       field_tok = pm->str->str[prefix_end + 2];
     else if (prefix_end + 8 < pm->str->len
              && pm->str->str[prefix_end] == new_tok
@@ -4056,7 +4114,8 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
     if (t == this_tok && i + 3 < pm->str->len
         && pm->str->str[i + 1] == TOK_ARROW
         && pm->str->str[i + 2] >= TOK_UIDENT
-        && pm->str->str[i + 3] == '=')
+        && (pm->str->str[i + 3] == '='
+            || pm->str->str[i + 3] == TOK_INIT_MEMBER))
     {
       int field_tok = pm->str->str[i + 2], dummy_ofs, field_struct_tok, j;
       int rhs_i = i + 4;
@@ -4065,6 +4124,24 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
       while (rhs_i + 1 < pm->str->len
              && pm->str->str[rhs_i] == TOK_LINENUM)
         rhs_i += 2;
+      if (field && (field->type.t & VT_BTYPE) != VT_STRUCT
+          && !(field->type.t & VT_ARRAY)
+          && rhs_i < pm->str->len && pm->str->str[rhs_i] == ';')
+      {
+        /* Empty scalar member initializers mean value-initialization. Resolve
+           this after the class is complete: an inline constructor can precede
+           its fields, so its initial replay does not yet know their types. */
+        CValue zero;
+        zero.i = 0;
+        tok_str_add(dst, this_tok);
+        tok_str_add(dst, TOK_ARROW);
+        tok_str_add(dst, field_tok);
+        tok_str_add(dst, '=');
+        tok_str_add2(dst, TOK_CINT, &zero);
+        tok_str_add(dst, ';');
+        i = rhs_i;
+        continue;
+      }
       if (rhs_i + 1 < pm->str->len
           && pm->str->str[rhs_i] >= TOK_UIDENT
           && pm->str->str[rhs_i + 1] == TOK_ARROW)
@@ -4134,11 +4211,11 @@ keep_field_assignment:
         && !pending_member_signature_has_param_name(pm->str, t)
         && (i == 0 || (pm->str->str[i - 1] != '.'
                        && pm->str->str[i - 1] != TOK_ARROW
-                       && pm->str->str[i - 1] != ':'))
-        && (i + 1 >= pm->str->len || pm->str->str[i + 1] != '('))
+                       && pm->str->str[i - 1] != ':')))
     {
       int dummy_ofs;
-      if (find_field_try(&class_type, t, &dummy_ofs))
+      Sym *member = find_field_try(&class_type, t, &dummy_ofs);
+      if (member && (member->type.t & VT_BTYPE) != VT_FUNC)
       {
         tok_str_add(dst, this_tok);
         tok_str_add(dst, TOK_ARROW);
@@ -4202,7 +4279,7 @@ static void rewrite_pending_static_member_calls(PendingMemberFunc *pm)
 
 static void compile_pending_member_funcs(int start)
 {
-  int i, saved_tok, out, len_tok, array_tok;
+  int i, saved_tok, out;
   int saved_local_scope;
   int saved_defer_pending_member_funcs;
   int saved_vstack_depth;
@@ -4249,8 +4326,6 @@ static void compile_pending_member_funcs(int start)
     local_stack = NULL;
     local_scope = 0;
   }
-  len_tok = tok_alloc_const("_len");
-  array_tok = tok_alloc_const("_array");
   out = start;
   for (i = start; i < nb_pending_member_funcs; ++i)
   {
@@ -4290,14 +4365,6 @@ static void compile_pending_member_funcs(int start)
         && pm->str->str[0] == TOK_AUTO)
     {
       pending_member_funcs[out++] = pm;
-      continue;
-    }
-    if (token_string_contains_tok(pm->str, len_tok)
-        || token_string_contains_tok(pm->str, array_tok))
-    {
-      tok_str_free(pm->str);
-      cprime_free(pm);
-      pending_member_funcs[i] = NULL;
       continue;
     }
     rewrite_pending_member_field_access(pm);
@@ -4421,15 +4488,35 @@ static void parse_namespace_decl(void)
   int ns_tok;
 
   next();
-  if (tok < TOK_UIDENT)
-    cprime_error("namespace name");
-  ns_tok = tok;
+  if (tok == '{')
+  {
+    if (!unnamed_namespace_tok)
+    {
+      const unsigned char *p = (const unsigned char *)cprime_state->current_filename;
+      unsigned int hash = 2166136261u;
+      char name[64];
+      /* Template identities containing internal-linkage types must also be
+         distinct across translation units. Reopenings in one unit agree. */
+      while (p && *p)
+        hash = (hash ^ *p++) * 16777619u;
+      snprintf(name, sizeof(name), "__cpc_unnamed_%08x", hash);
+      unnamed_namespace_tok = tok_alloc_const(name);
+    }
+    ns_tok = unnamed_namespace_tok;
+  }
+  else
+  {
+    if (tok < TOK_UIDENT)
+      cprime_error("namespace name");
+    ns_tok = tok;
+    next();
+  }
   note_namespace_tok(ns_tok);
-  next();
   if (nb_namespace_stack >= (int)(sizeof(namespace_stack) / sizeof(namespace_stack[0])))
     cprime_error("namespace nesting too deep");
   skip('{');
   namespace_stack[nb_namespace_stack++] = ns_tok;
+  note_current_namespace_scope();
   while (tok != TOK_EOF && tok != '}')
     decl(VT_CONST);
   skip('}');

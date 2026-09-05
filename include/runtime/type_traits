@@ -45,6 +45,9 @@ namespace std
   template<class T> struct remove_const { typedef T type; };
   template<class T> struct remove_const<const T> { typedef T type; };
 
+  template<class T> struct underlying_type { typedef int type; };
+  template<class T> using underlying_type_t = typename underlying_type<T>::type;
+
 }
 
 #endif

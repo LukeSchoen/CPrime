@@ -1,0 +1,22 @@
+#ifndef _CPC_IOSTREAM
+#define _CPC_IOSTREAM
+
+#include <math.h>
+#include <istream>
+#include <ostream>
+
+namespace std
+{
+  class __cpc_stderr_stream : public ostream
+  {
+  public:
+    __cpc_stderr_stream() : ostream(stderr) {}
+  };
+
+  static istream cin;
+  static ostream cout;
+  static __cpc_stderr_stream cerr;
+  static __cpc_stderr_stream clog;
+}
+
+#endif

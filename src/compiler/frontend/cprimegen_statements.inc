@@ -1068,6 +1068,11 @@ again:
   }
   else if (t == TOK_RETURN)
   {
+    if (lambda_probe)
+    {
+      lambda_note_return();
+      return;
+    }
     b = (func_vt.t &VT_BTYPE) != VT_VOID;
     a = 0;
     e = 0;
@@ -1537,7 +1542,7 @@ static void skip_or_save_block(TokenString **str)
     }
     else if (t == TOK_GT && angle > 0)
       --angle;
-    else if (t == '{' || t == '(' || t == '[')
+    else if (t == '{' || t == '(' || t == '[' || is_cpp_lambda_marker(t))
       level++;
     else if (t == '}' || t == ')' || t == ']')
     {

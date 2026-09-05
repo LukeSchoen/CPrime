@@ -1,0 +1,6 @@
+LIBRARY DBGHELP.DLL
+
+EXPORTS
+SymCleanup
+SymFromAddr
+SymInitialize

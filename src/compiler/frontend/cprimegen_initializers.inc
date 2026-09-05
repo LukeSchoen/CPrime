@@ -688,6 +688,8 @@ do_init_list:
         for (i = 0; i < len; ++i)
         {
           TokenString macro = *elements[i];
+          int saved_tok = tok;
+          CValue saved_tokc = tokc;
           TokenString *saved_macro_stack = macro_stack;
           const int *saved_macro_ptr = macro_ptr;
           if (getenv("CPC_TRACE_SHALLOW")
@@ -702,6 +704,8 @@ do_init_list:
           while (macro_stack && macro_stack != saved_macro_stack)
             end_macro();
           macro_ptr = saved_macro_ptr;
+          tok = saved_tok;
+          tokc = saved_tokc;
           if (vtop != element_storage)
             cprime_internal_error(
               "unbalanced initializer_list element initializer");

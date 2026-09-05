@@ -1,0 +1,6 @@
+#ifndef _CPC_CASSERT
+#define _CPC_CASSERT
+
+#include <assert.h>
+
+#endif

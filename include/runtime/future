@@ -1,0 +1,55 @@
+#ifndef _CPC_FUTURE
+#define _CPC_FUTURE
+
+#include <utility>
+#include <mutex>
+
+namespace std
+{
+  namespace launch
+  {
+    enum type
+    {
+      async = 1,
+      deferred = 2
+    };
+  }
+
+  template<class T>
+  class future
+  {
+  public:
+    future() : m_value(), m_valid(false) {}
+    explicit future(const T &value) : m_value(value), m_valid(true) {}
+    future(future &&other) : m_value(other.m_value), m_valid(other.m_valid)
+    {
+      other.m_valid = false;
+    }
+    future &operator=(future &&other)
+    {
+      m_value = other.m_value;
+      m_valid = other.m_valid;
+      other.m_valid = false;
+      return *this;
+    }
+    future(const future &) = delete;
+    future &operator=(const future &) = delete;
+
+    bool valid() const { return m_valid; }
+    T get() { m_valid = false; return m_value; }
+
+  private:
+    T m_value;
+    bool m_valid;
+  };
+
+  template<class Function, class Object, class... Args>
+  auto async(launch::type, Function function, Object *object, Args... args)
+    -> future<decltype((object->*function)(args...))>
+  {
+    typedef decltype((object->*function)(args...)) result_type;
+    return future<result_type>((object->*function)(args...));
+  }
+}
+
+#endif

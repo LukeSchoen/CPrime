@@ -3,6 +3,25 @@
 
 namespace std
 {
+  template<class ForwardIt, class T>
+  void fill(ForwardIt first, ForwardIt last, const T &value)
+  {
+    for (; first != last; ++first)
+      *first = value;
+  }
+
+  template<class T>
+  const T &min(const T &left, const T &right)
+  {
+    return right < left ? right : left;
+  }
+
+  template<class T>
+  const T &max(const T &left, const T &right)
+  {
+    return left < right ? right : left;
+  }
+
   template<class T>
   void iter_swap(T *left, T *right)
   {
@@ -18,6 +37,22 @@ namespace std
     {
       T *position = current;
       while (position > begin && *position < *(position - 1))
+      {
+        T value = *position;
+        *position = *(position - 1);
+        *(position - 1) = value;
+        --position;
+      }
+    }
+  }
+
+  template<class T, class Compare>
+  void sort(T *begin, T *end, Compare compare)
+  {
+    for (T *current = begin + 1; current < end; ++current)
+    {
+      T *position = current;
+      while (position > begin && compare(*position, *(position - 1)))
       {
         T value = *position;
         *position = *(position - 1);

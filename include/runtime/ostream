@@ -1,0 +1,71 @@
+#ifndef _CPC_OSTREAM
+#define _CPC_OSTREAM
+
+#include <stdio.h>
+#include <stddef.h>
+
+namespace std
+{
+  class ostream
+  {
+  public:
+    explicit ostream(FILE *stream = stdout) : m_stream(stream) {}
+
+    ostream &put(char value)
+    {
+      fputc(value, m_stream);
+      return *this;
+    }
+
+    ostream &write(const char *data, size_t count)
+    {
+      fwrite(data, 1, count, m_stream);
+      return *this;
+    }
+
+    ostream &flush()
+    {
+      fflush(m_stream);
+      return *this;
+    }
+
+    ostream &operator<<(const char *value)
+    {
+      fputs(value ? value : "(null)", m_stream);
+      return *this;
+    }
+
+    ostream &operator<<(char value) { return put(value); }
+    ostream &operator<<(bool value) { return *this << (value ? "true" : "false"); }
+    ostream &operator<<(short value) { fprintf(m_stream, "%hd", value); return *this; }
+    ostream &operator<<(unsigned short value) { fprintf(m_stream, "%hu", value); return *this; }
+    ostream &operator<<(int value) { fprintf(m_stream, "%d", value); return *this; }
+    ostream &operator<<(unsigned int value) { fprintf(m_stream, "%u", value); return *this; }
+    ostream &operator<<(long value) { fprintf(m_stream, "%ld", value); return *this; }
+    ostream &operator<<(unsigned long value) { fprintf(m_stream, "%lu", value); return *this; }
+    ostream &operator<<(long long value) { fprintf(m_stream, "%lld", value); return *this; }
+    ostream &operator<<(unsigned long long value) { fprintf(m_stream, "%llu", value); return *this; }
+    ostream &operator<<(float value) { fprintf(m_stream, "%g", (double)value); return *this; }
+    ostream &operator<<(double value) { fprintf(m_stream, "%g", value); return *this; }
+    ostream &operator<<(const void *value) { fprintf(m_stream, "%p", value); return *this; }
+
+    typedef ostream &(*manipulator)(ostream &);
+    ostream &operator<<(manipulator function) { return function(*this); }
+
+  private:
+    FILE *m_stream;
+  };
+
+  inline ostream &endl(ostream &stream)
+  {
+    stream.put('\n');
+    return stream.flush();
+  }
+
+  inline ostream &flush(ostream &stream)
+  {
+    return stream.flush();
+  }
+}
+
+#endif

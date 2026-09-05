@@ -1,6 +1,24 @@
 #ifndef _CPRIME_INTRIN_H
 #define _CPRIME_INTRIN_H
 
+#include <stddef.h>
+
+static __inline void __movsb(unsigned char *destination,
+                            const unsigned char *source, size_t count)
+{
+  __asm__ __volatile__("rep movsb"
+                       : "+D"(destination), "+S"(source), "+c"(count)
+                       : : "memory");
+}
+
+static __inline void __stosb(unsigned char *destination,
+                            unsigned char value, size_t count)
+{
+  __asm__ __volatile__("rep stosb"
+                       : "+D"(destination), "+c"(count)
+                       : "a"(value) : "memory");
+}
+
 static __inline unsigned short _byteswap_ushort(unsigned short x)
 {
   return (unsigned short)((x << 8) | (x >> 8));
@@ -60,14 +78,23 @@ static __inline unsigned char _BitScanForward64(unsigned long *index, unsigned l
 
 static __inline void __cpuid(int cpuInfo[4], int infoType)
 {
-  cpuInfo[0] = infoType;
-  cpuInfo[1] = 0;
-  cpuInfo[2] = 0;
-  cpuInfo[3] = 0;
+  __asm__ __volatile__("cpuid"
+                       : "=a"(cpuInfo[0]), "=b"(cpuInfo[1]),
+                         "=c"(cpuInfo[2]), "=d"(cpuInfo[3])
+                       : "a"(infoType), "c"(0));
+}
+
+static __inline void __cpuidex(int cpuInfo[4], int infoType, int subleaf)
+{
+  __asm__ __volatile__("cpuid"
+                       : "=a"(cpuInfo[0]), "=b"(cpuInfo[1]),
+                         "=c"(cpuInfo[2]), "=d"(cpuInfo[3])
+                       : "a"(infoType), "c"(subleaf));
 }
 
 static __inline void _mm_pause(void)
 {
+  __asm__ __volatile__("pause");
 }
 
 #endif

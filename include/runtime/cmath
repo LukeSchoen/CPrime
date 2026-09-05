@@ -7,22 +7,58 @@
 #undef isnan
 #undef isnormal
 #undef signbit
+#undef isfinite
+
+// Keep the C compatibility names usable after replacing math.h's macros.
+// Classify in the original floating type so float subnormals stay subnormal.
+#define CPC_MATH_CLASSIFY_OVERLOADS(Type, Classify, Sign) \
+  inline bool isnan(Type value) { return Classify(value) == FP_NAN; } \
+  inline bool isinf(Type value) { return Classify(value) == FP_INFINITE; } \
+  inline bool isnormal(Type value) { return Classify(value) == FP_NORMAL; } \
+  inline bool isfinite(Type value) { int c = Classify(value); return c != FP_NAN && c != FP_INFINITE; } \
+  inline bool signbit(Type value) { return Sign(value) != 0; }
+CPC_MATH_CLASSIFY_OVERLOADS(float, __fpclassifyf, __signbitf)
+CPC_MATH_CLASSIFY_OVERLOADS(double, __fpclassify, __signbit)
+CPC_MATH_CLASSIFY_OVERLOADS(long double, __fpclassifyl, __signbitl)
+#undef CPC_MATH_CLASSIFY_OVERLOADS
 
 namespace std
 {
   inline double exp(double value) { return ::exp(value); }
+  inline float sqrt(float value) { return ::sqrtf(value); }
+  inline double sqrt(double value) { return ::sqrt(value); }
+  inline long double sqrt(long double value) { return ::sqrtl(value); }
+
+  // Floating overloads retain the operand's precision; integral operands use
+  // the additional double overloads required by the C++ math interface.
+#define CPC_STD_MATH_OVERLOADS(Type) \
+  inline bool isnan(Type value) { return ::isnan(value); } \
+  inline bool isinf(Type value) { return ::isinf(value); } \
+  inline bool isnormal(Type value) { return ::isnormal(value); } \
+  inline bool signbit(Type value) { return ::signbit(value); } \
+  inline bool isfinite(Type value) { return ::isfinite(value); }
+  CPC_STD_MATH_OVERLOADS(float)
+  CPC_STD_MATH_OVERLOADS(double)
+  CPC_STD_MATH_OVERLOADS(long double)
+#undef CPC_STD_MATH_OVERLOADS
 
   template<typename T>
-  int isnan(T value) { return value != value; }
+  bool isnan(T value) { return ::isnan(static_cast<double>(value)); }
 
   template<typename T>
-  int isinf(T value) { return value == (T)(1.0 / 0.0) || value == (T)(-1.0 / 0.0); }
+  bool isinf(T value) { return ::isinf(static_cast<double>(value)); }
 
   template<typename T>
-  int isnormal(T value) { return !isnan<T>(value) && !isinf<T>(value) && value != (T)0; }
+  bool isnormal(T value) { return ::isnormal(static_cast<double>(value)); }
 
   template<typename T>
-  int signbit(T value) { return value < (T)0; }
+  bool signbit(T value) { return ::signbit(static_cast<double>(value)); }
+
+  template<typename T>
+  bool isfinite(T value) { return ::isfinite(static_cast<double>(value)); }
+
+  template<typename T>
+  double sqrt(T value) { return ::sqrt(static_cast<double>(value)); }
 }
 
 #endif
