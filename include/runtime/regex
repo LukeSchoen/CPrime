@@ -1,0 +1,173 @@
+#ifndef _CPC_REGEX
+#define _CPC_REGEX
+#include <string>
+#include <vector>
+#include <iterator>
+#include <stdexcept>
+#include <utility>
+#include <cprime_regex.h>
+namespace std {
+namespace regex_constants {
+typedef unsigned syntax_option_type;
+static const syntax_option_type ECMAScript=0, icase=1, nosubs=2, optimize=4,
+  collate=8, basic=16, extended=32, awk=64, grep=128, egrep=256, multiline=512;
+typedef unsigned match_flag_type;
+static const match_flag_type match_default=0, match_not_bol=1, match_not_eol=2,
+  match_not_bow=4, match_not_eow=8, match_any=16, match_not_null=32,
+  match_continuous=64, match_prev_avail=128;
+enum error_type { error_collate,error_ctype,error_escape,error_backref,error_brack,
+  error_paren,error_brace,error_badbrace,error_range,error_space,error_badrepeat,
+  error_complexity,error_stack };
+}
+class regex_error : public runtime_error {
+  regex_constants::error_type reason;
+public:
+  explicit regex_error(regex_constants::error_type value)
+    :runtime_error("regular expression error"),reason(value){}
+  regex_constants::error_type code()const noexcept{return reason;}
+};
+template<class C> struct regex_traits {
+  typedef C char_type;
+  typedef basic_string<C> string_type;
+  static size_t length(const C* text){return char_traits<C>::length(text);}
+};
+template<class C,class Traits=regex_traits<C>> class basic_regex {
+  void* program;
+  regex_constants::syntax_option_type options;
+  void compile(const C* text,size_t length,regex_constants::syntax_option_type flags) {
+    char error[256]={0};
+    if(flags & ~(regex_constants::icase|regex_constants::nosubs|regex_constants::optimize|regex_constants::multiline))
+      throw regex_error(regex_constants::error_collate);
+    void* replacement=__cpc_regex_compile(text,length,sizeof(C),bool(flags&regex_constants::icase),
+      bool(flags&regex_constants::multiline),error,sizeof(error));
+    if(!replacement)throw regex_error(error[0]?regex_constants::error_escape:regex_constants::error_space);
+    __cpc_regex_free(program);program=replacement;options=flags;
+  }
+public:
+  typedef C value_type;
+  typedef Traits traits_type;
+  typedef regex_constants::syntax_option_type flag_type;
+  static const flag_type ECMAScript=regex_constants::ECMAScript;
+  static const flag_type icase=regex_constants::icase;
+  static const flag_type nosubs=regex_constants::nosubs;
+  static const flag_type optimize=regex_constants::optimize;
+  basic_regex()noexcept:program(nullptr),options(ECMAScript){}
+  explicit basic_regex(const C* text,flag_type flags=ECMAScript):basic_regex(){compile(text,Traits::length(text),flags);}
+  basic_regex(const C* text,size_t count,flag_type flags=ECMAScript):basic_regex(){compile(text,count,flags);}
+  explicit basic_regex(const basic_string<C>& text,flag_type flags=ECMAScript):basic_regex(){compile(text.data(),text.size(),flags);}
+  basic_regex(const basic_regex& other):program(__cpc_regex_clone(other.program)),options(other.options){
+    if(other.program&&!program)throw regex_error(regex_constants::error_space);
+  }
+  basic_regex(basic_regex&& other)noexcept:program(other.program),options(other.options){other.program=nullptr;}
+  ~basic_regex(){__cpc_regex_free(program);}
+  basic_regex& operator=(basic_regex other){swap(other);return *this;}
+  basic_regex& operator=(const C* text){compile(text,Traits::length(text),ECMAScript);return *this;}
+  basic_regex& assign(const C* text,flag_type flags=ECMAScript){compile(text,Traits::length(text),flags);return *this;}
+  void swap(basic_regex& other)noexcept{std::swap(program,other.program);std::swap(options,other.options);}
+  flag_type flags()const noexcept{return options;}
+  unsigned mark_count()const noexcept{return options&nosubs?0:program?__cpc_regex_capture_count(program)-1:0;}
+  void* __program()const noexcept{return program;}
+};
+typedef basic_regex<char> regex;
+typedef basic_regex<wchar_t> wregex;
+template<class Iterator> struct sub_match {
+  typedef typename iterator_traits<Iterator>::value_type value_type;
+  typedef typename iterator_traits<Iterator>::difference_type difference_type;
+  typedef basic_string<value_type> string_type;
+  Iterator first,second;
+  bool matched;
+  sub_match():first(),second(),matched(false){}
+  difference_type length()const{return matched?std::distance(first,second):0;}
+  string_type str()const{string_type text;if(matched)for(Iterator i=first;i!=second;++i)text.push_back(*i);return text;}
+  operator string_type()const{return str();}
+};
+template<class Iterator,class Allocator=allocator<sub_match<Iterator>>> class match_results {
+  vector<sub_match<Iterator>> matches;
+  sub_match<Iterator> before,after,absent;
+  Iterator origin;
+  bool complete;
+public:
+  typedef sub_match<Iterator> value_type;
+  typedef const value_type& const_reference;
+  typedef const value_type* const_iterator;
+  typedef const_iterator iterator;
+  typedef size_t size_type;
+  typedef typename iterator_traits<Iterator>::difference_type difference_type;
+  typedef typename value_type::string_type string_type;
+  match_results():origin(),complete(false){}
+  bool ready()const noexcept{return complete;}
+  bool empty()const noexcept{return matches.empty();}
+  size_type size()const noexcept{return matches.size();}
+  const_iterator begin()const noexcept{return matches.data();}
+  const_iterator end()const noexcept{return matches.data()+matches.size();}
+  const_reference operator[](size_type n)const{return n<matches.size()?matches[n]:absent;}
+  const_reference prefix()const{return before;}
+  const_reference suffix()const{return after;}
+  difference_type length(size_type n=0)const{return (*this)[n].length();}
+  difference_type position(size_type n=0)const{return (*this)[n].matched?std::distance(origin,(*this)[n].first):-1;}
+  string_type str(size_type n=0)const{return (*this)[n].str();}
+  void __set(Iterator first,Iterator last,const int* offsets,int count){
+    complete=true;origin=first;matches.clear();before=value_type();after=value_type();
+    absent.first=absent.second=last;absent.matched=false;
+    for(int n=0;n<count;++n){
+      value_type match;match.first=match.second=last;
+      if(offsets[2*n]>=0){match.first=first;match.second=first;std::advance(match.first,offsets[2*n]);
+        std::advance(match.second,offsets[2*n+1]);match.matched=true;}
+      matches.push_back(match);
+    }
+    if(count){before.first=first;before.second=matches[0].first;before.matched=before.first!=before.second;
+      after.first=matches[0].second;after.second=last;after.matched=after.first!=after.second;}
+  }
+};
+typedef match_results<const char*> cmatch;
+typedef match_results<const wchar_t*> wcmatch;
+typedef match_results<string::const_iterator> smatch;
+typedef match_results<wstring::const_iterator> wsmatch;
+template<class Iterator,class Allocator,class C,class Traits>
+bool __regex_run(Iterator first,Iterator last,match_results<Iterator,Allocator>& result,
+                 const basic_regex<C,Traits>& expression,regex_constants::match_flag_type flags,bool full){
+  if(flags & ~(regex_constants::match_continuous|regex_constants::match_any))
+    throw regex_error(regex_constants::error_complexity);
+  vector<C> input;
+  for(Iterator at=first;at!=last;++at)input.push_back(*at);
+  size_t length=input.size();input.push_back(C());
+  int count=__cpc_regex_capture_count(expression.__program());
+  vector<int> offsets(count*2);
+  int matched=__cpc_regex_search(expression.__program(),input.data(),length,sizeof(C),
+    bool(flags&regex_constants::match_continuous),full,offsets.data());
+  if(matched<0)throw regex_error(regex_constants::error_stack);
+  result.__set(first,last,offsets.data(),matched?(expression.flags()&regex_constants::nosubs?1:count):0);
+  return matched!=0;
+}
+template<class Iterator,class Allocator,class C,class Traits>
+bool regex_search(Iterator first,Iterator last,match_results<Iterator,Allocator>& result,
+                  const basic_regex<C,Traits>& expression,regex_constants::match_flag_type flags=regex_constants::match_default){
+  return __regex_run(first,last,result,expression,flags,false);
+}
+template<class Iterator,class C,class Traits>
+bool regex_search(Iterator first,Iterator last,const basic_regex<C,Traits>& expression,
+                  regex_constants::match_flag_type flags=regex_constants::match_default){
+  match_results<Iterator> result;return regex_search(first,last,result,expression,flags);
+}
+template<class C,class Allocator,class Traits>
+bool regex_search(const C* text,match_results<const C*,Allocator>& result,const basic_regex<C,Traits>& expression,
+                  regex_constants::match_flag_type flags=regex_constants::match_default){
+  return regex_search(text,text+char_traits<C>::length(text),result,expression,flags);
+}
+template<class C,class Traits>
+bool regex_search(const C* text,const basic_regex<C,Traits>& expression,
+                  regex_constants::match_flag_type flags=regex_constants::match_default){
+  return regex_search(text,text+char_traits<C>::length(text),expression,flags);
+}
+template<class Iterator,class Allocator,class C,class Traits>
+bool regex_match(Iterator first,Iterator last,match_results<Iterator,Allocator>& result,
+                 const basic_regex<C,Traits>& expression,regex_constants::match_flag_type flags=regex_constants::match_default){
+  return __regex_run(first,last,result,expression,flags,true);
+}
+template<class C,class Traits>
+bool regex_match(const C* text,const basic_regex<C,Traits>& expression,
+                 regex_constants::match_flag_type flags=regex_constants::match_default){
+  match_results<const C*> result;return regex_match(text,text+char_traits<C>::length(text),result,expression,flags);
+}
+}
+#endif

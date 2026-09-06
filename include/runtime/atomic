@@ -42,6 +42,25 @@ namespace std
     }
 
     operator T() const { return load(); }
+    T fetch_add(T value, memory_order order = memory_order_seq_cst) { return __atomic_fetch_add(&m_value, value, (int)order); }
+    T fetch_sub(T value, memory_order order = memory_order_seq_cst) { return __atomic_fetch_sub(&m_value, value, (int)order); }
+    T exchange(T value, memory_order order = memory_order_seq_cst) {
+      T previous;
+      __atomic_exchange(&m_value, &value, &previous, (int)order);
+      return previous;
+    }
+    bool compare_exchange_weak(T& expected, T desired, memory_order success, memory_order failure) {
+      return __atomic_compare_exchange(&m_value, &expected, &desired, 1, (int)success, (int)failure);
+    }
+    bool compare_exchange_strong(T& expected, T desired, memory_order success, memory_order failure) {
+      return __atomic_compare_exchange(&m_value, &expected, &desired, 0, (int)success, (int)failure);
+    }
+    bool compare_exchange_weak(T& expected, T desired, memory_order order = memory_order_seq_cst) {
+      return compare_exchange_weak(expected, desired, order, order == memory_order_acq_rel ? memory_order_acquire : order == memory_order_release ? memory_order_relaxed : order);
+    }
+    bool compare_exchange_strong(T& expected, T desired, memory_order order = memory_order_seq_cst) {
+      return compare_exchange_strong(expected, desired, order, order == memory_order_acq_rel ? memory_order_acquire : order == memory_order_release ? memory_order_relaxed : order);
+    }
     T operator=(T value) { store(value); return value; }
     T operator++() { return __atomic_add_fetch(&m_value, (T)1, __CPC_ATOMIC_SEQ_CST); }
     T operator++(int) { return __atomic_fetch_add(&m_value, (T)1, __CPC_ATOMIC_SEQ_CST); }

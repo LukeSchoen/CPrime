@@ -6,6 +6,7 @@
 #include <new>
 #include <type_traits>
 #include <utility>
+#include <stdexcept>
 
 namespace std
 {
@@ -82,6 +83,8 @@ namespace std
 
     T &operator[](size_t index) { return m_data[index]; }
     const T &operator[](size_t index) const { return m_data[index]; }
+    T &at(size_t index) { if(index>=m_size)throw out_of_range("vector::at");return m_data[index]; }
+    const T &at(size_t index) const { if(index>=m_size)throw out_of_range("vector::at");return m_data[index]; }
     T *data() { return m_data; }
     const T *data() const { return m_data; }
     iterator begin() { return m_data; }
@@ -173,6 +176,53 @@ namespace std
     }
 
     void pop_back() { if (m_size) m_data[--m_size].~T(); }
+
+    iterator erase(const_iterator first,const_iterator last)
+    {
+      size_t start=m_data?size_t(first-m_data):0;
+      size_t count=first==last?0:size_t(last-first);
+      if(!count)return m_data?m_data+start:m_data;
+      for(size_t i=start;i+count<m_size;++i)m_data[i]=std::move(m_data[i+count]);
+      for(size_t i=0;i<count;++i)pop_back();
+      return m_data+start;
+    }
+    iterator erase(const_iterator position){return erase(position,position+1);}
+    template<class... Args> iterator emplace(const_iterator position,Args&&... args)
+    {
+      size_t index=m_data?size_t(position-m_data):0;
+      T value(std::forward<Args>(args)...);
+      if(index==m_size){emplace_back(std::move(value));return m_data+index;}
+      if(m_size==m_capacity)reserve(m_capacity?m_capacity*2:4);
+      new(m_data+m_size)T(std::move(m_data[m_size-1]));++m_size;
+      for(size_t i=m_size-2;i>index;--i)m_data[i]=std::move(m_data[i-1]);
+      m_data[index]=std::move(value);return m_data+index;
+    }
+    iterator insert(const_iterator position,const T& value){return emplace(position,value);}
+    iterator insert(const_iterator position,T&& value){return emplace(position,std::move(value));}
+    template<class InputIterator,class=typename enable_if<!is_integral<InputIterator>::value>::type>
+    iterator insert(const_iterator position,InputIterator first,InputIterator last)
+    {
+      size_t index=m_data?size_t(position-m_data):0;
+      vector incoming(first,last);
+      if(incoming.empty())return m_data?m_data+index:m_data;
+      size_t count=incoming.size(),old_size=m_size;
+      if(count>(size_t)-1-m_size)throw bad_alloc();
+      reserve(m_size+count);
+      // Construct the new tail before moving existing assignments, including
+      // ranges longer than the original suffix.
+      size_t constructed=0;
+      try {
+        for(size_t i=old_size;i<old_size+count;++i){
+          if(i<index+count)new(m_data+i)T(std::move(incoming[i-index]));
+          else new(m_data+i)T(std::move(m_data[i-count]));
+          ++constructed;
+        }
+      }catch(...){while(constructed)m_data[old_size+--constructed].~T();throw;}
+      m_size+=count;
+      for(size_t i=old_size;i>index;--i)if(i-1+count<old_size)m_data[i-1+count]=std::move(m_data[i-1]);
+      for(size_t i=0;i<count&&index+i<old_size;++i)m_data[index+i]=std::move(incoming[i]);
+      return m_data+index;
+    }
 
     void resize(size_t count)
     {

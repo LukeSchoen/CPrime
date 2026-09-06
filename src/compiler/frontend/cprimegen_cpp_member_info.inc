@@ -210,8 +210,9 @@ static int canonical_cpp_member_template_tok(int candidate_tok, int owner_tok,
         || !same_func_param_signature(&member->function_type, function_type))
       continue;
     for (i = 0; i < arguments->nb; ++i) {
-      if (value_mask & (1u << i)) {
+      if (i < 32 && (value_mask & (1u << i))) {
         int64_t first, second;
+        if (member->template_arguments.toks[i] == arguments->toks[i]) continue;
         if (!template_arg_const_int64(member->template_arguments.toks[i], &first)
             || !template_arg_const_int64(arguments->toks[i], &second)
             || first != second) break;

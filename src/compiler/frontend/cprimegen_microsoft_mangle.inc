@@ -88,7 +88,18 @@ static void cpp_ms_template_name(CppMsMangleContext *ctx, int source_tok,
   for (i = 0; i < args->nb; ++i) {
     CType argument;
     int64_t value;
-    if (value_mask & (1u << i)) {
+    if (i < 32 && (value_mask & (1u << i))) {
+      Sym *address = global_symbol_find(args->toks[i]);
+      if (address && address->template_address_target) {
+        Sym *target = address->template_address_target;
+        int label = target->asm_label;
+        if ((target->type.t & VT_BTYPE) != VT_FUNC)
+          cprime_error("object address template argument native linkage is not supported yet");
+        if (!label) label = cpp_ms_linkage_tok(target->v, &target->type);
+        cstr_cat(&name, "$1", 2);
+        cstr_cat(&name, get_tok_str(label, NULL), -1);
+        continue;
+      }
       if (!template_arg_const_int64(args->toks[i], &value))
         cprime_error("unsupported non-type template argument '%s' in native linkage for '%s'",
                      get_tok_str(args->toks[i], NULL), get_tok_str(source_tok, NULL));

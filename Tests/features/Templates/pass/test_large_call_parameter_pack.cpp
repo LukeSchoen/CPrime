@@ -1,0 +1,3 @@
+template<class... T> long long sum(T&&... values){long long result=0;int dummy[]={((result+=values),0)...};return result;}
+struct Collector {template<class... T> long long collect(int base,T&&... values){long long result=base;int dummy[]={((result+=values),0)...};return result;}};
+int main(){Collector c;return sum(1LL,2,3LL,4,5LL,6,7LL,8,9LL,10,11LL,12,13LL,14,15LL,16,17LL,18,19LL,20,21LL,22,23LL,24,25LL,26,27LL,28,29LL,30,31LL,32,33LL,34,35LL,36,37LL,38,39LL,40,41LL,42,43LL,44,45LL,46,47LL,48)!=1176 || c.collect(5,1LL,2,3LL,4,5LL,6,7LL,8,9LL,10,11LL,12,13LL,14,15LL,16,17LL,18,19LL,20,21LL,22,23LL,24,25LL,26,27LL,28,29LL,30,31LL,32,33LL,34,35LL,36,37LL,38,39LL,40,41LL,42,43LL,44,45LL,46,47LL,48)!=1181;}

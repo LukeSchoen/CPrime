@@ -2,6 +2,7 @@
 #define _CPC_ARRAY
 
 #include <stddef.h>
+#include <stdexcept>
 
 namespace std
 {
@@ -17,24 +18,8 @@ namespace std
 
     T m_elements[N ? N : 1];
 
-    array() {}
-
-    array(const array &other)
-    {
-      for (size_type i = 0; i < N; ++i)
-        m_elements[i] = other.m_elements[i];
-    }
-
-    array &operator=(const array &other)
-    {
-      if (this != &other)
-        for (size_type i = 0; i < N; ++i)
-          m_elements[i] = other.m_elements[i];
-      return *this;
-    }
-
-    reference at(size_type index) { return m_elements[index]; }
-    const_reference at(size_type index) const { return m_elements[index]; }
+    reference at(size_type index) { if(index>=N) throw out_of_range("array::at"); return m_elements[index]; }
+    const_reference at(size_type index) const { if(index>=N) throw out_of_range("array::at"); return m_elements[index]; }
     reference operator[](size_type index) { return m_elements[index]; }
     const_reference operator[](size_type index) const { return m_elements[index]; }
     reference front() { return m_elements[0]; }

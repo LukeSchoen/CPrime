@@ -1,0 +1,24 @@
+#ifndef _CPC_HASH
+#define _CPC_HASH
+#include <cstddef>
+#include <string>
+#include <type_traits>
+namespace std {
+template<class T> struct equal_to { bool operator()(const T& a,const T& b) const {return a==b;} };
+template<class T> struct less { bool operator()(const T& a,const T& b) const {return a<b;} };
+template<class T> struct hash {
+  size_t operator()(T value) const {
+    static_assert(is_integral<T>::value || is_enum<T>::value,"hash requires a specialization for this key type");
+    return static_cast<size_t>(value);
+  }
+};
+template<class T> struct hash<T*> { size_t operator()(T* p) const {return reinterpret_cast<size_t>(p);} };
+template<class C,class Traits,class Alloc> struct hash<basic_string<C,Traits,Alloc>> {
+  size_t operator()(const basic_string<C,Traits,Alloc>& value) const {
+    size_t h=2166136261u;
+    for(size_t i=0;i<value.size();++i) h=(h ^ static_cast<size_t>(value[i]))*16777619u;
+    return h;
+  }
+};
+}
+#endif

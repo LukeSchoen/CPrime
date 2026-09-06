@@ -14,6 +14,12 @@ namespace std
     const char *m_message;
   };
 
+  class out_of_range : public logic_error
+  {
+  public:
+    explicit out_of_range(const char* message) : logic_error(message) {}
+  };
+
   class runtime_error : public exception
   {
   public:

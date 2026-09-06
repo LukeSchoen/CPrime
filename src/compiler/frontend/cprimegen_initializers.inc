@@ -204,6 +204,44 @@ static void init_push_lvalue(init_params *p, CType *type, unsigned long offset)
 }
 
 // Store A Value Or An Expression Directly In Global Data Or In Local Array
+static void check_integer_list_initialization(CType *target, SValue *value)
+{
+  int source_kind = value->type.t & VT_BTYPE, target_kind = target->t & VT_BTYPE;
+  int align, source_bits, target_bits, source_unsigned, target_unsigned;
+  uint64_t number, maximum;
+  if (!is_integer_btype(target_kind)) return;
+  if (is_float(source_kind)) cprime_error("narrowing floating-to-integer list initialization");
+  if (!is_integer_btype(source_kind)) return;
+  source_bits = source_kind == VT_BOOL ? 1 : type_size(&value->type, &align) * 8;
+  target_bits = target_kind == VT_BOOL ? 1 : type_size(target, &align) * 8;
+  source_unsigned = source_kind == VT_BOOL || (value->type.t & VT_UNSIGNED);
+  target_unsigned = target_kind == VT_BOOL || (target->t & VT_UNSIGNED);
+  if (source_bits < target_bits && (!target_unsigned || source_unsigned)) return;
+  if (source_bits <= target_bits && source_unsigned && target_unsigned) return;
+  if (source_bits == target_bits && !source_unsigned && !target_unsigned) return;
+  if ((value->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) != VT_CONST)
+    cprime_error("narrowing integer list initialization");
+  number = value->c.i;
+  if (source_bits < 64)
+  {
+    uint64_t mask = (UINT64_C(1) << source_bits) - 1;
+    number &= mask;
+    if (!source_unsigned && (number & (UINT64_C(1) << (source_bits - 1))))
+      number |= ~mask;
+  }
+  if (!source_unsigned && (int64_t)number < 0)
+  {
+    if (target_unsigned || (target_bits < 64
+        && (int64_t)number < -(INT64_C(1) << (target_bits - 1))))
+      cprime_error("narrowing integer list initialization");
+    return;
+  }
+  maximum = target_unsigned
+    ? (target_bits == 64 ? UINT64_MAX : (UINT64_C(1) << target_bits) - 1)
+    : (target_bits == 64 ? INT64_MAX : (UINT64_C(1) << (target_bits - 1)) - 1);
+  if (number > maximum) cprime_error("narrowing integer list initialization");
+}
+
 static void init_putv(init_params *p, CType *type, unsigned long c)
 {
   int bt;
@@ -215,6 +253,8 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
 
   dtype = *type;
   dtype.t &= ~VT_CONSTANT; // need to do that to avoid false warning
+  if (is_cpp_translation_unit() && (p->copy_list_initialization || p->list_initialization))
+    check_integer_list_initialization(&dtype, vtop);
   if (!is_reference_type(&dtype) && is_reference_type(&vtop->type))
   {
     int category = vtop->type.t & VT_RVALUE_REFERENCE;
@@ -227,6 +267,14 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
     gen_cast(&dtype);
   if (is_reference_type(&dtype))
   {
+    CType target = *pointed_type(&dtype);
+    if (!sec && (target.t & VT_BTYPE) == VT_STRUCT
+        && ((target.t & VT_CONSTANT) || (dtype.t & VT_RVALUE_REFERENCE))
+        && !is_compatible_unqualified_types(&target, &vtop->type))
+    {
+      target.t &= ~(VT_CONSTANT | VT_VOLATILE);
+      try_materialize_constructor_conversion(&target);
+    }
     cpp_temp_extend_lifetime(vtop);
     if (!sec && !is_reference_type(&vtop->type)
         && !(vtop->r & VT_LVAL)
@@ -463,6 +511,12 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       return;
     }
     if ((dtype.t & VT_BTYPE) == VT_STRUCT
+        && !is_compatible_unqualified_types(&dtype, &vtop->type))
+    {
+      if (!try_materialize_constructor_conversion(&dtype))
+        gen_assign_cast(&dtype);
+    }
+    if ((dtype.t & VT_BTYPE) == VT_STRUCT
         && struct_needs_memberwise_copy(&dtype))
     {
       SValue dst_ptr, src_ptr, source;
@@ -563,7 +617,12 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
         continue;
       }
       if (token == '{')
-        return saved_initializer_close(expression, i, '{', '}') == end;
+      {
+        CType closure_type;
+        if (saved_initializer_close(expression, i, '{', '}') != end) return 0;
+        infer_saved_arg_type(expression, &closure_type);
+        return is_compatible_unqualified_types(type, &closure_type);
+      }
     }
     return 0;
   }
@@ -899,7 +958,7 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
       /* In case of strings we have special handling for arrays, so
          don't consume them as initializer value (which would commit them
          to some anonymous symbol).  */
-      tok != TOK_LSTR && tok != TOK_STR &&
+      ((tok != TOK_LSTR && tok != TOK_STR) || !(type->t & VT_ARRAY)) &&
       (!(flags & DIF_SIZE_ONLY)
        /* a struct may be initialized from a struct of same type, as in
                struct {int x,y;} a = {1,2}, b = {3,4}, c[] = {a,b};
@@ -1108,7 +1167,10 @@ do_init_list:
            /* Use i_c_parameter_t, to strip toplevel qualifiers.
               The source type might have VT_CONSTANT set, which is
               of course assignable to non-const elements.  */
-           && is_compatible_unqualified_types(type, &vtop->type))
+           && (is_compatible_unqualified_types(type, &vtop->type)
+               || (!p->sec && is_cpp_translation_unit()
+                   && (type->t & VT_BTYPE) == VT_STRUCT && type->ref
+                   && type->ref->a.cpp_user_constructor)))
   {
     /* Fall through to the scalar initializer path. */
     if ((flags & DIF_SIZE_ONLY))
@@ -1130,9 +1192,10 @@ do_init_list:
         parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
       }
       if (p->capture_integral_constexpr
-          && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
+          && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST
           && is_integer_btype(vtop->type.t & VT_BTYPE))
       {
+        gen_cast(type);
         p->integral_constexpr_value = vtop->c.i;
         p->integral_constexpr_valid = 1;
       }
@@ -1383,6 +1446,14 @@ do_init_list:
           expect("string constant");
         parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
       }
+      if (p->capture_integral_constexpr
+          && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST
+          && is_integer_btype(vtop->type.t & VT_BTYPE))
+      {
+        gen_cast(type);
+        p->integral_constexpr_value = vtop->c.i;
+        p->integral_constexpr_valid = 1;
+      }
       if (!p->sec && (flags & DIF_CLEAR) // Container Was Already Zero'D
           && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
           && vtop->c.i == 0
@@ -1507,8 +1578,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
     has_init = 0;
   }
   has_expr_struct_init = has_init
-                         && (type->t & VT_BTYPE) == VT_STRUCT
-                         && (tok != '{' || type_is_std_initializer_list(type));
+                         && (type->t & VT_BTYPE) == VT_STRUCT;
 
   if (decl_scope == VT_CONST)
   {

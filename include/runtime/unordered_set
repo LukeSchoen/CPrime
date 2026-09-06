@@ -1,60 +1,46 @@
 #ifndef _CPC_UNORDERED_SET
 #define _CPC_UNORDERED_SET
-
-#include <vector>
-
-namespace std
-{
-  template<class T>
-  class unordered_set
-  {
+#include <unordered_map>
+namespace std {
+template<class Key,class Hash=hash<Key>,class Equal=equal_to<Key>,class Alloc=allocator<Key>>
+class unordered_set {
+  typedef typename Alloc::template rebind<pair<const Key,unsigned char>>::other map_allocator;
+  typedef unordered_map<Key,unsigned char,Hash,Equal,map_allocator> table_type;
+  typedef typename table_type::value_type table_value;
+  table_type table_;
+  const table_type& view()const{return table_;}
+public:
+  typedef Key key_type;typedef Key value_type;typedef size_t size_type;
+  class iterator {
+    typename table_type::const_iterator position_;
+    friend class unordered_set;
+    explicit iterator(typename table_type::const_iterator p):position_(p){}
   public:
-    typedef T *iterator;
-    typedef const T *const_iterator;
-
-    unordered_set() : m_values() {}
-
-    iterator begin() { return m_values.begin(); }
-    const_iterator begin() const { return m_values.begin(); }
-    iterator end() { return m_values.end(); }
-    const_iterator end() const { return m_values.end(); }
-    bool empty() const { return m_values.empty(); }
-    size_t size() const { return m_values.size(); }
-
-    iterator find(const T &value)
-    {
-      for (iterator it = begin(); it != end(); ++it)
-        if (*it == value)
-          return it;
-      return end();
-    }
-
-    const_iterator find(const T &value) const
-    {
-      for (const_iterator it = begin(); it != end(); ++it)
-        if (*it == value)
-          return it;
-      return end();
-    }
-
-    void insert(const T &value)
-    {
-      if (find(value) == end())
-        m_values.push_back(value);
-    }
-
-    void erase(iterator position)
-    {
-      if (position == end())
-        return;
-      for (iterator it = position; it + 1 != end(); ++it)
-        *it = *(it + 1);
-      m_values.pop_back();
-    }
-
-  private:
-    vector<T> m_values;
+    typedef forward_iterator_tag iterator_category;typedef Key value_type;typedef ptrdiff_t difference_type;
+    typedef const Key* pointer;typedef const Key& reference;
+    iterator():position_(){}
+    reference operator*()const{return position_->first;}pointer operator->()const{return &position_->first;}
+    iterator& operator++(){++position_;return *this;}iterator operator++(int){iterator old=*this;++*this;return old;}
+    bool operator==(const iterator& o)const{return position_==o.position_;}
+    bool operator!=(const iterator& o)const{return position_!=o.position_;}
   };
+  typedef iterator const_iterator;
+  unordered_set():table_(){}
+  explicit unordered_set(size_t count,const Hash& hash=Hash(),const Equal& equal=Equal(),const Alloc& alloc=Alloc()):table_(count,hash,equal,map_allocator(alloc)){}
+  unordered_set(initializer_list<Key> values):table_(){for(const auto& value:values)insert(value);}
+  iterator begin()const{return iterator(view().begin());}iterator end()const{return iterator(view().end());}
+  const_iterator cbegin()const{return begin();}const_iterator cend()const{return end();}
+  bool empty()const{return table_.empty();}size_t size()const{return table_.size();}
+  iterator find(const Key& value)const{return iterator(view().find(value));}size_t count(const Key& value)const{return table_.count(value);}
+  pair<iterator,bool> insert(const Key& value){auto result=table_.insert(table_value(value,0));return pair<iterator,bool>(find(result.first->first),result.second);}
+  pair<iterator,bool> insert(Key&& value){auto result=table_.insert(table_value(std::move(value),0));return pair<iterator,bool>(find(result.first->first),result.second);}
+  template<class... Args>pair<iterator,bool>emplace(Args&&... args){Key value(std::forward<Args>(args)...);return insert(std::move(value));}
+  iterator erase(iterator p){iterator next=p;++next;table_.erase(*p);return next;}
+  size_t erase(const Key& value){return table_.erase(value);}void clear()noexcept{table_.clear();}
+  void reserve(size_t n){table_.reserve(n);}void rehash(size_t n){table_.rehash(n);}
+  size_t bucket_count()const{return table_.bucket_count();}float load_factor()const{return table_.load_factor();}
+  float max_load_factor()const{return table_.max_load_factor();}void max_load_factor(float value){table_.max_load_factor(value);}
+  void swap(unordered_set& o)noexcept{table_.swap(o.table_);}
+};
 }
-
 #endif

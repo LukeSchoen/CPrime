@@ -1,0 +1,2 @@
+#include <sstream>
+int main(){std::istringstream s(std::string("a\n\nlast"));std::string line;char c;s.get(c);if(c!='a'||s.gcount()!=1)return 1;if(!std::getline(s,line)||!line.empty()||s.gcount()!=1)return 2;if(!std::getline(s,line)||!line.empty())return 3;if(!std::getline(s,line)||line!="last"||!s.eof()||s.fail())return 4;if(std::getline(s,line)||!s.fail())return 5;s.clear();s.str("x:y");if(!std::getline(s,line,':')||line!="x")return 6;return 0;}

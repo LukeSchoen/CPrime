@@ -1,0 +1,114 @@
+#ifndef _CPC_MAP
+#define _CPC_MAP
+#include <__cpc_hash>
+#include <utility>
+#include <memory>
+#include <iterator>
+#include <initializer_list>
+#include <stdexcept>
+namespace std {
+template<class Key,class T,class Compare=less<Key>,class Alloc=allocator<pair<const Key,T>>>
+class map {
+public:
+  typedef Key key_type;typedef T mapped_type;typedef pair<const Key,T> value_type;typedef size_t size_type;
+private:
+  struct Node {
+    Node *left,*right,*next,*prev;int height;value_type value;
+    template<class V> explicit Node(V&& v):left(0),right(0),next(0),prev(0),height(1),value(std::forward<V>(v)){}
+  };
+  typedef typename Alloc::template rebind<Node>::other node_allocator;
+  Node* root_;Node* first_;Node* last_;size_t size_;Compare compare_;node_allocator allocator_;
+  static int height(Node* n){return n?n->height:0;}
+  static void update(Node* n){int l=height(n->left),r=height(n->right);n->height=1+(l>r?l:r);}
+  static Node* rotate_left(Node* n){Node* r=n->right;n->right=r->left;r->left=n;update(n);update(r);return r;}
+  static Node* rotate_right(Node* n){Node* l=n->left;n->left=l->right;l->right=n;update(n);update(l);return l;}
+  static Node* balance(Node* n){
+    if(!n)return n;update(n);int difference=height(n->left)-height(n->right);
+    if(difference>1){if(height(n->left->left)<height(n->left->right))n->left=rotate_left(n->left);return rotate_right(n);}
+    if(difference<-1){if(height(n->right->right)<height(n->right->left))n->right=rotate_right(n->right);return rotate_left(n);}
+    return n;
+  }
+  template<class V> Node* add(Node* n,V&& value,Node* before,Node* after,Node** result,bool* inserted){
+    if(!n){
+      Node* fresh=allocator_.allocate(1);
+      try {new(static_cast<void*>(fresh))Node(std::forward<V>(value));}
+      catch(...){allocator_.deallocate(fresh,1);throw;}
+      fresh->prev=before;fresh->next=after;if(before)before->next=fresh;else first_=fresh;
+      if(after)after->prev=fresh;else last_=fresh;++size_;*result=fresh;*inserted=true;return fresh;
+    }
+    if(compare_(value.first,n->value.first))n->left=add(n->left,std::forward<V>(value),before,n,result,inserted);
+    else if(compare_(n->value.first,value.first))n->right=add(n->right,std::forward<V>(value),n,after,result,inserted);
+    else {*result=n;*inserted=false;return n;}
+    return balance(n);
+  }
+  static Node* extract_first(Node* n,Node** extracted){
+    if(!n->left){*extracted=n;return n->right;}
+    n->left=extract_first(n->left,extracted);return balance(n);
+  }
+  Node* remove(Node* n,const Key& key,bool* erased){
+    if(!n)return 0;
+    if(compare_(key,n->value.first))n->left=remove(n->left,key,erased);
+    else if(compare_(n->value.first,key))n->right=remove(n->right,key,erased);
+    else {
+      Node* replacement;
+      if(!n->right)replacement=n->left;
+      else {Node* successor=0;Node* right=extract_first(n->right,&successor);successor->left=n->left;successor->right=right;replacement=balance(successor);}
+      if(n->prev)n->prev->next=n->next;else first_=n->next;if(n->next)n->next->prev=n->prev;else last_=n->prev;
+      n->~Node();allocator_.deallocate(n,1);--size_;*erased=true;return replacement;
+    }
+    return balance(n);
+  }
+  Node* lookup(const Key& key)const{Node* n=root_;while(n){if(compare_(key,n->value.first))n=n->left;else if(compare_(n->value.first,key))n=n->right;else return n;}return 0;}
+public:
+  template<bool Const> class cursor {
+    Node* node_;const map* owner_;friend class map;template<bool>friend class cursor;
+    cursor(Node* n,const map* owner):node_(n),owner_(owner){}
+  public:
+    typedef bidirectional_iterator_tag iterator_category;typedef pair<const Key,T> value_type;typedef ptrdiff_t difference_type;
+    typedef typename conditional<Const,const value_type*,value_type*>::type pointer;
+    typedef typename conditional<Const,const value_type&,value_type&>::type reference;
+    cursor():node_(0),owner_(0){}
+    template<bool C,typename enable_if<Const && !C,int>::type=0>cursor(const cursor<C>& o):node_(o.node_),owner_(o.owner_){}
+    reference operator*()const{return node_->value;}pointer operator->()const{return &node_->value;}
+    cursor& operator++(){node_=node_->next;return *this;}cursor operator++(int){cursor old=*this;++*this;return old;}
+    cursor& operator--(){node_=node_?node_->prev:owner_->last_;return *this;}cursor operator--(int){cursor old=*this;--*this;return old;}
+    template<bool C>bool operator==(const cursor<C>& o)const{return node_==o.node_;}
+    template<bool C>bool operator!=(const cursor<C>& o)const{return node_!=o.node_;}
+  };
+  typedef cursor<false> iterator;typedef cursor<true> const_iterator;
+  map():root_(0),first_(0),last_(0),size_(0),compare_(),allocator_(){}
+  explicit map(const Compare& comp,const Alloc& alloc=Alloc()):root_(0),first_(0),last_(0),size_(0),compare_(comp),allocator_(alloc){}
+  map(initializer_list<value_type> values):map(){for(const auto& v:values)insert(v);}
+  map(const map& o):map(o.compare_,Alloc(o.allocator_)){for(const auto& v:o)insert(v);}
+  map(map&& o)noexcept:map(){swap(o);}
+  ~map(){clear();}
+  map& operator=(const map& o){if(this!=&o){map copy(o);swap(copy);}return *this;}
+  map& operator=(map&& o)noexcept{if(this!=&o){map moved(std::move(o));swap(moved);}return *this;}
+  void swap(map& o)noexcept{std::swap(root_,o.root_);std::swap(first_,o.first_);std::swap(last_,o.last_);std::swap(size_,o.size_);std::swap(compare_,o.compare_);std::swap(allocator_,o.allocator_);}
+  iterator begin(){return iterator(first_,this);}const_iterator begin()const{return const_iterator(first_,this);}
+  iterator end(){return iterator(0,this);}const_iterator end()const{return const_iterator(0,this);}
+  const_iterator cbegin()const{return begin();}const_iterator cend()const{return end();}
+  size_t size()const{return size_;}bool empty()const{return size_==0;}
+  iterator find(const Key& key){return iterator(lookup(key),this);}const_iterator find(const Key& key)const{return const_iterator(lookup(key),this);}
+  size_t count(const Key& key)const{return lookup(key)?1:0;}
+  iterator lower_bound(const Key& key){Node* n=root_;Node* result=0;while(n){if(!compare_(n->value.first,key)){result=n;n=n->left;}else n=n->right;}return iterator(result,this);}
+  const_iterator lower_bound(const Key& key)const{Node* n=root_;Node* result=0;while(n){if(!compare_(n->value.first,key)){result=n;n=n->left;}else n=n->right;}return const_iterator(result,this);}
+  iterator upper_bound(const Key& key){Node* n=root_;Node* result=0;while(n){if(compare_(key,n->value.first)){result=n;n=n->left;}else n=n->right;}return iterator(result,this);}
+  const_iterator upper_bound(const Key& key)const{Node* n=root_;Node* result=0;while(n){if(compare_(key,n->value.first)){result=n;n=n->left;}else n=n->right;}return const_iterator(result,this);}
+private:
+  template<class V>pair<iterator,bool> insert_value(V&& value){Node* result=0;bool inserted=false;root_=add(root_,std::forward<V>(value),0,0,&result,&inserted);return pair<iterator,bool>(iterator(result,this),inserted);}
+public:
+  pair<iterator,bool> insert(const value_type& value){return insert_value(value);}pair<iterator,bool>insert(value_type&& value){return insert_value(std::move(value));}
+  template<class P>pair<iterator,bool>insert(P&& value){value_type converted(std::forward<P>(value));return insert_value(std::move(converted));}
+  template<class... Args>pair<iterator,bool>emplace(Args&&... args){value_type value(std::forward<Args>(args)...);return insert_value(std::move(value));}
+  T& operator[](const Key& key){iterator p=find(key);if(p!=end())return p->second;return insert(value_type(key,T())).first->second;}
+  T& operator[](Key&& key){iterator p=find(key);if(p!=end())return p->second;return insert(value_type(std::move(key),T())).first->second;}
+  T& at(const Key& key){iterator p=find(key);if(p==end())throw out_of_range("map::at");return p->second;}
+  const T& at(const Key& key)const{const_iterator p=find(key);if(p==end())throw out_of_range("map::at");return p->second;}
+  size_t erase(const Key& key){bool erased=false;root_=remove(root_,key,&erased);return erased?1:0;}
+  iterator erase(const_iterator p){Node* next=p.node_->next;erase(p->first);return iterator(next,this);}
+  iterator erase(iterator p){Node* next=p.node_->next;erase(p->first);return iterator(next,this);}
+  void clear()noexcept{Node* p=first_;while(p){Node* next=p->next;p->~Node();allocator_.deallocate(p,1);p=next;}root_=first_=last_=0;size_=0;}
+};
+}
+#endif

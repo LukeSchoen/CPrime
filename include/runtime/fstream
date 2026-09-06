@@ -1,0 +1,60 @@
+#ifndef _CPC_FSTREAM
+#define _CPC_FSTREAM
+#include <istream>
+#include <ostream>
+#include <string>
+namespace std {
+inline FILE* __open_file_stream(const char* path,ios_base::openmode mode) {
+  const char* access=0;
+  int flags=mode & ~(ios_base::ate|ios_base::binary);
+  if(flags==ios_base::in)access=(mode&ios_base::binary)?"rb":"r";
+  else if(flags==ios_base::out || flags==(ios_base::out|ios_base::trunc))access=(mode&ios_base::binary)?"wb":"w";
+  else if(flags==ios_base::app || flags==(ios_base::out|ios_base::app))access=(mode&ios_base::binary)?"ab":"a";
+  else if(flags==(ios_base::in|ios_base::out))access=(mode&ios_base::binary)?"r+b":"r+";
+  else if(flags==(ios_base::in|ios_base::out|ios_base::trunc))access=(mode&ios_base::binary)?"w+b":"w+";
+  else if(flags==(ios_base::in|ios_base::app) || flags==(ios_base::in|ios_base::out|ios_base::app))access=(mode&ios_base::binary)?"a+b":"a+";
+  if(!access)return 0;
+  FILE* file=fopen(path,access);
+  if(file && (mode&ios_base::ate) && _fseeki64(file,0,SEEK_END)!=0){fclose(file);return 0;}
+  return file;
+}
+template<class C,class Traits=char_traits<C>> class basic_ifstream:public basic_istream<C,Traits> {
+public:
+  basic_ifstream():basic_istream<C,Traits>((FILE*)0){this->clear();}
+  explicit basic_ifstream(const char* name,ios_base::openmode mode=ios_base::in):basic_istream<C,Traits>((FILE*)0){open(name,mode);}
+  explicit basic_ifstream(const string& name,ios_base::openmode mode=ios_base::in):basic_istream<C,Traits>((FILE*)0){open(name.c_str(),mode);}
+  basic_ifstream(const basic_ifstream&)=delete;
+  basic_ifstream& operator=(const basic_ifstream&)=delete;
+  ~basic_ifstream(){if(this->m_stream)fclose(this->m_stream);}
+  bool is_open()const{return this->m_stream!=0;}
+  void open(const char* name,ios_base::openmode mode=ios_base::in){
+    if(is_open()){this->setstate(ios_base::failbit);return;}
+    this->m_stream=__open_file_stream(name,mode|ios_base::in);
+    this->clear(this->m_stream?ios_base::goodbit:ios_base::failbit);
+  }
+  void open(const string& name,ios_base::openmode mode=ios_base::in){open(name.c_str(),mode);}
+  void close(){if(!this->m_stream){this->setstate(ios_base::failbit);return;}FILE* file=this->m_stream;this->m_stream=0;if(fclose(file)!=0)this->setstate(ios_base::failbit);}
+};
+template<class C,class Traits=char_traits<C>> class basic_ofstream:public basic_ostream<C,Traits> {
+public:
+  basic_ofstream():basic_ostream<C,Traits>((FILE*)0){this->clear();}
+  explicit basic_ofstream(const char* name,ios_base::openmode mode=ios_base::out):basic_ostream<C,Traits>((FILE*)0){open(name,mode);}
+  explicit basic_ofstream(const string& name,ios_base::openmode mode=ios_base::out):basic_ostream<C,Traits>((FILE*)0){open(name.c_str(),mode);}
+  basic_ofstream(const basic_ofstream&)=delete;
+  basic_ofstream& operator=(const basic_ofstream&)=delete;
+  ~basic_ofstream(){if(this->m_stream)fclose(this->m_stream);}
+  bool is_open()const{return this->m_stream!=0;}
+  void open(const char* name,ios_base::openmode mode=ios_base::out){
+    if(is_open()){this->setstate(ios_base::failbit);return;}
+    this->m_stream=__open_file_stream(name,mode|ios_base::out);
+    this->clear(this->m_stream?ios_base::goodbit:ios_base::failbit);
+  }
+  void open(const string& name,ios_base::openmode mode=ios_base::out){open(name.c_str(),mode);}
+  void close(){if(!this->m_stream){this->setstate(ios_base::failbit);return;}FILE* file=this->m_stream;this->m_stream=0;if(fclose(file)!=0)this->setstate(ios_base::failbit);}
+};
+typedef basic_ifstream<char> ifstream;
+typedef basic_ofstream<char> ofstream;
+typedef basic_ifstream<wchar_t> wifstream;
+typedef basic_ofstream<wchar_t> wofstream;
+}
+#endif

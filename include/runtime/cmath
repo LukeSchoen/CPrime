@@ -40,6 +40,12 @@ namespace std
   inline double abs(double value) { return ::fabs(value); }
   inline long double abs(long double value) { return ::fabsl(value); }
   inline double exp(double value) { return ::exp(value); }
+  inline float floor(float value) { return ::floorf(value); }
+  inline double floor(double value) { return ::floor(value); }
+  inline long double floor(long double value) { return ::floorl(value); }
+  template<typename T>
+  inline typename enable_if<is_integral<T>::value, double>::type floor(T value)
+  { return ::floor(static_cast<double>(value)); }
   inline float sqrt(float value) { return ::sqrtf(value); }
   inline double sqrt(double value) { return ::sqrt(value); }
   inline long double sqrt(long double value) { return ::sqrtl(value); }

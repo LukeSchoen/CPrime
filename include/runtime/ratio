@@ -1,0 +1,23 @@
+#ifndef _CPC_RATIO
+#define _CPC_RATIO
+#include <stdint.h>
+namespace std {
+template<intmax_t A, intmax_t B> struct __ratio_gcd {
+  static constexpr intmax_t value = __ratio_gcd<B, A % B>::value;
+};
+template<intmax_t A> struct __ratio_gcd<A, 0> {
+  static constexpr intmax_t value = A < 0 ? -A : A;
+};
+template<intmax_t N, intmax_t D = 1> struct ratio {
+  static_assert(D != 0, "ratio denominator is zero");
+  static constexpr intmax_t divisor = __ratio_gcd<N,D>::value;
+  static constexpr intmax_t num = (D < 0 ? -N : N) / divisor;
+  static constexpr intmax_t den = (D < 0 ? -D : D) / divisor;
+  typedef ratio<num,den> type;
+};
+typedef ratio<1,1000000000> nano;
+typedef ratio<1,1000000> micro;
+typedef ratio<1,1000> milli;
+typedef ratio<1000> kilo;
+}
+#endif

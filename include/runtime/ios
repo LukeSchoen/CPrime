@@ -7,8 +7,28 @@ class ios_base {
 public:
   typedef int iostate;
   typedef int seekdir;
+  typedef int openmode;
   static const iostate goodbit = 0, eofbit = 1, failbit = 2, badbit = 4;
   static const seekdir beg = SEEK_SET, cur = SEEK_CUR, end = SEEK_END;
+  static const openmode in = 1, out = 2, app = 4, ate = 8, trunc = 16, binary = 32;
+  typedef unsigned fmtflags;
+  static const fmtflags dec=1, oct=2, hex=4, basefield=7;
+  static const fmtflags fixed=8, scientific=16, floatfield=24;
+  static const fmtflags left=32, right=64, internal=128, adjustfield=224;
+  static const fmtflags boolalpha=256, showbase=512, showpoint=1024, showpos=2048, skipws=4096, uppercase=8192;
+  fmtflags flags() const { return m_flags; }
+  fmtflags flags(fmtflags f) { fmtflags old=m_flags; m_flags=f; return old; }
+  fmtflags setf(fmtflags f) { fmtflags old=m_flags; m_flags|=f; return old; }
+  fmtflags setf(fmtflags f,fmtflags mask) { fmtflags old=m_flags; m_flags=(m_flags&~mask)|(f&mask); return old; }
+  void unsetf(fmtflags f) { m_flags&=~f; }
+  streamsize precision() const { return m_precision; }
+  streamsize precision(streamsize n) { streamsize old=m_precision; m_precision=n; return old; }
+  streamsize width() const { return m_width; }
+  streamsize width(streamsize n) { streamsize old=m_width; m_width=n; return old; }
+protected:
+  ios_base():m_flags(dec|skipws),m_precision(6),m_width(0){}
+  fmtflags m_flags;
+  streamsize m_precision,m_width;
 };
 template<class C, class Traits> class basic_ios : public ios_base {
 public:
@@ -16,21 +36,42 @@ public:
   typedef Traits traits_type;
   typedef streamoff pos_type;
   typedef streamoff off_type;
-  bool good() const { return m_state == goodbit; }
-  bool eof() const { return (m_state & eofbit) != 0; }
-  bool fail() const { return (m_state & (failbit | badbit)) != 0; }
-  bool bad() const { return (m_state & badbit) != 0; }
+  bool good() const { return *m_state_ptr == goodbit; }
+  bool eof() const { return (*m_state_ptr & eofbit) != 0; }
+  bool fail() const { return (*m_state_ptr & (failbit | badbit)) != 0; }
+  bool bad() const { return (*m_state_ptr & badbit) != 0; }
   explicit operator bool() const { return !fail(); }
   bool operator!() const { return fail(); }
-  iostate rdstate() const { return m_state; }
-  void clear(iostate state = goodbit) { m_state = state; if(m_stream) clearerr(m_stream); }
-  void setstate(iostate state) { m_state |= state; }
+  iostate rdstate() const { return *m_state_ptr; }
+  void clear(iostate state = goodbit) { *m_state_ptr = state; if(m_stream) clearerr(m_stream); }
+  void setstate(iostate state) { *m_state_ptr |= state; }
+  C fill() const { return m_fill; }
+  C fill(C value) { C old=m_fill; m_fill=value; return old; }
+  basic_streambuf<C,Traits>* rdbuf() const { return m_buffer; }
+  basic_streambuf<C,Traits>* rdbuf(basic_streambuf<C,Traits>* buffer) {
+    basic_streambuf<C,Traits>* old=m_buffer; m_buffer=buffer; clear(buffer?goodbit:badbit); return old;
+  }
 protected:
-  basic_ios(FILE* file) : m_stream(file), m_state(file ? goodbit : badbit) {}
+  basic_ios(FILE* file = 0) : m_stream(file), m_state(file ? goodbit : badbit), m_state_ptr(&m_state),m_buffer(0),m_fill((C)' ') {}
+  void share_state(basic_ios& other) { m_state_ptr=other.m_state_ptr; }
+  void init(basic_streambuf<C,Traits>* buffer) { m_stream=0; m_buffer=buffer; m_state=buffer?goodbit:badbit; }
   FILE* m_stream;
   iostate m_state;
+  iostate* m_state_ptr;
+  basic_streambuf<C,Traits>* m_buffer;
+  C m_fill;
 };
 typedef basic_ios<char> ios;
 typedef basic_ios<wchar_t> wios;
+inline ios_base& hex(ios_base& s){s.setf(ios_base::hex,ios_base::basefield);return s;}
+inline ios_base& dec(ios_base& s){s.setf(ios_base::dec,ios_base::basefield);return s;}
+inline ios_base& oct(ios_base& s){s.setf(ios_base::oct,ios_base::basefield);return s;}
+inline ios_base& fixed(ios_base& s){s.setf(ios_base::fixed,ios_base::floatfield);return s;}
+inline ios_base& scientific(ios_base& s){s.setf(ios_base::scientific,ios_base::floatfield);return s;}
+inline ios_base& defaultfloat(ios_base& s){s.unsetf(ios_base::floatfield);return s;}
+inline ios_base& left(ios_base& s){s.setf(ios_base::left,ios_base::adjustfield);return s;}
+inline ios_base& right(ios_base& s){s.setf(ios_base::right,ios_base::adjustfield);return s;}
+inline ios_base& boolalpha(ios_base& s){s.setf(ios_base::boolalpha);return s;}
+inline ios_base& noboolalpha(ios_base& s){s.unsetf(ios_base::boolalpha);return s;}
 }
 #endif

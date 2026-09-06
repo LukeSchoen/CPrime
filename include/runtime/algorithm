@@ -2,10 +2,28 @@
 #define _ALGORITHM
 
 #include <utility>
+#include <iterator>
 #include <stdlib.h>
 
 namespace std
 {
+  template<class BidirectionalIterator>
+  void reverse(BidirectionalIterator first, BidirectionalIterator last)
+  {
+    while(first!=last){--last;if(first==last)break;std::swap(*first,*last);++first;}
+  }
+  template<class InputIt, class T>
+  InputIt find(InputIt first, InputIt last, const T &value)
+  {
+    for (; first != last; ++first) if (*first == value) break;
+    return first;
+  }
+  template<class InputIt, class Predicate>
+  InputIt find_if(InputIt first, InputIt last, Predicate predicate)
+  {
+    for (; first != last; ++first) if (predicate(*first)) break;
+    return first;
+  }
   template<class ForwardIterator, class BinaryPredicate>
   ForwardIterator unique(ForwardIterator first, ForwardIterator last,
                          BinaryPredicate equal)
@@ -136,6 +154,90 @@ namespace std
       *other = value;
     }
   }
+  template<class Input,class Output,class Operation>
+  Output transform(Input first,Input last,Output result,Operation operation) {
+    for(;first!=last;++first,++result) *result=operation(*first);
+    return result;
+  }
+  template<class Input1,class Input2,class Output,class Operation>
+  Output transform(Input1 first,Input1 last,Input2 second,Output result,Operation operation) {
+    for(;first!=last;++first,++second,++result) *result=operation(*first,*second);
+    return result;
+  }
+  struct __heap_less {
+    template<class T, class U> bool operator()(T&& a,U&& b) const {return std::forward<T>(a)<std::forward<U>(b);}
+  };
+  template<class Iterator,class Compare>
+  void push_heap(Iterator first,Iterator last,Compare compare) {
+    auto count=last-first;
+    if(count<2)return;
+    auto child=count-1;
+    while(child>0) {
+      auto parent=(child-1)/2;
+      if(!compare(first[parent],first[child]))break;
+      std::swap(first[parent],first[child]);
+      child=parent;
+    }
+  }
+  template<class Iterator> void push_heap(Iterator first,Iterator last) {
+    std::push_heap(first,last,__heap_less{});
+  }
+  template<class Iterator,class Compare>
+  void __heap_sift_down(Iterator first,typename iterator_traits<Iterator>::difference_type count,
+                        typename iterator_traits<Iterator>::difference_type parent,Compare compare) {
+    for(;;) {
+      auto child=parent*2+1;
+      if(child>=count)return;
+      if(child+1<count && compare(first[child],first[child+1]))++child;
+      if(!compare(first[parent],first[child]))return;
+      std::swap(first[parent],first[child]);
+      parent=child;
+    }
+  }
+  template<class Iterator,class Compare>
+  void pop_heap(Iterator first,Iterator last,Compare compare) {
+    auto count=last-first;
+    if(count<2)return;
+    std::swap(*first,*(last-1));
+    std::__heap_sift_down(first,count-1,decltype(count)(0),compare);
+  }
+  template<class Iterator> void pop_heap(Iterator first,Iterator last) {
+    std::pop_heap(first,last,__heap_less{});
+  }
+  template<class Iterator,class Compare>
+  void make_heap(Iterator first,Iterator last,Compare compare) {
+    auto count=last-first;
+    for(auto parent=count/2;parent>0;)
+      std::__heap_sift_down(first,count,--parent,compare);
+  }
+  template<class Iterator> void make_heap(Iterator first,Iterator last) {
+    std::make_heap(first,last,__heap_less{});
+  }
+  template<class Iterator,class Compare>
+  void sort_heap(Iterator first,Iterator last,Compare compare) {
+    while(last-first>1)std::pop_heap(first,last--,compare);
+  }
+  template<class Iterator> void sort_heap(Iterator first,Iterator last) {
+    std::sort_heap(first,last,__heap_less{});
+  }
+  template<class Iterator,class Compare>
+  Iterator is_heap_until(Iterator first,Iterator last,Compare compare) {
+    auto count=last-first;
+    for(decltype(count) child=1;child<count;++child)
+      if(compare(first[(child-1)/2],first[child]))return first+child;
+    return last;
+  }
+  template<class Iterator> Iterator is_heap_until(Iterator first,Iterator last) {
+    return std::is_heap_until(first,last,__heap_less{});
+  }
+  template<class Iterator,class Compare>
+  bool is_heap(Iterator first,Iterator last,Compare compare) {
+    return std::is_heap_until(first,last,compare)==last;
+  }
+  template<class Iterator> bool is_heap(Iterator first,Iterator last) {
+    return std::is_heap(first,last,__heap_less{});
+  }
+
 }
 
 #endif

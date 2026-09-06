@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
+#include <stdio.h>
 namespace std {
 template<class C> struct char_traits {
   typedef C char_type;
@@ -44,6 +45,7 @@ public:
   basic_string(basic_string&& s) noexcept : m_data(s.m_data), m_len(s.m_len), m_capacity(s.m_capacity) { s.m_data=0; s.m_len=0; s.m_capacity=0; }
   ~basic_string() { if(m_data) Alloc().deallocate(m_data,m_capacity+1); }
   basic_string& operator=(const basic_string& s) { if(this!=&s) assign(s.data(),s.size()); return *this; }
+  basic_string& operator=(C c) { return assign(&c,1); }
   basic_string& operator=(const C* s) { return assign(s,Traits::length(s)); }
   basic_string& operator=(basic_string&& s) noexcept { if(this!=&s) { if(m_data) Alloc().deallocate(m_data,m_capacity+1); m_data=s.m_data; m_len=s.m_len; m_capacity=s.m_capacity; s.m_data=0; s.m_len=0; s.m_capacity=0; } return *this; }
   size_t size() const { return m_len; }
@@ -59,6 +61,10 @@ public:
   const_iterator end() const { return data()+m_len; }
   const_iterator cbegin() const { return begin(); }
   const_iterator cend() const { return end(); }
+  C& front() { return data()[0]; }
+  const C& front() const { return data()[0]; }
+  C& back() { return data()[m_len-1]; }
+  const C& back() const { return data()[m_len-1]; }
   C& operator[](size_t i) { return data()[i]; }
   const C& operator[](size_t i) const { return data()[i]; }
   void reserve(size_t n) {
@@ -76,6 +82,13 @@ public:
     C* p=Alloc().allocate(n+1); Traits::copy(p,s,n); p[n]=C();
     if(m_data) Alloc().deallocate(m_data,m_capacity+1);
     m_data=p; m_len=n; m_capacity=n; return *this;
+  }
+  template<class Iterator, typename enable_if<!is_integral<Iterator>::value,int>::type = 0>
+  basic_string& assign(Iterator first,Iterator last) {
+    basic_string incoming;
+    for(;first!=last;++first) incoming.push_back(*first);
+    swap(incoming);
+    return *this;
   }
   basic_string& assign(const C* s) { return assign(s,Traits::length(s)); }
   basic_string& append(const C* s,size_t n) {
@@ -102,5 +115,28 @@ typedef basic_string<char> string;
 typedef basic_string<wchar_t> wstring;
 template<class C,class T,class A> bool operator==(const basic_string<C,T,A>& a,const basic_string<C,T,A>& b) { return a.compare(b)==0; }
 template<class C,class T,class A> bool operator!=(const basic_string<C,T,A>& a,const basic_string<C,T,A>& b) { return a.compare(b)!=0; }
+template<class C,class T,class A> bool operator<(const basic_string<C,T,A>& a,const basic_string<C,T,A>& b) { return a.compare(b)<0; }
+template<class C,class T,class A> bool operator>(const basic_string<C,T,A>& a,const basic_string<C,T,A>& b) { return a.compare(b)>0; }
+template<class C,class T,class A> bool operator<=(const basic_string<C,T,A>& a,const basic_string<C,T,A>& b) { return a.compare(b)<=0; }
+template<class C,class T,class A> bool operator>=(const basic_string<C,T,A>& a,const basic_string<C,T,A>& b) { return a.compare(b)>=0; }
+#define _CPC_STRING_POINTER_COMPARISON(op) \
+template<class C,class T,class A> bool operator op(const basic_string<C,T,A>& a,const C* b) { return a.compare(basic_string<C,T,A>(b)) op 0; } \
+template<class C,class T,class A> bool operator op(const C* a,const basic_string<C,T,A>& b) { return 0 op b.compare(basic_string<C,T,A>(a)); }
+_CPC_STRING_POINTER_COMPARISON(==)
+_CPC_STRING_POINTER_COMPARISON(!=)
+_CPC_STRING_POINTER_COMPARISON(<)
+_CPC_STRING_POINTER_COMPARISON(>)
+_CPC_STRING_POINTER_COMPARISON(<=)
+_CPC_STRING_POINTER_COMPARISON(>=)
+#undef _CPC_STRING_POINTER_COMPARISON
+template<class C,class T,class A> basic_string<C,T,A> operator+(basic_string<C,T,A> a,const basic_string<C,T,A>& b) { a+=b; return a; }
+template<class C,class T,class A> basic_string<C,T,A> operator+(basic_string<C,T,A> a,C c) { a+=c; return a; }
+template<class C,class T,class A> basic_string<C,T,A> operator+(basic_string<C,T,A> a,const C* b) { a+=b; return a; }
+inline string to_string(int v) { char b[32]; snprintf(b,sizeof(b),"%d",v); return string(b); }
+inline string to_string(unsigned int v) { char b[32]; snprintf(b,sizeof(b),"%u",v); return string(b); }
+inline string to_string(long v) { char b[32]; snprintf(b,sizeof(b),"%ld",v); return string(b); }
+inline string to_string(unsigned long v) { char b[32]; snprintf(b,sizeof(b),"%lu",v); return string(b); }
+inline string to_string(long long v) { char b[32]; snprintf(b,sizeof(b),"%lld",v); return string(b); }
+inline string to_string(unsigned long long v) { char b[32]; snprintf(b,sizeof(b),"%llu",v); return string(b); }
 }
 #endif

@@ -1,0 +1,15 @@
+#ifndef _CPC_IOMANIP
+#define _CPC_IOMANIP
+#include <ostream>
+namespace std {
+struct __width_manip { streamsize value; };
+struct __precision_manip { streamsize value; };
+template<class C> struct __fill_manip { C value; };
+inline __width_manip setw(int n){__width_manip v={n};return v;}
+inline __precision_manip setprecision(int n){__precision_manip v={n};return v;}
+template<class C> __fill_manip<C> setfill(C c){__fill_manip<C> v={c};return v;}
+template<class C,class T> basic_ostream<C,T>& operator<<(basic_ostream<C,T>& s,__width_manip v){s.width(v.value);return s;}
+template<class C,class T> basic_ostream<C,T>& operator<<(basic_ostream<C,T>& s,__precision_manip v){s.precision(v.value);return s;}
+template<class C,class T> basic_ostream<C,T>& operator<<(basic_ostream<C,T>& s,__fill_manip<C> v){s.fill(v.value);return s;}
+}
+#endif

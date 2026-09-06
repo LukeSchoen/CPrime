@@ -39,6 +39,8 @@ static int find_class_scope_type_tok(int class_tok, int name_tok)
     if (class_tok_matches_unqualified_name(class_tok, name_tok))
       return class_tok;
     nested_tok = make_static_member_tok(class_tok, name_tok);
+    if (find_class_template_def(nested_tok))
+      return nested_tok;
     if (struct_find(nested_tok))
       return nested_tok;
     alias = global_symbol_find(nested_tok);
@@ -236,6 +238,8 @@ static int find_current_namespace_tok(int name_tok)
   if (name_tok < TOK_UIDENT)
     return name_tok;
   local = sym_find(name_tok);
+  if (local && local->cpp_using_target)
+    return local->cpp_using_target;
   if (local && local->sym_scope)
     return name_tok;
   for (i = 0; i < nb_namespace_stack; ++i)
@@ -260,6 +264,19 @@ static int find_current_namespace_tok(int name_tok)
     if (sym_find(t) || global_symbol_find(t) || struct_find(t)
         || find_class_template_def(t) || find_function_template_def(t))
       return t;
+  }
+  return name_tok;
+}
+
+static int find_namespace_qualifier_tok(int name_tok)
+{
+  int parts[17], depth, i, candidate;
+  for (i = 0; i < nb_namespace_stack; ++i) parts[i] = namespace_stack[i];
+  for (depth = nb_namespace_stack; depth >= 0; --depth) {
+    parts[depth] = name_tok;
+    candidate = make_namespace_tok_from_parts(parts, depth + 1);
+    for (i = 0; i < nb_namespace_scopes; ++i)
+      if (namespace_scopes[i].name_tok == candidate) return candidate;
   }
   return name_tok;
 }
@@ -391,6 +408,13 @@ static int append_type_mangle_string(CString *name, CType *type)
     return 1;
   }
 
+  if (IS_ENUM(type->t) || IS_ENUM_VAL(type->t))
+  {
+    if (!type->ref) return 0;
+    cstr_cat(name, "_enum_", -1);
+    cstr_cat(name, get_tok_str(type->ref->v & ~SYM_STRUCT, NULL), -1);
+    return 1;
+  }
   if (CHARACTER_TYPE_KIND(type->t))
     pstrcpy(part, sizeof(part), CHARACTER_TYPE_NAME(type->t));
   else if (bt == VT_VOID)
@@ -1190,6 +1214,8 @@ static int default_arg_is_empty_braces(TokenString *str)
 
 static void emit_default_arg(Sym *func_type, Sym *arg)
 {
+  int entry_tok = tok;
+  CValue entry_tokc = tokc;
   TokenString macro;
   TokenString *value_init = NULL;
   TokenString *saved_macro_stack = macro_stack;
@@ -1240,7 +1266,9 @@ static void emit_default_arg(Sym *func_type, Sym *arg)
   while (macro_stack && macro_stack != saved_macro_stack)
     end_macro();
   macro_ptr = saved_macro_ptr;
-  gfunc_param_typed(func_type, arg);
+  tok = entry_tok;
+  tokc = entry_tokc;
+  gfunc_param_typed_with_conversions(func_type, arg);
 }
 
 static void drop_leaked_call_target(Sym *func_sym)
@@ -1473,8 +1501,9 @@ static void infer_saved_arg_type_and_category(TokenString *arg, CType *type,
 
   if (saved_arg_is_braced(arg))
   {
-    type->t = VT_INT;
-    type->ref = NULL;
+    type->t = VT_BRACED_LIST;
+    type->ref = sym_push2(&global_stack, SYM_FIELD, VT_VOID, 0);
+    type->ref->default_arg = arg;
     return;
   }
   if (saved_arg_functional_temporary_type(arg, type))
@@ -1546,7 +1575,7 @@ static void parse_typed_function_argument(Sym *param)
   {
     type = param->type;
     if (is_reference_type(&type)) type = *pointed_type(&type);
-    if ((type.t & VT_BTYPE) == VT_STRUCT)
+    if ((type.t & VT_BTYPE) == VT_STRUCT || (type.t & VT_ARRAY))
     {
       materialize_braced_temporary(&type);
       return;
@@ -1560,9 +1589,10 @@ static int emit_saved_arg_for_param(TokenString *arg, Sym *param)
   int saved_tok = tok;
   CValue saved_tokc = tokc;
   if (saved_arg_is_braced(arg) && param
-      && (((param->type.t & VT_BTYPE) == VT_STRUCT)
+      && (((param->type.t & VT_BTYPE) == VT_STRUCT) || (param->type.t & VT_ARRAY)
           || (is_reference_type(&param->type)
-              && ((pointed_type(&param->type)->t & VT_BTYPE) == VT_STRUCT))))
+              && (((pointed_type(&param->type)->t & VT_BTYPE) == VT_STRUCT)
+                  || (pointed_type(&param->type)->t & VT_ARRAY)))))
   {
     CType temp_type;
     TokenString macro;
@@ -1618,6 +1648,9 @@ static void gfunc_param_typed_with_conversions(Sym *func_type, Sym *param)
     construct_type = param_value_type;
     construct_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
     if ((construct_type.t & VT_BTYPE) == VT_STRUCT
+        && (!is_reference_type(&param->type)
+            || (param->type.t & VT_RVALUE_REFERENCE)
+            || (param_value_type.t & VT_CONSTANT))
         && !is_compatible_unqualified_types(&construct_type,
                                             &arg_value_type)
         && !same_concrete_template_instantiation(&construct_type,
@@ -1755,6 +1788,15 @@ static int cpp_pointer_to_bool_conversion(CType *parameter, CType *argument)
 
 static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
 {
+  if (arg_type->t == VT_BRACED_LIST)
+    return saved_list_argument_rank(param_type, arg_type->ref->default_arg) >= 0;
+  {
+    CType *source = arg_type;
+    if ((source->t & VT_BTYPE) == VT_PTR) source = pointed_type(source);
+    if ((source->t & VT_BTYPE) == VT_FUNC && source->ref
+        && source->ref->f.func_unresolved_template)
+      return resolve_function_template_address(source, param_type) != NULL;
+  }
   CType decayed_arg, arg_value_type;
   CType param_value_type;
   CType normalized_arg;
@@ -1959,6 +2001,15 @@ static int cpp_arithmetic_conversion_rank(CType *target, CType *source)
 
 static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
 {
+  if (arg_type->t == VT_BRACED_LIST)
+    return saved_list_argument_rank(param_type, arg_type->ref->default_arg);
+  {
+    CType *source = arg_type;
+    if ((source->t & VT_BTYPE) == VT_PTR) source = pointed_type(source);
+    if ((source->t & VT_BTYPE) == VT_FUNC && source->ref
+        && source->ref->f.func_unresolved_template)
+      return resolve_function_template_address(source, param_type) ? 0 : -1;
+  }
   CType arg_value_type;
   CType param_value_type;
   CType normalized_arg;
@@ -2235,6 +2286,12 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
            : call_arg_match_rank(&arg->type, &arg_types[i]);
       if (rank < 0)
       {
+        if (getenv("CPC_DUMP_FREE_RESOLVE")) {
+          char expected[256], actual[256];
+          type_to_str(expected, sizeof(expected), &arg->type, "");
+          type_to_str(actual, sizeof(actual), &arg_types[i], "");
+          fprintf(stderr,"CPC_FREE_REJECT name=%s argument=%d expected=%s actual=%s\n",get_tok_str(name_tok,NULL),i,expected,actual);
+        }
         ok = 0;
         break;
       }
@@ -2732,6 +2789,7 @@ static const char *cpp_operator_name_from_tok(int op)
   case TOK_DEC: return "operator--";
   case '!': return "operator!";
   case '~': return "operator~";
+  case TOK_ARROW: return "operator->";
   case TOK_SHR:
   case TOK_SAR: return "operator>>";
   case TOK_SHL: return "operator<<";
@@ -3034,6 +3092,11 @@ static int try_call_cpp_binary_operator(int op)
   sa = func_type->next;
   if (!sa || !sa->next || sa->next->next)
     cprime_error("operator overload must have exactly one explicit parameter");
+  /* A name-only fallback is not viable merely because the class declares
+     this operator. Nonmember candidates still participate when its explicit
+     parameter cannot accept the right operand. */
+  if (call_arg_match_rank(&sa->next->type, &saved_rhs.type) < 0)
+    return 0;
 
   /* Convert lhs/rhs into member call args: operator(this, rhs). */
   if (getenv("CPC_TRACE_MATRIX"))
@@ -3161,13 +3224,17 @@ static Sym *cpp_resolve_free_operator(int method_tok, CType *arguments, int coun
 {
   CppOperatorLookup lookup;
   FreeFuncOverload *overload;
-  int i, j, *candidates = NULL, candidate_count = 0;
+  int i, j, *candidates = NULL, candidate_count = 0, has_class_operand = 0;
   Sym *function;
   memset(&lookup, 0, sizeof lookup);
   lookup.method_tok = method_tok;
   cpp_operator_lookup_name(&lookup, find_current_namespace_tok(method_tok));
-  for (i = 0; i < count; ++i)
+  for (i = 0; i < count; ++i) {
+    CType value = arguments[i];
+    if (is_reference_type(&value)) value = *pointed_type(&value);
+    if ((value.t & VT_BTYPE) == VT_STRUCT) has_class_operand = 1;
     cpp_operator_associated_type(&lookup, &arguments[i]);
+  }
   for (i = 0; i < lookup.name_count; ++i) {
     instantiate_function_templates_for_call(lookup.names[i], arguments, count);
     function = find_global_symbol(lookup.names[i]);
@@ -3178,6 +3245,21 @@ static Sym *cpp_resolve_free_operator(int method_tok, CType *arguments, int coun
     for (i = 0; i < lookup.name_count; ++i)
       if (lookup.names[i] == overload->name_tok) break;
     if (i == lookup.name_count) continue;
+    if (!has_class_operand) {
+      /* With enum operands and no class operand, a non-member operator must
+         have a corresponding parameter of that enum type. Converting both
+         operands to unrelated classes cannot displace a builtin operator. */
+      Sym *parameter = overload->func_type.ref ? overload->func_type.ref->next : NULL;
+      int matches_enum = 0;
+      for (i = 0; i < count && parameter; ++i, parameter = parameter->next) {
+        CType value = arguments[i], expected = parameter->type;
+        if (is_reference_type(&value)) value = *pointed_type(&value);
+        if (is_reference_type(&expected)) expected = *pointed_type(&expected);
+        if ((IS_ENUM(value.t) || IS_ENUM_VAL(value.t))
+            && call_arg_exact_param_type(&expected, &value)) matches_enum = 1;
+      }
+      if (!matches_enum) continue;
+    }
     for (j = 0; j < candidate_count; ++j)
       if (candidates[j] == overload->mangled_tok) break;
     if (j < candidate_count) continue;
@@ -3324,7 +3406,13 @@ static int try_call_cpp_bool_conversion_operator(void)
   if (!func_sym)
     func_sym = resolve_member_func(&vtop->type, method_tok);
   if (!func_sym)
-    return 0;
+  {
+    CType boolean_type = { VT_BOOL, NULL };
+    func_sym = find_cpp_conversion_operator(&vtop->type, &boolean_type,
+                                             0, &method_tok, NULL);
+    if (!func_sym)
+      return 0;
+  }
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("conversion operator target is not declared as function");
   if (getenv("CPC_TRACE_CLBITREF")
@@ -3428,8 +3516,8 @@ static int try_call_cpp_index_operator(void)
 static int try_call_cpp_call_operator(void)
 {
   const int method_tok = tok_alloc_const("operator()");
-  TokenString *call_args[32];
-  CType call_arg_types[32];
+  TokenString *call_args[CPC_MAX_CALL_ARGUMENTS];
+  CType call_arg_types[CPC_MAX_CALL_ARGUMENTS];
   SValue saved_receiver;
   SValue *saved_vtop;
   Sym *func_sym, *func_type, *sa;
@@ -3448,7 +3536,7 @@ static int try_call_cpp_call_operator(void)
   saved_vtop = vtop;
   saved_receiver = *vtop;
   next();
-  call_arg_count = count_saved_call_args(call_args, 32);
+  call_arg_count = count_saved_call_args(call_args, CPC_MAX_CALL_ARGUMENTS);
   infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
 
   instantiate_template_member_for_call(&saved_receiver.type, method_tok,

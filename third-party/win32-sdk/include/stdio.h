@@ -198,6 +198,8 @@ extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
   int __cdecl fputs(const char *_Str,FILE *_File);
   size_t __cdecl fread(void *_DstBuf,size_t _ElementSize,size_t _Count,FILE *_File);
   FILE *__cdecl freopen(const char *_Filename,const char *_Mode,FILE *_File);
+  _CRTIMP int __cdecl fopen_s(FILE **_File,const char *_Filename,const char *_Mode);
+  _CRTIMP int __cdecl freopen_s(FILE **_File,const char *_Filename,const char *_Mode,FILE *_OldFile);
   int __cdecl fscanf(FILE *_File,const char *_Format,...);
   int __cdecl fsetpos(FILE *_File,const fpos_t *_Pos);
   int __cdecl fseek(FILE *_File,long _Offset,int _Origin);

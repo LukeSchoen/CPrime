@@ -1,0 +1,90 @@
+#ifndef _CPC_SSTREAM
+#define _CPC_SSTREAM
+#include <iostream>
+#include <string>
+namespace std {
+template<class C,class Traits=char_traits<C>,class Alloc=allocator<C>> class basic_stringbuf:public basic_streambuf<C,Traits> {
+public:
+  typedef basic_string<C,Traits,Alloc> string_type;
+  typedef typename Traits::int_type int_type;
+  typedef streamoff pos_type;
+  typedef streamoff off_type;
+  explicit basic_stringbuf(ios_base::openmode mode=ios_base::in|ios_base::out):m_mode(mode),m_read(0),m_write(0){}
+  explicit basic_stringbuf(const string_type& text,ios_base::openmode mode=ios_base::in|ios_base::out):m_text(text),m_mode(mode),m_read(0),m_write((mode&(ios_base::ate|ios_base::app))?(streamoff)text.size():0){}
+  string_type str()const{return m_text;}
+  void str(const string_type& text){m_text=text;m_read=0;m_write=(m_mode&(ios_base::ate|ios_base::app))?(streamoff)text.size():0;}
+protected:
+  int_type underflow(){return (m_mode&ios_base::in)&&m_read<(streamoff)m_text.size()?Traits::to_int_type(m_text[(size_t)m_read]):Traits::eof();}
+  int_type uflow(){int_type c=underflow();if(!Traits::eq_int_type(c,Traits::eof()))++m_read;return c;}
+  int_type overflow(int_type c=Traits::eof()){
+    if(!(m_mode&ios_base::out))return Traits::eof();
+    if(Traits::eq_int_type(c,Traits::eof()))return Traits::not_eof(c);
+    if(m_mode&ios_base::app)m_write=(streamoff)m_text.size();
+    if(m_write==(streamoff)m_text.size())m_text.push_back(Traits::to_char_type(c));
+    else m_text[(size_t)m_write]=Traits::to_char_type(c);
+    ++m_write;return c;
+  }
+  streamsize xsputn(const C* data,streamsize count){
+    if(!(m_mode&ios_base::out)||count<=0)return 0;
+    if(m_mode&ios_base::app)m_write=(streamoff)m_text.size();
+    if(m_write+count>(streamoff)m_text.size())m_text.resize((size_t)(m_write+count));
+    Traits::copy(m_text.data()+(size_t)m_write,data,(size_t)count);m_write+=count;return count;
+  }
+  streamsize xsgetn(C* data,streamsize count){
+    if(!(m_mode&ios_base::in)||count<=0)return 0;
+    streamsize remaining=(streamsize)m_text.size()-m_read;if(count>remaining)count=remaining;
+    Traits::copy(data,m_text.data()+(size_t)m_read,(size_t)count);m_read+=count;return count;
+  }
+  pos_type seekoff(off_type off,ios_base::seekdir dir,ios_base::openmode mode){
+    mode&=ios_base::in|ios_base::out;
+    if(!mode || (mode&m_mode)!=mode || (dir==ios_base::cur && mode==(ios_base::in|ios_base::out)))return -1;
+    streamoff pos=dir==ios_base::beg?off:dir==ios_base::end?(streamoff)m_text.size()+off:dir==ios_base::cur?((mode&ios_base::in)?m_read:m_write)+off:-1;
+    if(pos<0||pos>(streamoff)m_text.size())return -1;
+    if(mode&ios_base::in)m_read=pos;if(mode&ios_base::out)m_write=pos;return pos;
+  }
+  pos_type seekpos(pos_type pos,ios_base::openmode mode){return seekoff(pos,ios_base::beg,mode);}
+private:
+  string_type m_text;
+  ios_base::openmode m_mode;
+  streamoff m_read,m_write;
+};
+template<class C,class Traits=char_traits<C>,class Alloc=allocator<C>> class basic_stringstream:public basic_iostream<C,Traits> {
+  basic_stringbuf<C,Traits,Alloc> m_buffer;
+public:
+  typedef basic_string<C,Traits,Alloc> string_type;
+  explicit basic_stringstream(ios_base::openmode mode=ios_base::in|ios_base::out):basic_iostream<C,Traits>(&m_buffer),m_buffer(mode){}
+  explicit basic_stringstream(const string_type& text,ios_base::openmode mode=ios_base::in|ios_base::out):basic_iostream<C,Traits>(&m_buffer),m_buffer(text,mode){}
+  basic_stringbuf<C,Traits,Alloc>* rdbuf()const{return (basic_stringbuf<C,Traits,Alloc>*)&m_buffer;}
+  string_type str()const{return m_buffer.str();}
+  void str(const string_type& text){m_buffer.str(text);}
+};
+template<class C,class Traits=char_traits<C>,class Alloc=allocator<C>> class basic_ostringstream:public basic_ostream<C,Traits> {
+  basic_stringbuf<C,Traits,Alloc> m_buffer;
+public:
+  typedef basic_string<C,Traits,Alloc> string_type;
+  explicit basic_ostringstream(ios_base::openmode mode=ios_base::out):basic_ostream<C,Traits>(&m_buffer),m_buffer(mode|ios_base::out){}
+  explicit basic_ostringstream(const string_type& text,ios_base::openmode mode=ios_base::out):basic_ostream<C,Traits>(&m_buffer),m_buffer(text,mode|ios_base::out){}
+  basic_stringbuf<C,Traits,Alloc>* rdbuf()const{return (basic_stringbuf<C,Traits,Alloc>*)&m_buffer;}
+  string_type str()const{return m_buffer.str();}
+  void str(const string_type& text){m_buffer.str(text);}
+};
+template<class C,class Traits=char_traits<C>,class Alloc=allocator<C>> class basic_istringstream:public basic_istream<C,Traits> {
+  basic_stringbuf<C,Traits,Alloc> m_buffer;
+public:
+  typedef basic_string<C,Traits,Alloc> string_type;
+  explicit basic_istringstream(ios_base::openmode mode=ios_base::in):basic_istream<C,Traits>(&m_buffer),m_buffer(mode|ios_base::in){}
+  explicit basic_istringstream(const string_type& text,ios_base::openmode mode=ios_base::in):basic_istream<C,Traits>(&m_buffer),m_buffer(text,mode|ios_base::in){}
+  basic_stringbuf<C,Traits,Alloc>* rdbuf()const{return (basic_stringbuf<C,Traits,Alloc>*)&m_buffer;}
+  string_type str()const{return m_buffer.str();}
+  void str(const string_type& text){m_buffer.str(text);}
+};
+typedef basic_stringbuf<char> stringbuf;
+typedef basic_stringstream<char> stringstream;
+typedef basic_istringstream<char> istringstream;
+typedef basic_ostringstream<char> ostringstream;
+typedef basic_stringbuf<wchar_t> wstringbuf;
+typedef basic_stringstream<wchar_t> wstringstream;
+typedef basic_istringstream<wchar_t> wistringstream;
+typedef basic_ostringstream<wchar_t> wostringstream;
+}
+#endif

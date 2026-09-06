@@ -408,7 +408,9 @@ static int try_parse_range_for(void)
     next();
     while (tok == TOK_LINENUM)
       next();
-    if (tok == '&' || tok == TOK_LAND)
+    while (tok == '*' || tok == '&' || tok == TOK_LAND
+           || tok == TOK_CONST1 || tok == TOK_CONST2 || tok == TOK_CONST3
+           || tok == TOK_VOLATILE1 || tok == TOK_VOLATILE2 || tok == TOK_VOLATILE3)
     {
       tok_str_add(var_decl, tok);
       next();
@@ -677,8 +679,7 @@ static void gexpr_decl(void)
     }
     restore_cpp_lifecycle_probe(replay);
   }
-  if ((tok >= TOK_UIDENT && is_namespace_tok(tok))
-      || (tok >= TOK_UIDENT
+  if ((tok >= TOK_UIDENT
           && find_class_template_def(find_current_namespace_tok(tok))))
   {
     gexpr();
@@ -708,6 +709,18 @@ static void block(int flags)
   CType ref_ret_type;
 
 again:
+  if (is_cpp_translation_unit() && !(flags & STMT_COMPOUND) && tok != '{')
+  {
+    struct scope declaration_scope;
+    new_scope(&declaration_scope);
+    if (decl(VT_JMP))
+    {
+      skip(';');
+      prev_scope(&declaration_scope, 0);
+      return;
+    }
+    prev_scope(&declaration_scope, 0);
+  }
   t = tok;
   /* If the token carries a value, next() might destroy it. Only with
      invalid code such as f(){"123"4;} */
@@ -847,7 +860,23 @@ again:
     e = 0;
     if (tok != ';')
     {
-      if (tok == '{' && (func_vt.t & VT_BTYPE) == VT_STRUCT
+      if (tok == '{' && (func_vt.t & VT_BTYPE) != VT_STRUCT
+          && !is_reference_type(&func_vt))
+      {
+        CType result = func_vt;
+        if ((result.t & VT_BTYPE) == VT_VOID)
+          cprime_error("void function cannot return an initializer list");
+        next();
+        if (tok == '}') vset(&result, VT_CONST, 0);
+        else {
+          expr_eq();
+          check_integer_list_initialization(&result, vtop);
+          gen_assign_cast(&result);
+          if (tok == ',') next();
+        }
+        skip('}');
+      }
+      else if (tok == '{' && (func_vt.t & VT_BTYPE) == VT_STRUCT
           && func_vt.ref && !func_vt.ref->a.cpp_user_constructor)
       {
         CppConstructionDestination construction, *saved_destination;

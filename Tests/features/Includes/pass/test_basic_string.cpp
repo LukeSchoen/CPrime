@@ -16,5 +16,10 @@ int main() {
   if (w.size() != 5 || w.substr(1, 2)[0] != L'i') return 4;
   std::string empty;
   if (!empty.data() || empty.c_str()[0]) return 5;
+  std::string ip = std::to_string(127u) + '.' + std::to_string(1u);
+  if (ip.size() != 5 || ip[4] != '1') return 6;
+  a.assign(b.begin()+1,b.end());
+  if(a.size()!=3||a.front()!=b[1]||a.back()!=b.back())return 7;
+  a='q'; if(a!="q")return 8;
   return 0;
 }

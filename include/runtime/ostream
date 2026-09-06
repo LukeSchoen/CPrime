@@ -1,71 +1,95 @@
 #ifndef _CPC_OSTREAM
 #define _CPC_OSTREAM
-
-#include <ios>
+#include <streambuf>
 #include <wchar.h>
-#include <stddef.h>
-
-namespace std
-{
-  template<class C, class Traits> class basic_ostream : public basic_ios<C,Traits>
-  {
-  public:
-    explicit basic_ostream(FILE *stream = stdout) : basic_ios<C,Traits>(stream) {}
-
-    basic_ostream &put(C value)
-    {
-      if (sizeof(C) == 1) { if (fputc((unsigned char)value, this->m_stream) == EOF) this->setstate(ios_base::badbit); }
-      else if (fputwc((wchar_t)value, this->m_stream) == WEOF) this->setstate(ios_base::badbit);
-      return *this;
-    }
-
-    basic_ostream &write(const C *data, streamsize count)
-    {
-      for (streamsize i = 0; i < count && !this->fail(); ++i) put(data[i]);
-      return *this;
-    }
-
-    basic_ostream &flush()
-    {
-      if (fflush(this->m_stream) != 0) this->setstate(ios_base::badbit);
-      return *this;
-    }
-
-    basic_ostream &operator<<(const char *value)
-    {
-      const char *text = value ? value : "(null)"; while (*text) put((C)*text++);
-      return *this;
-    }
-
-    basic_ostream &operator<<(char value) { return put(value); }
-    basic_ostream &operator<<(bool value) { return *this << (value ? "true" : "false"); }
-    basic_ostream &operator<<(short value) { fprintf(this->m_stream, "%hd", value); return *this; }
-    basic_ostream &operator<<(unsigned short value) { fprintf(this->m_stream, "%hu", value); return *this; }
-    basic_ostream &operator<<(int value) { fprintf(this->m_stream, "%d", value); return *this; }
-    basic_ostream &operator<<(unsigned int value) { fprintf(this->m_stream, "%u", value); return *this; }
-    basic_ostream &operator<<(long value) { fprintf(this->m_stream, "%ld", value); return *this; }
-    basic_ostream &operator<<(unsigned long value) { fprintf(this->m_stream, "%lu", value); return *this; }
-    basic_ostream &operator<<(long long value) { fprintf(this->m_stream, "%lld", value); return *this; }
-    basic_ostream &operator<<(unsigned long long value) { fprintf(this->m_stream, "%llu", value); return *this; }
-    basic_ostream &operator<<(float value) { fprintf(this->m_stream, "%g", (double)value); return *this; }
-    basic_ostream &operator<<(double value) { fprintf(this->m_stream, "%g", value); return *this; }
-    basic_ostream &operator<<(const void *value) { fprintf(this->m_stream, "%p", value); return *this; }
-
-    typedef basic_ostream &(*manipulator)(basic_ostream &);
-    basic_ostream &operator<<(manipulator function) { return function(*this); }
-
-  };
-
-  template<class C, class Traits> inline basic_ostream<C,Traits> &endl(basic_ostream<C,Traits> &stream)
-  {
-    stream.put('\n');
-    return stream.flush();
+#include <stdlib.h>
+namespace std {
+template<class C,class Traits> class basic_ostream:public basic_ios<C,Traits> {
+  basic_ostream& formatted(const C* data,streamsize count) {
+    streamsize pad=this->width(0)-count;
+    if(!(this->flags()&ios_base::left))for(streamsize i=0;i<pad;++i)put(this->fill());
+    write(data,count);
+    if(this->flags()&ios_base::left)for(streamsize i=0;i<pad;++i)put(this->fill());
+    return *this;
   }
-
-  template<class C, class Traits> inline basic_ostream<C,Traits> &flush(basic_ostream<C,Traits> &stream)
-  {
-    return stream.flush();
+  basic_ostream& ascii(const char* text) {
+    basic_string<C> converted;
+    while(*text)converted.push_back((C)*text++);
+    return formatted(converted.data(),(streamsize)converted.size());
   }
+  basic_ostream& integer(unsigned long long magnitude,bool negative) {
+    char digits[70], result[74]; int n=0,k=0;
+    unsigned base=(this->flags()&ios_base::hex)?16:(this->flags()&ios_base::oct)?8:10;
+    const char* alphabet=(this->flags()&ios_base::uppercase)?"0123456789ABCDEF":"0123456789abcdef";
+    do{digits[n++]=alphabet[magnitude%base];magnitude/=base;}while(magnitude);
+    if(negative)result[k++]='-';else if(this->flags()&ios_base::showpos)result[k++]='+';
+    if((this->flags()&ios_base::showbase) && !(n==1&&digits[0]=='0')) {
+      if(base==8)result[k++]='0';
+      if(base==16){result[k++]='0';result[k++]=(this->flags()&ios_base::uppercase)?'X':'x';}
+    }
+    while(n)result[k++]=digits[--n];result[k]=0;return ascii(result);
+  }
+  basic_ostream& signed_integer(long long value) {
+    bool negative=value<0 && !(this->flags()&(ios_base::hex|ios_base::oct));
+    unsigned long long magnitude=negative?0-(unsigned long long)value:(unsigned long long)value;
+    return integer(magnitude,negative);
+  }
+public:
+  explicit basic_ostream(FILE* stream=stdout):basic_ios<C,Traits>(stream){}
+  explicit basic_ostream(basic_streambuf<C,Traits>* buffer):basic_ios<C,Traits>(){this->init(buffer);}
+  basic_ostream& put(C value) {
+    if(this->fail())return *this;
+    if(this->m_buffer){if(Traits::eq_int_type(this->m_buffer->sputc(value),Traits::eof()))this->setstate(ios_base::badbit);}
+    else if(!this->m_stream)this->setstate(ios_base::badbit);
+    else if(sizeof(C)==1){if(fputc((unsigned char)value,this->m_stream)==EOF)this->setstate(ios_base::badbit);}
+    else if(fputwc((wchar_t)value,this->m_stream)==WEOF)this->setstate(ios_base::badbit);
+    return *this;
+  }
+  basic_ostream& write(const C* data,streamsize count) {
+    if(count<0){this->setstate(ios_base::badbit);return *this;}
+    if(this->fail())return *this;
+    if(this->m_buffer){if(this->m_buffer->sputn(data,count)!=count)this->setstate(ios_base::badbit);}
+    else for(streamsize i=0;i<count&&!this->fail();++i)put(data[i]);
+    return *this;
+  }
+  basic_ostream& flush(){if(this->fail())return *this;if(this->m_buffer){if(this->m_buffer->pubsync()!=0)this->setstate(ios_base::badbit);}else if(!this->m_stream||fflush(this->m_stream)!=0)this->setstate(ios_base::badbit);return *this;}
+  streamoff tellp(){if(this->fail())return -1;return this->m_buffer?this->m_buffer->pubseekoff(0,ios_base::cur,ios_base::out):this->m_stream?_ftelli64(this->m_stream):-1;}
+  basic_ostream& seekp(streamoff off,ios_base::seekdir dir){if(!this->fail()){if(this->m_buffer){if(this->m_buffer->pubseekoff(off,dir,ios_base::out)<0)this->setstate(ios_base::failbit);}else if(!this->m_stream||_fseeki64(this->m_stream,off,dir)!=0)this->setstate(ios_base::failbit);}return *this;}
+  basic_ostream& seekp(streamoff pos){return seekp(pos,ios_base::beg);}
+  basic_ostream& operator<<(const C* text){return formatted(text,(streamsize)Traits::length(text));}
+  basic_ostream& operator<<(C value){return formatted(&value,1);}
+  template<class A> basic_ostream& operator<<(const basic_string<C,Traits,A>& value){return formatted(value.data(),(streamsize)value.size());}
+  basic_ostream& operator<<(bool value){return (this->flags()&ios_base::boolalpha)?ascii(value?"true":"false"):integer(value?1:0,false);}
+  basic_ostream& operator<<(short value){return signed_integer((this->flags()&(ios_base::hex|ios_base::oct))?(unsigned short)value:value);}
+  basic_ostream& operator<<(unsigned short value){return integer(value,false);}
+  basic_ostream& operator<<(int value){return signed_integer((this->flags()&(ios_base::hex|ios_base::oct))?(long long)(unsigned int)value:(long long)value);}
+  basic_ostream& operator<<(unsigned int value){return integer(value,false);}
+  basic_ostream& operator<<(long value){return signed_integer((this->flags()&(ios_base::hex|ios_base::oct))?(long long)(unsigned long)value:(long long)value);}
+  basic_ostream& operator<<(unsigned long value){return integer(value,false);}
+  basic_ostream& operator<<(long long value){return signed_integer(value);}
+  basic_ostream& operator<<(unsigned long long value){return integer(value,false);}
+  basic_ostream& operator<<(float value){return *this<<(double)value;}
+  basic_ostream& operator<<(double value){
+    char format[12];int n=0;format[n++]='%';
+    if(this->flags()&ios_base::showpos)format[n++]='+';
+    if(this->flags()&ios_base::showpoint)format[n++]='#';
+    format[n++]='.';format[n++]='*';
+    char kind=(this->flags()&ios_base::fixed)?'f':(this->flags()&ios_base::scientific)?'e':'g';
+    if(this->flags()&ios_base::uppercase)kind=(char)(kind-'a'+'A');
+    format[n++]=kind;format[n]=0;
+    int precision=(int)this->precision();if(precision<0)precision=6;
+    int length=snprintf(0,0,format,precision,value);
+    if(length<0){this->setstate(ios_base::badbit);return *this;}
+    char* text=(char*)malloc((size_t)length+1);
+    if(!text){this->setstate(ios_base::badbit);return *this;}
+    snprintf(text,(size_t)length+1,format,precision,value);ascii(text);free(text);return *this;
+  }
+  basic_ostream& operator<<(const void* value){char text[32];snprintf(text,sizeof(text),"%p",value);return ascii(text);}
+  typedef basic_ostream&(*manipulator)(basic_ostream&);
+  basic_ostream& operator<<(manipulator fn){return fn(*this);}
+  basic_ostream& operator<<(ios_base&(*fn)(ios_base&)){fn(*this);return *this;}
+};
+template<class C,class T> basic_ostream<C,T>& endl(basic_ostream<C,T>& s){s.put((C)'\n');return s.flush();}
+template<class C,class T> basic_ostream<C,T>& flush(basic_ostream<C,T>& s){return s.flush();}
 }
-
 #endif

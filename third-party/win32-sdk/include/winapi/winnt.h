@@ -7,6 +7,21 @@
 #define _WINNT_
 
 #ifdef __cplusplus
+#define DEFINE_ENUM_FLAG_OPERATORS(E) \
+extern "C++" { \
+inline constexpr E operator|(E a, E b) noexcept { return E((unsigned long long)a | (unsigned long long)b); } \
+inline constexpr E operator&(E a, E b) noexcept { return E((unsigned long long)a & (unsigned long long)b); } \
+inline constexpr E operator^(E a, E b) noexcept { return E((unsigned long long)a ^ (unsigned long long)b); } \
+inline constexpr E operator~(E a) noexcept { return E(~(unsigned long long)a); } \
+inline E& operator|=(E& a, E b) noexcept { return a = a | b; } \
+inline E& operator&=(E& a, E b) noexcept { return a = a & b; } \
+inline E& operator^=(E& a, E b) noexcept { return a = a ^ b; } \
+}
+#else
+#define DEFINE_ENUM_FLAG_OPERATORS(E)
+#endif
+
+#ifdef __cplusplus
 extern "C" {
 #endif
 

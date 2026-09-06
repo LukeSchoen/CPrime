@@ -376,7 +376,7 @@ struct SymAttr {
     cpp_user_constructor : 1,
     cpp_user_destructor : 1,
     cpp_nontrivial_copy_assignment : 1,
-    xxxx : 1;
+    cpp_mutable_field : 1;
 };
 
 struct FuncAttr {
@@ -397,7 +397,8 @@ struct FuncAttr {
     func_cpp_explicit : 1,
     func_cpp_member : 1,
     func_ref_qualifier : 2,
-    xxxx        : 4;
+    func_unresolved_template : 1,
+    xxxx        : 3;
 };
 
 typedef struct Sym {
@@ -436,6 +437,9 @@ typedef struct Sym {
     };
     struct TokenString *default_arg;
     long long const_value;
+    /* Symbolic constant substituted for an address template argument. */
+    struct Sym *template_address_target;
+    int cpp_using_target;
     /* Linked non-global bindings, independent of retained symbol storage. */
     struct Sym *scope_prev, *scope_next;
     /* First typedef giving an unnamed tag its stable linkage identity. */
@@ -963,6 +967,7 @@ struct filespec {
 #define IS_ASM_FUNC(t) ((t & (VT_BTYPE|VT_STRUCT_MASK)) == VT_ASM_FUNC)
 
 #define VT_BT_ARRAY (6 << VT_STRUCT_SHIFT)
+#define VT_BRACED_LIST (VT_VOID | 7 << VT_STRUCT_SHIFT)
 #define IS_BT_ARRAY(t) ((t & VT_STRUCT_MASK) == VT_BT_ARRAY)
 
 #define BFVAL(M,N) ((unsigned)((M) & ~((M) << 1)) * (N))

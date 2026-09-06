@@ -3,4 +3,21 @@
 
 #include <time.h>
 
+namespace std {
+typedef ::clock_t clock_t;
+typedef ::time_t time_t;
+typedef ::tm tm;
+inline clock_t clock() { return ::clock(); }
+inline double difftime(time_t end, time_t start) { return ::difftime(end, start); }
+inline time_t mktime(tm* value) { return ::mktime(value); }
+inline time_t time(time_t* value) { return ::time(value); }
+inline char* asctime(const tm* value) { return ::asctime(value); }
+inline char* ctime(const time_t* value) { return ::ctime(value); }
+inline tm* gmtime(const time_t* value) { return ::gmtime(value); }
+inline tm* localtime(const time_t* value) { return ::localtime(value); }
+inline size_t strftime(char* out, size_t size, const char* format, const tm* value) {
+  return ::strftime(out, size, format, value);
+}
+}
+
 #endif

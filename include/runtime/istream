@@ -1,39 +1,61 @@
 #ifndef _CPC_ISTREAM
 #define _CPC_ISTREAM
-#include <ios>
+#include <streambuf>
 #include <wchar.h>
 namespace std {
 template<class C, class Traits> class basic_istream : public basic_ios<C,Traits> {
 public:
   typedef streamoff pos_type;
   typedef streamoff off_type;
+  typedef typename Traits::int_type int_type;
   explicit basic_istream(FILE* file = stdin) : basic_ios<C,Traits>(file), m_count(0) {}
+  explicit basic_istream(basic_streambuf<C,Traits>* buffer) : basic_ios<C,Traits>(), m_count(0) {this->init(buffer);}
   basic_istream& read(C* data, streamsize count) {
     m_count=0;
-    if(this->fail() || count<0) { this->setstate(ios_base::failbit); return *this; }
-    if(sizeof(C)==1) m_count=(streamsize)fread(data,1,(size_t)count,this->m_stream);
+    if((!this->m_stream&&!this->m_buffer) || this->fail() || count<0) { this->setstate(ios_base::failbit); return *this; }
+    if(this->m_buffer)m_count=this->m_buffer->sgetn(data,count);
+    else if(sizeof(C)==1) m_count=(streamsize)fread(data,1,(size_t)count,this->m_stream);
     else while(m_count<count) { wint_t c=fgetwc(this->m_stream); if(c==WEOF) break; data[m_count++]=(C)c; }
     if(m_count!=count) {
-      if(feof(this->m_stream)) this->setstate(ios_base::eofbit | ios_base::failbit);
+      if(this->m_buffer || feof(this->m_stream)) this->setstate(ios_base::eofbit | ios_base::failbit);
       else this->setstate(ios_base::badbit);
     }
     return *this;
   }
   streamsize gcount() const { return m_count; }
+  int_type get(){m_count=0;if(this->fail()){this->setstate(ios_base::failbit);return Traits::eof();}int_type c=read_character();if(Traits::eq_int_type(c,Traits::eof()))this->setstate(ios_base::eofbit|ios_base::failbit);else m_count=1;return c;}
+  basic_istream& get(C& c){int_type value=get();if(!Traits::eq_int_type(value,Traits::eof()))c=Traits::to_char_type(value);return *this;}
+  template<class A> basic_istream& __getline(basic_string<C,Traits,A>& text,C delimiter){
+    if(this->fail()){this->setstate(ios_base::failbit);return *this;}
+    text.clear();streamsize extracted=0;
+    for(;;){int_type c=read_character();if(Traits::eq_int_type(c,Traits::eof())){this->setstate(ios_base::eofbit);break;}++extracted;if(Traits::eq(Traits::to_char_type(c),delimiter))break;text.push_back(Traits::to_char_type(c));}
+    if(!extracted)this->setstate(ios_base::failbit);return *this;
+  }
   pos_type tellg() {
-    if(this->fail()) return -1;
-    pos_type p=_ftelli64(this->m_stream);
+    if((!this->m_stream&&!this->m_buffer) || this->fail()) return -1;
+    pos_type p=this->m_buffer?this->m_buffer->pubseekoff(0,ios_base::cur,ios_base::in):_ftelli64(this->m_stream);
     if(p<0) this->setstate(ios_base::failbit);
     return p;
   }
   basic_istream& seekg(pos_type pos) { return seekg(pos,ios_base::beg); }
   basic_istream& seekg(off_type off,ios_base::seekdir dir) {
-    this->m_state &= ~ios_base::eofbit;
-    if(!this->fail() && _fseeki64(this->m_stream,off,dir)!=0) this->setstate(ios_base::failbit);
+    this->clear(this->rdstate() & ~ios_base::eofbit);
+    if(!this->fail()) {
+      if(this->m_buffer){if(this->m_buffer->pubseekoff(off,dir,ios_base::in)<0)this->setstate(ios_base::failbit);}
+      else if(!this->m_stream||_fseeki64(this->m_stream,off,dir)!=0)this->setstate(ios_base::failbit);
+    }
     return *this;
   }
 private:
+  int_type read_character(){
+    if(this->m_buffer)return this->m_buffer->sbumpc();
+    if(!this->m_stream){this->setstate(ios_base::badbit);return Traits::eof();}
+    if(sizeof(C)==1){int c=fgetc(this->m_stream);if(c==EOF){if(ferror(this->m_stream))this->setstate(ios_base::badbit);return Traits::eof();}return Traits::to_int_type((C)c);}
+    wint_t c=fgetwc(this->m_stream);if(c==WEOF){if(ferror(this->m_stream))this->setstate(ios_base::badbit);return Traits::eof();}return Traits::to_int_type((C)c);
+  }
   streamsize m_count;
 };
+template<class C,class T,class A> basic_istream<C,T>& getline(basic_istream<C,T>& stream,basic_string<C,T,A>& text,C delimiter){return stream.__getline(text,delimiter);}
+template<class C,class T,class A> basic_istream<C,T>& getline(basic_istream<C,T>& stream,basic_string<C,T,A>& text){return stream.__getline(text,(C)'\n');}
 }
 #endif

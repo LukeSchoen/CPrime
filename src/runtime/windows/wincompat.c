@@ -248,3 +248,21 @@ void __cpc_windows_sleep_for_milliseconds(long long milliseconds)
 {
     Sleep(milliseconds > 0 ? (DWORD)milliseconds : 0);
 }
+
+long long __cpc_windows_steady_nanoseconds(void)
+{
+    LARGE_INTEGER counter, frequency;
+    QueryPerformanceCounter(&counter);
+    QueryPerformanceFrequency(&frequency);
+    return (counter.QuadPart / frequency.QuadPart) * 1000000000LL
+         + (counter.QuadPart % frequency.QuadPart) * 1000000000LL / frequency.QuadPart;
+}
+
+long long __cpc_windows_system_ticks(void)
+{
+    FILETIME value;
+    unsigned long long ticks;
+    GetSystemTimeAsFileTime(&value);
+    ticks = ((unsigned long long)value.dwHighDateTime << 32) | value.dwLowDateTime;
+    return (long long)ticks - 116444736000000000LL;
+}

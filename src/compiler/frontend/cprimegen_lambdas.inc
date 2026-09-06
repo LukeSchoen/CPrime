@@ -12,6 +12,7 @@ typedef struct LambdaExpression {
   int return_deduction_kind;
   CType return_pattern;
   CType return_type;
+  Sym *outer_this;
   LambdaCapture captures[64];
   struct LambdaExpression *next, *parent_probe;
 } LambdaExpression;
@@ -131,7 +132,8 @@ static Sym *lambda_capture_symbol(Sym *symbol)
     cprime_error("'%s' is not captured by the lambda",
                  get_tok_str(symbol->v & ~SYM_FIELD, NULL));
   capture = add_lambda_capture(lambda_probe, symbol,
-                               lambda_probe->default_capture == '&');
+                               lambda_probe->default_capture == '&'
+                               && symbol != lambda_probe->outer_this);
   visible_type = capture->type;
   if (!capture->by_reference && !lambda_probe->mutable_call)
     visible_type.t |= VT_CONSTANT;
@@ -291,6 +293,7 @@ static void parse_cpp_lambda_expression(void)
   current.marker = marker;
   current.owner = owner;
   current.outer_scope = local_scope;
+  current.outer_this = find_cpp_this_symbol();
   current.return_type.t = VT_VOID;
   for (lambda = lambda_expressions; lambda; lambda = lambda->next)
     if (lambda->marker == marker && lambda->owner == owner) break;
@@ -356,10 +359,12 @@ static void parse_cpp_lambda_expression(void)
     AttributeDef attr;
     int name = 0;
     next();
+    current.return_deduction_kind = tok == TOK_AUTO ? 1 : 0;
     memset(&attr, 0, sizeof(attr));
     if (!parse_btype(&current.return_type, &attr, 0)) expect("lambda return type");
     type_decl(&current.return_type, &attr, &name, TYPE_ABSTRACT);
-    current.explicit_return = 1;
+    current.return_pattern = current.return_type;
+    current.explicit_return = !current.return_deduction_kind;
   }
   if (tok != '{') expect("lambda body");
   skip_or_save_block(&body);
@@ -424,7 +429,25 @@ static void parse_cpp_lambda_expression(void)
     tok_str_append_without_eof(declaration, parameters);
     tok_str_add(declaration, ')');
     if (!lambda->mutable_call) tok_str_add(declaration, TOK_CONST1);
-    tok_str_append_without_eof(declaration, body);
+    for (i = 0; i < lambda->count; ++i)
+      if (lambda->captures[i].source == lambda->outer_this) break;
+    if (i < lambda->count)
+    {
+      TokenString remainder = *body;
+      int first = tok_str_next_non_linenum_index(body->str, body->len, 0);
+      if (body->str[first] != '{') cprime_error("lambda compound body expected");
+      tok_str_add(declaration, '{');
+      if (!add_ctype_declarator_tokens(declaration, &lambda->outer_this->type,
+                                       tok_alloc_const("__cpc_lambda_this")))
+        cprime_error("unsupported enclosing object type in lambda");
+      tok_str_add(declaration, '=');
+      tok_str_add(declaration, lambda->captures[i].name);
+      tok_str_add(declaration, ';');
+      remainder.str += first + 1;
+      remainder.len -= first + 1;
+      tok_str_append_without_eof(declaration, &remainder);
+    }
+    else tok_str_append_without_eof(declaration, body);
     tok_str_add(declaration, '}');
     tok_str_add(declaration, ';');
     tok_str_add(declaration, TOK_EOF);

@@ -225,29 +225,44 @@ static int cpp_try_conditional_prvalue(void)
   int question = tok;
   int address = 0, storage = VT_LOCAL | VT_LVAL, direct = 0;
   int size, align, r2 = VT_CONST, false_jump = 0, end_jump = 0, constant;
-  int first_kind, second_kind;
+  int first_kind, second_kind, converted = 0;
   int result_qualifiers;
-  if (!is_cpp_translation_unit() || nocode_wanted) return 0;
+  if (!is_cpp_translation_unit()) return 0;
   next();
   if (tok == ':') { unget_tok(tok); tok = question; return 0; }
   yes = cpp_save_conditional_arm(1);
   if (tok != ':') cprime_error("':' expected in conditional expression");
-  if (!cpp_arm_may_produce_class(yes)) {
+  next(); no = cpp_save_conditional_arm(0);
+  if (!cpp_arm_may_produce_class(yes) && !cpp_arm_may_produce_class(no)) {
     replay = tok_str_alloc(); tok_str_add(replay, question);
-    tok_str_append_without_eof(replay, yes); tok_str_free(yes);
+    tok_str_append_without_eof(replay, yes); tok_str_add(replay, ':');
+    tok_str_append_without_eof(replay, no);
+    tok_str_free(yes); tok_str_free(no);
     restore_cpp_lifecycle_probe(replay);
     return 0;
   }
-  next(); no = cpp_save_conditional_arm(0);
   first_kind = cpp_probe_conditional_arm(yes, &type);
-  second_kind = first_kind ? cpp_probe_conditional_arm(no, &other) : 0;
+  second_kind = cpp_probe_conditional_arm(no, &other);
+  if (first_kind != 2 && second_kind != 2
+      && !is_compatible_unqualified_types(&type, &other)) {
+    int to_first = (type.t & VT_BTYPE) == VT_STRUCT
+      && class_has_single_arg_constructor_for(&type, &other);
+    int to_second = (other.t & VT_BTYPE) == VT_STRUCT
+      && class_has_single_arg_constructor_for(&other, &type);
+    if (to_first && !to_second) { other = type; second_kind = 3; converted = 1; }
+    else if (to_second && !to_first) { type = other; first_kind = 3; converted = 1; }
+  }
   if (first_kind == 2 && second_kind == 1) type = other;
+  if (first_kind == 1 && !saved_initializer_is_direct_constructor(yes, &type)) {
+    first_kind = 3; converted = 1;
+  }
+  if (second_kind == 1 && !saved_initializer_is_direct_constructor(no, &type)) {
+    second_kind = 3; converted = 1;
+  }
   if (!first_kind || !second_kind || (first_kind == 2 && second_kind == 2)
-      || (first_kind != 1 && second_kind != 1)
+      || (!converted && first_kind != 1 && second_kind != 1)
       || (first_kind != 2 && second_kind != 2
-          && !is_compatible_unqualified_types(&type, &other))
-      || (first_kind == 1 && !saved_initializer_is_direct_constructor(yes, &type))
-      || (second_kind == 1 && !saved_initializer_is_direct_constructor(no, &type))) {
+          && !is_compatible_unqualified_types(&type, &other))) {
     replay = tok_str_alloc(); tok_str_add(replay, question);
     tok_str_append_without_eof(replay, yes); tok_str_add(replay, ':');
     tok_str_append_without_eof(replay, no);
@@ -259,6 +274,12 @@ static int cpp_try_conditional_prvalue(void)
   if (first_kind != 2 && second_kind != 2)
     result_qualifiers |= other.t & (VT_CONSTANT | VT_VOLATILE);
   type.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE);
+  if (nocode_wanted) {
+    vpop();
+    vset(&type, VT_CONST | VT_CXX_PRVALUE, 0);
+    tok_str_free(yes); tok_str_free(no);
+    return 1;
+  }
   if (cpp_construction_destination
       && cpp_construction_destination->conditional_marker == question) {
     cpp_construction_destination->conditional_marker = 0;

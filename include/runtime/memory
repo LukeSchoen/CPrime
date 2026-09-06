@@ -4,6 +4,7 @@
 #include <stddef.h>
 #include <utility>
 #include <new>
+#include <atomic>
 #include <stdlib.h>
 
 namespace std
@@ -55,4 +56,71 @@ namespace std
   };
 }
 
+
+namespace std {
+class __cpc_shared_control {
+public:
+  atomic<long> strong;
+  atomic<long> weak;
+  __cpc_shared_control() : strong(1), weak(1) {}
+  virtual ~__cpc_shared_control() {}
+  virtual void dispose() = 0;
+  void release_weak() { if (weak.fetch_sub(1) == 1) delete this; }
+  void release() { if (strong.fetch_sub(1) == 1) { dispose(); release_weak(); } }
+};
+template<class T> class __cpc_shared_pointer_control : public __cpc_shared_control {
+  T* pointer;
+public:
+  __cpc_shared_pointer_control(T* p) : pointer(p) {}
+  void dispose() override { delete pointer; }
+};
+template<class T> class weak_ptr;
+template<class T> class shared_ptr {
+  template<class U> friend class shared_ptr;
+  template<class U> friend class weak_ptr;
+  T* pointer;
+  __cpc_shared_control* control;
+  shared_ptr(T* p, __cpc_shared_control* c) : pointer(p), control(c) {}
+public:
+  shared_ptr() noexcept : pointer(0), control(0) {}
+  shared_ptr(decltype(nullptr)) noexcept : pointer(0), control(0) {}
+  template<class U> explicit shared_ptr(U* p) : pointer(p), control(new __cpc_shared_pointer_control<U>(p)) {}
+  shared_ptr(const shared_ptr& s) noexcept : pointer(s.pointer), control(s.control) { if(control) control->strong.fetch_add(1); }
+  template<class U> shared_ptr(const shared_ptr<U>& s) noexcept : pointer(s.pointer), control(s.control) { if(control) control->strong.fetch_add(1); }
+  shared_ptr(shared_ptr&& s) noexcept : pointer(s.pointer), control(s.control) { s.pointer=0; s.control=0; }
+  ~shared_ptr() { if(control) control->release(); }
+  shared_ptr& operator=(shared_ptr s) noexcept { swap(s); return *this; }
+  void swap(shared_ptr& s) noexcept { T* p=pointer; pointer=s.pointer; s.pointer=p; __cpc_shared_control* c=control; control=s.control; s.control=c; }
+  void reset() noexcept { shared_ptr().swap(*this); }
+  template<class U> void reset(U* p) { shared_ptr(p).swap(*this); }
+  T* get() const noexcept { return pointer; }
+  T* operator->() const noexcept { return pointer; }
+  T& operator*() const noexcept { return *pointer; }
+  explicit operator bool() const noexcept { return pointer!=0; }
+  long use_count() const noexcept { return control?control->strong.load():0; }
+};
+template<class T> class weak_ptr {
+  T* pointer;
+  __cpc_shared_control* control;
+public:
+  weak_ptr() noexcept : pointer(0), control(0) {}
+  weak_ptr(const shared_ptr<T>& s) noexcept : pointer(s.pointer), control(s.control) { if(control) control->weak.fetch_add(1); }
+  weak_ptr(const weak_ptr& s) noexcept : pointer(s.pointer), control(s.control) { if(control) control->weak.fetch_add(1); }
+  weak_ptr(weak_ptr&& s) noexcept : pointer(s.pointer), control(s.control) { s.pointer=0; s.control=0; }
+  ~weak_ptr() { if(control) control->release_weak(); }
+  weak_ptr& operator=(weak_ptr s) noexcept { swap(s); return *this; }
+  void swap(weak_ptr& s) noexcept { T* p=pointer; pointer=s.pointer; s.pointer=p; __cpc_shared_control* c=control; control=s.control; s.control=c; }
+  void reset() noexcept { weak_ptr().swap(*this); }
+  long use_count() const noexcept { return control?control->strong.load():0; }
+  bool expired() const noexcept { return use_count()==0; }
+  shared_ptr<T> lock() const noexcept {
+    if(control) {
+      long n=control->strong.load();
+      while(n!=0) { if(control->strong.compare_exchange_weak(n,n+1)) return shared_ptr<T>(pointer,control); }
+    }
+    return shared_ptr<T>();
+  }
+};
+template<class T,class... Args> shared_ptr<T> make_shared(Args&&... args) { return shared_ptr<T>(new T(std::forward<Args>(args)...)); }
+}
 #endif

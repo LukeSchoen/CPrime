@@ -242,7 +242,8 @@ foreach ($project in $manifest.projects) {
         if (-not (Test-Path -LiteralPath $source.path -PathType Leaf)) { throw "Selected source is missing: $($source.path)" }
         $flags = @(Get-CompileFlags $project $source)
         $key = if ($Unity -and [IO.Path]::GetExtension($source.path) -in @('.cpp', '.cxx', '.cc')) {
-            $flags -join "`n"
+            $unityGroup = if ($source.PSObject.Properties['unityGroup']) { [string]$source.unityGroup } else { '' }
+            ($flags -join "`n") + "`nunity-group:" + $unityGroup
         } else { 'single:' + $index }
         if (-not $groups.Contains($key)) { $groups[$key] = [Collections.ArrayList]::new() }
         [void]$groups[$key].Add(@{ Source = $source.path; Flags = $flags; Index = $index++ })

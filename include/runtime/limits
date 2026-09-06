@@ -1,27 +1,71 @@
 #ifndef _LIMITS
 #define _LIMITS
-
 #include <limits.h>
 #include <float.h>
-
 #ifdef min
 #undef min
 #endif
-
 #ifdef max
 #undef max
 #endif
-
-namespace std
-{
-  template<typename T>
-  struct numeric_limits {
-    static T min() { return (T)0; }
-    static T max() { return (T)2147483647; }
-    static T lowest() { return (T)-2147483647; }
-    static T infinity() { return (T)(1.0 / 0.0); }
-    static T quiet_NaN() { return (T)__builtin_nan(""); }
-  };
+namespace std {
+template<class T> struct numeric_limits {
+  static constexpr bool is_specialized = false;
+  static constexpr bool is_signed = false;
+  static constexpr bool is_integer = false;
+  static constexpr int digits = 0;
+  static constexpr T min() noexcept { return T(); }
+  static constexpr T max() noexcept { return T(); }
+  static constexpr T lowest() noexcept { return T(); }
+  static constexpr T epsilon() noexcept { return T(); }
+  static constexpr T infinity() noexcept { return T(); }
+  static constexpr T quiet_NaN() noexcept { return T(); }
+};
+#define CPC_INTEGER_LIMITS(T, LO, HI, SIGNED) \
+template<> struct numeric_limits<T> { \
+  static constexpr bool is_specialized = true; \
+  static constexpr bool is_signed = SIGNED; \
+  static constexpr bool is_integer = true; \
+  static constexpr int digits = sizeof(T)*CHAR_BIT - (SIGNED?1:0); \
+  static constexpr T min() noexcept { return LO; } \
+  static constexpr T max() noexcept { return HI; } \
+  static constexpr T lowest() noexcept { return LO; } \
+  static constexpr T epsilon() noexcept { return 0; } \
+  static constexpr T infinity() noexcept { return 0; } \
+  static constexpr T quiet_NaN() noexcept { return 0; } \
+};
+CPC_INTEGER_LIMITS(bool, false, true, false)
+CPC_INTEGER_LIMITS(char, CHAR_MIN, CHAR_MAX, CHAR_MIN < 0)
+CPC_INTEGER_LIMITS(signed char, SCHAR_MIN, SCHAR_MAX, true)
+CPC_INTEGER_LIMITS(unsigned char, 0, UCHAR_MAX, false)
+CPC_INTEGER_LIMITS(short, SHRT_MIN, SHRT_MAX, true)
+CPC_INTEGER_LIMITS(unsigned short, 0, USHRT_MAX, false)
+CPC_INTEGER_LIMITS(int, INT_MIN, INT_MAX, true)
+CPC_INTEGER_LIMITS(unsigned int, 0, UINT_MAX, false)
+CPC_INTEGER_LIMITS(long, LONG_MIN, LONG_MAX, true)
+CPC_INTEGER_LIMITS(unsigned long, 0, ULONG_MAX, false)
+CPC_INTEGER_LIMITS(long long, LLONG_MIN, LLONG_MAX, true)
+CPC_INTEGER_LIMITS(unsigned long long, 0, ULLONG_MAX, false)
+#undef CPC_INTEGER_LIMITS
+#define CPC_FLOAT_LIMITS(T, PREFIX) \
+template<> struct numeric_limits<T> { \
+  static constexpr bool is_specialized = true; \
+  static constexpr bool is_signed = true; \
+  static constexpr bool is_integer = false; \
+  static constexpr int digits = PREFIX##_MANT_DIG; \
+  static constexpr T min() noexcept { return PREFIX##_MIN; } \
+  static constexpr T max() noexcept { return PREFIX##_MAX; } \
+  static constexpr T lowest() noexcept { return -PREFIX##_MAX; } \
+  static constexpr T epsilon() noexcept { return PREFIX##_EPSILON; } \
+  static constexpr T infinity() noexcept { return (T)(1.0/0.0); } \
+  static constexpr T quiet_NaN() noexcept { return (T)(0.0/0.0); } \
+};
+CPC_FLOAT_LIMITS(float, FLT)
+CPC_FLOAT_LIMITS(double, DBL)
+CPC_FLOAT_LIMITS(long double, LDBL)
+#undef CPC_FLOAT_LIMITS
+template<class T> struct numeric_limits<const T> : numeric_limits<T> {};
+template<class T> struct numeric_limits<volatile T> : numeric_limits<T> {};
+template<class T> struct numeric_limits<const volatile T> : numeric_limits<T> {};
 }
-
 #endif

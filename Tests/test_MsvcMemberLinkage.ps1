@@ -64,6 +64,22 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Mixed character fixture returned $LASTEXITCODE." }
     }
     Write-Output 'PASS distinct wchar_t, char16_t, char32_t scalar/reference/template signatures in both native/CPC directions'
+    $definition = Join-Path $characterFixtures 'function_address_linkage_other.cpp'
+    $caller = Join-Path $characterFixtures 'test_function_address_linkage_across_inputs.cpp'
+    foreach ($nativeDefinition in @($true, $false)) {
+        $nativeSource = if ($nativeDefinition) { $definition } else { $caller }
+        $primeSource = if ($nativeDefinition) { $caller } else { $definition }
+        $nativeObject = Join-Path $work 'address-native.obj'
+        & $native --target=x86_64-pc-windows-msvc -std=c++17 -Werror -fno-rtti -fno-exceptions -fno-autolink `
+            -c $nativeSource -o $nativeObject
+        if ($LASTEXITCODE -ne 0) { throw 'Native function address fixture failed to compile.' }
+        $addressExecutable = Join-Path $work 'addresses.exe'
+        & $compiler @commonArgs $primeSource $nativeObject -o $addressExecutable
+        if ($LASTEXITCODE -ne 0) { throw 'Mixed function address fixture failed to link.' }
+        & $addressExecutable
+        if ($LASTEXITCODE -ne 0) { throw "Mixed function address fixture returned $LASTEXITCODE." }
+    }
+    Write-Output 'PASS function pointer template argument linkage in both native/CPC directions'
 } finally {
     $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/') + [IO.Path]::DirectorySeparatorChar
     $resolvedWork = [IO.Path]::GetFullPath($work)

@@ -1,20 +1,76 @@
 #ifndef _CPC_CHRONO
 #define _CPC_CHRONO
 
-namespace std
-{
-  namespace chrono
-  {
-    class milliseconds
-    {
-    public:
-      explicit milliseconds(long long value) : m_value(value) {}
-      long long count() const { return m_value; }
-
-    private:
-      long long m_value;
-    };
-  }
+#include <ratio>
+#include <limits>
+#include <ctime>
+#include <cprime_thread.h>
+namespace std { namespace chrono {
+template<class Rep, class Period = ratio<1>> class duration {
+  Rep value;
+public:
+  typedef Rep rep;
+  typedef typename Period::type period;
+  constexpr duration() : value() {}
+  explicit constexpr duration(const Rep& count) : value(count) {}
+  constexpr Rep count() const { return value; }
+  static constexpr duration zero() { return duration(0); }
+  static constexpr duration min() { return duration(numeric_limits<Rep>::lowest()); }
+  static constexpr duration max() { return duration(numeric_limits<Rep>::max()); }
+  duration& operator+=(const duration& other) { value += other.value; return *this; }
+  duration& operator-=(const duration& other) { value -= other.value; return *this; }
+};
+template<class R,class P> constexpr duration<R,P> operator-(duration<R,P> a,duration<R,P> b) { return duration<R,P>(a.count()-b.count()); }
+template<class R,class P> constexpr duration<R,P> operator+(duration<R,P> a,duration<R,P> b) { return duration<R,P>(a.count()+b.count()); }
+template<class R,class P> constexpr bool operator<(duration<R,P> a,duration<R,P> b) { return a.count()<b.count(); }
+template<class R,class P> constexpr bool operator==(duration<R,P> a,duration<R,P> b) { return a.count()==b.count(); }
+template<class To,class R,class P> constexpr To duration_cast(const duration<R,P>& from) {
+  typedef typename To::period target_period;
+  typedef typename To::rep target_rep;
+  typedef ratio<P::num * target_period::den, P::den * target_period::num> factor;
+  typedef decltype(R() + target_rep() + intmax_t()) calculation;
+  return To(static_cast<target_rep>(static_cast<calculation>(from.count()) * factor::num / factor::den));
 }
+typedef duration<long long,nano> nanoseconds;
+typedef duration<long long,micro> microseconds;
+typedef duration<long long,milli> milliseconds;
+typedef duration<long long> seconds;
+typedef duration<long long,ratio<60>> minutes;
+typedef duration<long long,ratio<3600>> hours;
+template<class Clock,class Duration = typename Clock::duration> class time_point {
+  Duration elapsed;
+public:
+  typedef Clock clock;
+  typedef Duration duration;
+  typedef typename Duration::rep rep;
+  typedef typename Duration::period period;
+  constexpr time_point() : elapsed() {}
+  explicit constexpr time_point(const Duration& value) : elapsed(value) {}
+  constexpr Duration time_since_epoch() const { return elapsed; }
+  time_point& operator+=(const Duration& value) { elapsed += value; return *this; }
+  time_point& operator-=(const Duration& value) { elapsed -= value; return *this; }
+};
+template<class C,class D> constexpr D operator-(time_point<C,D> a,time_point<C,D> b) { return a.time_since_epoch()-b.time_since_epoch(); }
+template<class C,class D> constexpr bool operator<(time_point<C,D> a,time_point<C,D> b) { return a.time_since_epoch()<b.time_since_epoch(); }
+struct steady_clock {
+  typedef nanoseconds duration;
+  typedef duration::rep rep;
+  typedef duration::period period;
+  typedef chrono::time_point<steady_clock> time_point;
+  static constexpr bool is_steady = true;
+  static time_point now() noexcept { return time_point(duration(__cpc_windows_steady_nanoseconds())); }
+};
+struct system_clock {
+  typedef chrono::duration<long long,ratio<1,10000000>> duration;
+  typedef duration::rep rep;
+  typedef duration::period period;
+  typedef chrono::time_point<system_clock> time_point;
+  static constexpr bool is_steady = false;
+  static time_point now() noexcept { return time_point(duration(__cpc_windows_system_ticks())); }
+  static time_t to_time_t(const time_point& value) noexcept { return time_t(duration_cast<seconds>(value.time_since_epoch()).count()); }
+  static time_point from_time_t(time_t value) noexcept { return time_point(duration_cast<duration>(seconds(value))); }
+};
+typedef steady_clock high_resolution_clock;
+}}
 
 #endif

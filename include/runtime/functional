@@ -3,6 +3,7 @@
 
 #include <type_traits>
 #include <utility>
+#include <exception>
 
 namespace std
 {
@@ -110,4 +111,40 @@ namespace std
   }
 }
 
+
+namespace std {
+class bad_function_call : public exception {
+public: const char* what() const noexcept override { return "bad function call"; }
+};
+template<class Signature> class function;
+
+template<class R,class... Args> class function<R(Args...)> {
+  struct Target {
+    virtual ~Target() {}
+    virtual Target* clone() const = 0;
+    virtual R call(Args... args) = 0;
+  };
+  template<class F> struct Callable : Target {
+    F value;
+    Callable(F f) : value(std::move(f)) {}
+    Target* clone() const override { return new Callable(value); }
+    R call(Args... args) override {
+      return (R)value(std::forward<Args>(args)...);
+    }
+  };
+  Target* target;
+public:
+  function() noexcept : target(0) {}
+  function(decltype(nullptr)) noexcept : target(0) {}
+  template<class F> function(F f) : target(new Callable<F>(std::move(f))) {}
+  function(const function& f) : target(f.target?f.target->clone():0) {}
+  function(function&& f) noexcept : target(f.target) { f.target=0; }
+  ~function() { delete target; }
+  function& operator=(function f) { swap(f); return *this; }
+  function& operator=(decltype(nullptr)) noexcept { delete target; target=0; return *this; }
+  void swap(function& f) noexcept { Target* t=target; target=f.target; f.target=t; }
+  explicit operator bool() const noexcept { return target!=0; }
+  R operator()(Args... args) const { if(!target) throw bad_function_call(); return target->call(std::forward<Args>(args)...); }
+};
+}
 #endif

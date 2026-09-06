@@ -376,6 +376,11 @@ WCHAR *gai_strerrorW(int);
 #define NI_MAXSERV 32
 
 #define INET_ADDRSTRLEN 22
+#ifndef _CPRIME_INET_NTOP_DECLARED
+#define _CPRIME_INET_NTOP_DECLARED
+const char *WSAAPI inet_ntop(int Family, const void *Address, char *Buffer, size_t BufferSize);
+int WSAAPI inet_pton(int Family, const char *Address, void *Buffer);
+#endif
 #define INET6_ADDRSTRLEN 65
 
 #define NI_NOFQDN 0x01

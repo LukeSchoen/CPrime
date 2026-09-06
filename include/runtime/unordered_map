@@ -1,0 +1,118 @@
+#ifndef _CPC_UNORDERED_MAP
+#define _CPC_UNORDERED_MAP
+#include <__cpc_hash>
+#include <utility>
+#include <memory>
+#include <iterator>
+#include <initializer_list>
+#include <cstdlib>
+#include <stdexcept>
+namespace std {
+template<class Key,class T,class Hash=hash<Key>,class Equal=equal_to<Key>,class Alloc=allocator<pair<const Key,T>>>
+class unordered_map {
+public:
+  typedef Key key_type;
+  typedef T mapped_type;
+  typedef pair<const Key,T> value_type;
+  typedef size_t size_type;
+private:
+  struct Node {
+    Node* bucket_next; Node* next; Node* prev; size_t code;
+    value_type value;
+    template<class V> Node(size_t h,V&& v):bucket_next(0),next(0),prev(0),code(h),value(std::forward<V>(v)){}
+  };
+  typedef typename Alloc::template rebind<Node>::other node_allocator;
+  Node** buckets_; size_t bucket_count_; size_t size_; Node* first_; Node* last_;
+  Hash hash_; Equal equal_; node_allocator allocator_; float max_load_;
+public:
+  template<bool Const> class cursor {
+    Node* node_;
+    friend class unordered_map;
+    template<bool> friend class cursor;
+    explicit cursor(Node* n):node_(n){}
+  public:
+    typedef forward_iterator_tag iterator_category;
+    typedef pair<const Key,T> value_type;
+    typedef ptrdiff_t difference_type;
+    typedef typename conditional<Const,const value_type*,value_type*>::type pointer;
+    typedef typename conditional<Const,const value_type&,value_type&>::type reference;
+    cursor():node_(0){}
+    template<bool C,typename enable_if<Const && !C,int>::type=0> cursor(const cursor<C>& o):node_(o.node_){}
+    reference operator*() const {return node_->value;}
+    pointer operator->() const {return &node_->value;}
+    cursor& operator++(){node_=node_->next;return *this;}
+    cursor operator++(int){cursor old=*this;++*this;return old;}
+    template<bool C> bool operator==(const cursor<C>& o)const{return node_==o.node_;}
+    template<bool C> bool operator!=(const cursor<C>& o)const{return node_!=o.node_;}
+  };
+  typedef cursor<false> iterator;
+  typedef cursor<true> const_iterator;
+  unordered_map():buckets_(0),bucket_count_(0),size_(0),first_(0),last_(0),hash_(),equal_(),allocator_(),max_load_(1){}
+  explicit unordered_map(size_t count,const Hash& h=Hash(),const Equal& e=Equal(),const Alloc& a=Alloc()):buckets_(0),bucket_count_(0),size_(0),first_(0),last_(0),hash_(h),equal_(e),allocator_(a),max_load_(1){rehash(count);}
+  unordered_map(initializer_list<value_type> values):unordered_map(){for(const auto& v:values)insert(v);}
+  unordered_map(const unordered_map& o):unordered_map(o.bucket_count_,o.hash_,o.equal_,Alloc(o.allocator_)){max_load_=o.max_load_;for(const auto& v:o)insert(v);}
+  unordered_map(unordered_map&& o) noexcept:unordered_map(){swap(o);}
+  ~unordered_map(){clear();free(buckets_);}
+  unordered_map& operator=(const unordered_map& o){if(this!=&o){unordered_map copy(o);swap(copy);}return *this;}
+  unordered_map& operator=(unordered_map&& o) noexcept {if(this!=&o){unordered_map moved(std::move(o));swap(moved);}return *this;}
+  void swap(unordered_map& o) noexcept {
+    std::swap(buckets_,o.buckets_);std::swap(bucket_count_,o.bucket_count_);std::swap(size_,o.size_);
+    std::swap(first_,o.first_);std::swap(last_,o.last_);std::swap(hash_,o.hash_);std::swap(equal_,o.equal_);
+    std::swap(allocator_,o.allocator_);std::swap(max_load_,o.max_load_);
+  }
+  iterator begin(){return iterator(first_);} const_iterator begin()const{return const_iterator(first_);}
+  iterator end(){return iterator(0);} const_iterator end()const{return const_iterator(0);}
+  const_iterator cbegin()const{return begin();} const_iterator cend()const{return end();}
+  size_t size()const{return size_;} bool empty()const{return size_==0;}
+  size_t bucket_count()const{return bucket_count_;}
+  float load_factor()const{return bucket_count_?float(size_)/float(bucket_count_):0;}
+  float max_load_factor()const{return max_load_;}
+  void max_load_factor(float value){if(value>0)max_load_=value;}
+  void reserve(size_t n){rehash(size_t(double(n)/max_load_)+1);}
+  void rehash(size_t n){
+    size_t minimum=size_t(double(size_)/max_load_)+1;if(n<minimum)n=minimum;if(n<8)n=8;
+    if(n==bucket_count_)return;
+    Node** fresh=static_cast<Node**>(calloc(n,sizeof(Node*)));if(!fresh)throw bad_alloc();
+    for(Node* p=first_;p;p=p->next){size_t b=p->code%n;p->bucket_next=fresh[b];fresh[b]=p;}
+    free(buckets_);buckets_=fresh;bucket_count_=n;
+  }
+private:
+  Node* lookup(const Key& key,size_t code)const{
+    if(!bucket_count_)return 0;
+    for(Node* p=buckets_[code%bucket_count_];p;p=p->bucket_next)if(p->code==code&&equal_(p->value.first,key))return p;
+    return 0;
+  }
+  template<class V> pair<iterator,bool> insert_value(V&& value){
+    size_t h=hash_(value.first);Node* old=lookup(value.first,h);if(old)return pair<iterator,bool>(iterator(old),false);
+    if(!bucket_count_ || double(size_+1)>double(bucket_count_)*max_load_)rehash(bucket_count_?bucket_count_*2:8);
+    Node* n=allocator_.allocate(1);
+    try {new(static_cast<void*>(n)) Node(h,std::forward<V>(value));}
+    catch(...){allocator_.deallocate(n,1);throw;}
+    size_t b=h%bucket_count_;n->bucket_next=buckets_[b];buckets_[b]=n;n->prev=last_;
+    if(last_)last_->next=n;else first_=n;last_=n;++size_;
+    return pair<iterator,bool>(iterator(n),true);
+  }
+public:
+  iterator find(const Key& key){return iterator(lookup(key,hash_(key)));}
+  const_iterator find(const Key& key)const{return const_iterator(lookup(key,hash_(key)));}
+  size_t count(const Key& key)const{return lookup(key,hash_(key))?1:0;}
+  pair<iterator,bool> insert(const value_type& value){return insert_value(value);}
+  pair<iterator,bool> insert(value_type&& value){return insert_value(std::move(value));}
+  template<class P> pair<iterator,bool> insert(P&& value){value_type converted(std::forward<P>(value));return insert_value(std::move(converted));}
+  template<class... Args> pair<iterator,bool> emplace(Args&&... args){value_type v(std::forward<Args>(args)...);return insert_value(std::move(v));}
+  T& operator[](const Key& key){iterator old=find(key);if(old!=end())return old->second;return insert(value_type(key,T())).first->second;}
+  T& operator[](Key&& key){iterator old=find(key);if(old!=end())return old->second;return insert(value_type(std::move(key),T())).first->second;}
+  T& at(const Key& key){iterator p=find(key);if(p==end())throw out_of_range("unordered_map::at");return p->second;}
+  const T& at(const Key& key)const{const_iterator p=find(key);if(p==end())throw out_of_range("unordered_map::at");return p->second;}
+  iterator erase(const_iterator position){
+    Node* p=position.node_;if(!p)return end();Node* next=p->next;
+    Node** link=&buckets_[p->code%bucket_count_];while(*link!=p)link=&(*link)->bucket_next;*link=p->bucket_next;
+    if(p->prev)p->prev->next=p->next;else first_=p->next;if(p->next)p->next->prev=p->prev;else last_=p->prev;
+    p->~Node();allocator_.deallocate(p,1);--size_;return iterator(next);
+  }
+  iterator erase(iterator p){return erase(const_iterator(p.node_));}
+  size_t erase(const Key& key){iterator p=find(key);if(p==end())return 0;erase(p);return 1;}
+  void clear() noexcept {Node* p=first_;while(p){Node* next=p->next;p->~Node();allocator_.deallocate(p,1);p=next;}first_=last_=0;size_=0;for(size_t i=0;i<bucket_count_;++i)buckets_[i]=0;}
+};
+}
+#endif

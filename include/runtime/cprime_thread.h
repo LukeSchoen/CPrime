@@ -19,6 +19,8 @@ unsigned int __cpc_windows_thread_id(void);
 unsigned int __cpc_windows_thread_handle_id(void *thread);
 unsigned int __cpc_windows_hardware_concurrency(void);
 void __cpc_windows_sleep_for_milliseconds(long long milliseconds);
+long long __cpc_windows_steady_nanoseconds(void);
+long long __cpc_windows_system_ticks(void);
 #ifdef __cplusplus
 }
 #endif

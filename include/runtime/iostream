@@ -7,6 +7,25 @@
 
 namespace std
 {
+  template<class C,class Traits> class basic_iostream:public basic_istream<C,Traits>,public basic_ostream<C,Traits> {
+    typedef basic_istream<C,Traits> input_type;
+    typedef basic_ostream<C,Traits> output_type;
+  public:
+    /* The input and output adapters share state and a buffer. This runtime's
+       current class layout does not provide a virtual basic_ios diamond. */
+    explicit basic_iostream(basic_streambuf<C,Traits>* buffer):basic_istream<C,Traits>(buffer),basic_ostream<C,Traits>(buffer){input_type::share_state((output_type&)*this);}
+    bool good()const{return output_type::good();}
+    bool eof()const{return output_type::eof();}
+    bool fail()const{return output_type::fail();}
+    bool bad()const{return output_type::bad();}
+    void clear(ios_base::iostate state=ios_base::goodbit){output_type::clear(state);}
+    ios_base::iostate rdstate()const{return output_type::rdstate();}
+    void setstate(ios_base::iostate state){output_type::setstate(state);}
+    explicit operator bool()const{return !fail();}
+    bool operator!()const{return fail();}
+  };
+  typedef basic_iostream<char> iostream;
+  typedef basic_iostream<wchar_t> wiostream;
   class __cpc_stderr_stream : public ostream
   {
   public:
