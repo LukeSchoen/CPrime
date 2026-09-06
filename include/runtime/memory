@@ -3,9 +3,25 @@
 
 #include <stddef.h>
 #include <utility>
+#include <new>
+#include <stdlib.h>
 
 namespace std
 {
+  template<class T> class allocator {
+  public:
+    typedef T value_type;
+    allocator() noexcept {}
+    template<class U> allocator(const allocator<U>&) noexcept {}
+    T* allocate(size_t n) {
+      if (n > (size_t)-1 / sizeof(T)) throw bad_alloc();
+      void* p = malloc(n * sizeof(T));
+      if (!p && n) throw bad_alloc();
+      return static_cast<T*>(p);
+    }
+    void deallocate(T* p, size_t) { free(p); }
+    template<class U> struct rebind { typedef allocator<U> other; };
+  };
   template<class T>
   class unique_ptr
   {

@@ -1,196 +1,106 @@
 #ifndef _CPC_STRING
 #define _CPC_STRING
-
+#include <iosfwd>
+#include <memory>
 #include <stdlib.h>
 #include <string.h>
 #include <wchar.h>
-#include <stddef.h>
-
-/* Minimal std::string / std::wstring implementation for code that uses
-   CommonLibrary's clWideString bridge (ToWideString/FromWideString). */
-namespace std
-{
-  class wstring
-  {
-  public:
-    typedef wchar_t *iterator;
-    typedef const wchar_t *const_iterator;
-    static const size_t npos = (size_t)-1;
-
-    wstring() : m_data(0), m_len(0) {}
-    wstring(const wstring &o) : m_data(0), m_len(0) { assign(o.m_data, o.m_len); }
-    wstring(size_t count, wchar_t ch) : m_data(0), m_len(0)
-    {
-      m_data = (wchar_t *)malloc((count + 1) * sizeof(wchar_t));
-      if (m_data)
-      {
-        for (size_t i = 0; i < count; ++i)
-          m_data[i] = ch;
-        m_data[count] = 0;
-        m_len = count;
-      }
-    }
-    wstring(const wchar_t *text) : m_data(0), m_len(0)
-    {
-      if (text)
-        assign(text, wcslen(text));
-    }
-    wstring(const wchar_t *text, size_t count) : m_data(0), m_len(0)
-    {
-      assign(text, count);
-    }
-    ~wstring() { free(m_data); }
-
-    wstring &operator=(const wstring &o)
-    {
-      if (this != &o)
-        assign(o.m_data, o.m_len);
-      return *this;
-    }
-
-    size_t length() const { return m_len; }
-    size_t size() const { return m_len; }
-    bool empty() const { return m_len == 0; }
-    wchar_t *data() { return m_data; }
-    iterator begin() { return m_data; }
-    const_iterator begin() const { return m_data; }
-    const_iterator cbegin() const { return m_data; }
-    iterator end() { return m_data ? m_data + m_len : m_data; }
-    const_iterator end() const { return m_data ? m_data + m_len : m_data; }
-    const_iterator cend() const { return m_data ? m_data + m_len : m_data; }
-    const wchar_t *data() const { return c_str(); }
-    size_t find_first_of(wchar_t ch, size_t pos = 0) const
-    {
-      const wchar_t *data = c_str();
-      for (size_t i = pos; i < m_len; ++i)
-        if (data[i] == ch)
-          return i;
-      return npos;
-    }
-    wstring substr(size_t pos, size_t count = npos) const
-    {
-      wstring ret;
-      size_t len;
-      if (pos >= m_len)
-        return ret;
-      len = m_len - pos;
-      if (count < len)
-        len = count;
-      ret.assign(c_str() + pos, len);
-      return ret;
-    }
-    const wchar_t *c_str() const { return m_data ? m_data : L""; }
-    const wchar_t &operator[](size_t i) const { return m_data[i]; }
-    wchar_t &operator[](size_t i) { return m_data[i]; }
-
-  private:
-    void assign(const wchar_t *text, size_t len)
-    {
-      if (m_data)
-        free(m_data);
-      m_data = (wchar_t *)malloc((len + 1) * sizeof(wchar_t));
-      if (m_data)
-      {
-        for (size_t i = 0; i < len; ++i)
-          m_data[i] = text[i];
-        m_data[len] = 0;
-      }
-      m_len = len;
-    }
-    wchar_t *m_data;
-    size_t m_len;
-  };
-
-  class string
-  {
-  public:
-    typedef char *iterator;
-    typedef const char *const_iterator;
-    static const size_t npos = (size_t)-1;
-
-    string() : m_data(0), m_len(0) {}
-    string(const string &o) : m_data(0), m_len(0) { assign(o.m_data, o.m_len); }
-    string(size_t count, char ch) : m_data(0), m_len(0)
-    {
-      m_data = (char *)malloc(count + 1);
-      if (m_data)
-      {
-        for (size_t i = 0; i < count; ++i)
-          m_data[i] = ch;
-        m_data[count] = 0;
-        m_len = count;
-      }
-    }
-    string(const char *text) : m_data(0), m_len(0)
-    {
-      if (text)
-        assign(text, __builtin_strlen(text));
-    }
-    string(const char *text, size_t count) : m_data(0), m_len(0)
-    {
-      assign(text, count);
-    }
-    ~string() { free(m_data); }
-
-    string &operator=(const string &o)
-    {
-      if (this != &o)
-        assign(o.m_data, o.m_len);
-      return *this;
-    }
-
-    size_t length() const { return m_len; }
-    size_t size() const { return m_len; }
-    bool empty() const { return m_len == 0; }
-    char *data() { return m_data; }
-    iterator begin() { return m_data; }
-    const_iterator begin() const { return m_data; }
-    const_iterator cbegin() const { return m_data; }
-    iterator end() { return m_data ? m_data + m_len : m_data; }
-    const_iterator end() const { return m_data ? m_data + m_len : m_data; }
-    const_iterator cend() const { return m_data ? m_data + m_len : m_data; }
-    const char *data() const { return c_str(); }
-    size_t find_first_of(char ch, size_t pos = 0) const
-    {
-      const char *data = c_str();
-      for (size_t i = pos; i < m_len; ++i)
-        if (data[i] == ch)
-          return i;
-      return npos;
-    }
-    string substr(size_t pos, size_t count = npos) const
-    {
-      string ret;
-      size_t len;
-      if (pos >= m_len)
-        return ret;
-      len = m_len - pos;
-      if (count < len)
-        len = count;
-      ret.assign(c_str() + pos, len);
-      return ret;
-    }
-    const char *c_str() const { return m_data ? m_data : ""; }
-    const char &operator[](size_t i) const { return m_data[i]; }
-    char &operator[](size_t i) { return m_data[i]; }
-
-  private:
-    void assign(const char *text, size_t len)
-    {
-      if (m_data)
-        free(m_data);
-      m_data = (char *)malloc(len + 1);
-      if (m_data)
-      {
-        for (size_t i = 0; i < len; ++i)
-          m_data[i] = text[i];
-        m_data[len] = 0;
-      }
-      m_len = len;
-    }
-    char *m_data;
-    size_t m_len;
-  };
+namespace std {
+template<class C> struct char_traits {
+  typedef C char_type;
+  typedef unsigned long int_type;
+  typedef streamoff off_type;
+  typedef streamoff pos_type;
+  static size_t length(const C* s) { size_t n = 0; while (s[n]) ++n; return n; }
+  static void assign(C& a, const C& b) { a = b; }
+  static C* assign(C* p, size_t n, C v) { for (size_t i=0;i<n;++i) p[i]=v; return p; }
+  static C* copy(C* p, const C* s, size_t n) { if(n) memcpy(p,s,n*sizeof(C)); return p; }
+  static C* move(C* p, const C* s, size_t n) { if(n) memmove(p,s,n*sizeof(C)); return p; }
+  static bool eq(C a,C b) { return a==b; }
+  static bool lt(C a,C b) { return a<b; }
+  static int compare(const C* a,const C* b,size_t n) { for(size_t i=0;i<n;++i) { if(lt(a[i],b[i])) return -1; if(lt(b[i],a[i])) return 1; } return 0; }
+  static const C* find(const C* s,size_t n,const C& c) { for(size_t i=0;i<n;++i) if(eq(s[i],c)) return s+i; return 0; }
+  static int_type eof() { return (int_type)-1; }
+  static bool eq_int_type(int_type a,int_type b) { return a==b; }
+  static int_type to_int_type(C c) { return (int_type)c; }
+  static C to_char_type(int_type c) { return (C)c; }
+  static int_type not_eof(int_type c) { return c==eof()?0:c; }
+};
+template<class C, class Traits, class Alloc> class basic_string {
+public:
+  typedef C value_type;
+  typedef Traits traits_type;
+  typedef Alloc allocator_type;
+  typedef size_t size_type;
+  typedef ptrdiff_t difference_type;
+  typedef C* iterator;
+  typedef const C* const_iterator;
+  static const size_t npos = (size_t)-1;
+  basic_string() : m_data(0), m_len(0), m_capacity(0) {}
+  basic_string(const C* s) : m_data(0), m_len(0), m_capacity(0) { assign(s,Traits::length(s)); }
+  basic_string(const C* s,size_t n) : m_data(0), m_len(0), m_capacity(0) { assign(s,n); }
+  basic_string(size_t n,C c) : m_data(0), m_len(0), m_capacity(0) { resize(n,c); }
+  basic_string(const basic_string& s) : m_data(0), m_len(0), m_capacity(0) { assign(s.data(),s.size()); }
+  basic_string(basic_string&& s) noexcept : m_data(s.m_data), m_len(s.m_len), m_capacity(s.m_capacity) { s.m_data=0; s.m_len=0; s.m_capacity=0; }
+  ~basic_string() { if(m_data) Alloc().deallocate(m_data,m_capacity+1); }
+  basic_string& operator=(const basic_string& s) { if(this!=&s) assign(s.data(),s.size()); return *this; }
+  basic_string& operator=(const C* s) { return assign(s,Traits::length(s)); }
+  basic_string& operator=(basic_string&& s) noexcept { if(this!=&s) { if(m_data) Alloc().deallocate(m_data,m_capacity+1); m_data=s.m_data; m_len=s.m_len; m_capacity=s.m_capacity; s.m_data=0; s.m_len=0; s.m_capacity=0; } return *this; }
+  size_t size() const { return m_len; }
+  size_t length() const { return m_len; }
+  size_t capacity() const { return m_capacity; }
+  bool empty() const { return m_len==0; }
+  const C* c_str() const { static const C zero[1] = {0}; return m_data?m_data:zero; }
+  const C* data() const { return c_str(); }
+  C* data() { if(!m_data) reserve(1); return m_data; }
+  iterator begin() { return data(); }
+  iterator end() { return data()+m_len; }
+  const_iterator begin() const { return data(); }
+  const_iterator end() const { return data()+m_len; }
+  const_iterator cbegin() const { return begin(); }
+  const_iterator cend() const { return end(); }
+  C& operator[](size_t i) { return data()[i]; }
+  const C& operator[](size_t i) const { return data()[i]; }
+  void reserve(size_t n) {
+    if(n<=m_capacity) return;
+    if(n==(size_t)-1) throw std::bad_alloc();
+    C* p=Alloc().allocate(n+1);
+    Traits::copy(p,c_str(),m_len+1);
+    if(m_data) Alloc().deallocate(m_data,m_capacity+1);
+    m_data=p; m_capacity=n;
+  }
+  void resize(size_t n,C c=C()) { reserve(n); if(n>m_len) Traits::assign(m_data+m_len,n-m_len,c); m_len=n; if(m_data) m_data[n]=C(); }
+  void clear() { m_len=0; if(m_data) m_data[0]=C(); }
+  basic_string& assign(const C* s,size_t n) {
+    // Copy before releasing the old buffer: s may point inside this string.
+    C* p=Alloc().allocate(n+1); Traits::copy(p,s,n); p[n]=C();
+    if(m_data) Alloc().deallocate(m_data,m_capacity+1);
+    m_data=p; m_len=n; m_capacity=n; return *this;
+  }
+  basic_string& assign(const C* s) { return assign(s,Traits::length(s)); }
+  basic_string& append(const C* s,size_t n) {
+    if(n>(size_t)-1-m_len-1) throw std::bad_alloc();
+    size_t total=m_len+n;
+    C* p=Alloc().allocate(total+1); Traits::copy(p,c_str(),m_len); Traits::copy(p+m_len,s,n); p[total]=C();
+    if(m_data) Alloc().deallocate(m_data,m_capacity+1);
+    m_data=p; m_len=total; m_capacity=total; return *this;
+  }
+  basic_string& append(const C* s) { return append(s,Traits::length(s)); }
+  basic_string& operator+=(const C* s) { return append(s); }
+  basic_string& operator+=(const basic_string& s) { return append(s.data(),s.size()); }
+  basic_string& operator+=(C c) { return append(&c,1); }
+  void push_back(C c) { append(&c,1); }
+  size_t find_first_of(C c,size_t pos=0) const { for(size_t i=pos;i<m_len;++i) if(Traits::eq(data()[i],c)) return i; return npos; }
+  basic_string substr(size_t pos=0,size_t n=npos) const { if(pos>m_len) pos=m_len; if(n>m_len-pos) n=m_len-pos; return basic_string(data()+pos,n); }
+  int compare(const basic_string& s) const { int c=Traits::compare(data(),s.data(),m_len<s.m_len?m_len:s.m_len); return c?c:(m_len<s.m_len?-1:m_len>s.m_len?1:0); }
+private:
+  C* m_data;
+  size_t m_len;
+  size_t m_capacity;
+};
+typedef basic_string<char> string;
+typedef basic_string<wchar_t> wstring;
+template<class C,class T,class A> bool operator==(const basic_string<C,T,A>& a,const basic_string<C,T,A>& b) { return a.compare(b)==0; }
+template<class C,class T,class A> bool operator!=(const basic_string<C,T,A>& a,const basic_string<C,T,A>& b) { return a.compare(b)!=0; }
 }
-
 #endif

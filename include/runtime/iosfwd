@@ -1,0 +1,20 @@
+#ifndef _CPC_IOSFWD
+#define _CPC_IOSFWD
+#include <stddef.h>
+namespace std {
+typedef long long streamoff;
+typedef long long streamsize;
+template<class C> struct char_traits;
+template<class T> class allocator;
+template<class C, class Traits = char_traits<C>, class Alloc = allocator<C> > class basic_string;
+template<class C, class Traits = char_traits<C> > class basic_streambuf;
+template<class C, class Traits = char_traits<C> > class basic_ios;
+template<class C, class Traits = char_traits<C> > class basic_istream;
+template<class C, class Traits = char_traits<C> > class basic_ostream;
+template<class C, class Traits = char_traits<C> > class basic_iostream;
+typedef basic_istream<char> istream;
+typedef basic_ostream<char> ostream;
+typedef basic_istream<wchar_t> wistream;
+typedef basic_ostream<wchar_t> wostream;
+}
+#endif

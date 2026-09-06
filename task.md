@@ -617,3 +617,90 @@ The ongoing task is complete when:
   warnings for valid C++ base/derived conversions.  They are diagnostic noise
   in this target (all 517 runtime checks pass), but warning cleanup remains a
   separate compatibility improvement.
+
+
+## Racer compiler data handling and serial execution (2026-09-06)
+
+- User policy: Cprime compilation runs on one thread and one compiler process
+  at a time, especially during performance work. `agents.md` records this;
+  `build_project.ps1` defaults Prime to Jobs=1 and rejects higher values.
+  Manifest fixtures verify both the default and the rejection. Program runtime
+  support for C++ threads is unaffected.
+- Sampling the original compiler on real Racer dependencies identified repeated
+  whole-symbol-stack scans in template substitution, exact-type spelling and
+  unnamed-record linkage, plus whole-overload-registry scans. These repeated
+  searches increased with the amount of retained template state.
+- Substitution now tracks active scoped bindings separately from retained symbol
+  storage, preserves symbol scope across relinking, and snapshots only live
+  expression-stack values. Type spellings are canonical rather than selected by
+  rescanning arbitrary typedefs. Overload lookup uses name/mangled/member indexes;
+  conversion lookup visits conversion operators only. Template instantiations
+  retain their owner and index. Immutable member syntax and interned member names
+  are reused. Unnamed-record linkage retains the first successful typedef identity
+  on the tag instead of rescanning every global symbol for each signature.
+- Regression coverage exercises nested substitution binding restoration and native
+  linkage after different later typedef aliases in separate translation units.
+  All feature suites pass, including 402 template tests; native/CPC linkage in
+  both directions, MultiSource fixtures and 19 C compatibility tests pass.
+  Logs: build/racer-opt-final-{build,features,native,multisource,c}.log.
+- Serial original/new compiler measurements alternate order for each translation
+  unit using identical recorded flags. 65 separate Racer sources require 35.531s
+  versus 20.391s CPU (35.820s versus 20.544s wall), excluding link and build driver.
+  This is about 43% less compiler CPU work. The under-two-second target has NOT
+  been achieved. Earlier parallel-build numbers must not be treated as the serial
+  baseline. Exact per-source results: OT/cl/builds/racer-opt/serial-final.json.
+
+- The same serial comparison for 19 unity units improves from 37.641s to
+  12.422s CPU (43.793s to 13.722s wall), about 67% less CPU work. Full optimized
+  compile/link builds through cl/build_prime.cmd and build_prime_unity.cmd pass
+  without warnings: 24.111s separate and 12.371s unity including driver overhead.
+  Their separate compilation phases took 21.711s and 10.034s in those later runs.
+  Different runs are reported separately rather than subtracting unlike timings.
+- Packaged cpc.exe was rebuilt and deployed to OT/cl/cpc.exe. Testable artifacts:
+  OT/cl/builds/racer-opt/Racer-optimized-separate.exe and
+  OT/cl/builds/racer-opt/Racer-optimized-unity.exe. Interactive Racer gameplay
+  has not been tested. Feature totals are 991 passed, 0 failed across 22 suites.
+- Latest three-run self compile/link median is 0.276s, excluding runtime rebuild
+  and portable packaging. This is compiler build latency, not equivalent generated
+  code performance: CPC and MSVC do not implement equivalent optimization passes.
+
+- Serial MSVC Release separate rebuild passes in 49.728s with /m:1 and _CL_=/MP1,
+  retaining the existing LNK4098 CRT warning. The original CL source selection
+  was restored and CodeClip regenerated; only the deployed cpc.exe remains
+  modified in the CL repository. Detailed measurement report:
+  OT/cl/builds/racer-opt/RESULTS.md.
+
+- User clarified that MSVC may use threads; only Cprime must remain serial. Updated agents.md accordingly. MSVC Racer separate rebuilt successfully with /m and project /MP in 33.887s (one run, existing LNK4098 warning). Preserved Racer-msvc-threaded.exe and restored the original CL source selection.
+
+- Follow-up unity diagnosis: 19 serial units read 760,539 input lines / 28.55MB;
+  302,388 include-open attempts produce only 3,506 opens (98.84% failed searches).
+  File-open syscall accounts for about 40% of 15,606 samples. clList.inl appears
+  in 17 units, major Windows headers in 11. Remaining template hotspots include
+  global virtual-method scanning during member registration and deferred-body scans.
+  Raw link median is 1.770s; profiling exposes repeated preceding-archive symbol
+  scans (pe_earlier_archive_provider) and strlen traversal. Full evidence/method:
+  OT/cl/builds/racer-opt/unity-analysis/REPORT.md. This pass changes no compiler
+  implementation; temporary include-counter source instrumentation was restored.
+
+
+## Racer include/archive/template optimization wave (2026-09-06)
+
+- Implemented per-compilation Windows directory enumeration and include resolution
+  caches, PE archive provider indexes, virtual-member/template-alias indexes and
+  deferred-body negative token filters. Removed the saturating 8192-entry overload
+  token set in favor of the existing chained indexes.
+- Prime unity groups grow from four to 32 compatible sources (Racer: 19 to 5 units).
+  Reduced/fixed the ordinary-member/member-template definition identity bug exposed
+  by the 64-file experiment; the new focused regression passes.
+- Serial full-build median: 19.784s before, 6.240s after (3.17x faster), three
+  runs each. Compilation medians: 16.777s to 4.589s. Two-second target NOT achieved.
+- Same-input link medians improve from 2.080s to 0.982s. In the same 19-unit layout,
+  failed include opens decrease from 298,882 to one. Final five-unit input totals
+  decrease from 760,539 lines / 28.55MB to 302,177 lines / 11.24MB.
+- 992 feature tests pass across 22 suites, including 403 templates; include cache,
+  multi-source, native/CPC linkage, manifest/archive/resource and 19 C tests pass.
+  Logs: build/racer-four-final-*.log. Packaged compiler deployed to OT/cl/cpc.exe;
+  original CL source selection restored after real Racer compile/link verification.
+- Report and exact benchmark ranges/settings: OT/cl/builds/racer-opt/four/RESULTS.md.
+  Testable executable: OT/cl/builds/racer-opt/four/Racer-optimized.exe. Gameplay
+  was not exercised interactively. Keep Cprime serial; MSVC may remain parallel.

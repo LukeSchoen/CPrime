@@ -7,6 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 $driver = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\build_project.ps1'))
 $CompilerPath = [IO.Path]::GetFullPath($CompilerPath)
+$fixtureJobs = if ($Toolchain -eq 'Prime') { 1 } else { 2 }
 if (-not $NativeCompilerPath) {
     $NativeCompilerPath = if ($Toolchain -eq 'Clang') { $CompilerPath }
         else { Join-Path (Split-Path $ExporterPath -Parent) 'CommonLib\Assets\Programs\Clang\clang.exe' }
@@ -17,6 +18,19 @@ $fixture = Join-Path $temporaryRoot ('CPrime manifest ' + [guid]::NewGuid().ToSt
 if (-not $fixture.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Fixture must be under the temporary directory' }
 try {
     New-Item -ItemType Directory -Path $fixture | Out-Null
+    if ($Toolchain -eq 'Prime') {
+        $parallelLog = Join-Path $fixture 'parallel-rejected.log'
+        $savedErrorAction = $ErrorActionPreference
+        try {
+            $ErrorActionPreference = 'Continue'
+            & powershell -NoProfile -ExecutionPolicy Bypass -File $driver -Jobs 2 *> $parallelLog
+            $parallelExit = $LASTEXITCODE
+        } finally { $ErrorActionPreference = $savedErrorAction }
+        if ($parallelExit -eq 0 -or
+            (Get-Content -LiteralPath $parallelLog -Raw) -notmatch 'Cprime builds require -Jobs 1') {
+            throw 'Cprime accepted parallel compiler execution'
+        }
+    }
     @'
 Project("{fixture}") = "App", "App.vcxproj", "{app}"
 EndProject
@@ -200,7 +214,7 @@ const int *native_other_address(void) { return &native_shared_value; }
     try {
         $ErrorActionPreference = 'Continue'
         & powershell -NoProfile -ExecutionPolicy Bypass -File $driver -CompilerPath $CompilerPath -Toolchain $Toolchain `
-            -ProjectRoot $fixture -OutDir (Join-Path $fixture 'missing-toolset') -Jobs 2 *> $selectionLog
+            -ProjectRoot $fixture -OutDir (Join-Path $fixture 'missing-toolset') -Jobs $fixtureJobs *> $selectionLog
         $selectionExit = $LASTEXITCODE
     } finally { $ErrorActionPreference = $savedErrorAction }
     if ($selectionExit -eq 0 -or (Get-Content -LiteralPath $selectionLog -Raw) -notmatch 'Visual C\+\+ tools 0\.0\.0') {
@@ -211,15 +225,22 @@ const int *native_other_address(void) { return &native_shared_value; }
     foreach ($unity in @($false, $true)) {
         $output = Join-Path $fixture $(if ($unity) { 'unity' } else { 'separate' })
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-CompilerPath', $CompilerPath,
-            '-Toolchain', $Toolchain, '-ProjectRoot', $fixture, '-OutDir', $output, '-Jobs', '2')
+            '-Toolchain', $Toolchain, '-OutDir', $output)
+        if ($Toolchain -ne 'Prime') { $arguments += '-Jobs', [string]$fixtureJobs }
         if ($unity) { $arguments += '-Unity' }
-        & powershell @arguments
-        if ($LASTEXITCODE -ne 0) { throw "Manifest build failed (Unity=$unity)" }
+        Push-Location $fixture
+        try {
+            & powershell @arguments
+            if ($LASTEXITCODE -ne 0) { throw "Manifest build failed (Unity=$unity)" }
+        } finally { Pop-Location }
         $executable = Join-Path $fixture 'custom output\Selected App.exe'
         & $executable
         if ($LASTEXITCODE -ne 0) { throw "Manifest executable failed (Unity=$unity)" }
         $inputs = Get-Content -Raw -LiteralPath (Join-Path $output 'compile_inputs.json') | ConvertFrom-Json
         if (@($inputs | ForEach-Object { $_.Inputs }).Count -ne 13) { throw 'Driver changed the selected source list' }
+        $combined = @($inputs | Where-Object { $_.Inputs.Count -gt 1 })
+        if ($unity -and $combined.Count -eq 0) { throw 'Unity build did not combine any sources' }
+        if (-not $unity -and $combined.Count) { throw 'Separate build combined sources' }
         $archives = @(Get-ChildItem -LiteralPath $output -Filter '*.lib')
         if ($archives.Count -ne 5) { throw 'Static-library projects did not produce separate archives' }
         foreach ($archive in $archives) {
@@ -233,7 +254,7 @@ const int *native_other_address(void) { return &native_shared_value; }
     Add-Content -LiteralPath (Join-Path $fixture 'empty.c') -Value '#warning manifest_fixture_warning'
     $warningOutput = Join-Path $fixture 'warnings'
     $warningArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-CompilerPath', $CompilerPath,
-        '-Toolchain', $Toolchain, '-ProjectRoot', $fixture, '-OutDir', $warningOutput, '-Jobs', '2', '-SkipLink')
+        '-Toolchain', $Toolchain, '-ProjectRoot', $fixture, '-OutDir', $warningOutput, '-Jobs', [string]$fixtureJobs, '-SkipLink')
     & powershell @warningArgs
     if ($LASTEXITCODE -eq 0) { throw 'The manifest warning-as-error policy was ignored' }
     & powershell @warningArgs -AllowWarnings

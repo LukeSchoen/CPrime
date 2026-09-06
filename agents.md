@@ -1,5 +1,23 @@
 # Agent Instructions
 
+## Serial compiler execution
+
+- Cprime compilation and Cprime project builds must run on one thread, with
+  one compiler process at a time. Do not enable compiler threads, parallel
+  translation-unit builds, worker pools, or concurrent compiler invocations.
+- This rule applies especially when the user asks to make Cprime faster.
+  Optimize the compiler's algorithms, data structures, lookup, parsing,
+  instantiation, and memory use. Do not substitute parallel execution for
+  improving how the compiler handles its data.
+- Keep Cprime serial in performance comparisons. MSVC may use threaded and
+  parallel builds, including /MP and parallel MSBuild workers. The serial
+  restriction applies to Cprime, not MSVC.
+- Use the same source inputs and record each compiler's settings and concurrency.
+  Report compiler work separately from build-driver overhead. Do not re-enable
+  Cprime parallel compilation without an explicit user instruction to do so.
+- This concerns execution of the compiler and its build tools; it does not
+  remove C++ language/runtime support for programs that use threads.
+
 When working on the cpc compiler, stay with the task for as long as useful
 progress is possible. Prefer sustained, careful investigation and implementation
 over stopping early. Keep working through diagnosis, reproduction, fixing, and

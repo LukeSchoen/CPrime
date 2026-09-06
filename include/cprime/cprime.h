@@ -396,7 +396,8 @@ struct FuncAttr {
     func_cpp_conversion : 1,
     func_cpp_explicit : 1,
     func_cpp_member : 1,
-    xxxx        : 6;
+    func_ref_qualifier : 2,
+    xxxx        : 4;
 };
 
 typedef struct Sym {
@@ -435,6 +436,10 @@ typedef struct Sym {
     };
     struct TokenString *default_arg;
     long long const_value;
+    /* Linked non-global bindings, independent of retained symbol storage. */
+    struct Sym *scope_prev, *scope_next;
+    /* First typedef giving an unnamed tag its stable linkage identity. */
+    int linkage_typedef_tok;
 } Sym;
 
 typedef struct Section {
@@ -561,7 +566,7 @@ typedef struct CachedInclude {
     char filename[1];
 } CachedInclude;
 
-#define CACHED_INCLUDES_HASH_SIZE 32
+#define CACHED_INCLUDES_HASH_SIZE 1024
 
 #ifdef CONFIG_CPRIME_ASM
 typedef struct ExprValue {
@@ -912,6 +917,8 @@ struct filespec {
 #define VT_BITFIELD    0x0080
 #define VT_CONSTANT    0x0100
 #define VT_VOLATILE    0x0200
+#define VT_FUNC_LREF   VT_DEFSIGN
+#define VT_FUNC_RREF   0x0800
 #define VT_VLA         0x0400
 #define VT_LONG        0x0800
 

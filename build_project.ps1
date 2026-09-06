@@ -1,11 +1,11 @@
 param(
     [ValidateSet('Prime', 'Clang')][string]$Toolchain = 'Prime',
     [Alias('CpcPath')][string]$CompilerPath = '',
-    [string]$ProjectRoot = 'C:\Luke\Src\OT\cl',
+    [string]$ProjectRoot = (Get-Location).Path,
     [string]$ManifestPath = '',
     [string]$OutDir = '',
     [string]$ExePath = '',
-    [ValidateRange(1, 64)][int]$Jobs = [Environment]::ProcessorCount,
+    [ValidateRange(1, 64)][int]$Jobs = $(if ($Toolchain -eq 'Prime') { 1 } else { [Environment]::ProcessorCount }),
     [ValidateRange(1, 3600)][int]$CompileTimeoutSeconds = 60,
     [switch]$Unity,
     [switch]$SkipLink,
@@ -13,6 +13,10 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+if ($Toolchain -eq 'Prime' -and $Jobs -ne 1) {
+    throw 'Cprime builds require -Jobs 1. Optimize compiler work instead of enabling parallel compilation.'
+}
+$buildTimer = [Diagnostics.Stopwatch]::StartNew()
 $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot)
 if (-not $CompilerPath) {
     $CompilerPath = if ($Toolchain -eq 'Prime') { Join-Path $PSScriptRoot 'cpc.exe' }
@@ -244,7 +248,11 @@ foreach ($project in $manifest.projects) {
         [void]$groups[$key].Add(@{ Source = $source.path; Flags = $flags; Index = $index++ })
     }
     foreach ($group in $groups.Values) {
-        $chunkSize = if ($Unity -and $group.Count -gt 1) { 4 } else { 1 }
+        # Larger serial Prime units reuse guarded headers and template state.
+        # Keep grouping restricted to identical effective compiler settings.
+        $chunkSize = if ($Unity -and $group.Count -gt 1) {
+            if ($Toolchain -eq 'Prime') { 32 } else { 4 }
+        } else { 1 }
         for ($start = 0; $start -lt $group.Count; $start += $chunkSize) {
             $end = [Math]::Min($start + $chunkSize, $group.Count) - 1
             $chunk = @($group[$start..$end])
@@ -445,3 +453,4 @@ try {
     throw
 }
 Write-Host "Executable: $ExePath"
+Write-Host ('Build elapsed: {0:n3}s; {1} translation units; unity={2}' -f $buildTimer.Elapsed.TotalSeconds, $jobsToRun.Count, [bool]$Unity)

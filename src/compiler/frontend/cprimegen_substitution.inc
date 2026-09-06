@@ -9,7 +9,6 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     TokenString replay;
     const int *ptr;
     CValue value;
-    SValue values[1 + VSTACK_SIZE];
     struct temp_local_variable temporaries[MAX_TEMP_LOCAL_VARIABLE_NUMBER];
     Sym *locals, *globals, *parameter_frame, *probe_globals;
     Sym **local_bindings, **global_bindings;
@@ -22,14 +21,17 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     int member_class, declaration_auto, declaration_typedef, declaration_decltype;
     int scope, deferred_members, binding_count, global_binding_count;
     int unevaluated_depth, probe_depth;
-  } *saved = cprime_malloc(sizeof(*saved));
+    SValue values[1];
+  } *saved = cprime_malloc(sizeof(*saved)
+                           + (vtop - _vstack) * sizeof(SValue));
   jmp_buf recovery;
   volatile int success = 0;
   saved->macro = macro_stack; saved->ptr = macro_ptr;
   saved->replay = *tokens;
   saved->token = tok; saved->value = tokc;
   saved->depth = vtop - _vstack;
-  memcpy(saved->values, _vstack, sizeof(saved->values));
+  /* Only the live expression stack belongs to the suspended caller. */
+  memcpy(saved->values, _vstack, (saved->depth + 1) * sizeof(SValue));
   memcpy(saved->temporaries, arr_temp_local_vars, sizeof(saved->temporaries));
   saved->locals = local_stack;
   saved->globals = NULL; saved->parameter_frame = NULL;
@@ -60,14 +62,15 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
                                                     &saved->binding_count);
   if (saved->scope && argument < 6)
   {
-    Sym *frame;
+    Sym *frame, *next_binding;
     /* Types materialized inside a parameter declaration can add anonymous
        frames ahead of that declaration's own boundary. Hide all currently
        linked parameter-scope names, including the suspended outer frames. */
-    for (frame = global_stack; frame; frame = frame->prev) {
+    for (frame = scoped_bindings; frame; frame = next_binding) {
       int name = frame->v & ~SYM_STRUCT;
       TokenSym *token;
       Sym *binding;
+      next_binding = frame->scope_next;
       if (name < TOK_IDENT || name >= SYM_FIRST_ANOM || sym_scope_ex(frame) <= 0)
         continue;
       token = table_ident[name - TOK_IDENT];
@@ -237,7 +240,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   local_scope = saved->scope;
   cpp_member_declarator_depth = saved->declarator_depth;
   defer_pending_member_funcs = saved->deferred_members;
-  memcpy(_vstack, saved->values, sizeof(saved->values));
+  memcpy(_vstack, saved->values, (saved->depth + 1) * sizeof(SValue));
   vtop = _vstack + saved->depth;
   memcpy(arr_temp_local_vars, saved->temporaries, sizeof(saved->temporaries));
   nb_temp_local_vars = saved->temporary_count;

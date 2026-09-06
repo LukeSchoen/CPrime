@@ -44,6 +44,15 @@ static int find_class_scope_type_tok(int class_tok, int name_tok)
     alias = global_symbol_find(nested_tok);
     if (alias && (alias->type.t & VT_TYPEDEF))
       return nested_tok;
+    {
+      ClassBaseInfo *base;
+      for (base = class_base_infos; base; base = base->next)
+        if (base->class_tok == class_tok)
+        {
+          int inherited = find_class_scope_type_tok(base->base_tok, name_tok);
+          if (inherited != name_tok) return inherited;
+        }
+    }
     record = lookup_cpp_record_decl(class_tok);
     class_tok = record ? record->owner_tok : 0;
   }
@@ -494,6 +503,8 @@ static int make_member_func_tok_for_type(int struct_tok, int method_tok,
          o; o = o->bucket_next)
       if (o->struct_tok == struct_tok && o->method_tok == method_tok
           && o->explicit_arg_count == 0
+          && o->func_type.ref->f.func_ref_qualifier ==
+             ((func_type->t & VT_FUNC_RREF) ? 2 : (func_type->t & VT_FUNC_LREF) ? 1 : 0)
           && o->is_const == !!(func_type && (func_type->t & VT_CONSTANT)))
         return o->mangled_tok;
     if (sym_find(base_tok) || global_symbol_find(base_tok))
@@ -517,7 +528,7 @@ static int make_lifecycle_func_tok_for_type(int struct_tok, int method_tok,
   int explicit_arg_count = member_func_explicit_arg_count(lowered_type);
   MemberFuncOverload *o;
 
-  for (o = member_func_overloads; o; o = o->next)
+  for (o = member_func_candidates(struct_tok, method_tok); o; o = o->bucket_next)
     if (o->struct_tok == struct_tok && o->method_tok == method_tok
         && o->explicit_arg_count == explicit_arg_count)
     {
@@ -586,7 +597,6 @@ static void note_member_func_overload(int struct_tok, int method_tok,
 
   note_cpp_member_decl(struct_tok, method_tok, mangled_tok, lowered_type, 0, 1);
   note_member_function_scope(mangled_tok, struct_tok);
-  overload_tok_set_note(member_func_mangled_toks, mangled_tok);
 
   if (lowered_type && lowered_type->ref)
   {
@@ -619,6 +629,7 @@ static void note_member_func_overload(int struct_tok, int method_tok,
         }
         o->is_const = is_const != 0;
       }
+      index_conversion_overload(o);
       return;
     }
   o = cprime_mallocz(sizeof(*o));
@@ -633,6 +644,7 @@ static void note_member_func_overload(int struct_tok, int method_tok,
   o->next = member_func_overloads;
   member_func_overloads = o;
   index_member_func_overload(o);
+  index_conversion_overload(o);
 }
 
 static int func_explicit_arg_count(CType *func_type)
@@ -750,9 +762,8 @@ static void note_free_func_overload(int name_tok, int mangled_tok,
 {
   FreeFuncOverload *o;
 
-  overload_tok_set_note(free_func_name_toks, name_tok);
 
-  for (o = free_func_overloads; o; o = o->next)
+  for (o = free_func_candidates(name_tok); o; o = o->name_next)
   {
     if (o->name_tok == name_tok && o->mangled_tok == mangled_tok)
     {
@@ -782,6 +793,14 @@ static void note_free_func_overload(int name_tok, int mangled_tok,
     o->func_type = *func_type;
   o->next = free_func_overloads;
   free_func_overloads = o;
+  {
+    unsigned bucket = (unsigned)name_tok & (MEMBER_CANDIDATE_BUCKETS - 1);
+    o->name_next = free_name_buckets[bucket];
+    free_name_buckets[bucket] = o;
+    bucket = (unsigned)mangled_tok & (MEMBER_CANDIDATE_BUCKETS - 1);
+    o->mangled_next = free_mangled_buckets[bucket];
+    free_mangled_buckets[bucket] = o;
+  }
 }
 
 static void mark_unmangled_free_func_overload_provisional(int name_tok)
@@ -795,7 +814,7 @@ static void mark_unmangled_free_func_overload_provisional(int name_tok)
 static int is_provisional_free_func_tok(int tok)
 {
   FreeFuncOverload *o;
-  for (o = free_func_overloads; o; o = o->next)
+  for (o = free_func_candidates(tok); o; o = o->name_next)
     if (o->name_tok == tok && o->mangled_tok == tok
         && o->is_provisional_auto_member)
       return 1;
@@ -805,7 +824,8 @@ static int is_provisional_free_func_tok(int tok)
 static int is_mangled_free_func_tok(int tok)
 {
   FreeFuncOverload *o;
-  for (o = free_func_overloads; o; o = o->next)
+  for (o = free_mangled_buckets[(unsigned)tok & (MEMBER_CANDIDATE_BUCKETS - 1)];
+       o; o = o->mangled_next)
     if (o->mangled_tok == tok && o->name_tok != tok)
       return 1;
   return 0;
@@ -814,28 +834,17 @@ static int is_mangled_free_func_tok(int tok)
 static int has_free_func_overload(int name_tok)
 {
   FreeFuncOverload *o;
-  int indexed = overload_tok_set_has(free_func_name_toks, name_tok);
-
-  if (indexed >= 0)
-    return indexed;
-
-  for (o = free_func_overloads; o; o = o->next)
-    if (o->name_tok == name_tok)
-      return 1;
+  for (o = free_func_candidates(name_tok); o; o = o->name_next)
+    if (o->name_tok == name_tok) return 1;
   return 0;
 }
 
 static int is_member_func_mangled_tok(int tok)
 {
   MemberFuncOverload *o;
-  int indexed = overload_tok_set_has(member_func_mangled_toks, tok);
-
-  if (indexed >= 0)
-    return indexed;
-
-  for (o = member_func_overloads; o; o = o->next)
-    if (o->mangled_tok == tok)
-      return 1;
+  for (o = member_mangled_buckets[(unsigned)tok & (MEMBER_CANDIDATE_BUCKETS - 1)];
+       o; o = o->mangled_next)
+    if (o->mangled_tok == tok) return 1;
   return 0;
 }
 
@@ -868,12 +877,15 @@ static int is_cpp_translation_unit(void)
   BufferedFile *root_file = NULL;
   const char *filename;
 
+  if (cpp_translation_unit >= 0)
+    return cpp_translation_unit;
+
   if (cprime_state && cprime_state->include_stack[0])
     root_file = cprime_state->include_stack[0];
   if (!root_file)
     root_file = file;
   filename = root_file ? root_file->filename : NULL;
-  return has_suffix(filename, ".cpp")
+  return cpp_translation_unit = has_suffix(filename, ".cpp")
          || has_suffix(filename, ".cxx")
          || has_suffix(filename, ".cc")
          || has_suffix(filename, ".C");
@@ -930,6 +942,23 @@ static int make_static_member_func_tok_for_type(int name_tok, CType *func_type)
    The overload registry may keep the first source declaration under its
    lookup token; every emitted C++ free function nevertheless gets the same
    signature-based label in every translation unit. */
+static int cpp_unnamed_tag_typedef_tok(CType *type)
+{
+  Sym *alias;
+  int name_tok = 0;
+  if (!type->ref) return 0;
+  if (type->ref->linkage_typedef_tok) return type->ref->linkage_typedef_tok;
+  /* Retained symbols are newest first. Only cache a successful lookup:
+     an unnamed tag can be inspected before its first typedef is declared. */
+  for (alias = global_stack; alias; alias = alias->prev)
+    if ((alias->type.t & VT_TYPEDEF) && alias->type.ref == type->ref
+        && (alias->type.t & VT_BTYPE) == (type->t & VT_BTYPE)
+        && alias->v >= TOK_UIDENT && alias->v < SYM_FIRST_ANOM)
+      name_tok = alias->v;
+  type->ref->linkage_typedef_tok = name_tok;
+  return name_tok;
+}
+
 static int cpp_append_linkage_type(CString *out, CType *type)
 {
   CType plain = *type;
@@ -979,17 +1008,7 @@ static int cpp_append_linkage_type(CString *out, CType *type)
     cstr_cat(out, "E", 1);
   } else if (bt == VT_STRUCT) {
     name_tok = get_struct_type_name_tok(type);
-    if (!name_tok) {
-      Sym *alias;
-      /* An unnamed class declared by a typedef takes the first typedef
-         name as its linkage identity. The global stack is newest first. */
-      for (alias = global_stack; alias; alias = alias->prev)
-        if ((alias->type.t & VT_TYPEDEF)
-            && (alias->type.t & VT_BTYPE) == VT_STRUCT
-            && alias->type.ref == type->ref
-            && alias->v >= TOK_UIDENT && alias->v < SYM_FIRST_ANOM)
-          name_tok = alias->v;
-    }
+    if (!name_tok) name_tok = cpp_unnamed_tag_typedef_tok(type);
     cstr_cat(out, "S", 1);
   } else {
     cstr_cat(out, "T", 1);
@@ -2088,7 +2107,7 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
   int source_class = get_struct_type_name_tok(source);
   int best_rank = 0x7fffffff, best_const = 0, ambiguous = 0;
   if (!source_class) return NULL;
-  for (candidate = member_func_overloads; candidate; candidate = candidate->next) {
+  for (candidate = conversion_overloads; candidate; candidate = candidate->conversion_next) {
     Sym *function;
     CType converted;
     int rank;
@@ -2546,7 +2565,7 @@ static int make_lifecycle_func_tok_for_params(int struct_tok, int method_tok,
            get_tok_str(struct_tok, NULL),
            get_tok_str(method_tok, NULL));
   param_count = count_param_tokens(params);
-  for (o = member_func_overloads; o; o = o->next)
+  for (o = member_func_candidates(struct_tok, method_tok); o; o = o->bucket_next)
     if (o->struct_tok == struct_tok && o->method_tok == method_tok
         && o->explicit_arg_count == param_count)
     {
@@ -2663,7 +2682,6 @@ static void note_raw_lifecycle_overload(int struct_tok, int method_tok,
 {
   MemberFuncOverload *o;
 
-  overload_tok_set_note(member_func_mangled_toks, mangled_tok);
 
   for (o = member_func_candidates(struct_tok, method_tok);
        o; o = o->bucket_next)
@@ -2713,6 +2731,7 @@ static const char *cpp_operator_name_from_tok(int op)
   case TOK_INC: return "operator++";
   case TOK_DEC: return "operator--";
   case '!': return "operator!";
+  case '~': return "operator~";
   case TOK_SHR:
   case TOK_SAR: return "operator>>";
   case TOK_SHL: return "operator<<";

@@ -1,28 +1,39 @@
 #ifndef _CPC_ISTREAM
 #define _CPC_ISTREAM
-
-#include <stdio.h>
-#include <stddef.h>
-
-namespace std
-{
-  class istream
-  {
-  public:
-    explicit istream(FILE *stream = stdin) : m_stream(stream), m_count(0) {}
-
-    istream &read(char *data, size_t count)
-    {
-      m_count = fread(data, 1, count, m_stream);
-      return *this;
+#include <ios>
+#include <wchar.h>
+namespace std {
+template<class C, class Traits> class basic_istream : public basic_ios<C,Traits> {
+public:
+  typedef streamoff pos_type;
+  typedef streamoff off_type;
+  explicit basic_istream(FILE* file = stdin) : basic_ios<C,Traits>(file), m_count(0) {}
+  basic_istream& read(C* data, streamsize count) {
+    m_count=0;
+    if(this->fail() || count<0) { this->setstate(ios_base::failbit); return *this; }
+    if(sizeof(C)==1) m_count=(streamsize)fread(data,1,(size_t)count,this->m_stream);
+    else while(m_count<count) { wint_t c=fgetwc(this->m_stream); if(c==WEOF) break; data[m_count++]=(C)c; }
+    if(m_count!=count) {
+      if(feof(this->m_stream)) this->setstate(ios_base::eofbit | ios_base::failbit);
+      else this->setstate(ios_base::badbit);
     }
-
-    size_t gcount() const { return m_count; }
-
-  private:
-    FILE *m_stream;
-    size_t m_count;
-  };
+    return *this;
+  }
+  streamsize gcount() const { return m_count; }
+  pos_type tellg() {
+    if(this->fail()) return -1;
+    pos_type p=_ftelli64(this->m_stream);
+    if(p<0) this->setstate(ios_base::failbit);
+    return p;
+  }
+  basic_istream& seekg(pos_type pos) { return seekg(pos,ios_base::beg); }
+  basic_istream& seekg(off_type off,ios_base::seekdir dir) {
+    this->m_state &= ~ios_base::eofbit;
+    if(!this->fail() && _fseeki64(this->m_stream,off,dir)!=0) this->setstate(ios_base::failbit);
+    return *this;
+  }
+private:
+  streamsize m_count;
+};
 }
-
 #endif

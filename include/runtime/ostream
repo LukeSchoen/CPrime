@@ -1,68 +1,68 @@
 #ifndef _CPC_OSTREAM
 #define _CPC_OSTREAM
 
-#include <stdio.h>
+#include <ios>
+#include <wchar.h>
 #include <stddef.h>
 
 namespace std
 {
-  class ostream
+  template<class C, class Traits> class basic_ostream : public basic_ios<C,Traits>
   {
   public:
-    explicit ostream(FILE *stream = stdout) : m_stream(stream) {}
+    explicit basic_ostream(FILE *stream = stdout) : basic_ios<C,Traits>(stream) {}
 
-    ostream &put(char value)
+    basic_ostream &put(C value)
     {
-      fputc(value, m_stream);
+      if (sizeof(C) == 1) { if (fputc((unsigned char)value, this->m_stream) == EOF) this->setstate(ios_base::badbit); }
+      else if (fputwc((wchar_t)value, this->m_stream) == WEOF) this->setstate(ios_base::badbit);
       return *this;
     }
 
-    ostream &write(const char *data, size_t count)
+    basic_ostream &write(const C *data, streamsize count)
     {
-      fwrite(data, 1, count, m_stream);
+      for (streamsize i = 0; i < count && !this->fail(); ++i) put(data[i]);
       return *this;
     }
 
-    ostream &flush()
+    basic_ostream &flush()
     {
-      fflush(m_stream);
+      if (fflush(this->m_stream) != 0) this->setstate(ios_base::badbit);
       return *this;
     }
 
-    ostream &operator<<(const char *value)
+    basic_ostream &operator<<(const char *value)
     {
-      fputs(value ? value : "(null)", m_stream);
+      const char *text = value ? value : "(null)"; while (*text) put((C)*text++);
       return *this;
     }
 
-    ostream &operator<<(char value) { return put(value); }
-    ostream &operator<<(bool value) { return *this << (value ? "true" : "false"); }
-    ostream &operator<<(short value) { fprintf(m_stream, "%hd", value); return *this; }
-    ostream &operator<<(unsigned short value) { fprintf(m_stream, "%hu", value); return *this; }
-    ostream &operator<<(int value) { fprintf(m_stream, "%d", value); return *this; }
-    ostream &operator<<(unsigned int value) { fprintf(m_stream, "%u", value); return *this; }
-    ostream &operator<<(long value) { fprintf(m_stream, "%ld", value); return *this; }
-    ostream &operator<<(unsigned long value) { fprintf(m_stream, "%lu", value); return *this; }
-    ostream &operator<<(long long value) { fprintf(m_stream, "%lld", value); return *this; }
-    ostream &operator<<(unsigned long long value) { fprintf(m_stream, "%llu", value); return *this; }
-    ostream &operator<<(float value) { fprintf(m_stream, "%g", (double)value); return *this; }
-    ostream &operator<<(double value) { fprintf(m_stream, "%g", value); return *this; }
-    ostream &operator<<(const void *value) { fprintf(m_stream, "%p", value); return *this; }
+    basic_ostream &operator<<(char value) { return put(value); }
+    basic_ostream &operator<<(bool value) { return *this << (value ? "true" : "false"); }
+    basic_ostream &operator<<(short value) { fprintf(this->m_stream, "%hd", value); return *this; }
+    basic_ostream &operator<<(unsigned short value) { fprintf(this->m_stream, "%hu", value); return *this; }
+    basic_ostream &operator<<(int value) { fprintf(this->m_stream, "%d", value); return *this; }
+    basic_ostream &operator<<(unsigned int value) { fprintf(this->m_stream, "%u", value); return *this; }
+    basic_ostream &operator<<(long value) { fprintf(this->m_stream, "%ld", value); return *this; }
+    basic_ostream &operator<<(unsigned long value) { fprintf(this->m_stream, "%lu", value); return *this; }
+    basic_ostream &operator<<(long long value) { fprintf(this->m_stream, "%lld", value); return *this; }
+    basic_ostream &operator<<(unsigned long long value) { fprintf(this->m_stream, "%llu", value); return *this; }
+    basic_ostream &operator<<(float value) { fprintf(this->m_stream, "%g", (double)value); return *this; }
+    basic_ostream &operator<<(double value) { fprintf(this->m_stream, "%g", value); return *this; }
+    basic_ostream &operator<<(const void *value) { fprintf(this->m_stream, "%p", value); return *this; }
 
-    typedef ostream &(*manipulator)(ostream &);
-    ostream &operator<<(manipulator function) { return function(*this); }
+    typedef basic_ostream &(*manipulator)(basic_ostream &);
+    basic_ostream &operator<<(manipulator function) { return function(*this); }
 
-  private:
-    FILE *m_stream;
   };
 
-  inline ostream &endl(ostream &stream)
+  template<class C, class Traits> inline basic_ostream<C,Traits> &endl(basic_ostream<C,Traits> &stream)
   {
     stream.put('\n');
     return stream.flush();
   }
 
-  inline ostream &flush(ostream &stream)
+  template<class C, class Traits> inline basic_ostream<C,Traits> &flush(basic_ostream<C,Traits> &stream)
   {
     return stream.flush();
   }

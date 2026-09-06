@@ -1980,8 +1980,12 @@ static int member_receiver_is_const(CType *type)
   return (type->t & VT_CONSTANT) != 0;
 }
 
-static int member_overload_receiver_ok(MemberFuncOverload *o, int receiver_const)
+static int member_overload_receiver_ok(MemberFuncOverload *o, int receiver_const, CType *receiver)
 {
+  int ref = o->func_type.ref ? o->func_type.ref->f.func_ref_qualifier : 0;
+  int rvalue = (receiver->t & VT_RVALUE_REFERENCE) != 0;
+  if (ref == 2 && !rvalue) return 0;
+  if (ref == 1 && rvalue && !o->is_const) return 0;
   return o->is_const || !receiver_const;
 }
 
@@ -2053,7 +2057,7 @@ static Sym *resolve_member_func_by_arg_count(CType *type, int method_tok,
         || explicit_arg_count < o->min_arg_count
         || explicit_arg_count > o->explicit_arg_count)
       goto next_overload;
-    if (!member_overload_receiver_ok(o, receiver_const))
+    if (!member_overload_receiver_ok(o, receiver_const, type))
     {
       if (getenv("CPC_TRACE_CLBITREF")
           && struct_tok >= TOK_UIDENT
@@ -2843,7 +2847,7 @@ static Sym *resolve_member_func_by_arg_types_filtered(CType *type, int method_to
     if (!member_function_matches_explicit_arguments(o->mangled_tok,
                                                      explicit_member_template_arg_tok))
       goto next_overload;
-    if (!member_overload_receiver_ok(o, receiver_const))
+    if (!member_overload_receiver_ok(o, receiver_const, type))
     {
       if (getenv("CPC_TRACE_CLBITREF")
           && struct_tok >= TOK_UIDENT
@@ -3097,7 +3101,15 @@ static Sym *resolve_member_func_by_param_signature(CType *type, int method_tok,
     if (profile_scans_enabled) ++profile_other_overload_scans[5];
     if (o->struct_tok != struct_tok || o->method_tok != method_tok)
       continue;
-    if (!member_overload_receiver_ok(o, receiver_const))
+    /* An ordinary out-of-class definition cannot bind to an instantiated
+       member template just because their substituted parameter types match. */
+    {
+      const CppMemberDeclInfo *declaration = lookup_cpp_member_decl(o->mangled_tok);
+      if (declaration && declaration->is_template) continue;
+    }
+    if (o->is_const != receiver_const
+        || o->func_type.ref->f.func_ref_qualifier !=
+           ((func_type->t & VT_FUNC_RREF) ? 2 : (func_type->t & VT_FUNC_LREF) ? 1 : 0))
       continue;
     s = sym_find(o->mangled_tok);
     if (!s)
@@ -3287,6 +3299,8 @@ static CType make_lowered_member_func_type(CType *struct_type, CType *func_type)
   lowered_type.ref = fref = sym_push(SYM_FIELD, &return_type, 0, 0);
   fref->f = func_type->ref->f;
   fref->f.func_cpp_member = 1;
+  if (func_type->t & (VT_FUNC_LREF | VT_FUNC_RREF))
+    fref->f.func_ref_qualifier = (func_type->t & VT_FUNC_RREF) ? 2 : 1;
 
   this_type = *struct_type;
   if (func_type->t & VT_CONSTANT)
@@ -3518,6 +3532,7 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
 
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
+  pm->token_filter_valid = 0;
   pm->struct_tok = struct_tok;
   pm->func_tok = is_auto_return ? mangled_tok : 0;
   pm->auto_return_state = is_auto_return ? 1 : 0;
@@ -3671,6 +3686,7 @@ static void add_pending_static_member_func(CType *struct_type, int method_tok,
 
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
+  pm->token_filter_valid = 0;
   pm->func_tok = mangled_tok;
   pm->struct_tok = struct_tok;
   pm->is_static_member = 1;
@@ -3853,6 +3869,7 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
 
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
+  pm->token_filter_valid = 0;
   pm->func_tok = mangled_tok;
   pm->struct_tok = struct_tok;
   pm->is_lifecycle_member = 1;
@@ -3915,6 +3932,7 @@ static void add_pending_lifecycle_decl(CType *struct_type, int method_tok,
 
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
+  pm->token_filter_valid = 0;
   pm->struct_tok = struct_tok;
   pm->is_local_class_member = is_local_class_member;
   dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
@@ -4660,6 +4678,7 @@ close_initializer:
 
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
+  pm->token_filter_valid = 0;
   dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
 }
 
@@ -4868,6 +4887,7 @@ static void inject_omitted_constructor_member_initializers(
   tok_str_free(initialized);
   tok_str_free(pm->str);
   pm->str = dst;
+  pm->token_filter_valid = 0;
 }
 
 static int pending_member_signature_has_param_name(TokenString *str,
@@ -4956,6 +4976,7 @@ static void complete_defaulted_constructor_body(PendingMemberFunc *pm,
   tok_str_add(body, TOK_EOF);
   tok_str_free(pm->str);
   pm->str = body;
+  pm->token_filter_valid = 0;
 }
 
 static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
@@ -4994,6 +5015,7 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
   if (!pm->is_defaulted_default_constructor)
     inject_omitted_constructor_member_initializers(pm, &class_type, this_tok);
   prepare_saved_cpp_lambdas(pm->str);
+  pm->token_filter_valid = 0;
   dst = tok_str_alloc();
   for (i = 0; i < pm->str->len && pm->str->str[i] != TOK_EOF; ++i)
   {
@@ -5125,6 +5147,7 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
   tok_str_add(dst, TOK_EOF);
   tok_str_free(pm->str);
   pm->str = dst;
+  pm->token_filter_valid = 0;
 }
 
 static void rewrite_pending_static_member_calls(PendingMemberFunc *pm)
@@ -5135,6 +5158,7 @@ static void rewrite_pending_static_member_calls(PendingMemberFunc *pm)
   if (!pm || !pm->is_static_member || !pm->struct_tok || !pm->str)
     return;
   prepare_saved_cpp_lambdas(pm->str);
+  pm->token_filter_valid = 0;
   dst = tok_str_alloc();
   for (i = 0; i < pm->str->len && pm->str->str[i] != TOK_EOF; ++i)
   {
@@ -5178,6 +5202,7 @@ static void rewrite_pending_static_member_calls(PendingMemberFunc *pm)
   tok_str_add(dst, TOK_EOF);
   tok_str_free(pm->str);
   pm->str = dst;
+  pm->token_filter_valid = 0;
 }
 
 static void compile_pending_member_funcs(int start)

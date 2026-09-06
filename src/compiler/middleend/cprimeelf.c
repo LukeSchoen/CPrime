@@ -9,6 +9,10 @@ struct pe_archive_state {
   unsigned char *loaded;
   char *symbol_names;
   int symbol_count;
+  const char **names;
+  int *name_buckets;
+  int *name_next;
+  unsigned name_mask;
 };
 #endif
 
@@ -122,6 +126,9 @@ ST_FUNC void cprimeelf_delete(CPRIMEState *s1)
     cprime_free(state->filename);
     cprime_free(state->loaded);
     cprime_free(state->symbol_names);
+    cprime_free(state->names);
+    cprime_free(state->name_buckets);
+    cprime_free(state->name_next);
     cprime_free(state);
   }
   cprime_free(s1->pe_archives);
@@ -4192,13 +4199,14 @@ static int pe_earlier_archive_provider(CPRIMEState *s1,
                                        const char *name)
 {
   int i, j;
+  unsigned hash = elf_hash((const unsigned char *)name);
   if (!current) return 0;
   for (i = 0; i < s1->nb_pe_archives; ++i) {
     struct pe_archive_state *candidate = s1->pe_archives[i];
-    const char *symbol = candidate->symbol_names;
     if (candidate == current) break;
-    for (j = 0; j < candidate->symbol_count; ++j, symbol += strlen(symbol) + 1)
-      if (!candidate->loaded[j] && !strcmp(symbol, name)) return 1;
+    for (j = candidate->name_buckets[hash & candidate->name_mask];
+         j >= 0; j = candidate->name_next[j])
+      if (!candidate->loaded[j] && !strcmp(candidate->names[j], name)) return 1;
   }
   return 0;
 }
@@ -4246,6 +4254,31 @@ static int cprime_load_alacarte(CPRIMEState *s1, int fd, int size, int entrysize
       archive->symbol_names = cprime_malloc(size - (ar_names - (const char *)data));
       memcpy(archive->symbol_names, ar_names, size - (ar_names - (const char *)data));
       dynarray_add(&s1->pe_archives, &s1->nb_pe_archives, archive);
+      {
+        unsigned buckets = 16;
+        const char *name = archive->symbol_names;
+        const char *end = name + size - (ar_names - (const char *)data);
+        int j;
+        while (buckets < (unsigned)nsyms && buckets < 65536) buckets <<= 1;
+        archive->name_mask = buckets - 1;
+        archive->names = cprime_malloc((size_t)nsyms * sizeof(*archive->names));
+        archive->name_next = cprime_malloc((size_t)nsyms * sizeof(*archive->name_next));
+        archive->name_buckets = cprime_malloc(buckets * sizeof(*archive->name_buckets));
+        memset(archive->name_buckets, -1, buckets * sizeof(*archive->name_buckets));
+        for (j = 0; j < nsyms; ++j) {
+          const char *zero;
+          unsigned h;
+          if (name >= end || !(zero = memchr(name, 0, end - name))) {
+            libc_free(absolute);
+            goto invalid;
+          }
+          archive->names[j] = name;
+          h = elf_hash((const unsigned char *)name) & archive->name_mask;
+          archive->name_next[j] = archive->name_buckets[h];
+          archive->name_buckets[h] = j;
+          name = zero + 1;
+        }
+      }
     }
     libc_free(absolute);
     if (archive->symbol_count != nsyms) goto invalid;

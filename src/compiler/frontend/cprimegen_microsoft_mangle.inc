@@ -282,11 +282,7 @@ static void cpp_ms_mangle_type(CppMsMangleContext *ctx, CType *type, int mode)
               : type->ref ? type->ref->v & ~SYM_STRUCT : 0;
     const CppRecordDeclInfo *record = lookup_cpp_record_decl(tag);
     if (!tag) {
-      Sym *alias;
-      for (alias = global_stack; alias; alias = alias->prev)
-        if ((alias->type.t & VT_TYPEDEF) && alias->type.ref == type->ref
-            && alias->v >= TOK_UIDENT && alias->v < SYM_FIRST_ANOM)
-          tag = alias->v;
+      tag = cpp_unnamed_tag_typedef_tok(type);
       if (!tag) cprime_error("unnamed type has no native linkage name");
       record = lookup_cpp_record_decl(tag);
     }
@@ -379,6 +375,8 @@ static int cpp_ms_linkage_tok(int name_tok, CType *function_type)
 #if defined(CPRIME_TARGET_X86_64)
       cstr_ccat(&label, 'E');
 #endif
+      if (member->ref_qualifier)
+        cstr_ccat(&label, member->ref_qualifier == 1 ? 'G' : 'H');
       cstr_ccat(&label, 'A' + cpp_ms_cv(member->cv_qualifiers));
     }
     cpp_ms_mangle_function_type(&context, &semantic_type,

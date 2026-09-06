@@ -53,6 +53,10 @@ static CppMemberDeclInfo *note_cpp_member_decl(int owner_tok, int source_name_to
     /* Body replay may use a lowered signature which omits source-level
        function cv flags. Keep the declaration's qualifiers authoritative. */
     member->cv_qualifiers |= function_type->t & (VT_CONSTANT | VT_VOLATILE);
+    if (function_type->t & (VT_FUNC_LREF | VT_FUNC_RREF))
+      member->ref_qualifier = function_type->t & VT_FUNC_RREF ? 2 : 1;
+    else if (function_type->ref->f.func_ref_qualifier)
+      member->ref_qualifier = function_type->ref->f.func_ref_qualifier;
     if (is_lowered && !is_static && member->function_prototype.next) {
       Sym *receiver = member->function_prototype.next;
       if ((receiver->type.t & VT_BTYPE) == VT_PTR)
@@ -62,8 +66,8 @@ static CppMemberDeclInfo *note_cpp_member_decl(int owner_tok, int source_name_to
     }
     if (function_type->ref->f.func_cpp_conversion) member->kind = 3;
   }
-  for (virtual_method = virtual_method_infos; virtual_method;
-       virtual_method = virtual_method->next)
+  for (virtual_method = virtual_method_mangled[(unsigned)function_tok & 1023];
+       virtual_method; virtual_method = virtual_method->mangled_next)
     if (virtual_method->class_tok == owner_tok
         && virtual_method->mangled_tok == function_tok) {
       member->is_virtual = 1;

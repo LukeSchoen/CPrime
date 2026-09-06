@@ -1571,11 +1571,162 @@ ST_FUNC void skip_to_eol(int warn)
 static CachedInclude *
 search_cached_include(CPRIMEState *s1, const char *filename, int add);
 
+/* A compilation observes a fixed include search tree. Enumerate a directory
+   once instead of asking the OS about each absent header in every -I path.
+   The cache is discarded with preprocessor state, including between inputs. */
+#ifdef _WIN32
+typedef struct IncludeDirectoryFile {
+  struct IncludeDirectoryFile *next;
+  char name[1];
+} IncludeDirectoryFile;
+typedef struct IncludeDirectory {
+  struct IncludeDirectory *next;
+  IncludeDirectoryFile *files[64];
+  int complete;
+  char path[1];
+} IncludeDirectory;
+static IncludeDirectory *include_directories[256];
+typedef struct IncludeSearch {
+  struct IncludeSearch *next;
+  char *name, *origin, *filename;
+  int start, index;
+} IncludeSearch;
+static IncludeSearch *include_searches[256];
+
+static unsigned include_path_hash(const char *name)
+{
+  unsigned h = TOK_HASH_INIT;
+  while (*name) h = TOK_HASH_FUNC(h, toup((unsigned char)*name++));
+  return h;
+}
+
+static void include_directory_add(IncludeDirectory *dir, const char *name)
+{
+  unsigned h = include_path_hash(name) & 63;
+  IncludeDirectoryFile *entry = cprime_malloc(sizeof(*entry) + strlen(name));
+  strcpy(entry->name, name);
+  entry->next = dir->files[h];
+  dir->files[h] = entry;
+}
+
+static IncludeSearch *include_search(const char *name, const char *origin, int start)
+{
+  unsigned h = (include_path_hash(name) + include_path_hash(origin) + start) & 255;
+  IncludeSearch *entry;
+  for (entry = include_searches[h]; entry; entry = entry->next)
+    if (entry->start == start && !PATHCMP(entry->name, name)
+        && !PATHCMP(entry->origin, origin)) return entry;
+  entry = cprime_mallocz(sizeof(*entry));
+  entry->name = cprime_strdup(name);
+  entry->origin = cprime_strdup(origin);
+  entry->start = start;
+  entry->next = include_searches[h];
+  include_searches[h] = entry;
+  return entry;
+}
+
+static void include_search_resolved(IncludeSearch *entry, const char *path, int index)
+{
+  if (!entry->filename) entry->filename = cprime_strdup(path);
+  entry->index = index;
+}
+
+static int include_candidate_may_exist(const char *filename)
+{
+  char path[1024], pattern[1024];
+  const char *name = cprime_basename(filename);
+  IncludeDirectory *dir;
+  IncludeDirectoryFile *entry;
+  unsigned h;
+  size_t len = name - filename;
+  size_t stem = strcspn(name, ".");
+  char device[9];
+  unsigned k;
+  if (stem < sizeof(device)) {
+    for (k = 0; k < stem; ++k) device[k] = toup((unsigned char)name[k]);
+    device[stem] = 0;
+    if (!strcmp(device, "NUL") || !strcmp(device, "CON")
+        || !strcmp(device, "PRN") || !strcmp(device, "AUX")
+        || !strcmp(device, "CONIN$") || !strcmp(device, "CONOUT$")
+        || (stem == 4 && device[3] >= '1' && device[3] <= '9'
+            && (!memcmp(device, "COM", 3) || !memcmp(device, "LPT", 3))))
+      return 1;
+  }
+  /* Preserve unusual Windows path spellings/device names through open(). */
+  if (!*name || !strcmp(name, "-") || strchr(name, ':') || strchr(name, '*') || strchr(name, '?')
+      || name[strlen(name)-1] == '.' || name[strlen(name)-1] == ' '
+      || len + 2 >= sizeof(path)) return 1;
+  memcpy(path, filename, len);
+  path[len] = 0;
+  h = include_path_hash(path) & 255;
+  for (dir = include_directories[h]; dir; dir = dir->next)
+    if (!PATHCMP(dir->path, path)) break;
+  if (!dir) {
+    WIN32_FIND_DATAA found;
+    HANDLE handle;
+    dir = cprime_mallocz(sizeof(*dir) + len);
+    strcpy(dir->path, path);
+    dir->next = include_directories[h];
+    include_directories[h] = dir;
+    strcpy(pattern, path);
+    strcat(pattern, "*");
+    handle = FindFirstFileA(pattern, &found);
+    if (handle == INVALID_HANDLE_VALUE) {
+      DWORD error = GetLastError();
+      dir->complete = error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND;
+    } else {
+      do {
+        include_directory_add(dir, found.cFileName);
+        if (found.cAlternateFileName[0])
+          include_directory_add(dir, found.cAlternateFileName);
+      } while (FindNextFileA(handle, &found));
+      dir->complete = GetLastError() == ERROR_NO_MORE_FILES;
+      FindClose(handle);
+    }
+  }
+  if (!dir->complete) return 1;
+  for (entry = dir->files[include_path_hash(name) & 63]; entry; entry = entry->next)
+    if (!PATHCMP(entry->name, name)) return 1;
+  return 0;
+}
+
+static void free_include_directories(void)
+{
+  int i, j;
+  for (i = 0; i < 256; ++i) {
+    IncludeDirectory *dir;
+    IncludeSearch *search;
+    while ((search = include_searches[i]) != NULL) {
+      include_searches[i] = search->next;
+      cprime_free(search->name);
+      cprime_free(search->origin);
+      cprime_free(search->filename);
+      cprime_free(search);
+    }
+    while ((dir = include_directories[i]) != NULL) {
+      include_directories[i] = dir->next;
+      for (j = 0; j < 64; ++j) {
+        IncludeDirectoryFile *entry;
+        while ((entry = dir->files[j]) != NULL) {
+          dir->files[j] = entry->next;
+          cprime_free(entry);
+        }
+      }
+      cprime_free(dir);
+    }
+  }
+}
+#endif
+
 static int parse_include(CPRIMEState *s1, int do_next, int test)
 {
   int c, i;
   char name[1024], buf[1024], *p;
   CachedInclude *e;
+#ifdef _WIN32
+  IncludeSearch *resolved;
+  char origin[1024];
+#endif
 
   c = skip_spaces();
   if (c == '<' || c == '\"')
@@ -1615,6 +1766,18 @@ static int parse_include(CPRIMEState *s1, int do_next, int test)
     skip_to_eol(1);
 
   i = do_next ? file->include_next_index : -1;
+#ifdef _WIN32
+  origin[0] = 0;
+  if (c == '"')
+    pstrncpy(origin, sizeof(origin), file->true_filename,
+             cprime_basename(file->true_filename) - file->true_filename);
+  resolved = include_search(name, origin, i);
+  if (resolved->filename) {
+    pstrcpy(buf, sizeof(buf), resolved->filename);
+    i = resolved->index;
+    goto resolved_include_candidate;
+  }
+#endif
   for (;;)
   {
     ++i;
@@ -1648,9 +1811,15 @@ static int parse_include(CPRIMEState *s1, int do_next, int test)
       pstrcat(buf, sizeof buf, "/");
     }
     pstrcat(buf, sizeof buf, name);
+#ifdef _WIN32
+resolved_include_candidate:
+#endif
     e = search_cached_include(s1, buf, 0);
     if (e && (define_find(e->ifndef_macro) || e->once))
     {
+#ifdef _WIN32
+      include_search_resolved(resolved, buf, i);
+#endif
       /* no need to parse the include because the 'ifndef macro'
          is defined (or had #pragma once) */
 #ifdef INC_DEBUG
@@ -1661,8 +1830,15 @@ static int parse_include(CPRIMEState *s1, int do_next, int test)
                (int)(s1->include_stack_ptr - s1->include_stack), "", buf);
       return 1;
     }
-    if (cprime_open(s1, buf) >= 0)
+#ifdef _WIN32
+    if (!include_candidate_may_exist(buf)) continue;
+#endif
+    if (cprime_open(s1, buf) >= 0) {
+#ifdef _WIN32
+      include_search_resolved(resolved, buf, i);
+#endif
       break;
+    }
   }
 
   if (test)
@@ -4352,6 +4528,10 @@ ST_FUNC void cprimepp_new(CPRIMEState *s)
 ST_FUNC void cprimepp_delete(CPRIMEState *s)
 {
   int i, n;
+
+#ifdef _WIN32
+  free_include_directories();
+#endif
 
   dynarray_reset(&s->cached_includes, &s->nb_cached_includes);
 

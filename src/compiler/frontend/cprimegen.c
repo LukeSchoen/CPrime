@@ -407,6 +407,7 @@ typedef struct TemplateDef
 typedef struct TemplateInstOwner
 {
   int inst_tok;
+  int inst_index;
   TemplateDef *owner;
   struct TemplateInstOwner *next;
 } TemplateInstOwner;
@@ -433,6 +434,12 @@ static int instantiate_template_if_needed(TemplateDef *td,
                                           TemplateArgList *args);
 static void compile_pending_template_specs_without_member_flush(void);
 
+enum TemplateMemberSyntax {
+  TMS_SCOPED, TMS_PARAM_COUNT, TMS_MIN_PARAM_COUNT, TMS_ARRAY_REF,
+  TMS_PARAM_TYPE, TMS_CONST, TMS_TYPE_PARAM, TMS_CALL_SPECIALIZED, TMS_STATIC,
+  TMS_VARIADIC, TMS_BODY, TMS_COUNT
+};
+
 typedef struct TemplateMemberDef
 {
   int class_tok;
@@ -442,6 +449,9 @@ typedef struct TemplateMemberDef
   unsigned char method_tok_known;
   unsigned char member_access;
   unsigned char member_access_known;
+  /* Pure syntax of def_str is immutable once the definition is published. */
+  unsigned syntax_known;
+  int syntax_cache[TMS_COUNT];
   int type_param_tok;
   int stripped_member_type_param_toks[16];
   int nb_stripped_member_type_params;
@@ -484,6 +494,7 @@ typedef struct TemplateAliasInst
   int class_tok;
   int alias_tok;
   int scoped_tok;
+  int alias_next, scoped_next;
 } TemplateAliasInst;
 
 typedef struct ClassBaseInfo
@@ -507,6 +518,7 @@ struct VirtualMethodInfo
   CType func_type;
   unsigned char is_pure;
   struct VirtualMethodInfo *next;
+  struct VirtualMethodInfo *mangled_next;
 };
 
 typedef struct VirtualTableInfo
@@ -626,6 +638,7 @@ static TemplateInstOwner *template_inst_owner_bucket_tails[TEMPLATE_LOOKUP_BUCKE
 static TemplateMemberDef **template_member_defs;
 static int nb_template_member_defs;
 static TemplateAliasInst *template_alias_insts;
+static int template_alias_buckets[4096], template_scoped_alias_buckets[4096];
 static int nb_template_alias_insts;
 static int al_template_alias_insts;
 static TokenString **pending_template_specs;
@@ -740,6 +753,7 @@ static int integral_constant_expression_wanted;
 static int last_instantiated_member_func_tok;
 static ClassBaseInfo *class_base_infos;
 static VirtualMethodInfo *virtual_method_infos;
+static VirtualMethodInfo *virtual_method_mangled[1024];
 static VirtualTableInfo *virtual_table_infos;
 
 static void queue_pending_template_spec_in_namespace(TokenString *str,
@@ -780,6 +794,8 @@ static int al_using_namespace_toks;
 typedef struct PendingMemberFunc
 {
   TokenString *str;
+  unsigned token_filter[8];
+  int token_filter_valid;
   int func_tok;
   int struct_tok;
   int is_template_member;
@@ -813,6 +829,9 @@ typedef struct MemberFuncOverload
   CType func_type;
   struct MemberFuncOverload *next;
   struct MemberFuncOverload *bucket_next;
+  struct MemberFuncOverload *mangled_next;
+  struct MemberFuncOverload *conversion_next;
+  int conversion_indexed;
 } MemberFuncOverload;
 
 typedef struct FreeFuncOverload
@@ -825,11 +844,17 @@ typedef struct FreeFuncOverload
   int is_member_template;
   CType func_type;
   struct FreeFuncOverload *next;
+  struct FreeFuncOverload *mangled_next;
+  struct FreeFuncOverload *name_next;
 } FreeFuncOverload;
 
 static MemberFuncOverload *member_func_overloads;
 #define MEMBER_CANDIDATE_BUCKETS 4096
 static MemberFuncOverload *member_func_overload_buckets[MEMBER_CANDIDATE_BUCKETS];
+static MemberFuncOverload *member_mangled_buckets[MEMBER_CANDIDATE_BUCKETS];
+static MemberFuncOverload *conversion_overloads;
+static FreeFuncOverload *free_mangled_buckets[MEMBER_CANDIDATE_BUCKETS];
+static FreeFuncOverload *free_name_buckets[MEMBER_CANDIDATE_BUCKETS];
 static TemplateMemberDef *template_member_buckets[MEMBER_CANDIDATE_BUCKETS];
 static TemplateMemberDef *template_member_bucket_tails[MEMBER_CANDIDATE_BUCKETS];
 static unsigned long long profile_template_calls;
@@ -838,11 +863,13 @@ static unsigned long long profile_template_member_scans;
 static unsigned long long profile_overload_scans;
 static unsigned long long profile_other_overload_scans[8];
 static int profile_scans_enabled;
+static int cpp_translation_unit = -1;
+typedef struct MemberNameCacheEntry {
+  int owner, member, is_const, result;
+} MemberNameCacheEntry;
+static MemberNameCacheEntry member_name_cache[8192];
 #define MATERIALIZED_MEMBER_BODY_BUCKETS 4096
 static int materialized_member_body_toks[MATERIALIZED_MEMBER_BODY_BUCKETS];
-#define OVERLOAD_TOKEN_BUCKETS 8192
-static int member_func_mangled_toks[OVERLOAD_TOKEN_BUCKETS];
-static int free_func_name_toks[OVERLOAD_TOKEN_BUCKETS];
 #define TEMPLATE_TYPE_CACHE_BUCKETS 2048
 typedef struct TemplateTypeCacheEntry
 {
@@ -866,50 +893,6 @@ static unsigned member_candidate_bucket(int struct_tok, int method_tok)
 static unsigned template_tok_bucket(int tok)
 {
   return ((unsigned)tok * 2654435761u) & (TEMPLATE_LOOKUP_BUCKETS - 1);
-}
-
-/* Return -1 only when a completely full set cannot prove absence.  Callers
-   retain their original list walk as an overflow fallback, keeping these
-   fixed, allocation-free indexes semantically transparent. */
-static int overload_tok_set_has(int *set, int tok)
-{
-  unsigned slot, start;
-
-  if (!tok)
-    return 0;
-  start = slot = ((unsigned)tok * 2654435761u)
-                 & (OVERLOAD_TOKEN_BUCKETS - 1);
-  do
-  {
-    int candidate = set[slot];
-    if (!candidate)
-      return 0;
-    if (candidate == tok)
-      return 1;
-    slot = (slot + 1) & (OVERLOAD_TOKEN_BUCKETS - 1);
-  }
-  while (slot != start);
-  return -1;
-}
-
-static void overload_tok_set_note(int *set, int tok)
-{
-  unsigned slot, start;
-
-  if (!tok)
-    return;
-  start = slot = ((unsigned)tok * 2654435761u)
-                 & (OVERLOAD_TOKEN_BUCKETS - 1);
-  do
-  {
-    if (!set[slot] || set[slot] == tok)
-    {
-      set[slot] = tok;
-      return;
-    }
-    slot = (slot + 1) & (OVERLOAD_TOKEN_BUCKETS - 1);
-  }
-  while (slot != start);
 }
 
 /* Template arguments require type identity.  Declaration compatibility may
@@ -1078,6 +1061,7 @@ static void index_template_inst_owner(TemplateDef *td, int inst_tok)
   unsigned bucket = template_tok_bucket(inst_tok);
   TemplateInstOwner *entry = cprime_mallocz(sizeof(*entry));
   entry->inst_tok = inst_tok;
+  entry->inst_index = td->nb_inst;
   entry->owner = td;
   if (template_inst_owner_bucket_tails[bucket])
     template_inst_owner_bucket_tails[bucket]->next = entry;
@@ -1108,6 +1092,24 @@ static void index_member_func_overload(MemberFuncOverload *o)
   unsigned bucket = member_candidate_bucket(o->struct_tok, o->method_tok);
   o->bucket_next = member_func_overload_buckets[bucket];
   member_func_overload_buckets[bucket] = o;
+  bucket = (unsigned)o->mangled_tok & (MEMBER_CANDIDATE_BUCKETS - 1);
+  o->mangled_next = member_mangled_buckets[bucket];
+  member_mangled_buckets[bucket] = o;
+}
+
+static void index_conversion_overload(MemberFuncOverload *o)
+{
+  if (!o->conversion_indexed && o->func_type.ref
+      && o->func_type.ref->f.func_cpp_conversion) {
+    o->conversion_indexed = 1;
+    o->conversion_next = conversion_overloads;
+    conversion_overloads = o;
+  }
+}
+
+static FreeFuncOverload *free_func_candidates(int name_tok)
+{
+  return free_name_buckets[(unsigned)name_tok & (MEMBER_CANDIDATE_BUCKETS - 1)];
 }
 
 static TemplateMemberDef *template_member_candidates(int class_tok,
@@ -1227,6 +1229,27 @@ static int tok_str_prev_token_index(const int *str, int len, int i)
   return prev;
 }
 
+/* A negative filter avoids walking unrelated saved bodies. Positive matches
+   still use the exact original token/declarator checks below. */
+static int pending_member_may_have_tok(PendingMemberFunc *pm, int tok)
+{
+  unsigned h = (unsigned)tok * 2654435761u;
+  unsigned a = h >> 24, b = (h >> 16) & 255;
+  int i;
+  if (!pm->token_filter_valid) {
+    memset(pm->token_filter, 0, sizeof(pm->token_filter));
+    for (i = 0; i < pm->str->len; ++i) {
+      unsigned v = (unsigned)pm->str->str[i] * 2654435761u;
+      unsigned x = v >> 24, y = (v >> 16) & 255;
+      pm->token_filter[x >> 5] |= 1u << (x & 31);
+      pm->token_filter[y >> 5] |= 1u << (y & 31);
+    }
+    pm->token_filter_valid = 1;
+  }
+  return (pm->token_filter[a >> 5] & (1u << (a & 31)))
+      && (pm->token_filter[b >> 5] & (1u << (b & 31)));
+}
+
 static int pending_member_func_has_tok(int func_tok)
 {
   int i, j;
@@ -1236,6 +1259,7 @@ static int pending_member_func_has_tok(int func_tok)
     PendingMemberFunc *pm = pending_member_funcs[i];
     if (!pm || !pm->str)
       continue;
+    if (!pending_member_may_have_tok(pm, func_tok)) continue;
     for (j = 0; j < pm->str->len; ++j)
       if (pm->str->str[j] == func_tok)
         return 1;
@@ -1267,6 +1291,7 @@ static int pending_member_func_has_body_tok(int func_tok)
     int paren = 0;
     if (!pm || !pm->str)
       continue;
+    if (!pending_member_may_have_tok(pm, func_tok)) continue;
     for (j = 0; j < pm->str->len; ++j)
     {
       int t = pm->str->str[j];
@@ -1304,6 +1329,8 @@ static void free_template_state(void)
   ClassBaseInfo *bi;
   VirtualMethodInfo *vm;
   VirtualTableInfo *vt;
+  cpp_translation_unit = -1;
+  memset(member_name_cache, 0, sizeof(member_name_cache));
   while (cpp_member_pointer_types)
   {
     CppMemberPointerType *next = cpp_member_pointer_types->next;
@@ -1466,6 +1493,8 @@ static void free_template_state(void)
   /* These bindings contain token IDs owned by this translation unit. */
   cprime_free(template_alias_insts);
   template_alias_insts = NULL;
+  memset(template_alias_buckets, 0, sizeof(template_alias_buckets));
+  memset(template_scoped_alias_buckets, 0, sizeof(template_scoped_alias_buckets));
   nb_template_alias_insts = al_template_alias_insts = 0;
 
   cprime_free(member_init_list_struct_toks);
@@ -1500,14 +1529,16 @@ static void free_template_state(void)
   }
   memset(member_func_overload_buckets, 0,
          sizeof(member_func_overload_buckets));
-  memset(member_func_mangled_toks, 0, sizeof(member_func_mangled_toks));
+  memset(member_mangled_buckets, 0, sizeof(member_mangled_buckets));
+  conversion_overloads = NULL;
   while (free_func_overloads)
   {
     fo = free_func_overloads;
     free_func_overloads = fo->next;
     cprime_free(fo);
   }
-  memset(free_func_name_toks, 0, sizeof(free_func_name_toks));
+  memset(free_name_buckets, 0, sizeof(free_name_buckets));
+  memset(free_mangled_buckets, 0, sizeof(free_mangled_buckets));
   memset(template_type_cache, 0, sizeof(template_type_cache));
   while (class_base_infos)
   {
@@ -1521,6 +1552,7 @@ static void free_template_state(void)
     virtual_method_infos = vm->next;
     cprime_free(vm);
   }
+  memset(virtual_method_mangled, 0, sizeof(virtual_method_mangled));
   while (virtual_table_infos)
   {
     vt = virtual_table_infos;
@@ -2203,8 +2235,10 @@ ST_INLN Sym *sym_find(int v)
   return table_ident[v]->sym_identifier;
 }
 
+static Sym *scoped_bindings;
+
 // Make Sym In-/Visible To The Parser
-static inline void sym_link(Sym *s, int yes)
+static void sym_link_scoped(Sym *s, int yes, int scope)
 {
   TokenSym *ts = table_ident[(s->v & ~SYM_STRUCT) - TOK_IDENT];
   Sym **ps;
@@ -2212,10 +2246,19 @@ static inline void sym_link(Sym *s, int yes)
     ps = &ts->sym_struct;
   else
     ps = &ts->sym_identifier;
+  if (s->scope_prev) s->scope_prev->scope_next = s->scope_next;
+  else if (scoped_bindings == s) scoped_bindings = s->scope_next;
+  if (s->scope_next) s->scope_next->scope_prev = s->scope_prev;
+  s->scope_prev = s->scope_next = NULL;
   if (yes)
   {
     s->prev_tok = *ps, *ps = s;
-    s->sym_scope = local_scope;
+    s->sym_scope = scope;
+    if (scope > 0) {
+      s->scope_next = scoped_bindings;
+      if (scoped_bindings) scoped_bindings->scope_prev = s;
+      scoped_bindings = s;
+    }
   }
   else
   {
@@ -2227,6 +2270,11 @@ static inline void sym_link(Sym *s, int yes)
     if (*ps == s)
       *ps = s->prev_tok;
   }
+}
+
+static inline void sym_link(Sym *s, int yes)
+{
+  sym_link_scoped(s, yes, local_scope);
 }
 
 static inline int sym_scope_ex(Sym *s)
@@ -2816,10 +2864,11 @@ static CType *find_overload_func_type_by_mangled(int mangled_tok)
   FreeFuncOverload *fo;
   MemberFuncOverload *mo;
 
-  for (fo = free_func_overloads; fo; fo = fo->next)
+  unsigned bucket = (unsigned)mangled_tok & (MEMBER_CANDIDATE_BUCKETS - 1);
+  for (fo = free_mangled_buckets[bucket]; fo; fo = fo->mangled_next)
     if (fo->mangled_tok == mangled_tok && fo->func_type.ref)
       return &fo->func_type;
-  for (mo = member_func_overloads; mo; mo = mo->next)
+  for (mo = member_mangled_buckets[bucket]; mo; mo = mo->mangled_next)
     if (mo->mangled_tok == mangled_tok && mo->func_type.ref)
       return &mo->func_type;
   return NULL;
@@ -2856,7 +2905,7 @@ static void sym_relink_stack(Sym **bindings, int count)
   {
     Sym *s = bindings[--count];
     int saved_scope = s->sym_scope;
-    sym_link(s, 1);
+    sym_link_scoped(s, 1, sym_scope_ex(s));
     s->sym_scope = saved_scope;
   }
   cprime_free(bindings);
@@ -2876,7 +2925,7 @@ static void sym_relink_local_types(Sym **bindings, int count)
     if (sym_is_local_type_binding(s))
     {
       int saved_scope = s->sym_scope;
-      sym_link(s, 1);
+      sym_link_scoped(s, 1, sym_scope_ex(s));
       s->sym_scope = saved_scope;
     }
   }
@@ -3112,6 +3161,7 @@ static Sym *sym_copy(Sym *s0, Sym **ps)
 {
   Sym *s;
   s = sym_malloc(), *s = *s0;
+  s->scope_prev = s->scope_next = NULL;
   s->prev = *ps, *ps = s;
   if ((s->v & ~SYM_STRUCT) < SYM_FIRST_ANOM)
     sym_link(s, 1);
@@ -6523,16 +6573,36 @@ static int make_joined_name_tok(int owner_tok, int member_tok,
   return result;
 }
 
+static int cached_member_name_tok(int struct_tok, int method_tok, int is_const)
+{
+  unsigned slot = ((unsigned)struct_tok * 2654435761u
+                    ^ ((unsigned)method_tok * 97u) ^ (unsigned)is_const) & 8191;
+  MemberNameCacheEntry *entry = &member_name_cache[slot];
+  if (entry->result && entry->owner == struct_tok
+      && entry->member == method_tok && entry->is_const == is_const)
+    return entry->result;
+  entry->owner = struct_tok;
+  entry->member = method_tok;
+  entry->is_const = is_const;
+  entry->result = make_joined_name_tok(struct_tok, method_tok, "_",
+                                       is_const ? "_const" : "");
+  return entry->result;
+}
+
 static int make_member_func_tok(int struct_tok, int method_tok)
 {
-  return make_joined_name_tok(struct_tok, method_tok, "_", "");
+  return cached_member_name_tok(struct_tok, method_tok, 0);
 }
 
 static int make_member_func_tok_with_cv(int struct_tok, int method_tok,
                                         int cv_qualifiers)
 {
-  return make_joined_name_tok(struct_tok, method_tok, "_",
-                              cv_qualifiers & VT_CONSTANT ? "_const" : "");
+  int name = cached_member_name_tok(struct_tok, method_tok,
+                                 (cv_qualifiers & VT_CONSTANT) != 0);
+  if (cv_qualifiers & (VT_FUNC_LREF | VT_FUNC_RREF))
+    name = make_joined_name_tok(name,
+      tok_alloc_const(cv_qualifiers & VT_FUNC_RREF ? "rref" : "lref"), "_", "");
+  return name;
 }
 
 static int make_static_member_tok(int struct_tok, int member_tok)
@@ -6705,17 +6775,9 @@ static int template_exact_ctype_typedef_tok(CType *type)
   type_tok = template_type_cache_lookup(&wanted);
   if (type_tok)
     return type_tok;
-  for (s = global_stack; s; s = s->prev)
-    if ((s->type.t & VT_TYPEDEF)
-        && global_symbol_find(s->v & ~SYM_FIELD) == s)
-    {
-      CType candidate = s->type;
-      candidate.t &= ~VT_TYPEDEF;
-      if (candidate.t == wanted.t
-          && template_types_identical(&candidate, &wanted))
-        return s->v & ~SYM_FIELD;
-    }
-
+  /* A canonical generated spelling represents the type itself. Searching
+     every retained symbol for an arbitrary user alias makes each new type
+     depend on the size of the translation unit and is unnecessary. */
   pstrcpy(name, sizeof(name), "__cpc_template_type");
   if (!append_type_mangle(name, sizeof(name), &wanted))
     snprintf(name, sizeof(name), "__cpc_template_type_%u",
@@ -8114,7 +8176,7 @@ static void qualify_saved_default_arg_current_class(TokenString **str)
       if (static_member
           && (static_member->r & VT_VALMASK) == VT_CONST)
       {
-        tok_str_add(qualified, make_static_member_tok(class_tok, t));
+        tok_str_add(qualified, static_member->v & ~SYM_FIELD);
         previous = t;
         continue;
       }
@@ -10753,6 +10815,23 @@ static void parse_btype_qualify(CType *type, int qualifiers)
   type->t |= qualifiers;
 }
 
+static Sym *find_inherited_class_alias(int class_tok, int member_tok)
+{
+  ClassBaseInfo *base;
+  int alias_tok = template_member_scoped_alias_tok(class_tok, member_tok);
+  Sym *alias;
+  if (!alias_tok) alias_tok = class_alias_storage_tok(class_tok, member_tok);
+  alias = alias_tok ? global_symbol_find(alias_tok) : NULL;
+  if (alias && (alias->type.t & VT_TYPEDEF)) return alias;
+  for (base = class_base_infos; base; base = base->next)
+    if (base->class_tok == class_tok)
+    {
+      alias = find_inherited_class_alias(base->base_tok, member_tok);
+      if (alias) return alias;
+    }
+  return NULL;
+}
+
 /* Parse the nested typedef in a template-id type such as Trait<T>::type.
    C++ does not require `typename` here when the template arguments are known
    and the template-id is therefore not dependent in the current context. */
@@ -10812,6 +10891,8 @@ static Sym *parse_template_nested_typedef(Sym *class_sym)
   }
   class_type.t = class_sym->type.t;
   class_type.ref = class_sym;
+  if (!field)
+    field = find_inherited_class_alias(class_tok, member_tok);
   if (!field)
     field = find_field_try(&class_type, member_tok, &dummy_offset);
   if (!field)
@@ -11984,6 +12065,8 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
     ad->f.func_type = l;
     if (is_cpp_translation_unit()) {
       function_cv = skip_member_func_cv_qualifiers();
+      ad->f.func_ref_qualifier = (function_cv & VT_FUNC_RREF) ? 2
+                                 : (function_cv & VT_FUNC_LREF) ? 1 : 0;
       function_noexcept = last_member_noexcept_spec;
       if (function_noexcept) {
         ad->f.func_noexcept_specified = 1;
@@ -13148,8 +13231,7 @@ tok_next:
         gen_cast(&cast_type);
       else
         vtop->type = cast_type;
-      if (!(cast_type.t & VT_RVALUE_REFERENCE))
-        maybe_indir_reference();
+      maybe_indir_call_result();
       vtop->r &= ~VT_CXX_PRVALUE;
     }
     else
@@ -13575,6 +13657,8 @@ str_init:
   case '~':
     next();
     unary();
+    if (try_call_cpp_unary_operator('~'))
+      break;
     vpushi(-1);
     gen_op('^');
     break;
@@ -16876,6 +16960,8 @@ static void note_virtual_method(CType *class_type, int method_tok,
   }
   vm->next = virtual_method_infos;
   virtual_method_infos = vm;
+  vm->mangled_next = virtual_method_mangled[(unsigned)mangled_tok & 1023];
+  virtual_method_mangled[(unsigned)mangled_tok & 1023] = vm;
 }
 
 static int virtual_vptr_offset(int class_tok, int root_tok)

@@ -1,0 +1,36 @@
+#ifndef _CPC_IOS
+#define _CPC_IOS
+#include <iosfwd>
+#include <stdio.h>
+namespace std {
+class ios_base {
+public:
+  typedef int iostate;
+  typedef int seekdir;
+  static const iostate goodbit = 0, eofbit = 1, failbit = 2, badbit = 4;
+  static const seekdir beg = SEEK_SET, cur = SEEK_CUR, end = SEEK_END;
+};
+template<class C, class Traits> class basic_ios : public ios_base {
+public:
+  typedef C char_type;
+  typedef Traits traits_type;
+  typedef streamoff pos_type;
+  typedef streamoff off_type;
+  bool good() const { return m_state == goodbit; }
+  bool eof() const { return (m_state & eofbit) != 0; }
+  bool fail() const { return (m_state & (failbit | badbit)) != 0; }
+  bool bad() const { return (m_state & badbit) != 0; }
+  explicit operator bool() const { return !fail(); }
+  bool operator!() const { return fail(); }
+  iostate rdstate() const { return m_state; }
+  void clear(iostate state = goodbit) { m_state = state; if(m_stream) clearerr(m_stream); }
+  void setstate(iostate state) { m_state |= state; }
+protected:
+  basic_ios(FILE* file) : m_stream(file), m_state(file ? goodbit : badbit) {}
+  FILE* m_stream;
+  iostate m_state;
+};
+typedef basic_ios<char> ios;
+typedef basic_ios<wchar_t> wios;
+}
+#endif
