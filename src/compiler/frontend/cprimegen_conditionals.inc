@@ -169,7 +169,8 @@ static int cpp_probe_conditional_arm(TokenString *arm, CType *type)
   begin_macro(&macro, 0); next(); gexpr();
   *type = vtop->type;
   result = (vtop->r & VT_THROW) ? 2
-      : ((vtop->r & VT_CXX_PRVALUE) && (type->t & VT_BTYPE) == VT_STRUCT);
+      : (type->t & VT_BTYPE) != VT_STRUCT ? 0
+      : (vtop->r & VT_CXX_PRVALUE) ? 1 : 3;
   while (macro_stack && macro_stack != parent) end_macro();
   macro_ptr = parent_ptr;
   vtop = saved_vtop; nocode_wanted = saved_nocode;
@@ -181,14 +182,26 @@ static int cpp_probe_conditional_arm(TokenString *arm, CType *type)
 }
 
 static void cpp_emit_conditional_arm(TokenString *arm, CType *type,
-                                      int storage, int address)
+                                      int storage, int address, int kind)
 {
   CppConstructionDestination destination, *saved = cpp_construction_destination;
-  TokenString macro = *arm, *parent = macro_stack;
+  TokenString macro, *construction = NULL, *parent = macro_stack;
   const int *parent_ptr = macro_ptr;
   int saved_tok = tok;
   int saved_nocode = nocode_wanted;
   CValue saved_tokc = tokc;
+  if (kind == 3)
+  {
+    /* A glvalue arm of a class-prvalue conditional initializes the result
+       object. Let ordinary constructor selection preserve its cv/category. */
+    construction = tok_str_alloc();
+    tok_str_add(construction, template_ctype_typedef_tok(type));
+    tok_str_add(construction, '(');
+    tok_str_append_without_eof(construction, arm);
+    tok_str_add(construction, ')');
+    tok_str_add(construction, TOK_EOF);
+  }
+  macro = construction ? *construction : *arm;
   destination.type = *type; destination.storage = storage;
   destination.address = address; destination.available = 1;
   destination.conditional_marker = cpp_prepare_conditional_destination(arm);
@@ -198,6 +211,7 @@ static void cpp_emit_conditional_arm(TokenString *arm, CType *type,
     cprime_internal_error("conditional prvalue did not consume construction destination");
   vpop();
   while (macro_stack && macro_stack != parent) end_macro();
+  if (construction) tok_str_free(construction);
   macro_ptr = parent_ptr;
   cpp_construction_destination = saved;
   nocode_wanted = saved_nocode;
@@ -212,6 +226,7 @@ static int cpp_try_conditional_prvalue(void)
   int address = 0, storage = VT_LOCAL | VT_LVAL, direct = 0;
   int size, align, r2 = VT_CONST, false_jump = 0, end_jump = 0, constant;
   int first_kind, second_kind;
+  int result_qualifiers;
   if (!is_cpp_translation_unit() || nocode_wanted) return 0;
   next();
   if (tok == ':') { unget_tok(tok); tok = question; return 0; }
@@ -228,10 +243,11 @@ static int cpp_try_conditional_prvalue(void)
   second_kind = first_kind ? cpp_probe_conditional_arm(no, &other) : 0;
   if (first_kind == 2 && second_kind == 1) type = other;
   if (!first_kind || !second_kind || (first_kind == 2 && second_kind == 2)
-      || (first_kind == 1 && second_kind == 1
+      || (first_kind != 1 && second_kind != 1)
+      || (first_kind != 2 && second_kind != 2
           && !is_compatible_unqualified_types(&type, &other))
-      || (first_kind != 2 && !saved_initializer_is_direct_constructor(yes, &type))
-      || (second_kind != 2 && !saved_initializer_is_direct_constructor(no, &type))) {
+      || (first_kind == 1 && !saved_initializer_is_direct_constructor(yes, &type))
+      || (second_kind == 1 && !saved_initializer_is_direct_constructor(no, &type))) {
     replay = tok_str_alloc(); tok_str_add(replay, question);
     tok_str_append_without_eof(replay, yes); tok_str_add(replay, ':');
     tok_str_append_without_eof(replay, no);
@@ -239,6 +255,9 @@ static int cpp_try_conditional_prvalue(void)
     restore_cpp_lifecycle_probe(replay);
     return 0;
   }
+  result_qualifiers = type.t & (VT_CONSTANT | VT_VOLATILE);
+  if (first_kind != 2 && second_kind != 2)
+    result_qualifiers |= other.t & (VT_CONSTANT | VT_VOLATILE);
   type.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE);
   if (cpp_construction_destination
       && cpp_construction_destination->conditional_marker == question) {
@@ -252,13 +271,14 @@ static int cpp_try_conditional_prvalue(void)
   if (!direct) address = get_temp_local_var(size, align, &r2);
   vset(&type, storage, address); vtop->r2 = r2;
   if (constant == 0) ++nocode_wanted;
-  cpp_emit_conditional_arm(yes, &type, storage, address);
+  cpp_emit_conditional_arm(yes, &type, storage, address, first_kind);
   if (constant == 0) --nocode_wanted;
   if (constant < 0) { end_jump = gjmp(0); gsym(false_jump); }
   if (constant == 1) ++nocode_wanted;
-  cpp_emit_conditional_arm(no, &type, storage, address);
+  cpp_emit_conditional_arm(no, &type, storage, address, second_kind);
   if (constant == 1) --nocode_wanted;
   gsym(end_jump);
+  vtop->type.t |= result_qualifiers;
   if (!direct) cpp_register_class_temporary(vtop);
   tok_str_free(yes); tok_str_free(no);
   return 1;

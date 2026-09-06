@@ -85,7 +85,7 @@ C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_char_literal_overloa
 C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_class_alias_inline_method.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_class_alias_inline_method.exe
 C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_const_member_definition.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_const_member_definition.exe
 C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_const_nonconst_receiver_preference.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_const_nonconst_receiver_preference.exe
-C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_const_value_receiver.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_const_value_receiver.exe
+C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_const_value_receiver.c -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_const_value_receiver.exe
 C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_declared_inline_defined_out_of_class_method.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_declared_inline_defined_out_of_class_method.exe
 C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_inline_const_char_pointer_return.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_inline_const_char_pointer_return.exe
 C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_inline_method_preserves_fields.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_inline_method_preserves_fields.exe
@@ -109,9 +109,9 @@ C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_static_member_class_
 C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_static_overloaded_member_functions.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_static_overloaded_member_functions.exe
 C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_struct_return_member_method.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_struct_return_member_method.exe
 C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_unqualified_member_call_in_out_of_class_method.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_unqualified_member_call_in_out_of_class_method.exe
-C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_value_receiver_multi_args.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_value_receiver_multi_args.exe
-C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_value_receiver_no_args.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_value_receiver_no_args.exe
-C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_value_receiver_with_args.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_value_receiver_with_args.exe
+C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_value_receiver_multi_args.c -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_value_receiver_multi_args.exe
+C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_value_receiver_no_args.c -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_value_receiver_no_args.exe
+C:/Luke/Src/CPrime/Tests/features/MemberFunctions/pass/test_value_receiver_with_args.c -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_value_receiver_with_args.exe
 C:/Luke/Src/CPrime/Tests/features/Namespaces/pass/test_basic_namespace.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_basic_namespace.exe
 C:/Luke/Src/CPrime/Tests/features/Namespaces/pass/test_namespace_type_lookup.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_namespace_type_lookup.exe
 C:/Luke/Src/CPrime/Tests/features/Namespaces/pass/test_nested_namespace.cpp -o C:/Luke/Src/CPrime/Tests/../Tests/batch/out/test_nested_namespace.exe

@@ -5,6 +5,7 @@
 #include "clStream.h"
 
 #include <stdlib.h>
+#include <stdio.h>
 #include <string.h>
 
 // Minimal runtime allocator stubs so the focused test links standalone.

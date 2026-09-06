@@ -215,15 +215,50 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
 
   dtype = *type;
   dtype.t &= ~VT_CONSTANT; // need to do that to avoid false warning
+  if (!is_reference_type(&dtype) && is_reference_type(&vtop->type))
+  {
+    int category = vtop->type.t & VT_RVALUE_REFERENCE;
+    decay_reference_type(&vtop->type);
+    indir();
+    vtop->type.t |= category;
+  }
+  if (p->scalar_direct_initialization && (dtype.t & VT_BTYPE) == VT_BOOL
+      && (vtop->type.t & VT_BTYPE) == VT_NULLPTR)
+    gen_cast(&dtype);
   if (is_reference_type(&dtype))
   {
     cpp_temp_extend_lifetime(vtop);
+    if (!sec && !is_reference_type(&vtop->type)
+        && !(vtop->r & VT_LVAL)
+        && !(vtop->type.t & (VT_ARRAY | VT_VLA))
+        && (vtop->type.t & VT_BTYPE) != VT_FUNC
+        && ((dtype.t & VT_RVALUE_REFERENCE)
+            || (pointed_type(&dtype)->t & VT_CONSTANT)))
+    {
+      CType storage_type = *pointed_type(&dtype);
+      SValue value;
+      int storage_size, storage_align, address;
+      storage_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+      gen_assign_cast(&storage_type);
+      storage_size = type_size(&storage_type, &storage_align);
+      loc = (loc - storage_size) & -storage_align;
+      address = loc;
+      value = *vtop--;
+      vset(&storage_type, VT_LOCAL | VT_LVAL, address);
+      vpushv(&value);
+      vstore(); vpop();
+      vset(&storage_type, VT_LOCAL | VT_LVAL, address);
+    }
     decay_reference_type(&dtype);
     if (is_reference_type(&vtop->type))
       decay_reference_type(&vtop->type);
     else
     {
-      test_lvalue();
+      /* Arrays/functions already carry their address rather than a scalar
+         load marker, just as in reference argument binding and unary &. */
+      if (!(vtop->type.t & (VT_ARRAY | VT_VLA))
+          && (vtop->type.t & VT_BTYPE) != VT_FUNC)
+        test_lvalue();
       mk_pointer(&vtop->type);
       gaddrof();
     }
@@ -382,6 +417,7 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
         // Intptr_T May Need A Reloc Too, See Tcctest.C:Relocation_Test()
         case VT_LLONG:
         case VT_PTR:
+        case VT_NULLPTR:
           if (vtop->r & VT_SYM)
             greloca(sec, vtop->sym, c, R_DATA_PTR, val);
           else
@@ -395,6 +431,7 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
           write64le(ptr, val);
           break;
         case VT_PTR:
+        case VT_NULLPTR:
         case VT_INT:
           if (vtop->r & VT_SYM)
             greloc(sec, vtop->sym, c, R_DATA_PTR);
@@ -487,6 +524,13 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
               && (cpp_saved_arm_is_throw(no)
                    || saved_initializer_is_direct_constructor(no, type));
     tok_str_free(yes); tok_str_free(no);
+    if (!result)
+    {
+      CType conditional_type;
+      int prvalue = 0;
+      infer_saved_arg_type_and_category(expression, &conditional_type, &prvalue);
+      result = prvalue && is_compatible_unqualified_types(type, &conditional_type);
+    }
     return result;
   }
   int first = tok_str_next_non_linenum_index(expression->str, expression->len, 0);
@@ -719,6 +763,119 @@ static void emit_placement_aggregate_initializer(CType *type, TokenString *place
   tok = saved_tok; tokc = saved_tokc;
 }
 
+static int initialize_class_constructor_list(init_params *p, CType *type,
+                                               unsigned long address, int flags)
+{
+  TokenString *initializer, **arguments;
+  CType actual[32], target = *type;
+  MemberFuncOverload *candidate;
+  Sym *constructor = NULL;
+  int count, i, best_rank = 0x7fffffff, ambiguous = 0;
+  int class_tok = get_struct_type_name_tok(type), is_list = 0, implicit_copy = 0;
+  if (tok != '{' || p->sec || (flags & DIF_SIZE_ONLY)
+      || !is_cpp_translation_unit() || !type->ref
+      || !type->ref->a.cpp_user_constructor || type_is_std_initializer_list(type))
+    return 0;
+  target.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  skip_or_save_block(&initializer);
+  count = split_saved_array_initializer(initializer, &arguments);
+  if (count > 32) cprime_error("too many constructor arguments");
+  if (count) {
+    constructor = resolve_initializer_list_constructor(&target);
+    if (constructor) {
+      Sym *parameter = constructor->type.ref->next;
+      if (parameter) parameter = parameter->next;
+      if (!parameter || saved_list_argument_rank(&parameter->type, initializer) < 0)
+        constructor = NULL;
+      else is_list = 1;
+    }
+  }
+  if (!constructor) {
+    infer_saved_arg_types(arguments, actual, count);
+    if (count == 1 && !saved_arg_is_braced(arguments[0])) {
+      CType source = actual[0];
+      if (is_reference_type(&source)) source = *pointed_type(&source);
+      source.t &= ~VT_RVALUE_REFERENCE;
+      if (is_compatible_unqualified_types(&target, &source)) {
+        constructor = resolve_copy_constructor_func(&target, &actual[0]);
+        implicit_copy = !constructor;
+      }
+    }
+    if (!implicit_copy)
+      instantiate_template_member_for_call(&target, TOK_CONSTRUCTOR1, actual, count);
+    for (candidate = implicit_copy ? NULL : member_func_candidates(class_tok, TOK_CONSTRUCTOR1);
+         candidate; candidate = candidate->bucket_next) {
+      Sym *function, *parameter;
+      int rank = 0;
+      if (candidate->struct_tok != class_tok
+          || candidate->method_tok != TOK_CONSTRUCTOR1
+          || count < candidate->min_arg_count || count > candidate->explicit_arg_count)
+        continue;
+      function = find_global_symbol(candidate->mangled_tok);
+      if (!function || !function->type.ref) continue;
+      use_overload_func_type(function, &candidate->func_type);
+      parameter = function->type.ref->next;
+      if (parameter) parameter = parameter->next;
+      for (i = 0; i < count && parameter; ++i, parameter = parameter->next) {
+        int conversion = saved_arg_is_braced(arguments[i])
+          ? saved_list_argument_rank(&parameter->type, arguments[i])
+          : call_arg_match_rank(&parameter->type, &actual[i]);
+        if (conversion < 0) break;
+        rank += conversion;
+      }
+      if (i != count) continue;
+      if (rank > best_rank) continue;
+      if (rank == best_rank && constructor && constructor != function) {
+        int order = compare_member_function_template_order(function->v, constructor->v);
+        if (order < 0) continue;
+        if (!order) { ambiguous = 1; continue; }
+      }
+      constructor = function; best_rank = rank; ambiguous = 0;
+    }
+  }
+  if (!constructor && !implicit_copy && !count) {
+    constructor = resolve_initializer_list_constructor(&target);
+    is_list = constructor != NULL;
+  }
+  if (ambiguous || (!constructor && !implicit_copy)
+      || (constructor && p->copy_list_initialization
+          && constructor->type.ref->f.func_cpp_explicit)) {
+    free_saved_array_elements(arguments, count);
+    tok_str_free(initializer);
+    if (ambiguous) cprime_error("ambiguous constructor in list-initialization");
+    if (!constructor) cprime_error("no matching constructor in list-initialization");
+    cprime_error("copy-list-initialization selects an explicit constructor");
+  }
+  if (!nocode_wanted && implicit_copy) {
+    TokenString replay = *arguments[0], *parent = macro_stack;
+    const int *parent_ptr = macro_ptr;
+    int saved_tok = tok;
+    CValue saved_tokc = tokc;
+    begin_macro(&replay, 0); next();
+    parse_init_elem(EXPR_ANY);
+    init_putv(p, &target, address);
+    while (macro_stack && macro_stack != parent) end_macro();
+    macro_ptr = parent_ptr; tok = saved_tok; tokc = saved_tokc;
+  } else if (!nocode_wanted) {
+    int storage = VT_LOCAL | VT_LVAL, location = address;
+    if (p->indirect_base) {
+      init_push_lvalue(p, &target, address);
+      mk_pointer(&vtop->type); gaddrof();
+      vtop->type = char_pointer_type;
+      loc = (loc - PTR_SIZE) & -PTR_SIZE;
+      location = loc;
+      vset(&char_pointer_type, VT_LOCAL | VT_LVAL, location);
+      vswap(); vstore(); vpop();
+      storage = VT_LLOCAL | VT_LVAL;
+    }
+    emit_lifecycle_constructor_selected(&target, storage, location, VT_CONST, NULL,
+        constructor, is_list ? &initializer : arguments, is_list ? 1 : count);
+  }
+  free_saved_array_elements(arguments, count);
+  tok_str_free(initializer);
+  return 1;
+}
+
 /* 't' contains the type and storage info. 'c' is the offset of the
    object in section 'sec'. If 'sec' is NULL, it means stack based
    allocation. 'flags & DIF_FIRST' is true if array '{' must be read (multi
@@ -927,6 +1084,22 @@ do_init_list:
         skip(',');
       }
     }
+    if ((type->t & VT_ARRAY) && !p->sec && !(flags & DIF_SIZE_ONLY)
+        && is_cpp_translation_unit()
+        && ((t1->t & VT_BTYPE) == VT_STRUCT || (t1->t & VT_ARRAY)))
+    {
+      /* Omitted class/array elements are value-initialized, including their
+         constructors. Zeroing the backing bytes does not start those lifetimes. */
+      for (i = indexsym.c; i < n; ++i)
+      {
+        TokenString *empty = tok_str_alloc();
+        tok_str_add(empty, '{'); tok_str_add(empty, '}');
+        tok_str_add(empty, tok);
+        tok_str_add(empty, 0);
+        begin_macro(empty, 1); next();
+        decl_initializer(p, t1, c + i * size1, DIF_FIRST | DIF_CLEAR);
+      }
+    }
     if (!no_oblock)
       skip('}');
 
@@ -979,12 +1152,21 @@ do_init_list:
            && tok == '{')
   {
     Sym *field;
-    TokenString *elements[32];
+    TokenString **elements, *initializer = NULL;
     CType *element_type;
+    CType backing_type;
+    Sym *backing_symbol = NULL;
+    int *static_element_addresses = NULL;
+    int static_backing = p->extend_backing_array_lifetime == 2;
+    int element_storage_kind = static_backing ? VT_LLOCAL | VT_LVAL : VT_LOCAL | VT_LVAL;
     int element_size, element_align, element_addr = 0, element_r2 = 0;
     int i;
 
-    len = count_saved_braced_ctor_args(elements, 32);
+    /* List elements are not function arguments: their number is unbounded,
+       and a final comma does not introduce an empty element. */
+    skip_or_save_block(&initializer);
+    len = split_saved_array_initializer(initializer, &elements);
+    tok_str_free(initializer);
     if (!(flags & DIF_SIZE_ONLY))
     {
       field = type->ref->next;
@@ -998,18 +1180,88 @@ do_init_list:
       {
         init_params element_init = {0};
         SValue *element_storage;
-        element_addr = get_temp_local_var(element_size * len, element_align,
-                                          &element_r2);
-        element_init.local_offset = element_addr + element_size * len;
+        if (static_backing)
+        {
+          char backing_name[64];
+          int size = element_size * len;
+          int offset = section_add(bss_section, size, element_align);
+          backing_type.t = VT_PTR | VT_ARRAY | VT_STATIC;
+          backing_type.ref = sym_push2(&global_stack, SYM_FIELD, element_type->t, len);
+          backing_type.ref->type.ref = element_type->ref;
+          snprintf(backing_name, sizeof(backing_name), "__cpc_list_backing_%u", anon_sym++);
+          backing_symbol = external_global_sym(tok_alloc_const(backing_name), &backing_type);
+          backing_symbol->type.t = backing_type.t;
+          put_extern_sym(backing_symbol, bss_section, offset, size);
+          loc = (loc - PTR_SIZE) & -PTR_SIZE;
+          element_addr = loc;
+          element_r2 = VT_CONST;
+          vset(&char_pointer_type, VT_LOCAL | VT_LVAL, element_addr);
+          vpushsym(&backing_type, backing_symbol);
+          vtop->r |= VT_LVAL;
+          mk_pointer(&vtop->type); gaddrof();
+          vtop->type = char_pointer_type;
+          vstore(); vpop();
+          element_init.indirect_base = element_addr;
+          static_element_addresses = cprime_malloc(len * sizeof(int));
+        }
+        else if (p->extend_backing_array_lifetime)
+        {
+          loc = (loc - element_size * len) & -element_align;
+          element_addr = loc;
+          element_r2 = VT_CONST;
+        }
+        else
+          element_addr = get_temp_local_var(element_size * len, element_align,
+                                            &element_r2);
+        element_init.local_offset = (static_backing ? 0 : element_addr) + element_size * len;
+        if (!p->extend_backing_array_lifetime)
+          cpp_temp_reserve_storage(element_addr, element_size * len, element_r2);
         /* Keep the complete backing allocation live while each element is
            materialized.  Struct element expressions can allocate their own
            temporaries; without this marker the temp allocator reuses and
            overwrites the initializer_list's first slot. */
-        vset(element_type, VT_LOCAL | VT_LVAL, element_addr);
+        vset(element_type, element_storage_kind, element_addr);
         vtop->r2 = element_r2;
         element_storage = vtop;
         for (i = 0; i < len; ++i)
         {
+          int element_offset = (static_backing ? 0 : element_addr) + i * element_size;
+          int address = element_offset;
+          if (static_backing)
+          {
+            init_push_lvalue(&element_init, element_type, element_offset);
+            mk_pointer(&vtop->type); gaddrof();
+            vtop->type = char_pointer_type;
+            loc = (loc - PTR_SIZE) & -PTR_SIZE;
+            address = loc;
+            vset(&char_pointer_type, VT_LOCAL | VT_LVAL, address);
+            vswap(); vstore(); vpop();
+            static_element_addresses[i] = address;
+          }
+          if ((element_type->t & VT_BTYPE) == VT_STRUCT
+              && type_requires_class_construction(element_type))
+          {
+            /* Each backing-array element is copy-initialized from its
+               clause, including ordinary converting constructors. */
+            if (saved_initializer_is_direct_constructor(elements[i], element_type))
+            {
+              element_init.elided_value = emit_class_initializer_expression_at(
+                  elements[i], element_type, address, element_storage_kind);
+              init_putv(&element_init, element_type, element_offset);
+            }
+            else
+              call_lifecycle_constructor_saved_args_ex(element_type,
+                  element_storage_kind, address, element_r2, NULL,
+                  resolve_lifecycle_func(element_type, TOK_CONSTRUCTOR1),
+                  &elements[i], 1, saved_arg_is_braced(elements[i]) ? 2 : 1);
+            vset(element_type, element_storage_kind, address);
+            vtop->r2 = VT_CONST;
+            cpp_register_class_temporary(vtop);
+            if (p->extend_backing_array_lifetime)
+              cpp_temp_extend_lifetime(vtop);
+            vpop();
+            continue;
+          }
           TokenString macro = *elements[i];
           int saved_tok = tok;
           CValue saved_tokc = tokc;
@@ -1018,7 +1270,7 @@ do_init_list:
           begin_macro(&macro, 0);
           next();
           decl_initializer(&element_init, element_type,
-                           element_addr + i * element_size, DIF_FIRST);
+                           element_offset, DIF_FIRST);
           while (macro_stack && macro_stack != saved_macro_stack)
             end_macro();
           macro_ptr = saved_macro_ptr;
@@ -1027,9 +1279,35 @@ do_init_list:
           if (vtop != element_storage)
             cprime_internal_error(
               "unbalanced initializer_list element initializer");
+          if ((element_type->t & VT_BTYPE) == VT_STRUCT)
+          {
+            vset(element_type, element_storage_kind, address);
+            cpp_register_class_temporary(vtop);
+            if (p->extend_backing_array_lifetime)
+              cpp_temp_extend_lifetime(vtop);
+            vpop();
+          }
         }
         mk_pointer(&vtop->type);
         gaddrof();
+        if (static_backing)
+        {
+          TokenString *registration = tok_str_alloc();
+          TokenString *parent = macro_stack;
+          const int *parent_ptr = macro_ptr;
+          int saved_tok = tok;
+          CValue saved_tokc = tokc;
+          tok_str_add(registration, '{');
+          append_static_destructor_registration(registration, backing_symbol->v, &backing_type);
+          tok_str_add(registration, '}');
+          tok_str_add(registration, TOK_EOF);
+          begin_macro(registration, 1); next(); block(STMT_COMPOUND);
+          while (macro_stack && macro_stack != parent) end_macro();
+          macro_ptr = parent_ptr; tok = saved_tok; tokc = saved_tokc;
+          for (i = 0; i < len; ++i)
+            cpp_temp_commit_static_object(element_storage_kind, static_element_addresses[i]);
+          cprime_free(static_element_addresses);
+        }
       }
       else
         vpushi(0);
@@ -1040,11 +1318,11 @@ do_init_list:
       vpushi(len);
       init_putv(p, &field->type, c + field->c);
     }
-    for (i = 0; i < len; ++i)
-      tok_str_free(elements[i]);
+    free_saved_array_elements(elements, len);
   }
   else if ((type->t & VT_BTYPE) == VT_STRUCT)
   {
+    if (initialize_class_constructor_list(p, type, c, flags)) return;
     no_oblock = 1;
     if ((flags & DIF_FIRST) || tok == '{')
     {
@@ -1063,7 +1341,18 @@ do_init_list:
     if (flags & DIF_HAVE_ELEM)
       skip(';');
     next();
-    decl_initializer(p, type, c, flags & ~DIF_HAVE_ELEM);
+    if (is_cpp_translation_unit() && tok == '}')
+    {
+      if (is_reference_type(type))
+        cprime_error("reference requires an initializer");
+      if (!(flags & DIF_SIZE_ONLY))
+      {
+        vset(type, VT_CONST, 0);
+        init_putv(p, type, c);
+      }
+    }
+    else
+      decl_initializer(p, type, c, flags & ~DIF_HAVE_ELEM);
     skip('}');
 
   }
@@ -1185,7 +1474,7 @@ static void emit_automatic_class_array_initialization(Sym *symbol,
    is done to handle string constants. */
 static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
                                    int has_init, int has_ctor_init,
-                                   TokenString *copy_ctor_init, int v, int decl_scope)
+                                   TokenString *copy_ctor_init, int v, int decl_scope, int direct_init)
 {
   int size, align, addr;
   TokenString *init_str = NULL;
@@ -1203,6 +1492,9 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
   int bcheck = cprime_state->do_bounds_check && !NODATA_WANTED;
 #endif
   init_params p = {0};
+  p.extend_backing_array_lifetime = v && (r & VT_VALMASK) == VT_LOCAL;
+  p.scalar_direct_initialization = direct_init
+      && (type->t & VT_BTYPE) == VT_BOOL;
   initialize_class_array = is_cpp_translation_unit() && v
       && (r & VT_VALMASK) == VT_LOCAL && (type->t & VT_ARRAY)
       && !(type->t & VT_VLA)
@@ -1543,7 +1835,9 @@ err_size:
       flexible_array->type.ref->c = -1;
   }
 
-  if ((r & VT_VALMASK) == VT_LOCAL && sym && !NODATA_WANTED && !(type->t & VT_VLA))
+  /* Unreachable statements still require constructor argument parsing and
+     overload checking; the backend suppresses their generated code. */
+  if ((r & VT_VALMASK) == VT_LOCAL && sym && !(type->t & VT_VLA))
   {
     if (has_ctor_init)
       ctor_func = resolve_lifecycle_func(type, TOK_CONSTRUCTOR1);

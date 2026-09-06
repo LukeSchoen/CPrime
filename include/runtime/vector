@@ -3,7 +3,9 @@
 
 #include <stddef.h>
 #include <stdlib.h>
-#include <string.h>
+#include <new>
+#include <type_traits>
+#include <utility>
 
 namespace std
 {
@@ -18,158 +20,224 @@ namespace std
 
     vector() : m_data(0), m_size(0), m_capacity(0) {}
 
-    explicit vector(size_t count) : m_data(0), m_size(0), m_capacity(0)
+    explicit vector(size_t count) : vector() { resize(count); }
+    vector(size_t count, const T &value) : vector() { resize(count, value); }
+
+    template<class InputIterator,
+      class = typename enable_if<!is_integral<InputIterator>::value>::type>
+    vector(InputIterator first, InputIterator last) : vector()
     {
-      resize_default(count);
+      for (; first != last; ++first)
+        push_back(*first);
     }
 
-    vector(size_t count, const T &value)
-      : m_data(0), m_size(0), m_capacity(0)
+    vector(const vector &other) : vector()
     {
-      size_t i;
-      this->reserve(count);
-      for (i = 0; i < count; i = i + 1)
-        this->m_data[i] = value;
-      this->m_size = count;
+      reserve(other.m_size);
+      for (size_t i = 0; i < other.m_size; ++i)
+        push_back(other.m_data[i]);
     }
 
-    vector(const vector &other) : m_data(0), m_size(0), m_capacity(0)
+    vector(vector &&other) noexcept
+      : m_data(other.m_data), m_size(other.m_size), m_capacity(other.m_capacity)
     {
-      size_t i;
-      this->reserve(other.m_size);
-      for (i = 0; i < other.m_size; i = i + 1)
-        this->m_data[i] = other.m_data[i];
-      this->m_size = other.m_size;
+      other.m_data = 0;
+      other.m_size = other.m_capacity = 0;
     }
 
-    ~vector()
-    {
-      this->clear();
-      free(this->m_data);
-    }
+    ~vector() { clear(); free(m_data); }
 
     vector &operator=(const vector &other)
     {
-      size_t i;
       if (this != &other)
       {
-        this->clear();
-        this->reserve(other.m_size);
-        for (i = 0; i < other.m_size; i = i + 1)
-          this->m_data[i] = other.m_data[i];
-        this->m_size = other.m_size;
+        vector copy(other);
+        swap(copy);
       }
       return *this;
     }
 
-    T &operator[](size_t index) { return this->m_data[index]; }
-    const T &operator[](size_t index) const { return this->m_data[index]; }
-    T *data() { return this->m_data; }
-    const T *data() const { return this->m_data; }
-    T *begin() { return this->m_data; }
-    const T *begin() const { return this->m_data; }
-    T *end() { return this->m_data + this->m_size; }
-    const T *end() const { return this->m_data + this->m_size; }
-    size_t size() const { return this->m_size; }
-    bool empty() const { return this->m_size == 0; }
-
-    T &front() { return this->m_data[0]; }
-    const T &front() const { return this->m_data[0]; }
-    T &back() { return this->m_data[this->m_size - 1]; }
-    const T &back() const { return this->m_data[this->m_size - 1]; }
-
-    void clear()
+    vector &operator=(vector &&other) noexcept
     {
-      size_t i;
-      for (i = 0; i < this->m_size; i = i + 1)
-        this->m_data[i].~T();
-      this->m_size = 0;
+      if (this != &other)
+      {
+        clear();
+        free(m_data);
+        m_data = other.m_data;
+        m_size = other.m_size;
+        m_capacity = other.m_capacity;
+        other.m_data = 0;
+        other.m_size = other.m_capacity = 0;
+      }
+      return *this;
+    }
+
+    void swap(vector &other) noexcept
+    {
+      T *data = m_data; m_data = other.m_data; other.m_data = data;
+      size_t size = m_size; m_size = other.m_size; other.m_size = size;
+      size_t capacity = m_capacity; m_capacity = other.m_capacity;
+      other.m_capacity = capacity;
+    }
+
+    T &operator[](size_t index) { return m_data[index]; }
+    const T &operator[](size_t index) const { return m_data[index]; }
+    T *data() { return m_data; }
+    const T *data() const { return m_data; }
+    iterator begin() { return m_data; }
+    const_iterator begin() const { return m_data; }
+    const_iterator cbegin() const { return m_data; }
+    iterator end() { return m_data ? m_data + m_size : m_data; }
+    const_iterator end() const { return m_data ? m_data + m_size : m_data; }
+    const_iterator cend() const { return m_data ? m_data + m_size : m_data; }
+    size_t size() const { return m_size; }
+    size_t capacity() const { return m_capacity; }
+    bool empty() const { return m_size == 0; }
+    T &front() { return m_data[0]; }
+    const T &front() const { return m_data[0]; }
+    T &back() { return m_data[m_size - 1]; }
+    const T &back() const { return m_data[m_size - 1]; }
+
+    void clear() noexcept
+    {
+      while (m_size)
+        m_data[--m_size].~T();
     }
 
     void reserve(size_t capacity)
     {
-      T *next;
-      size_t i;
-      if (capacity <= this->m_capacity)
+      if (capacity <= m_capacity)
         return;
-      next = (T *)malloc(capacity * sizeof(T));
-      memset(next, 0, capacity * sizeof(T));
-      for (i = 0; i < this->m_size; i = i + 1)
+      T *next = allocate(capacity);
+      size_t constructed = 0;
+      try
       {
-        next[i] = this->m_data[i];
-        this->m_data[i].~T();
+        for (; constructed < m_size; ++constructed)
+          new (next + constructed) T(m_data[constructed]);
       }
-      free(this->m_data);
-      this->m_data = next;
-      this->m_capacity = capacity;
+      catch (...)
+      {
+        while (constructed)
+          next[--constructed].~T();
+        free(next);
+        throw;
+      }
+      size_t size = m_size;
+      clear();
+      free(m_data);
+      m_data = next;
+      m_size = size;
+      m_capacity = capacity;
     }
 
-    void push_back(const T &value)
+    void push_back(const T &value) { emplace_back(value); }
+    void push_back(T &&value) { emplace_back(std::move(value)); }
+
+    template<class... Args>
+    T &emplace_back(Args &&...args)
     {
-      if (this->m_size == this->m_capacity)
-        this->reserve(this->m_capacity ? this->m_capacity * 2 : 4);
-      this->m_data[this->m_size] = value;
-      this->m_size = this->m_size + 1;
+      if (m_size == m_capacity)
+      {
+        size_t capacity = m_capacity ? m_capacity * 2 : 4;
+        if (capacity < m_capacity)
+          throw bad_alloc();
+        T *next = allocate(capacity);
+        size_t constructed = 0;
+        // Construct the inserted value before relocating an aliased argument.
+        bool inserted = false;
+        try
+        {
+          new (next + m_size) T(std::forward<Args>(args)...);
+          inserted = true;
+          for (; constructed < m_size; ++constructed)
+            new (next + constructed) T(m_data[constructed]);
+        }
+        catch (...)
+        {
+          while (constructed)
+            next[--constructed].~T();
+          if (inserted) next[m_size].~T();
+          free(next);
+          throw;
+        }
+        size_t size = m_size;
+        clear();
+        free(m_data);
+        m_data = next;
+        m_size = size;
+        m_capacity = capacity;
+      }
+      else
+        new (m_data + m_size) T(std::forward<Args>(args)...);
+      return m_data[m_size++];
     }
 
-    void pop_back()
-    {
-      if (this->m_size)
-      {
-        this->m_size = this->m_size - 1;
-        this->m_data[this->m_size].~T();
-      }
-    }
+    void pop_back() { if (m_size) m_data[--m_size].~T(); }
 
     void resize(size_t count)
     {
-      size_t i;
-      if (count < this->m_size)
+      if (count < m_size)
       {
-        for (i = count; i < this->m_size; ++i)
-          this->m_data[i].~T();
+        while (m_size > count) pop_back();
+        return;
       }
-      else if (count > this->m_size)
+      reserve(count);
+      size_t old_size = m_size;
+      try
       {
-        this->reserve(count);
-        for (i = this->m_size; i < count; ++i)
-          this->m_data[i] = T();
+        while (m_size < count)
+        {
+          new (m_data + m_size) T();
+          ++m_size;
+        }
       }
-      this->m_size = count;
+      catch (...)
+      {
+        while (m_size > old_size) pop_back();
+        throw;
+      }
     }
 
     void resize(size_t count, const T &value)
     {
-      size_t old_size = this->m_size;
-      this->resize(count);
-      for (size_t i = old_size; i < count; ++i)
-        this->m_data[i] = value;
+      if (count <= m_size)
+      {
+        while (m_size > count) pop_back();
+        return;
+      }
+      T stable_value(value);
+      reserve(count);
+      size_t old_size = m_size;
+      try
+      {
+        while (m_size < count)
+        {
+          new (m_data + m_size) T(stable_value);
+          ++m_size;
+        }
+      }
+      catch (...)
+      {
+        while (m_size > old_size) pop_back();
+        throw;
+      }
     }
 
     void assign(size_t count, const T &value)
     {
-      this->clear();
-      this->resize(count, value);
-    }
-
-    template<class First, class Second>
-    void emplace_back(First first, Second second)
-    {
-      if (this->m_size == this->m_capacity)
-        this->reserve(this->m_capacity ? this->m_capacity * 2 : 4);
-      this->m_data[this->m_size] = T(first, second);
-      this->m_size = this->m_size + 1;
+      vector replacement(count, value);
+      swap(replacement);
     }
 
   private:
-    void resize_default(size_t count)
+    static T *allocate(size_t count)
     {
-      size_t i;
-      this->reserve(count);
-      for (i = 0; i < count; i = i + 1)
-      {
-      }
-      this->m_size = count;
+      if (count > (size_t)-1 / sizeof(T))
+        throw bad_alloc();
+      T *data = (T *)malloc(count * sizeof(T));
+      if (!data)
+        throw bad_alloc();
+      return data;
     }
 
     T *m_data;

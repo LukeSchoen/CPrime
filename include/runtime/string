@@ -13,6 +13,8 @@ namespace std
   class wstring
   {
   public:
+    typedef wchar_t *iterator;
+    typedef const wchar_t *const_iterator;
     static const size_t npos = (size_t)-1;
 
     wstring() : m_data(0), m_len(0) {}
@@ -28,7 +30,7 @@ namespace std
         m_len = count;
       }
     }
-    explicit wstring(const wchar_t *text) : m_data(0), m_len(0)
+    wstring(const wchar_t *text) : m_data(0), m_len(0)
     {
       if (text)
         assign(text, wcslen(text));
@@ -50,6 +52,12 @@ namespace std
     size_t size() const { return m_len; }
     bool empty() const { return m_len == 0; }
     wchar_t *data() { return m_data; }
+    iterator begin() { return m_data; }
+    const_iterator begin() const { return m_data; }
+    const_iterator cbegin() const { return m_data; }
+    iterator end() { return m_data ? m_data + m_len : m_data; }
+    const_iterator end() const { return m_data ? m_data + m_len : m_data; }
+    const_iterator cend() const { return m_data ? m_data + m_len : m_data; }
     const wchar_t *data() const { return c_str(); }
     size_t find_first_of(wchar_t ch, size_t pos = 0) const
     {
@@ -96,6 +104,8 @@ namespace std
   class string
   {
   public:
+    typedef char *iterator;
+    typedef const char *const_iterator;
     static const size_t npos = (size_t)-1;
 
     string() : m_data(0), m_len(0) {}
@@ -111,7 +121,7 @@ namespace std
         m_len = count;
       }
     }
-    explicit string(const char *text) : m_data(0), m_len(0)
+    string(const char *text) : m_data(0), m_len(0)
     {
       if (text)
         assign(text, __builtin_strlen(text));
@@ -133,6 +143,12 @@ namespace std
     size_t size() const { return m_len; }
     bool empty() const { return m_len == 0; }
     char *data() { return m_data; }
+    iterator begin() { return m_data; }
+    const_iterator begin() const { return m_data; }
+    const_iterator cbegin() const { return m_data; }
+    iterator end() { return m_data ? m_data + m_len : m_data; }
+    const_iterator end() const { return m_data ? m_data + m_len : m_data; }
+    const_iterator cend() const { return m_data ? m_data + m_len : m_data; }
     const char *data() const { return c_str(); }
     size_t find_first_of(char ch, size_t pos = 0) const
     {

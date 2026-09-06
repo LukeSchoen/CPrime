@@ -23,7 +23,8 @@ typedef ConvertingCtorMatrix<double> ConvertingCtorMatrixD;
 
 int main()
 {
-  ConvertingCtorMatrixD source = { 3.0 };
+  double source_values[] = { 3.0 };
+  ConvertingCtorMatrixD source(source_values);
   ConvertingCtorMatrixF target(source);
   return target.value == 3.0f ? 0 : 1;
 }

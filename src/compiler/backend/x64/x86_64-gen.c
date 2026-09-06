@@ -329,7 +329,8 @@ ST_FUNC void gsym_addr(int t, int a)
 
 static int is64_type(int t)
 {
-  return ((t &VT_BTYPE) == VT_PTR ||
+  return ((t &VT_BTYPE) == VT_NULLPTR ||
+          (t &VT_BTYPE) == VT_PTR ||
           (t &VT_BTYPE) == VT_FUNC ||
           (t &VT_BTYPE) == VT_LLONG);
 }
@@ -541,7 +542,7 @@ void load(int r, SValue *sv)
         break;
       }
     }
-    ft &= ~VT_WCHAR_T;
+    ft = CHARACTER_STORAGE_TYPE(ft);
     if ((ft & VT_BTYPE) == VT_FLOAT)
     {
       b = 0x6e0f66;
@@ -582,6 +583,7 @@ void load(int r, SValue *sv)
     {
       assert(((ft &VT_BTYPE) == VT_INT)
              || ((ft &VT_BTYPE) == VT_LLONG)
+             || ((ft &VT_BTYPE) == VT_NULLPTR)
              || ((ft &VT_BTYPE) == VT_PTR)
              || ((ft &VT_BTYPE) == VT_FUNC)
             );
@@ -1555,7 +1557,7 @@ void gfunc_epilog(void)
   ind = start;
   if (v >= 4096)
   {
-    Sym *sym = external_helper_sym(TOK___chkstk);
+    Sym *sym = external_helper_sym(tok_alloc_const("__cpc_stack_probe_frame"));
     oad(0xb8, v); // Mov Stacksize, %Eax
     oad(0xe8, 0); // Call __Chkstk, (Does The Stackframe Too)
     greloca(cur_text_section, sym, ind - 4, R_X86_64_PLT32, -4);
@@ -1629,6 +1631,7 @@ static X86_64_Mode classify_x86_64_inner(CType *ty)
   case VT_SHORT:
   case VT_LLONG:
   case VT_BOOL:
+  case VT_NULLPTR:
   case VT_PTR:
   case VT_FUNC:
     return x86_64_mode_integer;

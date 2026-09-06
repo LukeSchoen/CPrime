@@ -135,8 +135,8 @@ static void note_cpp_record_decl(int type_tok, int source_name_tok,
   CppRecordDeclInfo *record;
   unsigned bucket;
   type_tok &= ~SYM_STRUCT;
-  if (type_tok < TOK_IDENT || type_tok >= SYM_FIRST_ANOM
-      || source_name_tok < TOK_IDENT || lookup_cpp_record_decl(type_tok)) return;
+  if (type_tok < TOK_IDENT || source_name_tok < TOK_IDENT
+      || source_name_tok >= SYM_FIRST_ANOM || lookup_cpp_record_decl(type_tok)) return;
   bucket = (unsigned)type_tok & 1023;
   record = cprime_mallocz(sizeof(*record));
   record->type_tok = type_tok;
@@ -145,6 +145,21 @@ static void note_cpp_record_decl(int type_tok, int source_name_tok,
   record->namespace_tok = namespace_tok;
   record->next = cpp_record_declarations[bucket];
   cpp_record_declarations[bucket] = record;
+}
+
+/* The first typedef naming an unnamed class/enum supplies its linkage
+   name. Keep its lexical owner rather than anonymous allocation order. */
+static void note_cpp_typedef_record_name(CType *type, int alias_tok)
+{
+  int tag, namespace_tok;
+  if (!is_cpp_translation_unit() || !type->ref || (type->t & VT_ARRAY)
+      || ((type->t & VT_BTYPE) != VT_STRUCT && !IS_ENUM(type->t))) return;
+  tag=type->ref->v & ~SYM_STRUCT;
+  if (tag < SYM_FIRST_ANOM || lookup_cpp_record_decl(tag)) return;
+  namespace_tok=current_namespace_scope_tok();
+  note_cpp_record_decl(tag, cpp_ms_unqualified_tok(alias_tok,namespace_tok),
+      nb_defining_class_stack ? defining_class_stack[nb_defining_class_stack-1] : 0,
+      namespace_tok);
 }
 
 static void note_cpp_record_template(int type_tok, TemplateDef *definition,

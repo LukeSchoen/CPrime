@@ -8,16 +8,6 @@
 #include <io.h>
 
 #ifndef __CPRIME_UCRT__
-size_t strnlen_s(const char *text, size_t maximum)
-{
-    size_t length = 0;
-    if (!text)
-        return 0;
-    while (length < maximum && text[length])
-        ++length;
-    return length;
-}
-
 long long _ftelli64(FILE *stream)
 {
     return _telli64(_fileno(stream));

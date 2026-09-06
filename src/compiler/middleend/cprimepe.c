@@ -1572,11 +1572,11 @@ static int pe_check_symbols(struct pe_info *pe)
         {
           unsigned char *p;
 
-          /* add a helper symbol, will be patched later in
-             pe_build_imports */
+          /* Keep any preceding native __imp_ aliases in the IAT chain.
+             pe_build_imports patches every alias to the same slot. */
           sprintf(buffer, "IAT.%s", name);
           is->iat_index = put_elf_sym(
-                            symtab_section, 0, sizeof(DWORD),
+                            symtab_section, is->iat_index, sizeof(DWORD),
                             Obj64_ST_INFO(STB_LOCAL, STT_OBJECT),
                             0, SHN_UNDEF, buffer);
 

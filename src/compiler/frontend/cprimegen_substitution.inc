@@ -1,8 +1,8 @@
 /* Substitution probes own their token replay and restore the caller's
    expression state on failure. Errors in instantiated class definitions are
    outside the immediate context and are not recovered here. */
-static int template_probe_type(TokenString *tokens, int argument,
-                               int namespace_tok, CType *result)
+static int template_probe_type_ex(TokenString *tokens, int argument,
+                               int namespace_tok, int owner_tok, int function_tok, CType *result)
 {
   struct ProbeState {
     TokenString *macro;
@@ -15,10 +15,13 @@ static int template_probe_type(TokenString *tokens, int argument,
     Sym **local_bindings, **global_bindings;
     CppMemberDeclContext *member_declaration_context;
     LambdaExpression *lambda;
+    CppConstructionDestination *construction;
     jmp_buf *previous;
     int token, depth, nocode, local_offset, temporary_count, namespace_tok;
+    int declarator_depth;
     int member_class, declaration_auto, declaration_typedef, declaration_decltype;
     int scope, deferred_members, binding_count, global_binding_count;
+    int unevaluated_depth, probe_depth;
   } *saved = cprime_malloc(sizeof(*saved));
   jmp_buf recovery;
   volatile int success = 0;
@@ -33,6 +36,7 @@ static int template_probe_type(TokenString *tokens, int argument,
   saved->local_bindings = NULL; saved->binding_count = 0;
   saved->global_bindings = NULL; saved->global_binding_count = 0;
   saved->scope = local_scope;
+  saved->declarator_depth = cpp_member_declarator_depth;
   saved->deferred_members = defer_pending_member_funcs;
   saved->nocode = nocode_wanted; saved->local_offset = loc;
   saved->temporary_count = nb_temp_local_vars;
@@ -43,14 +47,18 @@ static int template_probe_type(TokenString *tokens, int argument,
   saved->declaration_typedef = last_btype_was_typedef;
   saved->declaration_decltype = last_btype_was_decltype;
   saved->previous = cpp_substitution_jump;
+  saved->probe_depth = cpp_template_probe_depth++;
+  saved->unevaluated_depth = cpp_unevaluated_expression_depth;
   saved->lambda = lambda_probe;
-  /* Lookup belongs to the template's declaration context. Even a caller's
+  saved->construction = cpp_construction_destination;
+  /* Modes 6/8 disambiguate expression type-ids and statement declarators in the current lexical
+     context. Other probes use the template's declaration context. A caller's
      local typedef must not hide a name in that context. Substituted type
      arguments already have stable global spellings from template_subst_token. */
-  if (saved->locals)
+  if (saved->locals && argument < 6)
     saved->local_bindings = sym_hide_local_bindings(saved->locals,
                                                     &saved->binding_count);
-  if (saved->scope)
+  if (saved->scope && argument < 6)
   {
     Sym *frame;
     /* Types materialized inside a parameter declaration can add anonymous
@@ -87,13 +95,20 @@ static int template_probe_type(TokenString *tokens, int argument,
   {
     AttributeDef attributes;
     enter_namespace_scope(namespace_tok);
-    active_member_class_tok = 0;
-    cpp_member_decl_context = NULL;
+    active_member_class_tok = argument >= 6 ? saved->member_class : 0;
+    cpp_member_decl_context = argument >= 6 ? saved->member_declaration_context : NULL;
     lambda_probe = NULL;
     ++nocode_wanted;
     begin_macro(&saved->replay, 0);
     next();
-    if (argument == 3)
+    if (argument == 7)
+    {
+      cpp_construction_destination = NULL;
+      materialize_braced_temporary_mode(result, 1);
+      success = tok == TOK_EOF;
+      vpop();
+    }
+    else if (argument == 3)
     {
       CType target = *result;
       int braced = tok == '{';
@@ -111,10 +126,56 @@ static int template_probe_type(TokenString *tokens, int argument,
         if (is_reference_type(&vtop->type)) decay_reference_type(&vtop->type);
         else { test_lvalue(); mk_pointer(&vtop->type); gaddrof(); }
       }
+      /* Initialization may target a const object; the constant-expression
+         probe checks conversion, not assignment to an existing object. */
+      target.t &= ~VT_CONSTANT;
       gen_assign_cast(&target);
       success = tok == TOK_EOF
           && (vtop->r & (VT_VALMASK | VT_LVAL | VT_NONCONST)) == VT_CONST;
       vpop();
+    }
+    else if (argument == 4 || argument == 5)
+    {
+      CType function;
+      int name = 0;
+      cpp_substitution_jump = NULL;
+      if (parse_btype(&function, &attributes, 0)) {
+        TokenString *body = NULL, *parameters = tok_str_alloc();
+        LambdaExpression deduction;
+        int saved_type_owner=local_type_owner_tok;
+        int saved_type_index=local_type_declaration_index;
+        Sym *parameter;
+        type_decl(&function, &attributes, &name, TYPE_ABSTRACT);
+        if ((function.t & VT_BTYPE) != VT_FUNC || tok != '{')
+          cprime_error("saved function body expected");
+        for (parameter = function.ref->next; parameter; parameter=parameter->next) {
+          if (parameter != function.ref->next) tok_str_add(parameters, ',');
+          add_ctype_declarator_tokens(parameters, &parameter->type, parameter->v & ~SYM_FIELD);
+        }
+        tok_str_add(parameters, TOK_EOF);
+        skip_or_save_block(&body);
+        tok_str_add(body, TOK_EOF);
+        memset(&deduction, 0, sizeof(deduction));
+        deduction.return_type.t = VT_VOID;
+        deduction.return_deduction_kind = argument == 5 ? 2 : 1;
+        deduction.return_pattern = function.ref->type;
+        deduction.mutable_call = 1;
+        deduction.owner = function_tok;
+        local_type_owner_tok = function_tok;
+        local_type_declaration_index = 0;
+        active_member_class_tok = owner_tok;
+        cpp_substitution_jump = NULL;
+        probe_lambda_body(&deduction, parameters, body);
+        if (!deduction.return_seen && deduction.return_deduction_kind == 1
+            && (deduction.return_pattern.t & VT_BTYPE) == VT_PTR)
+          cprime_error("cannot deduce auto pointer or reference without a return expression");
+        cpp_substitution_jump = &recovery;
+        *result = deduction.return_type;
+        local_type_owner_tok = saved_type_owner;
+        local_type_declaration_index = saved_type_index;
+        tok_str_free(parameters); tok_str_free(body);
+        success = 1;
+      }
     }
     else if (argument == 2)
     {
@@ -125,7 +186,7 @@ static int template_probe_type(TokenString *tokens, int argument,
         decl(VT_CONST);
       success = 1;
     }
-    else if (argument)
+    else if (argument && argument < 6)
     {
       int token = parse_one_template_type_arg();
       if (token && tok == TOK_EOF)
@@ -138,12 +199,16 @@ static int template_probe_type(TokenString *tokens, int argument,
     else if (parse_btype(result, &attributes, 0))
     {
       int declarator = 0;
-      type_decl(result, &attributes, &declarator, TYPE_ABSTRACT);
+      type_decl(result, &attributes, &declarator,
+                argument == 8 ? TYPE_DIRECT : TYPE_ABSTRACT);
       success = tok == TOK_EOF;
     }
   }
   cpp_substitution_jump = saved->previous;
+  cpp_template_probe_depth = saved->probe_depth;
+  cpp_unevaluated_expression_depth = saved->unevaluated_depth;
   lambda_probe = saved->lambda;
+  cpp_construction_destination = saved->construction;
   while (macro_stack && macro_stack != saved->macro) end_macro();
   macro_ptr = saved->ptr; tok = saved->token; tokc = saved->value;
   /* A failed nested replay can abandon its own local stack. The caller's
@@ -170,6 +235,7 @@ static int template_probe_type(TokenString *tokens, int argument,
   sym_relink_stack(saved->local_bindings, saved->binding_count);
   local_stack = saved->locals;
   local_scope = saved->scope;
+  cpp_member_declarator_depth = saved->declarator_depth;
   defer_pending_member_funcs = saved->deferred_members;
   memcpy(_vstack, saved->values, sizeof(saved->values));
   vtop = _vstack + saved->depth;
@@ -184,6 +250,12 @@ static int template_probe_type(TokenString *tokens, int argument,
   last_btype_was_decltype = saved->declaration_decltype;
   cprime_free(saved);
   return success;
+}
+
+static int template_probe_type(TokenString *tokens, int argument,
+                               int namespace_tok, CType *result)
+{
+  return template_probe_type_ex(tokens, argument, namespace_tok, 0, 0, result);
 }
 
 static int template_substituted_pattern_argument(TemplateDef *definition,

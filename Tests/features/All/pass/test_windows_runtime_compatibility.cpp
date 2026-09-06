@@ -7,7 +7,6 @@
 extern "C" unsigned char _BitScanForward64(unsigned long *index,
                                              unsigned long long mask);
 extern "C" long _InterlockedExchangeAdd(volatile long *target, long value);
-extern "C" size_t strnlen_s(const char *text, size_t maximum);
 
 static int compare_ints(const void *left, const void *right)
 {
@@ -32,6 +31,9 @@ int main()
 
   if (strnlen_s(nullptr, 8) != 0 || strnlen_s("abcdef", 3) != 3)
     return 4;
+  if (strnlen_s("abcdef", 0) != 0 || strnlen_s("", 8) != 0 ||
+      strnlen_s("abcdef", 8) != 6 || strnlen_s("ab\0cd", 5) != 2)
+    return 11;
 
   if (std::thread::hardware_concurrency() == 0)
     return 5;

@@ -1694,6 +1694,25 @@ static int parse_include(CPRIMEState *s1, int do_next, int test)
   return 1;
 }
 
+static int cprime_has_attribute(int attribute)
+{
+  switch (attribute)
+  {
+  case TOK_PACKED1: case TOK_PACKED2:
+  case TOK_ALIGNED1: case TOK_ALIGNED2:
+  case TOK_CLEANUP1: case TOK_CLEANUP2:
+  case TOK_SECTION1: case TOK_SECTION2:
+  case TOK_WEAK1: case TOK_WEAK2:
+  case TOK_ALIAS1: case TOK_ALIAS2:
+  case TOK_CONSTRUCTOR1: case TOK_CONSTRUCTOR2:
+  case TOK_DESTRUCTOR1: case TOK_DESTRUCTOR2:
+  case TOK_NORETURN1: case TOK_NORETURN2:
+    return 1;
+  default:
+    return 0;
+  }
+}
+
 // Eval An Expression For #If/#Elif
 static int expr_preprocess(CPRIMEState *s1)
 {
@@ -1730,7 +1749,8 @@ static int expr_preprocess(CPRIMEState *s1)
       c = 0;
       if (define_find(tok)
           || tok == TOK___HAS_INCLUDE
-          || tok == TOK___HAS_INCLUDE_NEXT)
+          || tok == TOK___HAS_INCLUDE_NEXT
+          || tok == TOK___HAS_ATTRIBUTE)
         c = 1;
       if (t == '(')
       {
@@ -1738,6 +1758,17 @@ static int expr_preprocess(CPRIMEState *s1)
         if (tok != ')')
           expect("')'");
       }
+      goto c_number;
+    }
+    else if (tok == TOK___HAS_ATTRIBUTE)
+    {
+      next();
+      if (tok != '(') expect("'('");
+      next();
+      if (tok < TOK_IDENT) expect("attribute name");
+      c = cprime_has_attribute(tok);
+      next();
+      if (tok != ')') expect("')'");
       goto c_number;
     }
     else if (tok == TOK___HAS_INCLUDE ||
@@ -2165,7 +2196,8 @@ do_ifdef:
     }
     if (define_find(tok)
         || tok == TOK___HAS_INCLUDE
-        || tok == TOK___HAS_INCLUDE_NEXT)
+        || tok == TOK___HAS_INCLUDE_NEXT
+          || tok == TOK___HAS_ATTRIBUTE)
       c ^= 1;
     next_nomacro();
 do_if:
@@ -2545,7 +2577,11 @@ static void parse_string(const char *s, int len)
     if (n < 1)
       cprime_error("empty character constant");
     if (n > 1)
+    {
       cprime_warning_c(warn_all)("multi-character character constant");
+      if (!is_long)
+        tok = TOK_CINT;
+    }
     for (c = i = 0; i < n; ++i)
     {
       if (is_long)

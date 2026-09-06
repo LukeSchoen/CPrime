@@ -2,6 +2,12 @@
 #define _CMATH
 
 #include <math.h>
+#include <cstdlib>
+#include <type_traits>
+
+inline float abs(float value) { return ::fabsf(value); }
+inline double abs(double value) { return ::fabs(value); }
+inline long double abs(long double value) { return ::fabsl(value); }
 
 #undef isinf
 #undef isnan
@@ -24,6 +30,15 @@ CPC_MATH_CLASSIFY_OVERLOADS(long double, __fpclassifyl, __signbitl)
 
 namespace std
 {
+  inline float fabs(float value) { return ::fabsf(value); }
+  inline double fabs(double value) { return ::fabs(value); }
+  inline long double fabs(long double value) { return ::fabsl(value); }
+  template<typename T>
+  inline typename enable_if<is_integral<T>::value, double>::type fabs(T value)
+  { return ::fabs(static_cast<double>(value)); }
+  inline float abs(float value) { return ::fabsf(value); }
+  inline double abs(double value) { return ::fabs(value); }
+  inline long double abs(long double value) { return ::fabsl(value); }
   inline double exp(double value) { return ::exp(value); }
   inline float sqrt(float value) { return ::sqrtf(value); }
   inline double sqrt(double value) { return ::sqrt(value); }

@@ -47,6 +47,12 @@ typedef double GLclampd;
 #ifndef GL_LESS
 #define GL_LESS 0x0201
 #endif
+#ifndef GL_ZERO
+#define GL_ZERO 0
+#endif
+#ifndef GL_ONE
+#define GL_ONE 1
+#endif
 #ifndef GL_SRC_ALPHA
 #define GL_SRC_ALPHA 0x0302
 #endif

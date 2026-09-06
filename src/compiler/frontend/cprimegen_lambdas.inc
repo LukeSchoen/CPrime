@@ -7,8 +7,10 @@ typedef struct LambdaCapture {
 } LambdaCapture;
 
 typedef struct LambdaExpression {
-  int marker, owner, class_tok, count, default_capture, mutable_call;
+  int marker, owner, class_tok, body_owner_tok, count, default_capture, mutable_call;
   int return_seen, explicit_return, outer_scope;
+  int return_deduction_kind;
+  CType return_pattern;
   CType return_type;
   LambdaCapture captures[64];
   struct LambdaExpression *next, *parent_probe;
@@ -16,6 +18,14 @@ typedef struct LambdaExpression {
 
 static LambdaExpression *lambda_expressions, *lambda_probe;
 static unsigned lambda_expression_counter;
+static int lambda_body_type_owner(int class_tok)
+{
+  LambdaExpression *lambda;
+  for (lambda = lambda_expressions; lambda; lambda = lambda->next)
+    if (lambda->class_tok == class_tok)
+      return lambda->body_owner_tok;
+  return 0;
+}
 static void probe_lambda_body(LambdaExpression *lambda, TokenString *parameters,
                               TokenString *body);
 
@@ -128,6 +138,85 @@ static Sym *lambda_capture_symbol(Sym *symbol)
   return sym_push(capture->name, &visible_type, VT_LOCAL | VT_LVAL, 0);
 }
 
+static CType deduce_placeholder_return_pattern(CType *pattern, CType *actual)
+{
+  CType result = *actual;
+  if ((pattern->t & VT_BTYPE) == VT_PTR && !is_reference_type(pattern))
+  {
+    if ((actual->t & VT_BTYPE) != VT_PTR || is_reference_type(actual))
+      cprime_error("return expression does not match auto pointer declarator");
+    result = deduce_placeholder_return_pattern(pointed_type(pattern),
+                                               pointed_type(actual));
+    mk_pointer(&result);
+    result.t |= pattern->t & (VT_CONSTANT | VT_VOLATILE);
+  }
+  else
+    result.t |= pattern->t & (VT_CONSTANT | VT_VOLATILE);
+  return result;
+}
+
+static CType deduce_placeholder_return_expression(LambdaExpression *deduction)
+{
+  CType actual = vtop->type, pattern = deduction->return_pattern, result;
+  int lvalue = !(vtop->r & VT_CXX_PRVALUE)
+      && !(actual.t & VT_RVALUE_REFERENCE)
+      && ((vtop->r & VT_LVAL) || (actual.t & VT_ARRAY)
+          || (actual.t & VT_BTYPE) == VT_FUNC || is_reference_type(&actual));
+  if (is_reference_type(&actual)) actual = *pointed_type(&actual);
+  actual.t &= ~(VT_STORAGE | VT_RVALUE_REFERENCE);
+  if (is_reference_type(&pattern))
+  {
+    CType *pointee = pointed_type(&pattern);
+    int forwarding = (pattern.t & VT_RVALUE_REFERENCE)
+        && (pointee->t & VT_BTYPE) == VT_INT
+        && !(pointee->t & (VT_CONSTANT | VT_VOLATILE));
+    int rvalue = (pattern.t & VT_RVALUE_REFERENCE) && !(forwarding && lvalue);
+    if (rvalue && lvalue)
+      cprime_error("lvalue return expression cannot bind to auto rvalue reference");
+    if (!rvalue && !lvalue && !(pointee->t & VT_CONSTANT))
+      cprime_error("rvalue return expression cannot bind to auto lvalue reference");
+    result = deduce_placeholder_return_pattern(pointee, &actual);
+    mk_reference(&result);
+    if (rvalue) result.t |= VT_RVALUE_REFERENCE;
+  }
+  else
+  {
+    actual.t &= ~(VT_CONSTANT | VT_VOLATILE);
+    if (actual.t & VT_ARRAY) actual.t &= ~VT_ARRAY;
+    if ((actual.t & VT_BTYPE) == VT_FUNC) mk_pointer(&actual);
+    result = deduce_placeholder_return_pattern(&pattern, &actual);
+  }
+  if ((result.t & VT_BTYPE) == VT_PTR)
+    result.ref = template_stable_pointer_ref(&result);
+  return result;
+}
+
+static void deduce_decltype_auto_return(CType *result)
+{
+  TokenString *expression = tok_str_alloc(), *parent;
+  const int *parent_ptr;
+  int parens = 0, brackets = 0, braces = 0, token;
+  CValue value;
+  tok_str_add(expression, '(');
+  while (tok != TOK_EOF && (tok != ';' || parens || brackets || braces)) {
+    if (tok == '(') ++parens; else if (tok == ')') --parens;
+    else if (tok == '[') ++brackets; else if (tok == ']') --brackets;
+    else if (tok == '{') ++braces; else if (tok == '}') --braces;
+    tok_str_add_tok(expression);
+    next();
+  }
+  tok_str_add(expression, ')');
+  tok_str_add(expression, TOK_EOF);
+  parent = macro_stack; parent_ptr = macro_ptr; token = tok; value = tokc;
+  begin_macro(expression, 1);
+  next();
+  parse_decltype_type(result);
+  if ((result->t & VT_BTYPE) == VT_PTR || (result->t & VT_BTYPE) == VT_FUNC)
+    result->ref = template_stable_pointer_ref(result);
+  while (macro_stack && macro_stack != parent) end_macro();
+  macro_ptr = parent_ptr; tok = token; tokc = value;
+}
+
 static void lambda_note_return(void)
 {
   CType result;
@@ -135,15 +224,28 @@ static void lambda_note_return(void)
   result.ref = NULL;
   if (tok != ';')
   {
-    gexpr();
-    result = vtop->type;
-    if (is_reference_type(&result)) result = *pointed_type(&result);
-    result.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE | VT_RVALUE_REFERENCE);
-    if (result.t & VT_ARRAY) result.t &= ~VT_ARRAY;
-    if ((result.t & VT_BTYPE) == VT_PTR)
-      result.ref = template_stable_pointer_ref(&result);
-    vpop();
+    if (lambda_probe->return_deduction_kind == 2)
+      deduce_decltype_auto_return(&result);
+    else
+    {
+      gexpr();
+      if (lambda_probe->return_deduction_kind)
+        result = deduce_placeholder_return_expression(lambda_probe);
+      else
+      {
+        result = vtop->type;
+        if (is_reference_type(&result)) result = *pointed_type(&result);
+        result.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE | VT_RVALUE_REFERENCE);
+        if (result.t & VT_ARRAY) result.t &= ~VT_ARRAY;
+        if ((result.t & VT_BTYPE) == VT_PTR)
+          result.ref = template_stable_pointer_ref(&result);
+      }
+      vpop();
+    }
   }
+  else if (lambda_probe->return_deduction_kind == 1
+           && (lambda_probe->return_pattern.t & VT_BTYPE) == VT_PTR)
+    cprime_error("empty return does not match auto pointer or reference declarator");
   if (!lambda_probe->explicit_return)
   {
     if (lambda_probe->return_seen
@@ -266,11 +368,11 @@ static void parse_cpp_lambda_expression(void)
   if (!lambda)
   {
     char class_name[96];
+    snprintf(class_name, sizeof(class_name), "__cpc_closure_%u", anon_sym++);
+    current.class_tok = current.body_owner_tok = tok_alloc_const(class_name);
     probe_lambda_body(&current, parameters, body);
     lambda = cprime_malloc(sizeof(*lambda));
     *lambda = current;
-    snprintf(class_name, sizeof(class_name), "__cpc_closure_%u", anon_sym++);
-    lambda->class_tok = tok_alloc_const(class_name);
     lambda->next = lambda_expressions;
     lambda_expressions = lambda;
     declaration = tok_str_alloc();

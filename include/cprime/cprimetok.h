@@ -56,6 +56,7 @@
      DEF(TOK_BOOL2, "bool")
      DEF(TOK_TRUE, "true")
      DEF(TOK_FALSE, "false")
+     DEF(TOK_NULLPTR, "nullptr")
      DEF(TOK_COMPLEX, "_Complex")
      DEF(TOK_SHORT, "short")
      DEF(TOK_LONG, "long")
@@ -71,6 +72,7 @@
      DEF(TOK_ALIGNOF1, "__alignof")
      DEF(TOK_ALIGNOF2, "__alignof__")
      DEF(TOK_ALIGNOF3, "_Alignof")
+     DEF(TOK_ALIGNOF4, "alignof")
      DEF(TOK_ALIGNAS, "_Alignas")
      DEF(TOK_TYPEOF1, "typeof")
      DEF(TOK_TYPEOF2, "__typeof")
@@ -100,6 +102,7 @@
      DEF(TOK___COUNTER__, "__COUNTER__")
      DEF(TOK___HAS_INCLUDE, "__has_include")
      DEF(TOK___HAS_INCLUDE_NEXT, "__has_include_next")
+     DEF(TOK___HAS_ATTRIBUTE, "__has_attribute")
 
      DEF(TOK___FUNC__, "__func__")
 

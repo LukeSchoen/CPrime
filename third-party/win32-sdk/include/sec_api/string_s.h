@@ -14,6 +14,11 @@
 extern "C" {
 #endif
 
+  static __inline size_t __cdecl strnlen_s(const char *_Str, size_t _MaxCount)
+  {
+    return _Str == NULL ? 0 : strnlen(_Str, _MaxCount);
+  }
+
   _CRTIMP errno_t __cdecl _strset_s(char *_Dst,size_t _DstSize,int _Value);
   _CRTIMP errno_t __cdecl _strerror_s(char *_Buf,size_t _SizeInBytes,const char *_ErrMsg);
   _CRTIMP errno_t __cdecl _strlwr_s(char *_Str,size_t _Size);

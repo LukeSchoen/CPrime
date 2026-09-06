@@ -81,6 +81,30 @@ static int cpp_temp_guard_cleanup(Sym *cleanup)
   return skip;
 }
 
+/* A backing allocation may contain scalar values or several class objects.
+   Reserve its one allocator slot independently from element destructors. */
+static void cpp_temp_reserve_storage(int address, int size, int temporary_slot)
+{
+  CppTemporary *temporary;
+  int index = temporary_slot - (VT_CONST + 1);
+  if (nocode_wanted || !cur_scope || index < 0
+      || index >= MAX_TEMP_LOCAL_VARIABLE_NUMBER) return;
+  if (cpp_temporary_count == cpp_temporary_capacity) {
+    cpp_temporary_capacity = cpp_temporary_capacity ? 2 * cpp_temporary_capacity : 16;
+    cpp_temporaries = cprime_realloc(cpp_temporaries,
+        cpp_temporary_capacity * sizeof(*cpp_temporaries));
+  }
+  temporary = &cpp_temporaries[cpp_temporary_count++];
+  memset(temporary, 0, sizeof(*temporary));
+  /* Storage-only entries cannot match a class object's local lvalue. */
+  temporary->storage = VT_CONST;
+  temporary->address = address;
+  temporary->size = size;
+  temporary->active = 1;
+  temporary->used_slot = 1U << index;
+  cpp_temporary_reserved_slots |= temporary->used_slot;
+}
+
 static void cpp_register_class_temporary(SValue *value)
 {
   CppTemporary *temporary;
@@ -96,7 +120,8 @@ static void cpp_register_class_temporary(SValue *value)
   if (storage != (VT_LOCAL | VT_LVAL)
       && storage != (VT_LLOCAL | VT_LVAL)) return;
   for (i = cpp_temporary_count - 1; i >= 0; --i)
-    if (cpp_temporaries[i].active && cpp_temporaries[i].storage == storage
+    if (cpp_temporaries[i].active && !cpp_temporaries[i].extended
+        && cpp_temporaries[i].storage == storage
         && cpp_temporaries[i].address == value->c.i) return;
   type = value->type;
   type.t &= ~(VT_STORAGE | VT_RVALUE_REFERENCE);
@@ -166,6 +191,24 @@ static void cpp_temp_extend_lifetime(SValue *value)
 {
   CppTemporary *temporary = cpp_temp_find_value(value);
   if (temporary) temporary->extended = 1;
+}
+
+/* Once static-array construction succeeds, the module destructor registry
+   owns its objects. Partial-construction cleanups were needed until then. */
+static void cpp_temp_commit_static_object(int storage, int address)
+{
+  int i;
+  for (i = cpp_temporary_count - 1; i >= 0; --i)
+  {
+    CppTemporary *temporary = &cpp_temporaries[i];
+    if (!temporary->active || temporary->storage != storage
+        || temporary->address != address) continue;
+    if (temporary->flag_offset) cpp_temp_store_flag(temporary->flag_offset, 0);
+    temporary->active = 0;
+    cpp_temporary_reserved_slots &= ~temporary->used_slot;
+    if (temporary->cleanup) temporary->cleanup->cleanup_func = NULL;
+    return;
+  }
 }
 
 static void cpp_temp_end(int mark)

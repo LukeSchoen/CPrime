@@ -224,33 +224,6 @@ static void lblock(int *bsym, int *csym)
   }
 }
 
-static void append_range_for_body(TokenString *dst, TokenString *body,
-                                  int var_tok, int ptr_tok)
-{
-  const int *p = body->str;
-  const int *end = body->str + body->len;
-  CValue cv;
-  int t;
-
-  while (p < end)
-  {
-    TOK_GET(&t, &p, &cv);
-    if (t == TOK_EOF || t == 0)
-      break;
-    if ((t & ~SYM_FIELD) == (var_tok & ~SYM_FIELD))
-    {
-      tok_str_add(dst, '(');
-      tok_str_add(dst, '*');
-      tok_str_add(dst, ptr_tok);
-      tok_str_add(dst, ')');
-    }
-    else
-    {
-      tok_str_add2(dst, t, &cv);
-    }
-  }
-}
-
 static void skip_or_save_balanced_tokens(TokenString *dst)
 {
   int level = 0;
@@ -311,10 +284,33 @@ static void skip_or_save_statement_tokens(TokenString *dst, int nested)
     return;
   }
 
-  while (tok != TOK_EOF && tok != ';' && tok != '}')
+  if (tok == TOK_FOR || tok == TOK_WHILE || tok == TOK_SWITCH)
   {
     tok_str_add_tok(dst);
     next();
+    if (tok != '(') cprime_error("'(' expected");
+    skip_or_save_balanced_tokens(dst);
+    skip_or_save_statement_tokens(dst, 1);
+    return;
+  }
+  if (tok == TOK_DO)
+  {
+    tok_str_add_tok(dst);
+    next();
+    skip_or_save_statement_tokens(dst, 1);
+    if (tok != TOK_WHILE) cprime_error("'while' expected");
+    tok_str_add_tok(dst);
+    next();
+    if (tok != '(') cprime_error("'(' expected");
+    skip_or_save_balanced_tokens(dst);
+    if (nested && tok == ';') { tok_str_add_tok(dst); next(); }
+    return;
+  }
+  while (tok != TOK_EOF && tok != ';' && tok != '}')
+  {
+    if (tok == '(' || tok == '[' || tok == '{')
+      skip_or_save_balanced_tokens(dst);
+    else { tok_str_add_tok(dst); next(); }
   }
   if (nested && tok == ';')
   {
@@ -381,16 +377,14 @@ static int for_header_starts_range_declaration(void)
 static int try_parse_range_for(void)
 {
   char tmp_name[64];
-  int var_tok, range_tok, index_tok, ptr_tok, value_tok, iterator_tok, end_tok;
+  int var_tok, range_tok, index_tok, iterator_tok, end_tok;
   int body_first_tok;
   int body_had_semicolon = 0;
   int is_array_range, array_count;
   int is_iterator_range = 0;
-  int iterator_deref_returns_reference = 0;
-  int has_range_elem_type = 0;
   int has_range_type = 0;
   Sym *range_sym;
-  CType range_type, range_elem_type;
+  CType range_type;
   TokenString *body, *lowered, *var_decl, *range_expr;
 
   var_decl = tok_str_alloc();
@@ -401,6 +395,13 @@ static int try_parse_range_for(void)
   }
   while (tok == TOK_LINENUM)
     next();
+  while (tok == TOK_CONST1 || tok == TOK_CONST2 || tok == TOK_CONST3
+         || tok == TOK_VOLATILE1 || tok == TOK_VOLATILE2
+         || tok == TOK_VOLATILE3)
+  {
+    tok_str_add(var_decl, tok);
+    next();
+  }
   if (tok == TOK_AUTO)
   {
     tok_str_add(var_decl, tok);
@@ -409,7 +410,7 @@ static int try_parse_range_for(void)
       next();
     if (tok == '&' || tok == TOK_LAND)
     {
-      tok_str_add(var_decl, '&');
+      tok_str_add(var_decl, tok);
       next();
       while (tok == TOK_LINENUM)
         next();
@@ -422,183 +423,20 @@ static int try_parse_range_for(void)
     while (tok == TOK_LINENUM)
       next();
   }
-  else if (tok == TOK_CONST1 || tok == TOK_CONST2 || tok == TOK_CONST3)
-  {
-    CType range_type;
-    AttributeDef range_ad;
-
-    tok_str_add(var_decl, tok);
-    next();
-    while (tok == TOK_LINENUM)
-      next();
-    memset(&range_type, 0, sizeof range_type);
-    memset(&range_ad, 0, sizeof range_ad);
-    if (!parse_btype(&range_type, &range_ad, 0))
-      cprime_error("range-for variable type");
-    if (!add_ctype_tokens(var_decl, &range_type))
-      cprime_error("range-for variable type");
-    while (tok == TOK_LINENUM)
-      next();
-    if (tok != '&')
-      cprime_error("range-for reference");
-    tok_str_add(var_decl, tok);
-    next();
-    while (tok == TOK_LINENUM)
-      next();
-    if (tok == '(')
-    {
-      int range_decl_parens = 0;
-      do
-      {
-        tok_str_add(var_decl, tok);
-        range_decl_parens++;
-        next();
-        while (tok == TOK_LINENUM)
-          next();
-      }
-      while (tok == '(');
-      if (tok == '*')
-      {
-        tok_str_add(var_decl, tok);
-        next();
-        while (tok == TOK_LINENUM)
-          next();
-        while (tok == '(')
-        {
-          tok_str_add(var_decl, tok);
-          range_decl_parens++;
-          next();
-          while (tok == TOK_LINENUM)
-            next();
-        }
-      }
-      if (tok < TOK_UIDENT)
-        cprime_error("range-for variable before '%s'",
-                     get_tok_str(tok, &tokc));
-      var_tok = tok;
-      tok_str_add(var_decl, tok);
-      next();
-      while (tok == TOK_LINENUM)
-        next();
-      while (range_decl_parens-- > 0)
-      {
-        skip(')');
-        tok_str_add(var_decl, ')');
-      }
-      while (tok == TOK_LINENUM)
-        next();
-      goto range_for_decl_done;
-    }
-    if (tok < TOK_UIDENT)
-      cprime_error("range-for variable before '%s'", get_tok_str(tok, &tokc));
-    var_tok = tok;
-    tok_str_add(var_decl, tok);
-    next();
-    while (tok == TOK_LINENUM)
-      next();
-range_for_decl_done:
-    ;
-  }
-  else if (tok == TOK_STRUCT || tok == TOK_UNION || tok == TOK_ENUM)
-  {
-    CType range_type;
-    AttributeDef range_ad;
-
-    memset(&range_type, 0, sizeof range_type);
-    memset(&range_ad, 0, sizeof range_ad);
-    if (!parse_btype(&range_type, &range_ad, 0))
-      cprime_error("range-for variable type");
-    if (!add_ctype_tokens(var_decl, &range_type))
-      cprime_error("range-for variable type");
-    while (tok == TOK_LINENUM)
-      next();
-    if (tok != '&')
-      cprime_error("range-for reference");
-    tok_str_add(var_decl, tok);
-    next();
-    while (tok == TOK_LINENUM)
-      next();
-    if (tok < TOK_UIDENT)
-      cprime_error("range-for variable before '%s'", get_tok_str(tok, &tokc));
-    var_tok = tok;
-    tok_str_add(var_decl, tok);
-    next();
-    while (tok == TOK_LINENUM)
-      next();
-  }
-  else if (tok >= TOK_UIDENT)
-  {
-    int class_tok = find_current_class_nested_type_tok(tok);
-    if (!struct_find(class_tok))
-      class_tok = find_any_nested_struct_type_tok(tok);
-    if (!class_tok)
-      class_tok = tok;
-    TokenString *replay = tok_str_alloc();
-    tok_str_add2(replay, tok, &tokc);
-    tok_str_add(var_decl, class_tok);
-    next();
-    while (tok == TOK_LINENUM)
-      next();
-    if (tok == ':')
-    {
-      int nested_tok;
-      next();
-      skip(':');
-      while (tok == TOK_LINENUM)
-        next();
-      if (tok < TOK_UIDENT)
-        cprime_error("range-for nested type");
-      nested_tok = make_static_member_tok(class_tok, tok);
-      if (!struct_find(nested_tok))
-        nested_tok = tok;
-      var_decl->len = 0;
-      tok_str_add(var_decl, nested_tok);
-      next();
-      while (tok == TOK_LINENUM)
-        next();
-    }
-    if (tok != '&')
-    {
-      if (tok < TOK_UIDENT)
-      {
-        restore_cpp_lifecycle_probe(replay);
-        tok_str_free(var_decl);
-        return 0;
-      }
-      var_tok = tok;
-      tok_str_add2(replay, tok, &tokc);
-      tok_str_add(var_decl, tok);
-      next();
-      while (tok == TOK_LINENUM)
-        next();
-      if (tok != ':')
-      {
-        restore_cpp_lifecycle_probe(replay);
-        tok_str_free(var_decl);
-        return 0;
-      }
-      tok_str_free(replay);
-      goto range_for_decl_parsed;
-    }
-    tok_str_free(replay);
-    tok_str_add(var_decl, tok);
-    next();
-    while (tok == TOK_LINENUM)
-      next();
-    if (tok < TOK_UIDENT)
-      cprime_error("range-for variable before '%s'", get_tok_str(tok, &tokc));
-    var_tok = tok;
-    tok_str_add(var_decl, tok);
-    next();
-    while (tok == TOK_LINENUM)
-      next();
-  }
   else
   {
-    tok_str_free(var_decl);
-    return 0;
+    CType declared_type;
+    AttributeDef attributes;
+    memset(&declared_type, 0, sizeof declared_type);
+    memset(&attributes, 0, sizeof attributes);
+    if (!parse_btype(&declared_type, &attributes, 0))
+      cprime_error("range-for variable type");
+    type_decl(&declared_type, &attributes, &var_tok, TYPE_DIRECT);
+    if (var_tok < TOK_UIDENT)
+      cprime_error("range-for variable");
+    if (!add_ctype_declarator_tokens(var_decl, &declared_type, var_tok))
+      cprime_error("unsupported range-for variable declarator");
   }
-range_for_decl_parsed:
   skip(':');
   while (tok == TOK_LINENUM)
     next();
@@ -656,66 +494,20 @@ range_for_decl_parsed:
     decay_reference_type(&range_type);
     range_type = *pointed_type(&range_type);
   }
+  if (has_range_type && (range_type.t & VT_ARRAY) && range_type.ref)
+  {
+    is_array_range = 1;
+    array_count = range_type.ref->c;
+  }
   if (has_range_type && (range_type.t & VT_BTYPE) == VT_STRUCT)
     materialize_incomplete_template_type(&range_type);
   if (!is_array_range && has_range_type
       && (range_type.t & VT_BTYPE) == VT_STRUCT)
   {
-    CType index_type = int_type;
-    int begin_tok = tok_alloc_const("begin");
-    int end_method_tok = tok_alloc_const("end");
-    Sym *index_func =
-      resolve_member_func_by_arg_types(&range_type,
-                                       tok_alloc_const("operator[]"),
-                                       &index_type, 1);
-    is_iterator_range = type_has_member_func_name(&range_type, begin_tok)
+    is_iterator_range = type_has_member_func_name(&range_type,
+                                     tok_alloc_const("begin"))
                         && type_has_member_func_name(&range_type,
-                                                     end_method_tok);
-    if (is_iterator_range)
-    {
-      Sym *begin_func = resolve_member_func_by_arg_count(&range_type,
-                                                         begin_tok, 0);
-      if (begin_func && (begin_func->type.t & VT_BTYPE) == VT_FUNC
-          && begin_func->type.ref)
-      {
-        CType iterator_type = begin_func->type.ref->type;
-        Sym *deref_func;
-        if (is_reference_type(&iterator_type))
-        {
-          decay_reference_type(&iterator_type);
-          iterator_type = *pointed_type(&iterator_type);
-        }
-        materialize_incomplete_template_type(&iterator_type);
-        if ((iterator_type.t & VT_BTYPE) == VT_PTR)
-        {
-          /* Dereferencing a built-in pointer is always an lvalue.  Treating
-             it like a proxy iterator materializes a copy of each element,
-             so `for (T &value : range)` binds to that copy instead of the
-             element and can discard ownership state in copy constructors. */
-          iterator_deref_returns_reference = 1;
-        }
-        else
-        {
-          deref_func = resolve_member_func_by_arg_count(
-                         &iterator_type, tok_alloc_const("operator*"), 0);
-          if (deref_func && (deref_func->type.t & VT_BTYPE) == VT_FUNC
-              && deref_func->type.ref)
-            iterator_deref_returns_reference =
-              is_reference_type(&deref_func->type.ref->type);
-        }
-      }
-    }
-    if (index_func && (index_func->type.t & VT_BTYPE) == VT_FUNC
-        && index_func->type.ref)
-    {
-      range_elem_type = index_func->type.ref->type;
-      if (is_reference_type(&range_elem_type))
-      {
-        decay_reference_type(&range_elem_type);
-        range_elem_type = *pointed_type(&range_elem_type);
-      }
-      has_range_elem_type = 1;
-    }
+                                     tok_alloc_const("end"));
   }
   skip(')');
 
@@ -730,12 +522,9 @@ range_for_decl_parsed:
   snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_i_%d",
            range_for_temp_counter++);
   index_tok = tok_alloc_const(tmp_name);
-  snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_p_%d",
+  snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_%d",
            range_for_temp_counter++);
-  ptr_tok = tok_alloc_const(tmp_name);
-  snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_value_%d",
-           range_for_temp_counter++);
-  value_tok = tok_alloc_const(tmp_name);
+  range_tok = tok_alloc_const(tmp_name);
   snprintf(tmp_name, sizeof(tmp_name), "__cprime_range_it_%d",
            range_for_temp_counter++);
   iterator_tok = tok_alloc_const(tmp_name);
@@ -745,14 +534,20 @@ range_for_decl_parsed:
 
   lowered = tok_str_alloc();
   tok_str_add(lowered, '{');
+  /* The range expression is evaluated once. The hidden forwarding reference
+     also extends a temporary range's lifetime through the entire loop. */
+  tok_str_add(lowered, TOK_AUTO);
+  tok_str_add(lowered, TOK_LAND);
+  tok_str_add(lowered, range_tok);
+  tok_str_add(lowered, '=');
+  tok_str_append_without_eof(lowered, range_expr);
+  tok_str_add(lowered, ';');
   if (is_iterator_range)
   {
     tok_str_add(lowered, TOK_AUTO);
     tok_str_add(lowered, iterator_tok);
     tok_str_add(lowered, '=');
-    tok_str_add(lowered, '(');
-    tok_str_append_without_eof(lowered, range_expr);
-    tok_str_add(lowered, ')');
+    tok_str_add(lowered, range_tok);
     tok_str_add(lowered, '.');
     tok_str_add(lowered, tok_alloc_const("begin"));
     tok_str_add(lowered, '(');
@@ -761,9 +556,7 @@ range_for_decl_parsed:
     tok_str_add(lowered, TOK_AUTO);
     tok_str_add(lowered, end_tok);
     tok_str_add(lowered, '=');
-    tok_str_add(lowered, '(');
-    tok_str_append_without_eof(lowered, range_expr);
-    tok_str_add(lowered, ')');
+    tok_str_add(lowered, range_tok);
     tok_str_add(lowered, '.');
     tok_str_add(lowered, tok_alloc_const("end"));
     tok_str_add(lowered, '(');
@@ -799,9 +592,7 @@ range_for_decl_parsed:
       tok_str_add_cint(lowered, array_count);
     else
     {
-      tok_str_add(lowered, '(');
-      tok_str_append_without_eof(lowered, range_expr);
-      tok_str_add(lowered, ')');
+      tok_str_add(lowered, range_tok);
       tok_str_add(lowered, '.');
       tok_str_add(lowered, tok_alloc_const("Size"));
       tok_str_add(lowered, '(');
@@ -824,76 +615,24 @@ range_for_decl_parsed:
   }
   tok_str_add(lowered, ')');
   tok_str_add(lowered, '{');
-  if (is_array_range)
+  /* Keep the user's declaration: a value loop variable owns a copy, while
+     a reference loop variable binds to the actual iterator result. */
+  tok_str_append_without_eof(lowered, var_decl);
+  tok_str_add(lowered, '=');
+  if (is_iterator_range)
   {
-    tok_str_append_without_eof(lowered, var_decl);
-    tok_str_add(lowered, '=');
+    tok_str_add(lowered, '*');
+    tok_str_add(lowered, iterator_tok);
+  }
+  else
+  {
     tok_str_add(lowered, range_tok);
     tok_str_add(lowered, '[');
     tok_str_add(lowered, index_tok);
     tok_str_add(lowered, ']');
-    tok_str_add(lowered, ';');
-    tok_str_append_without_eof(lowered, body);
   }
-  else if (is_iterator_range)
-  {
-    if (iterator_deref_returns_reference)
-    {
-      tok_str_add(lowered, TOK_AUTO);
-      tok_str_add(lowered, '*');
-      tok_str_add(lowered, ptr_tok);
-      tok_str_add(lowered, '=');
-      tok_str_add(lowered, '&');
-      tok_str_add(lowered, '(');
-      tok_str_add(lowered, '*');
-      tok_str_add(lowered, iterator_tok);
-      tok_str_add(lowered, ')');
-      tok_str_add(lowered, ';');
-    }
-    else
-    {
-      /* Proxy iterators return an aggregate by value.  Store that temporary
-         for the iteration before taking its address. */
-      tok_str_add(lowered, TOK_AUTO);
-      tok_str_add(lowered, value_tok);
-      tok_str_add(lowered, '=');
-      tok_str_add(lowered, '(');
-      tok_str_add(lowered, '*');
-      tok_str_add(lowered, iterator_tok);
-      tok_str_add(lowered, ')');
-      tok_str_add(lowered, ';');
-      tok_str_add(lowered, TOK_AUTO);
-      tok_str_add(lowered, '*');
-      tok_str_add(lowered, ptr_tok);
-      tok_str_add(lowered, '=');
-      tok_str_add(lowered, '&');
-      tok_str_add(lowered, value_tok);
-      tok_str_add(lowered, ';');
-    }
-    append_range_for_body(lowered, body, var_tok, ptr_tok);
-  }
-  else
-  {
-    if (has_range_elem_type)
-    {
-      if (!add_ctype_tokens(lowered, &range_elem_type))
-        tok_str_add(lowered, TOK_AUTO);
-    }
-    else
-      tok_str_add(lowered, TOK_AUTO);
-    tok_str_add(lowered, '*');
-    tok_str_add(lowered, ptr_tok);
-    tok_str_add(lowered, '=');
-    tok_str_add(lowered, '&');
-    tok_str_add(lowered, '(');
-    tok_str_append_without_eof(lowered, range_expr);
-    tok_str_add(lowered, ')');
-    tok_str_add(lowered, '[');
-    tok_str_add(lowered, index_tok);
-    tok_str_add(lowered, ']');
-    tok_str_add(lowered, ';');
-    append_range_for_body(lowered, body, var_tok, ptr_tok);
-  }
+  tok_str_add(lowered, ';');
+  tok_str_append_without_eof(lowered, body);
   if (body_first_tok != '{' && body_had_semicolon)
     tok_str_add(lowered, ';');
   tok_str_add(lowered, '}');
@@ -1108,7 +847,24 @@ again:
     e = 0;
     if (tok != ';')
     {
-      if (tok == '{' && (func_vt.t & VT_BTYPE) == VT_STRUCT)
+      if (tok == '{' && (func_vt.t & VT_BTYPE) == VT_STRUCT
+          && func_vt.ref && !func_vt.ref->a.cpp_user_constructor)
+      {
+        CppConstructionDestination construction, *saved_destination;
+        CType register_type;
+        int align, regsize;
+        saved_destination = cpp_construction_destination;
+        construction.type = func_vt;
+        construction.storage = VT_LLOCAL | VT_LVAL;
+        construction.address = func_vc;
+        construction.available = cpp_current_return_regs(&func_vt,
+                                  &register_type, &align, &regsize) == 0;
+        construction.conditional_marker = 0;
+        cpp_construction_destination = &construction;
+        materialize_braced_temporary(&func_vt);
+        cpp_construction_destination = saved_destination;
+      }
+      else if (tok == '{' && (func_vt.t & VT_BTYPE) == VT_STRUCT)
       {
         int depth = 1;
         int struct_tok = get_struct_type_name_tok(&func_vt);
@@ -1150,7 +906,7 @@ again:
         saved_tokc = tokc;
         begin_macro(return_expr, 1);
         next();
-        gexpr();
+        if (!cpp_parse_class_return_expression()) gexpr();
         /* end_macro() owns and frees return_expr. */
         end_macro();
         tok = saved_tok;
@@ -1167,7 +923,8 @@ again:
           if (is_reference_type(&vtop->type))
             decay_reference_type(&vtop->type);
           else {
-            if ((vtop->type.t & VT_BTYPE) != VT_FUNC)
+            if ((vtop->type.t & VT_BTYPE) != VT_FUNC
+                && !(vtop->type.t & (VT_ARRAY | VT_VLA)))
               test_lvalue();
             mk_pointer(&vtop->type);
             gaddrof();
@@ -1618,6 +1375,7 @@ static void skip_or_save_block_ex(TokenString **str, int allow_eof)
         && (angle > 0
             || (prev_sig >= TOK_UIDENT
                 && (find_template_def(prev_sig)
+                    || find_template_def(find_current_namespace_tok(prev_sig))
                     || is_template_keyword_tok(prev_prev_sig)))))
       ++angle;
     else if ((t == TOK_SAR || t == TOK_SHR) && angle > 0)

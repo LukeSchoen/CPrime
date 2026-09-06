@@ -359,16 +359,23 @@ __CRT_INLINE long double __cdecl nexttowardl(long double x, long double to) {
   return nextafter(x, to);
 }
 
-/* Override msvcrt fabs(): 6.3x speedup! */
+/* Clear the sign without comparing or changing zero/NaN payload bits. */
 
 __CRT_INLINE double __cdecl fabs(double x) {
-  return x < 0 ? -x : x;
+  union {double f; uint64_t i;} u = {.f = x};
+  u.i &= UINT64_C(0x7fffffffffffffff);
+  return u.f;
 }
 __CRT_INLINE float __cdecl fabsf(float x) {
-  return x < 0 ? -x : x;
+  union {float f; uint32_t i;} u = {.f = x};
+  u.i &= UINT32_C(0x7fffffff);
+  return u.f;
 }
 __CRT_INLINE long double __cdecl fabsl(long double x) {
-  return x < 0 ? -x : x;
+  /* The Windows target uses the double representation for long double. */
+  union {long double f; uint64_t i;} u = {.f = x};
+  u.i &= UINT64_C(0x7fffffffffffffff);
+  return u.f;
 }
 
 

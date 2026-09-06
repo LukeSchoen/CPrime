@@ -1,8 +1,40 @@
 #ifndef _ALGORITHM
 #define _ALGORITHM
 
+#include <utility>
+#include <stdlib.h>
+
 namespace std
 {
+  template<class ForwardIterator, class BinaryPredicate>
+  ForwardIterator unique(ForwardIterator first, ForwardIterator last,
+                         BinaryPredicate equal)
+  {
+    if (first == last) return last;
+    ForwardIterator result = first;
+    while (++first != last)
+      if (!equal(*result, *first))
+      {
+        ++result;
+        if (result != first) *result = std::move(*first);
+      }
+    return ++result;
+  }
+
+  template<class ForwardIterator>
+  ForwardIterator unique(ForwardIterator first, ForwardIterator last)
+  {
+    if (first == last) return last;
+    ForwardIterator result = first;
+    while (++first != last)
+      if (!(*result == *first))
+      {
+        ++result;
+        if (result != first) *result = std::move(*first);
+      }
+    return ++result;
+  }
+
   template<class ForwardIt, class T>
   void fill(ForwardIt first, ForwardIt last, const T &value)
   {

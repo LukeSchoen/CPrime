@@ -20,8 +20,10 @@ typedef union { long long __ll; long double __ld; } max_align_t;
 #endif
 #endif
 
+#ifndef __cplusplus
 #ifndef nullptr
 #define nullptr 0
+#endif
 #endif
 
 #undef offsetof

@@ -3,4 +3,16 @@
 
 #include <stdlib.h>
 
+inline long abs(long value) { return ::labs(value); }
+inline long long abs(long long value) { return ::llabs(value); }
+
+namespace std
+{
+  inline int abs(int value) { return ::abs(value); }
+  inline long abs(long value) { return ::labs(value); }
+  inline long long abs(long long value) { return ::llabs(value); }
+  inline long labs(long value) { return ::labs(value); }
+  inline long long llabs(long long value) { return ::llabs(value); }
+}
+
 #endif

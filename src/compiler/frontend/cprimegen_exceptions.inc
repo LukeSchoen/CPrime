@@ -468,7 +468,7 @@ static Sym *cpp_eh_type_descriptor(CType *original)
       : (type.t & VT_BTYPE) == VT_PTR ? CPC_EH_POINTER
       : (type.t & VT_BTYPE) == VT_VOID ? CPC_EH_VOID
       : (type.t & VT_BTYPE) == VT_FUNC ? CPC_EH_FUNCTION
-      : (type.t & VT_NULLPTR_TYPE) ? CPC_EH_NULLPTR : CPC_EH_SCALAR;
+      : ((type.t & VT_BTYPE) == VT_NULLPTR) ? CPC_EH_NULLPTR : CPC_EH_SCALAR;
   if (descriptor.kind == CPC_EH_POINTER) pointee = cpp_eh_type_descriptor(pointed_type(&type));
   if (descriptor.kind == CPC_EH_CLASS) {
     cpp_eh_collect_bases(get_struct_type_name_tok(&type), 0, 1, &bases, &base_count);

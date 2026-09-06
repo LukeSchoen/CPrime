@@ -902,6 +902,7 @@ struct filespec {
 #define VT_DOUBLE           9
 #define VT_LDOUBLE         10
 #define VT_BOOL            11
+#define VT_NULLPTR         12
 #define VT_QLONG           13
 #define VT_QFLOAT          14
 
@@ -920,7 +921,15 @@ struct filespec {
 #define VT_INLINE  0x00008000
 #define VT_REFERENCE 0x00010000
 #define VT_RVALUE_REFERENCE 0x00020000
+/* Wide/UTF character identity is distinct from its integer storage.
+   VT_DEFSIGN has no signedness meaning on a non-byte type, so the character
+   family reuses it to distinguish UTF character types from wchar_t. */
 #define VT_WCHAR_T 0x00040000
+#define VT_CHAR16_T (VT_SHORT | VT_UNSIGNED | VT_WCHAR_T | VT_DEFSIGN)
+#define VT_CHAR32_T (VT_INT | VT_UNSIGNED | VT_WCHAR_T | VT_DEFSIGN)
+#define CHARACTER_TYPE_KIND(t) (!((t) & VT_WCHAR_T) ? 0 : !((t) & VT_DEFSIGN) ? 1 : (((t) & VT_BTYPE) == VT_SHORT ? 2 : 3))
+#define CHARACTER_TYPE_NAME(t) (CHARACTER_TYPE_KIND(t) == 1 ? "wchar_t" : CHARACTER_TYPE_KIND(t) == 2 ? "char16_t" : "char32_t")
+#define CHARACTER_STORAGE_TYPE(t) (((t) & VT_WCHAR_T) ? ((t) & ~(VT_WCHAR_T | VT_DEFSIGN)) : (t))
 #define VT_NULLPTR_TYPE 0x00080000 /* overload-probe null pointer constant */
 
 #define VT_STRUCT_SHIFT 20

@@ -4,18 +4,42 @@
 #include <chrono>
 #include <cprime_thread.h>
 #include <utility>
+#include <functional>
 #include <stdexcept>
 
 namespace std
 {
-  template<class Function> struct __cpc_thread_task
+  template<class... Args> struct __cpc_thread_arguments;
+  template<> struct __cpc_thread_arguments<>
+  {
+    template<class Function, class... Bound>
+    void invoke(Function &function, Bound&&... bound)
+    { std::invoke(std::move(function), std::forward<Bound>(bound)...); }
+  };
+  template<class First, class... Rest>
+  struct __cpc_thread_arguments<First, Rest...>
+  {
+    First first;
+    __cpc_thread_arguments<Rest...> rest;
+    template<class Value, class... Values>
+    __cpc_thread_arguments(Value&& value, Values&&... values)
+      : first(std::forward<Value>(value)), rest(std::forward<Values>(values)...) {}
+    template<class Function, class... Bound>
+    void invoke(Function &function, Bound&&... bound)
+    { rest.invoke(function, std::forward<Bound>(bound)..., std::move(first)); }
+  };
+
+  template<class Function, class... Args> struct __cpc_thread_task
   {
     Function function;
-    explicit __cpc_thread_task(Function input) : function(std::move(input)) {}
+    __cpc_thread_arguments<Args...> arguments;
+    template<class Input, class... Values>
+    __cpc_thread_task(Input&& input, Values&&... args)
+      : function(std::forward<Input>(input)), arguments(std::forward<Values>(args)...) {}
     static void run(void *argument)
     {
       __cpc_thread_task *task = static_cast<__cpc_thread_task *>(argument);
-      try { task->function(); }
+      try { task->arguments.invoke(task->function); }
       catch (...) { delete task; std::terminate(); }
       delete task;
     }
@@ -27,10 +51,14 @@ namespace std
     typedef unsigned int id;
     typedef void *native_handle_type;
     thread() : m_thread(0) {}
-    template<class Function> explicit thread(Function function) : m_thread(0)
+    template<class Function, class... Args>
+    explicit thread(Function &&function, Args&&... args) : m_thread(0)
     {
-      __cpc_thread_task<Function> *task = new __cpc_thread_task<Function>(std::move(function));
-      m_thread = __cpc_windows_thread_create(&__cpc_thread_task<Function>::run, task);
+      typedef __cpc_thread_task<typename decay<Function>::type,
+                               typename decay<Args>::type...> task_type;
+      task_type *task = new task_type(std::forward<Function>(function),
+                                     std::forward<Args>(args)...);
+      m_thread = __cpc_windows_thread_create(&task_type::run, task);
       if (!m_thread) { delete task; throw runtime_error("could not create thread"); }
     }
     ~thread() { if (joinable()) std::terminate(); }

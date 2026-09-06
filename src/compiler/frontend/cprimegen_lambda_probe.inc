@@ -13,7 +13,10 @@ static void probe_lambda_body(LambdaExpression *lambda, TokenString *parameters,
   SValue saved_values[VSTACK_SIZE];
   int saved_scope, i, saved_tok = tok, saved_loc = loc;
   int saved_nocode = nocode_wanted, saved_temp_count = nb_temp_local_vars;
+  int saved_unevaluated_depth = cpp_unevaluated_expression_depth;
   int saved_defer = defer_pending_member_funcs;
+  int saved_type_owner = local_type_owner_tok;
+  int saved_type_index = local_type_declaration_index;
   int value_count = (int)(vtop - vstack + 1);
   char saved_debug = debug_modes;
   CValue saved_tokc = tokc;
@@ -25,6 +28,7 @@ static void probe_lambda_body(LambdaExpression *lambda, TokenString *parameters,
   memcpy(saved_temps, arr_temp_local_vars, sizeof(saved_temps));
   vtop = vstack - 1;
   nocode_wanted = 1;
+  cpp_unevaluated_expression_depth = 0;
   defer_pending_member_funcs = 1;
   debug_modes = 0;
   nb_temp_local_vars = 0;
@@ -43,6 +47,11 @@ static void probe_lambda_body(LambdaExpression *lambda, TokenString *parameters,
     sym_push(lambda->captures[i].name, &visible, VT_LOCAL | VT_LVAL, 0);
   }
   lambda->parent_probe = saved_probe;
+  if (lambda->body_owner_tok)
+  {
+    local_type_owner_tok = lambda->body_owner_tok;
+    local_type_declaration_index = 0;
+  }
   lambda_probe = lambda;
   begin_macro(&macro, 0);
   next();
@@ -50,6 +59,8 @@ static void probe_lambda_body(LambdaExpression *lambda, TokenString *parameters,
   while (macro_stack && macro_stack != parent) end_macro();
   macro_ptr = parent_ptr;
   lambda_probe = saved_probe;
+  local_type_owner_tok = saved_type_owner;
+  local_type_declaration_index = saved_type_index;
   sym_pop(&local_stack, NULL, 0);
   sym_pop(&all_cleanups, NULL, 0);
   sym_pop(&pending_gotos, NULL, 0);
@@ -65,6 +76,7 @@ static void probe_lambda_body(LambdaExpression *lambda, TokenString *parameters,
   cur_switch = saved_switch;
   loc = saved_loc;
   nocode_wanted = saved_nocode;
+  cpp_unevaluated_expression_depth = saved_unevaluated_depth;
   nb_temp_local_vars = saved_temp_count;
   defer_pending_member_funcs = saved_defer;
   debug_modes = saved_debug;

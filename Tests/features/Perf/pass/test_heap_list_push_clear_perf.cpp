@@ -2,8 +2,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-
-unsigned long long GetTickCount64(void);
+#include <windows.h>
 
 template<typename T>
 class List

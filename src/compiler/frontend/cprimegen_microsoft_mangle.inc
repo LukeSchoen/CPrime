@@ -298,8 +298,10 @@ static void cpp_ms_mangle_type(CppMsMangleContext *ctx, CType *type, int mode)
              record ? record->namespace_tok : symbol_namespace_scope_tok(tag));
     return;
   }
-  if (type->t & VT_WCHAR_T) code = "_W";
-  else if (type->t & VT_NULLPTR_TYPE) code = "$$T";
+  if (CHARACTER_TYPE_KIND(type->t))
+    code = CHARACTER_TYPE_KIND(type->t) == 1 ? "_W"
+           : CHARACTER_TYPE_KIND(type->t) == 2 ? "_S" : "_U";
+  else if (bt == VT_NULLPTR) code = "$$T";
   else switch (bt) {
     case VT_VOID: code = "X"; break;
     case VT_BYTE: code = !(type->t & VT_DEFSIGN) ? "D"

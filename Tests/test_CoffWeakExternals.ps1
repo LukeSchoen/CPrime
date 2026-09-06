@@ -105,6 +105,24 @@ extern DWORD (*weak_address)(void);
 int main(void) { return optional()!=GetCurrentProcessId() || weak_address()!=GetCurrentProcessId() || weak_address!=optional; }
 '@
         Check 'weak alias resolves to a DLL import thunk' @('import-main.c', 'import.obj')
+        Set-Content -Encoding ASCII 'mixed-import.c' @'
+__declspec(dllimport) unsigned long __stdcall GetCurrentProcessId(void);
+unsigned long native_process_id(void) { return GetCurrentProcessId(); }
+'@
+        Invoke-Checked $native @('-c', 'mixed-import.c', '-o', 'mixed-import.obj')
+        Set-Content -Encoding ASCII 'mixed-import-main.c' @'
+extern unsigned long GetCurrentProcessId(void);
+extern unsigned long native_process_id(void);
+int main(void) {
+    unsigned long id = native_process_id();
+    return !id || id != GetCurrentProcessId();
+}
+'@
+        Compile @('-c', 'mixed-import-main.c', '-o', 'mixed-import-main.o')
+        Check 'native IAT reference preceding callable import retains its slot' @('mixed-import.obj', 'mixed-import-main.o', '-lkernel32')
+        Check 'callable import preceding native IAT reference retains its slot' @('mixed-import-main.o', 'mixed-import.obj', '-lkernel32')
+        Compile @('-r', 'mixed-import.obj', 'mixed-import-main.o', '-o', 'mixed-import-r.o')
+        Check 'mixed IAT and callable imports survive relocatable link' @('mixed-import-r.o', '-lkernel32')
         Set-Content -Encoding ASCII 'alternate.s' @'
 .section .drectve,"yn"
 .ascii " /alternatename:optional=fallback /alternatename:unused=absent"

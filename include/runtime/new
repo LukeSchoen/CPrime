@@ -4,6 +4,11 @@
 #include <exception>
 
 namespace std {
+  struct nothrow_t {
+    explicit nothrow_t() = default;
+  };
+  inline constexpr nothrow_t nothrow{};
+
   class bad_alloc : public exception {
   public:
     bad_alloc() noexcept {}

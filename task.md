@@ -1,23 +1,60 @@
-## Implementation resumed (2026-09-06)
+## Canonical CL migration (2026-09-06)
 
-The task is active. Packed resume34 compiles and links all 66 original sources
-from the CodeClip manifest with zero warnings in 9.517 seconds. The verified
-compiler is copied to the measurement project and produces
-`C:\Luke\Src\OT\cl\builds\racer\Racer.exe`. Startup now opens Racer, remains
-running for the eight-second smoke test, and exits 0 after WM_CLOSE. It is
-not ready for gameplay testing: the window currently shows the green clear
-color without the track/car. The Clang reference renders the car correctly.
-Historical successful builds below used workarounds and do not establish
-readiness for this wave.
+The CPC-era duplicate CL implementations and their consumers now use ordinary
+CL classes, without old-name aliases. Racer and FreeLancer remain functions
+selected in ModelViewer.cpp. CodeClip owns the VS-project-derived manifest
+consumed by Prime and Clang. CoreCodeClip.exe, generate_core.cmd, the Premake
+core action and the Racer-specific driver/shim sources have been removed.
+See CL_MIGRATION.md for the API migration and library behavior details.
 
-The latest investigation has two concrete remaining differences in isolated
-original-CL probes. Asset-path decoding produces different bytes from Clang:
-the entropy engine's initial atom state agrees, but its first update diverges.
-With the expected asset path supplied only in the diagnostic probe, the image
-loads and uploads correctly, but stored MVP matrix values are incorrect.
-No path substitution or drawing workaround was added to the application.
-Logs are `build/racer-smoke-packed34-window.log`, `build/probe-entropy.log`,
-`build/probe-entropy-clang.log` and `build/probe-draw.log`.
+The current compiler is rebuilt and packaged as `C:/Luke/Src/CPrime/cpc.exe`
+and copied to `C:/Luke/Src/OT/cl/cpc.exe`. Verified application outputs:
+
+- `C:/Luke/Src/OT/cl/builds/Racer.exe`: the normal build_prime.cmd compiled
+  all 65 sources with zero warnings in 16.010 seconds and linked Model Viewer.exe;
+  Racer.exe is an identical preserved copy. The car and track render, keyboard
+  and wheel input are exercised, and WM_CLOSE exits zero after eight seconds.
+- `C:/Luke/Src/OT/cl/builds/FreeLancer_prime.exe`: all 89 original sources
+  compile and link with zero warnings (21.869 seconds compilation, with feature
+  tests running concurrently). The textured scene renders and WM_CLOSE exits
+  zero after 35 seconds. Existing MVP/passTexcoord0/passcolor0 binding warnings
+  and the unused normal0 message remain, as in the native reference.
+
+Racer is restored as the selected ordinary function and CodeClip has regenerated
+its 65-source manifest. Captures are `build/racer-packed6-controls.png` and
+`build/freelancer-packed6.png`. These timings are observations, not a controlled
+performance comparison with earlier builds.
+
+Current packaged verification: 990 feature tests, 19 C compatibility tests,
+all dedicated multi-source checks, and 48 canonical CL tests pass. Mixed Clang/CPC
+stack-probe/vtable and nullptr_t fixtures pass in both directions at -O0/-O2,
+plus CPC-only multiple-input builds. The canonical Assimp import/export test
+passes geometry, material, texture-path and failure cases; rerun it using
+`python Tests/test_cl_assimp.py` after building the FreeLancer graph.
+Logs: `build/migration-features-packed6.log`, `build/cl-migration-packed6.log`,
+`build/migration-native-stack6.log`, `build/migration-native-nullptr6.log`,
+`build/assimp-packed6.log`, and the corresponding application build/smoke logs.
+
+This wave integrates true nullptr_t identity, dependent non-type template
+parameters, recursive pack forwarding and nested partial-specialization
+matching, reference construction and memberwise moves, pointer allocation and
+array value initialization. Standard pair and variadic owned thread arguments
+now use these compiler semantics. A native-compatible __chkstk and separate CPC
+frame helper fix native large-stack calls. Placement construction preserves the
+vtable installed by the constructor. Positive runtime regressions cover these
+behaviors, including move-only ownership and reference-member binding.
+
+These gates do not establish full C++ conformance. Existing standard-trait
+shortcuts and incomplete deleted-function diagnostics still need work. Native
+RTTI, deleting-destructor ABI, virtual bases and cross-toolchain exception
+interoperability remain separate compatibility work. The optional OT server
+check also has three unchanged baseline clDelete(this) errors outside this
+migration. Historical results and earlier implementation details follow.
+
+## Earlier implementation records
+
+The following records describe previous waves and their measurements, not the
+current migration build. Current verification is recorded above.
 
 CodeClip exports one selected solution/project graph to a schema-2 manifest.
 Prime and Clang consume the same original sources, effective per-file settings,

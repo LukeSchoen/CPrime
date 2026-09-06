@@ -1,0 +1,1 @@
+template<class T>struct A{T x;template<class V>A(V&&v):x(static_cast<V&&>(v)) {}};int main(){A<int>a(3);return a.x!=3;}

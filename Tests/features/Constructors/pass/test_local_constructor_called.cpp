@@ -16,7 +16,7 @@ Widget::Widget()
 
 int main(void)
 {
-  struct Widget w = {0};
+  Widget w;
   if (g != 1)
     return 1;
   return w.v == 7 ? 0 : 2;

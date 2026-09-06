@@ -1,0 +1,211 @@
+static int compare_free_function_template_order(TemplateDef *, TemplateDef *);
+static int infer_template_args_from_call_with_explicit(TemplateDef *, CType *, int,
+                                                       TemplateArgList *, TemplateArgList *);
+/* Bind an explicit function specialization through its declaration. A '<'
+   inside the body is never part of the specialization's declarator. */
+static void parse_explicit_function_specialization(void)
+{
+  TokenString *parameters = tok_str_alloc(), *definition = tok_str_alloc();
+  CType result, function, actual[16];
+  AttributeDef attributes;
+  TemplateArgList explicit_args = {{0}, 0};
+  int name, qualified, owner = 0, qualifier = 0, cv, exception_spec;
+  int count = 0, depth = 0, function_tok = 0, i, saved_tok, is_inline;
+  int saved_class_depth = nb_defining_class_stack;
+  int saved_namespace = current_namespace_scope_tok();
+  CValue saved_tokc;
+  Sym *parameter, *symbol;
+  TemplateDef *selected_free = NULL;
+
+  if (!parse_btype(&result, &attributes, 0)) expect("specialization return type");
+  is_inline = !!(result.t & VT_INLINE);
+  while (tok == '*' || tok == '&' || tok == TOK_LAND) {
+    int reference = tok == '&' ? VT_REFERENCE : tok == TOK_LAND ? VT_RVALUE_REFERENCE : 0;
+    mk_pointer(&result); result.t |= reference;
+    next();
+    while (tok == TOK_CONST1 || tok == TOK_VOLATILE1) {
+      result.t |= tok == TOK_CONST1 ? VT_CONSTANT : VT_VOLATILE;
+      next();
+    }
+  }
+  for (;;) {
+    TemplateArgList component_args = {{0}, 0};
+    int has_args = 0;
+    if (tok < TOK_UIDENT) expect("specialization name");
+    name = tok;
+    if (qualifier && is_namespace_tok(qualifier)) {
+      int parts[2] = { qualifier, name };
+      qualified = make_namespace_tok_from_parts(parts, 2);
+    } else qualified = qualifier ? make_static_member_tok(qualifier, name)
+                                 : find_current_namespace_tok(name);
+    next();
+    if (tok == TOK_LT || tok == '<') {
+      has_args = 1;
+      parse_template_type_args(&component_args);
+    }
+    if (tok != ':') {
+      explicit_args = component_args;
+      break;
+    }
+    next(); skip(':');
+    if (has_args) {
+      TemplateDef *record = find_class_template_def(qualified);
+      if (!record) cprime_error("class template expected in specialization qualifier");
+      qualified = instantiate_template_if_needed(record, &component_args);
+    }
+    qualifier = qualified;
+    if (struct_find(qualifier)) owner = qualifier;
+  }
+  skip('(');
+  while (tok != TOK_EOF && (tok != ')' || depth)) {
+    if (tok == '(') ++depth;
+    else if (tok == ')') --depth;
+    tok_str_add_tok(parameters); next();
+  }
+  skip(')'); tok_str_add(parameters, TOK_EOF);
+  cv = skip_member_func_cv_qualifiers();
+  exception_spec = last_member_noexcept_spec;
+  if (owner) defining_class_stack[nb_defining_class_stack++] = owner;
+  function = make_func_type_from_saved_params(&result, parameters);
+  nb_defining_class_stack = saved_class_depth;
+  function.t |= cv;
+  apply_function_noexcept(&function, exception_spec);
+  for (parameter = function.ref->next; parameter; parameter = parameter->next) {
+    if (count == 16) cprime_error("too many specialization parameters");
+    actual[count] = parameter->type;
+    /* Deduction takes the referred-to expression type. Preserve lvalue
+       category for reference patterns without adding a pointer level. */
+    if (is_reference_type(&actual[count])) {
+      int category = actual[count].t & (VT_REFERENCE | VT_RVALUE_REFERENCE);
+      actual[count] = *pointed_type(&actual[count]);
+      actual[count].t |= category;
+    }
+    ++count;
+  }
+  if (owner) {
+    TemplateMemberDef *member;
+    TemplateInstOwner *record = find_template_inst_owner_entry(owner);
+    int lookup = record ? record->owner->name_tok : owner;
+    int class_argument = first_template_arg_tok_from_inst_type(&(CType){VT_STRUCT, struct_find(owner)});
+    int old_count = nb_template_member_call_arg_types;
+    int old_explicit = explicit_member_template_arg_tok;
+    CType old_actual[16];
+    memcpy(old_actual, template_member_call_arg_types, sizeof(old_actual));
+    nb_template_member_call_arg_types = count;
+    memcpy(template_member_call_arg_types, actual, count * sizeof(CType));
+    ++materializing_template_interface;
+    for (member = template_member_candidates(lookup, name); member; member = member->bucket_next) {
+      int key, candidate;
+      const CppMemberDeclInfo *info;
+      if (!template_member_is_call_specialized(member)
+          || template_member_def_method_tok(member) != name) continue;
+      explicit_member_template_arg_tok = 0;
+      key = explicit_args.nb ? intern_explicit_member_arguments(&explicit_args)
+                            : deduce_member_template_argument_key(member, owner, actual, count);
+      if (key <= 0) continue;
+      explicit_member_template_arg_tok = explicit_args.nb ? key : 0;
+      last_instantiated_member_func_tok = 0;
+      instantiate_template_member_if_needed(member, class_argument, owner, key);
+      candidate = last_instantiated_member_func_tok;
+      info = candidate ? lookup_cpp_member_decl(candidate) : NULL;
+      if (!info || info->cv_qualifiers != cv
+          || !same_func_param_signature((CType *)&info->function_type, &function)
+          || !compare_types(&info->function_type.ref->type, &result, 1)) continue;
+      if (function_tok && function_tok != candidate) {
+        int order = compare_member_function_template_order(candidate, function_tok);
+        if (order < 0) continue;
+        if (!order) cprime_error("ambiguous explicit member template specialization '%s'", get_tok_str(name, NULL));
+      }
+      function_tok = candidate;
+    }
+    compile_pending_template_specs_without_member_flush();
+    --materializing_template_interface;
+    explicit_member_template_arg_tok = old_explicit;
+    nb_template_member_call_arg_types = old_count;
+    memcpy(template_member_call_arg_types, old_actual, sizeof(old_actual));
+  } else {
+    TemplateDef *candidate;
+    for (candidate = template_def_candidates(qualified); candidate;
+         candidate = candidate->lookup_bucket_next) {
+      TemplateArgList arguments;
+      int candidate_tok;
+      if (candidate->is_class || candidate->is_alias
+          || template_def_lookup_tok(candidate) != qualified
+          || candidate->func_max_args != count) continue;
+      if (!infer_template_args_from_call_with_explicit(candidate, actual, count,
+                          &arguments, explicit_args.nb ? &explicit_args : NULL)) continue;
+      candidate_tok = instantiate_template_if_needed(candidate, &arguments);
+      compile_pending_template_specs_without_member_flush();
+      symbol = global_symbol_find(candidate_tok);
+      if (!symbol || !same_func_param_signature(&symbol->type, &function)
+          || !compare_types(&symbol->type.ref->type, &result, 1)) continue;
+      if (function_tok && function_tok != candidate_tok) {
+        int order = compare_free_function_template_order(candidate, selected_free);
+        if (order < 0) continue;
+        if (!order) cprime_error("ambiguous explicit function template specialization '%s'", get_tok_str(name, NULL));
+      }
+      function_tok = candidate_tok; selected_free = candidate;
+    }
+  }
+  if (!function_tok)
+    cprime_error("no matching function template for specialization '%s'", get_tok_str(name, NULL));
+  symbol = global_symbol_find(function_tok);
+  for (i = 0; i < nb_explicit_function_specializations; ++i)
+    if (explicit_function_specializations[i] == function_tok) break;
+  if (i == nb_explicit_function_specializations) {
+    if (symbol && symbol->c)
+      cprime_error("specialization after instantiation '%s'", get_tok_str(name, NULL));
+    explicit_function_specializations = cprime_realloc(explicit_function_specializations,
+        (nb_explicit_function_specializations + 1) * sizeof(int));
+    explicit_function_specializations[nb_explicit_function_specializations++] = function_tok;
+  }
+  /* The selected primary contributes its interface and native template
+     identity, while this declaration supplies the specialization's body. */
+  if (owner) {
+    int m, j;
+    for (m = 0; m < nb_template_member_defs; ++m) {
+      TemplateMemberDef *member = template_member_defs[m];
+      for (j = 0; j < member->nb_inst; ++j)
+        if (member->inst_func_toks[j] == function_tok) member->inst_states[j] = 2;
+    }
+  } else {
+    for (i = 0; i < selected_free->nb_inst; ++i)
+      if (selected_free->inst_name_toks[i] == function_tok)
+        selected_free->inst_states[i] = 2;
+  }
+  if (symbol) {
+    symbol->a.weak = is_inline;
+    if (is_inline) symbol->type.t |= VT_INLINE;
+    else symbol->type.t &= ~VT_INLINE;
+    update_storage(symbol);
+  }
+  if (owner) tok_str_add(definition, name);
+  else {
+    add_ctype_tokens(definition, &result);
+    tok_str_add(definition, function_tok);
+  }
+  tok_str_add(definition, '(');
+  for (i = 0; i < parameters->len && parameters->str[i] != TOK_EOF; ++i)
+    tok_str_add_record(definition, parameters->str, parameters->len, &i);
+  tok_str_add(definition, ')');
+  if (cv & VT_CONSTANT) tok_str_add(definition, TOK_CONST1);
+  if (cv & VT_VOLATILE) tok_str_add(definition, TOK_VOLATILE1);
+  append_function_exception_spec(definition, &function.ref->f);
+  if (tok == '{') {
+    TokenString *body = NULL;
+    skip_or_save_block(&body);
+    tok_str_append(definition, body);
+    tok_str_free(body);
+  } else {
+    skip(';'); tok_str_add(definition, ';');
+  }
+  tok_str_add(definition, TOK_EOF);
+  saved_tok = tok; saved_tokc = tokc;
+  enter_namespace_scope(owner ? symbol_namespace_scope_tok(owner) : selected_free->namespace_tok);
+  begin_macro(definition, 1); next();
+  if (owner) parse_cpp_scoped_member_def_body(&result, owner, function_tok);
+  else decl(VT_CONST);
+  end_macro(); tok = saved_tok; tokc = saved_tokc;
+  enter_namespace_scope(saved_namespace);
+  tok_str_free(parameters);
+}

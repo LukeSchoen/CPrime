@@ -1,70 +1,148 @@
-# Canonical CL migration
+﻿# Canonical CL migration
 
-The CodeClip-selected application currently compiles the canonical CL sources.
-Racer and FreeLancer are functions in the application, selected in its source;
-compiler selection must not select another source graph. This inventory records
-the remaining legacy components before removing them. Paths below are relative
-to `C:/Luke/Src/OT/cl` and were inspected on 2026-09-06.
+The canonical migration is integrated and application-tested on 2026-09-06.
+The packaged compiler passes 990 feature tests and 48 canonical CL tests.
+Both the 65-source Racer graph and 89-source FreeLancer graph compile and link
+with zero warnings using the shared manifest driver. Racer renders and passes
+keyboard/wheel input and clean shutdown; FreeLancer renders its textured scene
+and exits cleanly after 35 seconds. Executables are preserved at
+`C:/Luke/Src/OT/cl/builds/Racer.exe` and
+`C:/Luke/Src/OT/cl/builds/FreeLancer_prime.exe`. Racer is the current ordinary
+function selection. See task.md for current logs, timings and compatibility
+limits. FreeLancer retains the native reference's shader binding warnings.
 
-## String comparison
+Racer, FreeLancer, and the test entry point are ordinary application functions.
+CodeClip selects the source graph, exports the VS project-derived manifest, and
+the shared build driver consumes that manifest for Prime and Clang. Compiler
+selection does not select a different library or application graph.
+CoreCodeClip.exe, generate_core.cmd, and the separate Premake core action have
+been removed.
+The obsolete build_racer.ps1 driver, its old-core compile probe, and the four
+Racer-specific ABI/KNN/platform/printing shim sources are also removed. Their
+source substitutions and the CPRIME_RACER_BUILD drawing branch are unnecessary
+with the shared manifest and normal CL implementation.
 
-The canonical implementation is
-`CommonLib/commonLib/include/Strings/clString.h` with
-`CommonLib/commonLib/src/Strings/clString.cpp`. The legacy implementation is
-`CommonLib/commonLib/include/core/String/cpcString.h` with
-`CommonLib/commonLib/src/Core/String/cpcString.cpp`.
+## Shared string, filesystem, and assets
 
-| Legacy operation | Canonical replacement or migration requirement |
+The duplicate compiler-era string, list, path, file, folder, and asset-path
+implementations were removed after migrating their consumers. These names in
+the table describe the old APIs, not compatibility aliases retained in CL.
+Paths below are relative to `C:/Luke/Src/OT/cl`.
+
+| Old API | Canonical API |
 | --- | --- |
-| `AssignLen(text, n)` | Assign `clString(text, n, false)` for an exact non-null-terminated buffer. Check callers' embedded-null assumptions. |
-| `Assign(text)` / `Assign(&other)` | Ordinary string construction / copy assignment; remove the pointer-based copy API at callers. |
-| `Append(text)` / `Concat(text)` | `+=` / `+`; retain owned-storage and overlapping-input behavior in regression coverage. |
-| `CharAt(i)` | `operator[]` or `at`; canonical access is const, so mutable indexing requires a deliberate replacement. |
-| `SubstringFrom(i)` | `Substring(i)`. |
-| `PadLeft(n, c)` | `Pad(n, c)`; pass the padding explicitly because the defaults differ (`' '` versus `'0'`). |
-| `TrimLeft` / `TrimRight` | `TrimStart` / `TrimEnd`. |
-| `Equals(text)` | `operator==`. |
-| Search, splitting, replace, case conversion, left/right, deletion around a delimiter | Already present in `clString`; preserve caller expectations at boundaries rather than assuming identical semantics. |
+| `cpcString` | `clString` |
+| `AssignLen`, pointer-based `Assign` | Counted construction and ordinary copy/move assignment |
+| `Append`, `Concat`, `Equals`, `CharAt` | `+=`, `+`, `==`, `operator[]`/`at` |
+| `SubstringFrom`, `TrimLeft`, `TrimRight` | `Substring`, `TrimStart`, `TrimEnd` |
+| `PadLeft` | `Pad`, with explicit padding where the old space default is required |
+| `cpcList`, pointer accessors, lowercase adapters | `clList`, reference accessors, canonical operation names |
+| `cpcPath`, `cpcFile`, `cpcFileHelper`, `cpcFolder` | Corresponding `clPath`, `clFile`, `clFileHelper`, `clFolder` APIs |
+| `cpcAssetPaths` | `clAssets` |
 
-Canonical `clString` additionally has move construction/assignment, wide-string
-input, case-sensitive/insensitive matching, split options, joining, formatting,
-ownership transfer and generic `clToString` integration. These are supported
-through ordinary compiler behavior; retaining a smaller compiler-specific
-string would discard useful functionality.
+Mutable string indexing is limited to actual characters, preserving the final
+NUL terminator. Counted construction, empty strings after move/ownership
+transfer, overlapping appends, reverse-search boundaries, empty delimiters,
+padding, and extreme substring counts now have passing reference coverage.
+Canonical conventions remain explicit: file size for a missing file is zero,
+and deleting an already absent file or folder succeeds.
 
-The useful legacy behavior to preserve is explicit handling of assignment and
-append from its own buffer before allocation invalidates that buffer. Check
-self-append, interior-pointer append/assignment, deep copies, moves and empty
-strings against canonical CL. The legacy allocator requests exact capacity and
-has no move operations; neither is a reason to preserve the fork. Its allocation
-failure behavior is inconsistent (assignment may empty the string while append
-keeps it), so it should not silently become the canonical allocation policy.
+Wide-pointer construction now selects the wide-string conversion overload for
+mutable input too. UTF-8 conversion measures the required output bytes before
+allocation. Unicode file moves use MoveFileExW with cross-volume copy support
+and explicit replacement flags; failed moves do not pre-delete the target.
+Recursive folder deletion reports failures promptly, including locked files,
+and removes directory reparse points without following their targets.
 
-Boundary semantics require explicit tests during migration: empty search
-patterns, null pointer input, negative/out-of-range substring inputs, embedded
-nulls, empty split tokens and padding defaults. For example, the legacy reverse
-search returns `-1` for an empty pattern while canonical `_FindStringReverse`
-returns the source length. Existing legacy tests live in
-`CommonLib/commonLib/test/core/String/cpcTests_String.h`.
+Asset discovery honors explicit overrides, then searches executable-relative
+`../CommonLib/Assets` and `Assets`, followed by the existing working-directory
+candidates. A standalone process fixture verifies the precedence using actual
+files under a private temporary directory. Existing encoded fallback paths and
+the encoding APIs remain intact.
 
-## Remaining consumers and order
+## Test migration and validation
 
-The legacy string is still referenced by `cpcPath`, `cpcFileHelper`, `cpcFolder`,
-`cpcAssetPaths`, the `cpcTexture`/mesh/material/OBJ model family,
-`cpcRenderObjectCore`, `Projects/Model Viewer/src/Private/FreeLancer.cpp`,
-`cpcLanguageModel.cpp` and legacy container/string tests. Removing the type
-before migrating these consumers would break application functions outside the
-currently selected Racer call.
+All 27 original string/list/file/folder cases now live in canonical test headers
+under `CommonLib/commonLib/test/{Strings,Containers,Platform}` and register with
+`src/Platform/clTests.cpp`. The duplicate cpcTests runner and its four test
+headers were removed. The Model Viewer test function calls `clTests::RunAll`.
+New random/timing, renderer, and controller tests also register with the
+canonical runner.
 
-The other legacy families include `cpcList`, vector/matrix/types/random,
-camera, timers, input, audio and the Win32/GL window layer. Their counterparts
-and behavioral differences still need component-level review; string API
-similarity does not establish that all these forks can be deleted mechanically.
+Verified during this wave:
 
-Migrate complete dependency groups to canonical CL, transfer useful behavioral
-tests, and fix compiler failures with neutral language regressions. When source
-or include membership changes, regenerate the graph with CodeClip.exe and
-compile that same graph with Prime and the reference compiler. Preserve timing
-measurements and run the selected application through startup and shutdown.
-Remove each legacy component only once its remaining consumers and tests have
-been migrated.
+- Packaged CPC and Clang canonical runners: 47 passed, 0 failed each, including
+  the 27 migrated cases,
+  new ownership/boundary/Unicode/filesystem cases, shared utilities, and renderer
+  CPU-resource copy tests and controller event/virtual-device tests. The CPC
+  run also links using clControls' own SDL dependency declaration.
+- The added transform regression checks a quarter-turn, nonuniform scale,
+  translation, copied matrices, and a transformed point against scalar expected
+  values. It now passes with both compilers after correcting preservation of
+  deduced member return types during later template specialization discovery.
+- The renamed LanguageModel example passes CPC and Clang tests with an isolated
+  in-memory corpus, including prefix filtering, word boundaries, reset behavior,
+  and 100 generated words. Its actual missing-file path also exits cleanly with
+  both compilers. The default external corpus path is unchanged and no files
+  were created in the archive directory.
+- Asset process fixture: 6 passed with CPC and 6 with Clang, using freshly
+  compiled string, filesystem, cipher, and encoding sources.
+- Both CPrime compiler probes previously including the real cpcList header now
+  compile against canonical clList with CPC and Clang.
+- Native/CPC DLL import interoperability: 24 COFF fixture cases pass, including
+  both input orders and relocatable linking for direct and IAT references to
+  the same import. The native controller fixture links and runs successfully.
+
+These tests exposed general compiler limitations in conditional-expression
+copy/move behavior, constructor delegation, character literals, cv-qualified
+partial-specialization ordering, and fundamental UTF character types. The packed
+compiler now passes the focused gates. Source runtime math tests also
+pass in C and C++ with CPC and Clang, covering negative zero, infinities,
+subnormals, NaN payloads, numeric overloads, and integral/floating type traits.
+
+Normal CodeClip regenerated the project files and manifest with 65 canonical
+sources and no removed core source/include paths. The same shared driver built
+Clang Racer with zero warnings in 54.199 seconds of compilation using four
+workers. Its executable is
+`C:/Luke/Src/CPrime/build/migration-racer-clang/Racer.exe`. The smoke capture
+shows the rendered red car; it runs for eight seconds and exits zero on
+WM_CLOSE. Reference capture:
+`C:/Luke/Src/CPrime/build/migration-racer-clang-transform-window.png`.
+
+Only C: is available for physical-volume testing in this environment. Unicode
+same-volume moves, explicit overwrite policy, and failure preservation are
+tested; an actual move between two physical volumes has not been exercised.
+
+The prescribed OT root `buildServer.cmd` was also exercised. Its migrated
+common library compiled with MSVC, but the server build stopped on existing
+`clDelete(this)` calls in `clOTItem.h` and `clOTContainer.h`: `clDelete(T *&)`
+cannot accept the temporary pointer value. The calls and signature also exist
+in the repository baseline and were left unchanged. The live server was not
+running, and this check did not start one. The log is
+`C:/Luke/Src/CPrime/build/migration-otserver-build.log`.
+
+FreeLancer's full build and scene startup/shutdown checks now pass with the
+packaged compiler. The retained `Tests/test_cl_assimp.py` integration fixture
+checks the canonical Assimp C API wrapper's geometry/material import-export
+roundtrip, texture-path resolution and missing-input/output failure handling.
+Native large-stack probing and constructor-owned vtables have focused mixed
+Clang/CPC regression coverage. Racer selection and its CodeClip manifest have
+been restored after the FreeLancer check.
+
+## Additional compiler compatibility checks
+
+The reviewed compiler also passes the unmodified TinyXML-2 11.0.0 official
+suite: 517 passed, 0 failed. Its three source files were checked byte-for-byte
+against the pristine upstream archive. This check exposed and now covers
+pointer-to-bool overload conversion, const-qualified C++ string literals, and
+local-class virtual parameter metadata surviving deferred template emission.
+TinyXML-2 still reports four mutable-member qualifier warnings, one overload
+pointer warning, and repeated derived/base pointer comparison warnings; the
+successful runtime suite does not imply those diagnostics have been resolved.
+
+A further retained regression checks nested auto-return member calls on
+different receiver classes. Completing the nested member body now preserves
+the explicitly selected outer function. The real canonical clMesh.cpp unit
+compiles without diagnostics using that reviewed compiler. These changes have
+focused CPC/Clang runtime coverage and surrounding suite checks; the final
+packaged application verification is recorded separately in task.md.

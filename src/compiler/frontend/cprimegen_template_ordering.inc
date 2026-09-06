@@ -227,6 +227,24 @@ static int compare_member_function_template_order(int first_tok, int second_tok)
   return result;
 }
 
+static int compare_free_function_template_order(TemplateDef *first, TemplateDef *second)
+{
+  TemplateMemberDef av = {0}, bv = {0};
+  MemberOrderPattern *a = cprime_mallocz(sizeof(*a));
+  MemberOrderPattern *b = cprime_mallocz(sizeof(*b));
+  int result = 0;
+  av.def_str = first->def_str; av.method_tok = first->name_tok; av.method_tok_known = 1;
+  bv.def_str = second->def_str; bv.method_tok = second->name_tok; bv.method_tok_known = 1;
+  av.nb_stripped_member_type_params = first->nb_type_params;
+  bv.nb_stripped_member_type_params = second->nb_type_params;
+  memcpy(av.stripped_member_type_param_toks, first->type_param_toks, first->nb_type_params * sizeof(int));
+  memcpy(bv.stripped_member_type_param_toks, second->type_param_toks, second->nb_type_params * sizeof(int));
+  if (member_order_pattern(&av, a) && member_order_pattern(&bv, b))
+    result = member_order_deduces(b, a) - member_order_deduces(a, b);
+  cprime_free(a); cprime_free(b);
+  return result;
+}
+
 /* Class partial specializations are ordered as the parameter types of
    fictitious functions taking Primary<pattern...>. Unlike ordinary function
    parameter ordering, their argument references and cv qualifiers remain. */
@@ -318,6 +336,159 @@ static int class_partial_order_pattern(TemplateDef *definition,
   return 0;
 }
 
+/* Type qualification is a set, not a token prefix. Deduction of volatile T
+   from const volatile U binds T to const U, including when those types occur
+   inside another template or behind a pointer. */
+typedef struct ClassOrderType {
+  int variable, wrapper, qualifiers;
+  int name_start, name_length, child, next;
+} ClassOrderType;
+
+typedef struct ClassOrderTypes {
+  MemberOrderPattern *pattern;
+  ClassOrderType nodes[512];
+  int count, roots[16];
+} ClassOrderTypes;
+
+typedef struct ClassOrderTypeBinding {
+  int node, removed_qualifiers;
+} ClassOrderTypeBinding;
+
+static int class_order_qualifiers(MemberOrderPattern *pattern, int *at, int end)
+{
+  int result = 0;
+  while (*at < end && member_order_cv(pattern->tokens[*at])) {
+    int token = pattern->tokens[(*at)++];
+    result |= token == TOK_CONST1 || token == TOK_CONST2 || token == TOK_CONST3
+               ? VT_CONSTANT : VT_VOLATILE;
+  }
+  return result;
+}
+
+static int class_order_type(ClassOrderTypes *types, int *at, int end)
+{
+  MemberOrderPattern *pattern = types->pattern;
+  ClassOrderType *node;
+  int root, qualifiers = class_order_qualifiers(pattern, at, end);
+  int token, previous = 0;
+  if (*at == end || types->count == 511) return 0;
+  root = ++types->count;
+  node = &types->nodes[root];
+  token = pattern->tokens[*at];
+  if (token < 0) {
+    node->variable = -token;
+    ++*at;
+  } else {
+    node->name_start = *at;
+    while (*at < end) {
+      token = pattern->tokens[*at];
+      if (member_order_cv(token) || token == '*' || token == '&'
+          || token == TOK_LAND || token == TOK_LT || token == TOK_GT
+          || token == ',' || token == '[' || token == '('
+          || token == ')' || token == ']') break;
+      if (token < 0) return 0;
+      ++*at;
+    }
+    node->name_length = *at - node->name_start;
+    if (!node->name_length) return 0;
+    if (*at < end && pattern->tokens[*at] == TOK_LT) {
+      ++*at;
+      while (*at < end && pattern->tokens[*at] != TOK_GT) {
+        int child = class_order_type(types, at, end);
+        if (!child) return 0;
+        if (previous) types->nodes[previous].next = child;
+        else node->child = child;
+        previous = child;
+        if (*at == end || pattern->tokens[*at] != ',') break;
+        ++*at;
+      }
+      if (*at == end || pattern->tokens[(*at)++] != TOK_GT) return 0;
+    }
+  }
+  node->qualifiers = qualifiers | class_order_qualifiers(pattern, at, end);
+  while (*at < end) {
+    token = pattern->tokens[*at];
+    if (token != '*' && token != '&' && token != TOK_LAND) break;
+    ++*at;
+    if (types->count == 511) return 0;
+    node = &types->nodes[++types->count];
+    node->wrapper = token;
+    node->child = root;
+    node->qualifiers = class_order_qualifiers(pattern, at, end);
+    root = types->count;
+  }
+  return root;
+}
+
+static int class_order_types(MemberOrderPattern *pattern, ClassOrderTypes *types)
+{
+  int i;
+  types->pattern = pattern;
+  for (i = 0; i < pattern->parameters; ++i) {
+    int at = pattern->starts[i];
+    types->roots[i] = class_order_type(types, &at, pattern->ends[i]);
+    if (!types->roots[i] || at != pattern->ends[i]) return 0;
+  }
+  return 1;
+}
+
+static int class_order_same_type(ClassOrderTypes *types, int first, int first_cv,
+                                   int second, int second_cv)
+{
+  ClassOrderType *a = &types->nodes[first], *b = &types->nodes[second];
+  int i, left, right;
+  if (a->variable != b->variable || a->wrapper != b->wrapper
+      || (a->qualifiers & ~first_cv) != (b->qualifiers & ~second_cv)
+      || a->name_length != b->name_length) return 0;
+  for (i = 0; i < a->name_length; ++i)
+    if (types->pattern->tokens[a->name_start + i]
+        != types->pattern->tokens[b->name_start + i]) return 0;
+  for (left = a->child, right = b->child; left && right;
+       left = types->nodes[left].next, right = types->nodes[right].next)
+    if (!class_order_same_type(types, left, 0, right, 0)) return 0;
+  return left == right;
+}
+
+static int class_order_deduce_type(ClassOrderTypes *pattern, int pattern_node,
+                                    ClassOrderTypes *actual, int actual_node,
+                                    ClassOrderTypeBinding *bindings)
+{
+  ClassOrderType *p = &pattern->nodes[pattern_node];
+  ClassOrderType *a = &actual->nodes[actual_node];
+  int i, left, right;
+  if (p->variable) {
+    ClassOrderTypeBinding *binding = &bindings[p->variable - 1];
+    if ((a->qualifiers & p->qualifiers) != p->qualifiers) return 0;
+    if (binding->node)
+      return class_order_same_type(actual, binding->node,
+                binding->removed_qualifiers, actual_node, p->qualifiers);
+    binding->node = actual_node;
+    binding->removed_qualifiers = p->qualifiers;
+    return 1;
+  }
+  if (a->variable || p->wrapper != a->wrapper
+      || p->qualifiers != a->qualifiers || p->name_length != a->name_length)
+    return 0;
+  for (i = 0; i < p->name_length; ++i)
+    if (pattern->pattern->tokens[p->name_start + i]
+        != actual->pattern->tokens[a->name_start + i]) return 0;
+  for (left = p->child, right = a->child; left && right;
+       left = pattern->nodes[left].next, right = actual->nodes[right].next)
+    if (!class_order_deduce_type(pattern, left, actual, right, bindings)) return 0;
+  return left == right;
+}
+
+static int class_order_deduces(ClassOrderTypes *pattern, ClassOrderTypes *actual)
+{
+  ClassOrderTypeBinding bindings[32] = {{0, 0}};
+  int i;
+  if (pattern->pattern->parameters != actual->pattern->parameters) return 0;
+  for (i = 0; i < pattern->pattern->parameters; ++i)
+    if (!class_order_deduce_type(pattern, pattern->roots[i], actual,
+                                 actual->roots[i], bindings)) return 0;
+  return 1;
+}
+
 static int compare_class_partial_template_order(TemplateDef *first,
                                                 TemplateDef *second)
 {
@@ -325,8 +496,16 @@ static int compare_class_partial_template_order(TemplateDef *first,
   MemberOrderPattern *b = cprime_mallocz(sizeof(*b));
   int result = 0;
   if (class_partial_order_pattern(first, a)
-      && class_partial_order_pattern(second, b))
-    result = member_order_deduces(b, a) - member_order_deduces(a, b);
+      && class_partial_order_pattern(second, b)) {
+    ClassOrderTypes *ta = cprime_mallocz(sizeof(*ta));
+    ClassOrderTypes *tb = cprime_mallocz(sizeof(*tb));
+    if (class_order_types(a, ta) && class_order_types(b, tb))
+      result = class_order_deduces(tb, ta) - class_order_deduces(ta, tb);
+    else
+      result = member_order_deduces(b, a) - member_order_deduces(a, b);
+    cprime_free(ta);
+    cprime_free(tb);
+  }
   cprime_free(a);
   cprime_free(b);
   return result;
