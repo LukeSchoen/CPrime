@@ -586,7 +586,7 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
       && saved_initializer_close(expression, next_token, '(', ')') == end)
     return 1;
   {
-    int index, angles = 0, call = -1;
+    int index, angles = 0, call = -1, is_class_prvalue;
     CType result;
     /* A single call can have a qualified/member name and explicit template
        arguments. Reject operators and earlier calls before claiming storage;
@@ -608,8 +608,8 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
     }
     if (call < 0 || saved_initializer_close(expression, call, '(', ')') != end)
       return 0;
-    infer_saved_arg_types(&expression, &result, 1);
-    if (is_reference_type(&result)) return 0;
+    infer_saved_arg_type_and_category(expression, &result, &is_class_prvalue);
+    if (!is_class_prvalue || is_reference_type(&result)) return 0;
     result.t &= ~VT_RVALUE_REFERENCE;
     return is_compatible_unqualified_types(type, &result);
   }
@@ -1015,11 +1015,6 @@ do_init_list:
           CValue saved_tokc = tokc;
           TokenString *saved_macro_stack = macro_stack;
           const int *saved_macro_ptr = macro_ptr;
-          if (getenv("CPC_TRACE_SHALLOW")
-              && token_string_contains_tok(&macro,
-                                           tok_alloc_const("clVector2")))
-            fprintf(stderr, "CPC_SHALLOW init-list func=%s len=%d\n",
-                    funcname ? funcname : "<none>", macro.len);
           begin_macro(&macro, 0);
           next();
           decl_initializer(&element_init, element_type,

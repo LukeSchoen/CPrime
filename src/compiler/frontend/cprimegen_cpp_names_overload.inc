@@ -250,6 +250,19 @@ static Sym *find_namespace_or_plain_symbol(int *ptok)
   Sym *s;
 
   s = sym_find(t);
+  if (active_member_class_tok && (!s || sym_scope_ex(s) == 0))
+  {
+    int owner_tok = 0;
+    Sym *member = find_static_member_by_class_try(active_member_class_tok,
+                                                  t, &owner_tok);
+    /* Out-of-class definitions still perform lookup in their class scope.
+       A local declaration hides a member; a namespace declaration does not. */
+    if (member && !symbol_is_nonstatic_member_of_class(member, owner_tok))
+    {
+      s = member;
+      t = member->v & ~SYM_FIELD;
+    }
+  }
   if (!s)
   {
     t = find_current_namespace_tok(t);
@@ -556,6 +569,7 @@ static void note_member_func_overload(int struct_tok, int method_tok,
   int is_const = 0;
   Sym *this_arg;
 
+  note_cpp_member_decl(struct_tok, method_tok, mangled_tok, lowered_type, 0, 1);
   note_member_function_scope(mangled_tok, struct_tok);
   overload_tok_set_note(member_func_mangled_toks, mangled_tok);
 
@@ -688,7 +702,10 @@ static void note_member_function_template(int function_tok, int class_tok,
     if (scope->function_tok == function_tok)
     {
       scope->is_function_template = 1;
-      scope->template_definition = definition;
+      if (!scope->template_definition
+          || token_string_has_top_level_body(definition->def_str)
+          || !token_string_has_top_level_body(scope->template_definition->def_str))
+        scope->template_definition = definition;
       return;
     }
 }
@@ -975,6 +992,8 @@ static int cpp_append_linkage_type(CString *out, CType *type)
   return 1;
 }
 
+#include "cprimegen_microsoft_mangle.inc"
+
 static int cpp_free_function_linkage_label(int name_tok, CType *func_type)
 {
   CString label, parameters;
@@ -1018,6 +1037,7 @@ static void cpp_prepare_free_function_linkage(int name_tok, CType *func_type,
   struct FuncAttr *attr = &func_type->ref->f;
 
   if (!is_cpp_translation_unit() || is_member_func_mangled_tok(name_tok)
+      || lookup_cpp_member_decl(name_tok)
       || is_provisional_free_func_tok(name_tok)
       /* Template instantiations already carry their declaration identity and
          concrete template arguments in their existing linkage token. */
@@ -1060,7 +1080,11 @@ static void cpp_prepare_free_function_linkage(int name_tok, CType *func_type,
     ad->asm_label = tok_alloc_const(name);
   } else if (attr->func_language_linkage == 2
              && source_name != tok_alloc_const("main")) {
+#ifdef CPRIME_TARGET_PE
+    ad->asm_label = cpp_ms_linkage_tok(source_name, func_type);
+#else
     ad->asm_label = cpp_free_function_linkage_label(source_name, func_type);
+#endif
   }
 }
 
@@ -1176,10 +1200,6 @@ static void emit_default_arg(Sym *func_type, Sym *arg)
     return;
   }
   macro = *arg->default_arg;
-  if (getenv("CPC_TRACE_SHALLOW")
-      && token_string_contains_tok(&macro, tok_alloc_const("clVector2")))
-    fprintf(stderr, "CPC_SHALLOW default-arg func=%s len=%d\n",
-            funcname ? funcname : "<none>", macro.len);
   begin_macro(&macro, 0);
   next();
   expr_eq();
@@ -1300,8 +1320,10 @@ static int saved_arg_is_single_cchar(TokenString *arg)
 
 static int saved_arg_is_functional_temporary(TokenString *arg)
 {
-  int i = 0;
+  int i = 0, depth = 0;
 
+  if (!arg || !arg->str)
+    return 0;
   while (i + 1 < arg->len && arg->str[i] == TOK_LINENUM)
     i += 2;
   if (i >= arg->len || arg->str[i] < TOK_UIDENT)
@@ -1309,7 +1331,30 @@ static int saved_arg_is_functional_temporary(TokenString *arg)
   ++i;
   while (i + 1 < arg->len && arg->str[i] == TOK_LINENUM)
     i += 2;
-  return i < arg->len && arg->str[i] == '(';
+  if (i >= arg->len || arg->str[i] != '(')
+    return 0;
+  /* This shortcut describes the whole expression, not just its first
+     primary expression.  A member call, subscript, or operator after the
+     temporary can have a different type and value category. */
+  for (; i < arg->len; ++i)
+  {
+    int token = arg->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      i += tok_str_value_extra_words(arg->str, arg->len, i);
+      continue;
+    }
+    if (token == '(')
+      ++depth;
+    else if (token == ')' && !--depth)
+    {
+      ++i;
+      while (i + 1 < arg->len && arg->str[i] == TOK_LINENUM)
+        i += 2;
+      return i == arg->len || arg->str[i] == TOK_EOF || !arg->str[i];
+    }
+  }
+  return 0;
 }
 
 static int saved_arg_first_real_index(TokenString *arg)
@@ -1333,7 +1378,7 @@ static int saved_arg_functional_temporary_type(TokenString *arg, CType *type)
   int type_tok, struct_tok;
   int i = saved_arg_first_real_index(arg);
 
-  if (!arg || i >= arg->len || arg->str[i] < TOK_UIDENT)
+  if (!saved_arg_is_functional_temporary(arg))
     return 0;
   type_tok = arg->str[i++];
   while (i + 1 < arg->len && arg->str[i] == TOK_LINENUM)
@@ -1362,7 +1407,8 @@ static int saved_arg_functional_temporary_type(TokenString *arg, CType *type)
   return struct_tok != 0;
 }
 
-static void infer_saved_arg_type(TokenString *arg, CType *type)
+static void infer_saved_arg_type_and_category(TokenString *arg, CType *type,
+                                               int *is_class_prvalue)
 {
   SValue *saved_vtop = vtop;
   int saved_nocode_wanted = nocode_wanted;
@@ -1374,6 +1420,9 @@ static void infer_saved_arg_type(TokenString *arg, CType *type)
   int is_null_pointer_constant;
   TokenString macro;
 
+  if (is_class_prvalue)
+    *is_class_prvalue = 0;
+
   if (saved_arg_is_braced(arg))
   {
     type->t = VT_INT;
@@ -1381,14 +1430,14 @@ static void infer_saved_arg_type(TokenString *arg, CType *type)
     return;
   }
   if (saved_arg_functional_temporary_type(arg, type))
+  {
+    if (is_class_prvalue)
+      *is_class_prvalue = 1;
     return;
+  }
 
   prepare_saved_cpp_lambdas(arg);
   nocode_wanted++;
-  if (getenv("CPC_TRACE_SHALLOW")
-      && token_string_contains_tok(arg, tok_alloc_const("clVector2")))
-    fprintf(stderr, "CPC_SHALLOW infer-saved func=%s len=%d\n",
-            funcname ? funcname : "<none>", arg->len);
   /* end_macro() resets a non-owning macro buffer.  Replay a shallow view so
      overload inference does not consume the saved argument that emission
      still needs. */
@@ -1400,11 +1449,13 @@ static void infer_saved_arg_type(TokenString *arg, CType *type)
     (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
     && is_integer_btype(vtop->type.t & VT_BTYPE) && vtop->c.i == 0;
   *type = vtop->type;
+  if (is_class_prvalue)
+    *is_class_prvalue = (vtop->r & VT_CXX_PRVALUE) != 0;
   if (!is_reference_type(type)
       && ((!(vtop->r & VT_LVAL) && !(type->t & VT_ARRAY)
        && (type->t & VT_BTYPE) != VT_FUNC)
       || (((type->t & VT_BTYPE) == VT_STRUCT)
-          && saved_arg_is_functional_temporary(arg))))
+          && (vtop->r & VT_CXX_PRVALUE))))
     type->t |= VT_RVALUE_REFERENCE;
   while (macro_stack && macro_stack != saved_macro_stack)
     end_macro();
@@ -1417,6 +1468,11 @@ static void infer_saved_arg_type(TokenString *arg, CType *type)
   nocode_wanted = saved_nocode_wanted;
   tok = saved_tok;
   tokc = saved_tokc;
+}
+
+static void infer_saved_arg_type(TokenString *arg, CType *type)
+{
+  infer_saved_arg_type_and_category(arg, type, NULL);
 }
 
 static void infer_saved_arg_types(TokenString **args, CType *types, int nb_args)
@@ -1444,10 +1500,6 @@ static int emit_saved_arg_for_param(TokenString *arg, Sym *param)
     temp_type = is_reference_type(&param->type) ? *pointed_type(&param->type)
                                                : param->type;
     macro = *arg;
-    if (getenv("CPC_TRACE_SHALLOW")
-        && token_string_contains_tok(&macro, tok_alloc_const("clVector2")))
-      fprintf(stderr, "CPC_SHALLOW braced-arg func=%s len=%d\n",
-              funcname ? funcname : "<none>", macro.len);
     begin_macro(&macro, 0);
     next();
     materialize_braced_temporary(&temp_type);
@@ -1725,6 +1777,69 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
                                         int allow_explicit, int *method,
                                         int *conversion_rank);
 
+static int cpp_enum_promotion_rank(CType *target, CType *source)
+{
+  Sym *enumeration = source->ref, *value;
+  CType promoted, underlying;
+  int fits_int = 1, fits_unsigned = 1, fits_signed_long_long = 1;
+  if (!enumeration || enumeration->a.scoped_enum) return -1;
+  underlying = enumeration->type;
+  underlying.t &= ~(VT_STRUCT_MASK | VT_CONSTANT | VT_VOLATILE
+                    | VT_STORAGE | VT_RVALUE_REFERENCE);
+  underlying.ref = NULL;
+  promoted = underlying;
+  if (enumeration->c == 1) {
+    /* An enum without a fixed underlying type promotes according to the
+       range of all its enumerators, even when its storage type is unsigned. */
+    for (value = enumeration->next; value; value = value->next) {
+      long long number = value->enum_val;
+      if ((value->type.t & VT_UNSIGNED) && number < 0) {
+        fits_int = fits_unsigned = fits_signed_long_long = 0;
+      } else {
+        if (number < -2147483647LL - 1 || number > 2147483647LL)
+          fits_int = 0;
+        if (number < 0 || (unsigned long long)number > 4294967295ULL)
+          fits_unsigned = 0;
+      }
+    }
+    promoted.t = fits_int ? VT_INT : fits_unsigned ? VT_INT | VT_UNSIGNED
+      : fits_signed_long_long ? VT_LLONG : VT_LLONG | VT_UNSIGNED;
+    if (!fits_int && !fits_unsigned && LONG_SIZE == 8)
+      promoted.t |= VT_LONG;
+  } else {
+    if (call_arg_exact_param_type(target, &underlying)) return 3;
+    if ((underlying.t & VT_BTYPE) == VT_BOOL
+        || (underlying.t & VT_BTYPE) == VT_BYTE
+        || (underlying.t & VT_BTYPE) == VT_SHORT)
+      promoted.t = VT_INT;
+  }
+  return call_arg_exact_param_type(target, &promoted) ? 3 : 4;
+}
+
+/* For a fixed enum, conversion to its underlying type is preferred over
+   conversion to the promoted underlying type; both have promotion rank. */
+static int cpp_compare_enum_promotion_targets(CType *left, CType *right,
+                                               CType *source)
+{
+  CType from = *source, l = *left, r = *right, underlying;
+  int left_underlying, right_underlying;
+  if (is_reference_type(&from)) from = *pointed_type(&from);
+  if (!(IS_ENUM(from.t) || IS_ENUM_VAL(from.t)) || !from.ref
+      || from.ref->a.scoped_enum || from.ref->c == 1)
+    return 0;
+  if (is_reference_type(&l)) l = *pointed_type(&l);
+  if (is_reference_type(&r)) r = *pointed_type(&r);
+  if (cpp_enum_promotion_rank(&l, &from) != 3
+      || cpp_enum_promotion_rank(&r, &from) != 3)
+    return 0;
+  underlying = from.ref->type;
+  underlying.t &= ~(VT_STRUCT_MASK | VT_CONSTANT | VT_VOLATILE | VT_STORAGE);
+  underlying.ref = NULL;
+  left_underlying = call_arg_exact_param_type(&l, &underlying);
+  right_underlying = call_arg_exact_param_type(&r, &underlying);
+  return left_underlying - right_underlying;
+}
+
 static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
 {
   CType arg_value_type;
@@ -1778,6 +1893,15 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
   }
   if (IS_ENUM(param_value_type.t) || IS_ENUM_VAL(param_value_type.t))
     return -1;
+  if ((IS_ENUM(arg_value_type.t) || IS_ENUM_VAL(arg_value_type.t))
+      && btype_is_arithmetic_scalar(param_value_type.t & VT_BTYPE)) {
+    if (is_reference_type(param_type)
+        && !(param_type->t & VT_RVALUE_REFERENCE)
+        && !(param_value_type.t & VT_CONSTANT))
+      return -1;
+    return cpp_enum_promotion_rank(&param_value_type, &arg_value_type);
+  }
+
   if (is_reference_type(param_type))
   {
     if ((param_type->t & VT_RVALUE_REFERENCE)
@@ -1896,6 +2020,24 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
 static int template_deduced_inst_for_call(TemplateDef *definition,
                                          CType *arguments, int argument_count);
 
+static int cpp_compare_enum_promotion_overloads(Sym *left, Sym *right,
+                                                 CType *arguments, int count, int skip_this)
+{
+  Sym *l = left->type.ref->next, *r = right->type.ref->next;
+  int i, preference = 0;
+  if (skip_this) { if (l) l = l->next; if (r) r = r->next; }
+  for (i = 0; i < count && l && r; ++i, l = l->next, r = r->next) {
+    int current;
+    if (call_arg_match_rank(&l->type, &arguments[i])
+        != call_arg_match_rank(&r->type, &arguments[i]))
+      return 0;
+    current = cpp_compare_enum_promotion_targets(&l->type, &r->type, &arguments[i]);
+    if (current && preference && current != preference) return 0;
+    if (current) preference = current;
+  }
+  return preference;
+}
+
 static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_types,
                                            int explicit_arg_count,
                                            int template_deduction_failed,
@@ -1911,7 +2053,7 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
   {
     int arg_rank = 0;
     int candidate_is_template;
-    if (o->name_tok != name_tok || explicit_arg_count < o->min_arg_count
+    if ((o->name_tok != name_tok && !candidates) || explicit_arg_count < o->min_arg_count
         || explicit_arg_count > o->explicit_arg_count)
       continue;
     if (candidates)
@@ -1980,6 +2122,17 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
               at ? at->t : 0,
               at && (at->t & VT_BTYPE) == VT_PTR ? pointed_type(at)->t : 0);
     }
+    if (arg_rank == best_arg_rank && match) {
+      int preference = cpp_compare_enum_promotion_overloads(s, match, arg_types,
+                                                            explicit_arg_count, 0);
+      if (preference < 0) continue;
+      if (preference > 0) {
+        match = NULL;
+        matches = 0;
+        best_is_provisional = o->is_provisional_auto_member;
+        best_is_template = candidate_is_template;
+      }
+    }
     if (arg_rank > best_arg_rank)
       continue;
     if (arg_rank < best_arg_rank)
@@ -2010,6 +2163,10 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
         && name_tok >= TOK_UIDENT)
       fprintf(stderr, "CPC_FREE_CAND name=%s rank=%d cand=%s\n",
               get_tok_str(name_tok, NULL), arg_rank, get_tok_str(s->v, NULL));
+    /* One function can be registered under its declaration name and an
+       instantiated interface alias. It is still a single candidate. */
+    if (match == s)
+      continue;
     match = s;
     matches++;
   }
@@ -2430,10 +2587,19 @@ static const char *cpp_operator_name_from_tok(int op)
   }
 }
 
+static TokenString *take_cpp_conversion_operator_type_tokens(void)
+{
+  TokenString *tokens = last_cpp_conversion_operator_type_tokens;
+  last_cpp_conversion_operator_type_tokens = NULL;
+  return tokens;
+}
+
 static int parse_cpp_operator_method_tok(void)
 {
   const char *name;
 
+  if (last_cpp_conversion_operator_type_tokens)
+    tok_str_free(last_cpp_conversion_operator_type_tokens);
   last_cpp_conversion_operator_type_tokens = NULL;
   if (tok != TOK_OPERATOR)
     cprime_error("operator");
@@ -2500,7 +2666,7 @@ static void finish_cpp_member_func_call_to(Sym *func_type, int nb_args,
   if ((func_type->type.t & VT_BTYPE) == VT_STRUCT)
   {
     variadic = (func_type->f.func_type == FUNC_ELLIPSIS);
-    ret_nregs = gfunc_sret(&func_type->type, variadic, &ret.type,
+    ret_nregs = cpp_function_return_regs(&func_type->type, func_type, variadic, &ret.type,
                            &ret_align, &regsize);
     if (ret_nregs <= 0)
     {
@@ -2766,10 +2932,120 @@ static int try_call_cpp_binary_operator(int op)
   return 1;
 }
 
+/* Operator candidates combine ordinary lookup and the namespaces associated
+   with both operand types. Keep one overload set so conversions, rather than
+   namespace discovery order, decide the selected function. */
+typedef struct CppOperatorLookup {
+  int method_tok;
+  int *names, name_count;
+  Sym **visited;
+  int visited_count;
+} CppOperatorLookup;
+
+static void cpp_operator_lookup_name(CppOperatorLookup *lookup, int name)
+{
+  int i;
+  for (i = 0; i < lookup->name_count; ++i)
+    if (lookup->names[i] == name) return;
+  lookup->names = cprime_realloc(lookup->names,
+                                (lookup->name_count + 1) * sizeof(int));
+  lookup->names[lookup->name_count++] = name;
+}
+
+static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type)
+{
+  int i, name = 0, namespace_tok;
+  Sym *symbol = type->ref;
+  if (!symbol) return;
+  for (i = 0; i < lookup->visited_count; ++i)
+    if (lookup->visited[i] == symbol) return;
+  dynarray_add(&lookup->visited, &lookup->visited_count, symbol);
+  if ((type->t & VT_BTYPE) == VT_PTR) {
+    cpp_operator_associated_type(lookup, pointed_type(type));
+    return;
+  }
+  if ((type->t & VT_BTYPE) == VT_FUNC) {
+    cpp_operator_associated_type(lookup, &symbol->type);
+    for (symbol = symbol->next; symbol; symbol = symbol->next)
+      cpp_operator_associated_type(lookup, &symbol->type);
+    return;
+  }
+  if (IS_ENUM(type->t) || IS_ENUM_VAL(type->t))
+    name = symbol->v & ~SYM_STRUCT;
+  else if ((type->t & VT_BTYPE) == VT_STRUCT)
+    name = get_struct_type_name_tok(type);
+  if (!name) return;
+  namespace_tok = symbol_namespace_scope_tok(name);
+  cpp_operator_lookup_name(lookup, namespace_tok
+    ? make_static_member_tok(namespace_tok, lookup->method_tok)
+    : lookup->method_tok);
+  if ((type->t & VT_BTYPE) == VT_STRUCT) {
+    ClassBaseInfo *base;
+    TemplateInstOwner *owner = find_template_inst_owner_entry(name);
+    for (base = class_base_infos; base; base = base->next) {
+      CType base_type;
+      if (base->class_tok == name
+          && make_class_type_from_tok(&base_type, base->base_tok))
+        cpp_operator_associated_type(lookup, &base_type);
+    }
+    if (owner && owner->owner->is_class) {
+      TemplateDef *definition = owner->owner;
+      int inst;
+      for (inst = 0; inst < definition->nb_inst; ++inst)
+        if (definition->inst_name_toks[inst] == name) {
+          TemplateArgList *arguments = &definition->inst_arg_lists[inst];
+          for (i = 0; i < arguments->nb; ++i) {
+            CType argument_type;
+            if (!(definition->value_param_mask & (1u << i))
+                && make_type_from_type_arg_tok(&argument_type, arguments->toks[i]))
+              cpp_operator_associated_type(lookup, &argument_type);
+          }
+          break;
+        }
+    }
+  }
+}
+
+static Sym *cpp_resolve_free_operator(int method_tok, CType *arguments, int count)
+{
+  CppOperatorLookup lookup;
+  FreeFuncOverload *overload;
+  int i, j, *candidates = NULL, candidate_count = 0;
+  Sym *function;
+  memset(&lookup, 0, sizeof lookup);
+  lookup.method_tok = method_tok;
+  cpp_operator_lookup_name(&lookup, find_current_namespace_tok(method_tok));
+  for (i = 0; i < count; ++i)
+    cpp_operator_associated_type(&lookup, &arguments[i]);
+  for (i = 0; i < lookup.name_count; ++i) {
+    instantiate_function_templates_for_call(lookup.names[i], arguments, count);
+    function = find_global_symbol(lookup.names[i]);
+    if (function && (function->type.t & VT_BTYPE) == VT_FUNC)
+      note_free_func_overload(lookup.names[i], function->v, &function->type);
+  }
+  for (overload = free_func_overloads; overload; overload = overload->next) {
+    for (i = 0; i < lookup.name_count; ++i)
+      if (lookup.names[i] == overload->name_tok) break;
+    if (i == lookup.name_count) continue;
+    for (j = 0; j < candidate_count; ++j)
+      if (candidates[j] == overload->mangled_tok) break;
+    if (j < candidate_count) continue;
+    candidates = cprime_realloc(candidates, (candidate_count + 1) * sizeof(int));
+    candidates[candidate_count++] = overload->mangled_tok;
+  }
+  function = candidate_count
+    ? resolve_free_func_by_arg_types_filtered(method_tok, arguments, count,
+                                              0, candidates, candidate_count)
+    : NULL;
+  cprime_free(candidates);
+  cprime_free(lookup.names);
+  cprime_free(lookup.visited);
+  return function;
+}
+
 static int try_call_cpp_free_binary_operator(int op)
 {
   int method_tok;
-  int template_deduction_failed;
   CType arg_types[2];
   Sym *func_sym, *func_type, *sa;
 
@@ -2779,10 +3055,7 @@ static int try_call_cpp_free_binary_operator(int op)
 
   arg_types[0] = vtop[-1].type;
   arg_types[1] = vtop->type;
-  template_deduction_failed =
-    instantiate_function_templates_for_call(method_tok, arg_types, 2);
-  func_sym = resolve_free_func_by_arg_types(method_tok, arg_types, 2,
-                                            template_deduction_failed);
+  func_sym = cpp_resolve_free_operator(method_tok, arg_types, 2);
   if (!func_sym)
     return 0;
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)

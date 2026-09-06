@@ -282,8 +282,10 @@ enum
 {
   sec_text = 0,
   sec_rdata,
+  sec_crt,
   sec_data,
   sec_bss,
+  sec_tls,
   sec_idata,
   sec_pdata,
   sec_other,
@@ -341,6 +343,7 @@ struct pe_info
   Section *thunk;
   Section *coffsym;
   Section *coffstr;
+  Section *exception_table;
   const char *filename;
   int type;
   DWORD sizeofheaders;
@@ -509,22 +512,30 @@ static void pe_add_coffsym(struct pe_info *pe)
   for (n = s1->symtab->data_offset / sizeof *esym; ++esym, --n;)
   {
     int sym_bind = Obj64_ST_BIND(esym->st_info);
-    if (sym_bind == STB_GLOBAL)
+    if (sym_bind == STB_GLOBAL || sym_bind == STB_WEAK || sym_bind == STB_LOCAL)
     {
       char *name = esym->st_name + (char *)s1->symtab->link->data;
       int nl = strlen(name);
       addr_t value = esym->st_value;
       int shnum = esym->st_shndx;
+      if (!nl || shnum == SHN_UNDEF)
+        continue;
       if (shnum != SHN_UNDEF && shnum < s1->nb_sections)
       {
         Section *s = s1->sections[shnum];
         shnum = s->sh_info;
-        value = value - s->sh_addr;
+        if (!(s->sh_flags & SHF_ALLOC) || !shnum)
+          continue;
+        value -= ((struct section_info *)pe->sec_info[shnum - 1])->sh_addr;
       }
+      else if (shnum == SHN_ABS)
+        shnum = -1;
       se = section_ptr_add(pe->coffsym, sizeof *se);
       se->n_value = value;
       se->n_scnum = shnum;
-      se->n_sclass = 2; // C_EXT
+      se->n_sclass = sym_bind == STB_LOCAL ? 3 : 2; // C_STAT / C_EXT
+      if (Obj64_ST_TYPE(esym->st_info) == STT_FUNC)
+        se->n_type = 0x20;
       if (nl <= 8)
         memcpy(se->n_name, name, nl);
       else
@@ -724,7 +735,9 @@ static int pe_write(struct pe_info *pe)
       break;
 
     case sec_pdata:
+#ifndef CPRIME_TARGET_X86_64
       pe_set_datadir(&header, IMAGE_DIRECTORY_ENTRY_EXCEPTION, addr, size);
+#endif
       break;
     }
 
@@ -763,6 +776,62 @@ static int pe_write(struct pe_info *pe)
         header.opthdr.SizeOfCode += psh->SizeOfRawData;
       else
         header.opthdr.SizeOfInitializedData += psh->SizeOfRawData;
+    }
+  }
+
+#ifdef CPRIME_TARGET_X86_64
+  if (pe->exception_table)
+    pe_set_datadir(&header, IMAGE_DIRECTORY_ENTRY_EXCEPTION,
+                  pe->exception_table->sh_addr - pe->imagebase,
+                  pe->exception_table->data_offset);
+#endif
+
+  /* The Windows loader owns allocation, copying and callbacks for native
+     static TLS. The native CRT supplies the standard directory object. */
+  {
+    int tls_index = find_elf_sym(symtab_section, "_tls_used");
+    if (tls_index)
+    {
+      ObjW(Sym) *tls = (ObjW(Sym) *)symtab_section->data + tls_index;
+      if (tls->st_shndx != SHN_UNDEF)
+      {
+        Section *directory;
+        addr_t offset;
+        unsigned alignment = 1, encoding = 1;
+        int j;
+        if (tls->st_shndx >= s1->nb_sections)
+        {
+          cprime_error_noabort("native TLS directory must reside in an image section");
+          fclose(pe->op);
+          return -1;
+        }
+        directory = s1->sections[tls->st_shndx];
+        offset = tls->st_value - directory->sh_addr;
+        if (!directory->data || offset > directory->data_offset ||
+            directory->data_offset - offset < PTR_SIZE * 4 + 8)
+        {
+          cprime_error_noabort("native TLS directory extends beyond initialized image data");
+          fclose(pe->op);
+          return -1;
+        }
+        for (j = 1; j < s1->nb_sections; ++j)
+        {
+          Section *s = s1->sections[j];
+          if (!strncmp(s->name, ".tls", 4) &&
+              (!s->name[4] || s->name[4] == '$'))
+            alignment = umax(alignment, s->sh_addralign);
+        }
+        while ((1U << (encoding - 1)) < alignment && encoding < 14)
+          ++encoding;
+        if (offset + PTR_SIZE * 4 + 8 <= directory->data_offset)
+        {
+          unsigned char *characteristics = directory->data + offset + PTR_SIZE * 4 + 4;
+          write32le(characteristics,
+                    (read32le(characteristics) & ~0x00f00000U) | (encoding << 20));
+        }
+        pe_set_datadir(&header, IMAGE_DIRECTORY_ENTRY_TLS,
+                      tls->st_value - pe->imagebase, PTR_SIZE == 8 ? 40 : 24);
+      }
     }
   }
 
@@ -1185,6 +1254,12 @@ static void pe_build_reloc (struct pe_info *pe)
 }
 
 // -------------------------------------------------------------
+static int pe_section_has_base(const char *name, const char *base)
+{
+  int n = strlen(base);
+  return !strncmp(name, base, n) && (!name[n] || name[n] == '$');
+}
+
 static int pe_section_class(Section *s)
 {
   int type, flags;
@@ -1197,6 +1272,10 @@ static int pe_section_class(Section *s)
     return sec_debug;
   else if (flags & SHF_ALLOC)
   {
+    if (pe_section_has_base(name, ".tls"))
+      return sec_tls;
+    if (pe_section_has_base(name, ".CRT"))
+      return sec_crt;
     if (type == SHT_PROGBITS
         || type == SHT_INIT_ARRAY
         || type == SHT_FINI_ARRAY)
@@ -1205,11 +1284,11 @@ static int pe_section_class(Section *s)
         return sec_text;
       if (flags & SHF_WRITE)
         return sec_data;
-      if (0 == strcmp(name, ".rsrc"))
+      if (pe_section_has_base(name, ".rsrc"))
         return sec_rsrc;
       if (0 == strcmp(name, ".iedat"))
         return sec_idata;
-      if (0 == strcmp(name, ".pdata"))
+      if (pe_section_has_base(name, ".pdata"))
         return sec_pdata;
       return sec_rdata;
     }
@@ -1225,6 +1304,58 @@ static int pe_section_class(Section *s)
   return sec_last;
 }
 
+#ifdef CPRIME_TARGET_X86_64
+static int pe_reserve_exception_directory(struct pe_info *pe)
+{
+  CPRIMEState *s1 = pe->s1;
+  unsigned long size = 0;
+  int i;
+  for (i = 1; i < s1->nb_sections; ++i)
+  {
+    Section *s = s1->sections[i];
+    if (pe_section_class(s) != sec_pdata) continue;
+    if (s->data_offset % 12)
+      return cprime_error_noabort("invalid x64 runtime-function contribution '%s'", s->name);
+    size += s->data_offset;
+  }
+  if (size)
+  {
+    /* Input .pdata symbols retain their original addresses. The loader's
+       directory is a separate packed index, ordered by final code RVA after
+       relocation. Input subsection alignment must not insert index rows. */
+    pe->exception_table = new_section(s1, ".rdata$cpc_exception_directory",
+                                       SHT_PROGBITS, SHF_ALLOC);
+    pe->exception_table->sh_addralign = 4;
+    section_ptr_add(pe->exception_table, size);
+  }
+  return 0;
+}
+
+static int pe_compare_runtime_function(const void *a, const void *b)
+{
+  unsigned first = read32le(a), second = read32le(b);
+  return first < second ? -1 : first > second;
+}
+
+static void pe_finish_exception_directory(struct pe_info *pe)
+{
+  CPRIMEState *s1 = pe->s1;
+  unsigned char *out;
+  int i;
+  if (!pe->exception_table) return;
+  out = pe->exception_table->data;
+  for (i = 1; i < s1->nb_sections; ++i)
+  {
+    Section *s = s1->sections[i];
+    if (pe_section_class(s) != sec_pdata) continue;
+    memcpy(out, s->data, s->data_offset);
+    out += s->data_offset;
+  }
+  qsort(pe->exception_table->data, pe->exception_table->data_offset / 12,
+         12, pe_compare_runtime_function);
+}
+#endif
+
 static int pe_assign_addresses (struct pe_info *pe)
 {
   int i, k, n, c, nbs;
@@ -1234,25 +1365,36 @@ static int pe_assign_addresses (struct pe_info *pe)
   Section *s;
   CPRIMEState *s1 = pe->s1;
 
+#ifdef CPRIME_TARGET_X86_64
+  if (pe_reserve_exception_directory(pe) < 0) return -1;
+#endif
   if (PE_DLL == pe->type)
     pe->reloc = new_section(s1, ".reloc", SHT_PROGBITS, 0);
   //pe->thunk = new_section(s1, ".iedat", SHT_PROGBITS, SHF_ALLOC);
 
   nbs = s1->nb_sections;
+  /* Import tables must not be appended inside an ordered .CRT$ array. */
+  pe->thunk = rodata_section;
   sec_order = cprime_mallocz(2 * sizeof (int) * nbs);
   sec_cls = sec_order + nbs;
   for (i = 1; i < nbs; ++i)
   {
     s = s1->sections[i];
     k = pe_section_class(s);
-    for (n = i; n > 1 && k < (c = sec_cls[n - 1]); --n)
+    for (n = i; n > 1; --n)
+    {
+      c = sec_cls[n - 1];
+      if (k > c || (k == c && strcmp(s->name,
+          s1->sections[sec_order[n - 1]]->name) >= 0))
+        break;
       sec_cls[n] = c, sec_order[n] = sec_order[n - 1];
+    }
     sec_cls[n] = k, sec_order[n] = i;
   }
   si = NULL;
   addr = pe->imagebase + 1;
 
-  for (i = 1; (c = sec_cls[i]) < sec_last; ++i)
+  for (i = 1; i < nbs && (c = sec_cls[i]) < sec_last; ++i)
   {
     s = s1->sections[sec_order[i]];
 
@@ -1262,7 +1404,8 @@ static int pe_assign_addresses (struct pe_info *pe)
     if (si && c == si->cls && c != sec_debug)
     {
       // Merge With Previous Section
-      s->sh_addr = addr = ((addr - 1) | (16 - 1)) + 1;
+      int alignment = s->sh_addralign ? s->sh_addralign : 1;
+      s->sh_addr = addr = (addr + alignment - 1) & -(addr_t)alignment;
     }
     else
     {
@@ -1270,13 +1413,10 @@ static int pe_assign_addresses (struct pe_info *pe)
       s->sh_addr = addr = pe_virtual_align(pe, addr);
     }
 
-    if (NULL == pe->thunk
-        && c == (data_section == rodata_section ? sec_data : sec_rdata))
-      pe->thunk = s;
-
     if (s == pe->thunk)
     {
       pe_build_imports(pe);
+      pe_resolve_weak_externals(s1);
       pe_build_exports(pe);
     }
     if (s == pe->reloc)
@@ -1291,7 +1431,14 @@ static int pe_assign_addresses (struct pe_info *pe)
     si = cprime_mallocz(sizeof *si);
     dynarray_add(&pe->sec_info, &pe->sec_count, si);
 
-    strcpy(si->name, s->name);
+    pstrcpy(si->name, sizeof si->name, s->name);
+    {
+      char *suffix = strchr(si->name, '$');
+      if (suffix) *suffix = 0;
+      if (c == sec_text) strcpy(si->name, ".text");
+      if (c == sec_rdata) strcpy(si->name, ".rdata");
+      if (c == sec_data) strcpy(si->name, ".data");
+    }
     si->cls = c;
     si->sh_addr = addr;
 
@@ -1308,6 +1455,8 @@ static int pe_assign_addresses (struct pe_info *pe)
       si->pe_flags |= IMAGE_SCN_MEM_DISCARDABLE;
 
 add_section:
+    if (s->sh_flags & SHF_WRITE)
+      si->pe_flags |= IMAGE_SCN_MEM_WRITE;
     s->sh_info = pe->sec_count; // Section Number For Coff Syms
     addr += s->data_offset;
     si->sh_size = addr - si->sh_addr;
@@ -1992,7 +2141,9 @@ ST_FUNC int pe_load_file(struct CPRIMEState *s1, int fd, const char *filename)
     ret = 0;
   else if (read_mem(fd, 0, buf, 4) && 0 == memcmp(buf, "MZ", 2))
     ret = pe_load_dll(s1, fd, filename);
-  else if (read_mem(fd, 0, buf, 2) && read16le((unsigned char *)buf) == IMAGE_FILE_MACHINE)
+  else if (read_mem(fd, 0, buf, 4)
+           && (read16le((unsigned char *)buf) == IMAGE_FILE_MACHINE
+               || (!read16le((unsigned char *)buf) && read16le((unsigned char *)buf + 2))))
     ret = pe_load_coff_object(s1, fd, 0);
   return ret;
 }
@@ -2220,7 +2371,11 @@ static void pe_add_runtime(CPRIMEState *s1, struct pe_info *pe)
   {
     static const char * const libs[] =
     {
+#if CONFIG_CPRIME_UCRT
+      "ucrtbase", "kernel32", "", "user32", "gdi32", NULL
+#else
       "msvcrt", "kernel32", "", "user32", "gdi32", NULL
+#endif
     };
     const char * const *pp, *p;
     if (CPRIME_LIBCPRIME1[0])
@@ -2337,6 +2492,57 @@ static void pe_set_options(CPRIMEState *s1, struct pe_info *pe)
     pe->imagebase = s1->text_addr;
 }
 
+/* COFF initialization arrays span lexicographically ordered subsections.
+   Define separate runtime bounds without competing with native CRT sentinels. */
+static void pe_native_array_bounds(CPRIMEState *s1, const char *prefix,
+                                   const char *start, const char *end)
+{
+  Section *first = NULL, *last = NULL;
+  int i, len = strlen(prefix);
+  for (i = 1; i < s1->nb_sections; ++i)
+  {
+    Section *s = s1->sections[i];
+    if (!(s->sh_flags & SHF_ALLOC) || !s->data_offset ||
+        strncmp(s->name, prefix, len))
+      continue;
+    if (!first || strcmp(s->name, first->name) < 0) first = s;
+    if (!last || strcmp(s->name, last->name) > 0) last = s;
+  }
+  set_global_sym(s1, start, first ? first : text_section, 0);
+  set_global_sym(s1, end, last ? last : text_section,
+                 last ? last->data_offset : 0);
+}
+
+static void pe_native_runtime_symbols(CPRIMEState *s1)
+{
+  static const char *const kinds[] = { "xi", "xc", "xp", "xt" };
+  static const char *const prefixes[] = { ".CRT$XI", ".CRT$XC", ".CRT$XP", ".CRT$XT" };
+  int i;
+  char start[64], end[64];
+  for (i = 0; i < 4; ++i)
+  {
+    snprintf(start, sizeof start, "__cpc_native_%s_start", kinds[i]);
+    snprintf(end, sizeof end, "__cpc_native_%s_end", kinds[i]);
+    pe_native_array_bounds(s1, prefixes[i], start, end);
+  }
+  for (i = 0; i < 2; ++i)
+  {
+    const char *native_name = i ? "__dyn_tls_dtor_callback" : "__dyn_tls_init_callback";
+    const char *runtime_name = i ? "__cpc_native_tls_dtor_callback" : "__cpc_native_tls_init_callback";
+    int index = find_elf_sym(symtab_section, native_name);
+    ObjW(Sym) *symbol = index ? (ObjW(Sym) *)symtab_section->data + index : NULL;
+    if (symbol && symbol->st_shndx != SHN_UNDEF)
+      set_elf_sym(symtab_section, symbol->st_value, PTR_SIZE,
+                  Obj64_ST_INFO(STB_GLOBAL, STT_OBJECT), 0,
+                  symbol->st_shndx, runtime_name);
+    else
+    {
+      unsigned long offset = section_add(rodata_section, PTR_SIZE, PTR_SIZE);
+      set_global_sym(s1, runtime_name, rodata_section, offset);
+    }
+  }
+}
+
 ST_FUNC int pe_output_file(CPRIMEState *s1, const char *filename)
 {
   struct pe_info pe;
@@ -2349,24 +2555,45 @@ ST_FUNC int pe_output_file(CPRIMEState *s1, const char *filename)
 #ifdef CONFIG_CPRIME_BCHECK
   cprime_add_bcheck(s1);
 #endif
-  cprime_add_pragma_libs(s1);
   pe_add_runtime(s1, &pe);
+  /* The implicit runtime is already a provider when deferred DEFAULTLIB
+     archives are searched. Otherwise an unrelated archive member exporting
+     printf can be extracted even though the CRT supplies that symbol. */
+  cprime_add_pragma_libs(s1);
+  pe_rescan_archives(s1);
   resolve_common_syms(s1);
+  pe_native_runtime_symbols(s1);
   pe_set_options(s1, &pe);
+  /* Microsoft native objects use this linker-provided address to form RVAs
+     and locate their module's PE headers. It denotes the image itself, not
+     an allocated object in a data section. */
+  if (pe.type != PE_RUN) {
+    int image_symbol = find_elf_sym(symtab_section, "__ImageBase");
+    if (image_symbol
+        && ((ObjW(Sym) *)symtab_section->data)[image_symbol].st_shndx == SHN_UNDEF)
+      set_elf_sym(symtab_section, pe.imagebase, 0,
+                  Obj64_ST_INFO(STB_GLOBAL, STT_NOTYPE), 0, SHN_ABS, "__ImageBase");
+  }
   pe_check_symbols(&pe);
+  pe_resolve_weak_externals(s1);
 
   if (s1->nb_errors)
     ;
   else if (filename)
   {
-    pe_assign_addresses(&pe);
-    relocate_syms(s1, s1->symtab, 0);
-    s1->pe_imagebase = pe.imagebase;
-    relocate_sections(s1);
-    pe.start_addr = (DWORD)
-                    (get_sym_addr(s1, pe.start_symbol, 1, 1) - pe.imagebase);
-    if (0 == s1->nb_errors)
-      pe_write(&pe);
+    if (pe_assign_addresses(&pe) >= 0)
+    {
+      relocate_syms(s1, s1->symtab, 0);
+      s1->pe_imagebase = pe.imagebase;
+      relocate_sections(s1);
+      pe.start_addr = (DWORD)
+                      (get_sym_addr(s1, pe.start_symbol, 1, 1) - pe.imagebase);
+#ifdef CPRIME_TARGET_X86_64
+      pe_finish_exception_directory(&pe);
+#endif
+      if (0 == s1->nb_errors)
+        pe_write(&pe);
+    }
     dynarray_reset(&pe.sec_info, &pe.sec_count);
   }
   else
@@ -2374,6 +2601,7 @@ ST_FUNC int pe_output_file(CPRIMEState *s1, const char *filename)
 #ifdef CPRIME_IS_NATIVE
     pe.thunk = data_section;
     pe_build_imports(&pe);
+    pe_resolve_weak_externals(s1);
     s1->run_main = pe.start_symbol;
 #ifdef CPRIME_TARGET_X86_64
     s1->uw_pdata = find_section(s1, ".pdata");

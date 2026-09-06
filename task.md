@@ -1,8 +1,12 @@
 ## Implementation resumed (2026-09-06)
 
-The task is active. The canonical CPC application executable has not yet been
-produced by this implementation wave. The historical successful builds below
-used workarounds and do not establish that the current build is ready.
+The task is active. The canonical CPC application now links to
+`C:\Luke\Src\CPrime\build\canonical-ucrt.exe` (4,838,400 bytes), using the
+original 66-source manifest object set and native libraries. It is not ready
+to test: the startup smoke test reaches Racer image loading, then reports heap
+corruption during a class swap/copy. A fresh packed-source build and runtime
+fix are being completed. Historical successful builds below used workarounds
+and do not establish readiness for this wave.
 
 CodeClip exports one selected solution/project graph to a schema-2 manifest.
 Prime and Clang consume the same original sources, effective per-file settings,
@@ -30,16 +34,18 @@ The retained compiler wave now includes:
   value, reference, void, and exception results. Integration regressions are
   still being checked against the packed compiler.
 
-Latest packed measurement: build/canonical-resume27.log compiled all 66 original
-manifest sources in 7.986 seconds, then failed at link. No CPC application
-executable was produced. This includes the original camera, Racer, xBRZ, string,
-histogram, and image sources. Remaining link diagnostics concern in-class
-defaulted assignment linkage, namespace const object linkage, native archive
-code-label relocations, and native CRT library discovery. Compiler/native C++
-ABI interoperability still requires work; pointer warnings in nanoflann's
-reference_wrapper/async calls remain runtime-significant.
+Latest source measurement: build/canonical-ucrt-native.log compiled all 66
+original manifest sources in 10.421 seconds while other checks were running,
+then reached link. That original object set now links successfully. Native C++
+names and UCRT selection now resolve the earlier ordinary CL/Imagine interface
+failures. COFF weak externals, machine-neutral alias objects, deferred alternate
+names, SECTION/SECREL relocations and native TLS/CRT initialization now pass
+focused native integration tests.
+The latest packed resume30 measurement predates these native ABI/runtime fixes
+and exposed overload-candidate duplication, which is now fixed in source.
+A fresh packed compile/link/runtime gate remains required.
 
-The next integrated wave addresses these causes with general compiler changes:
+The current integrated wave addresses these causes with general compiler changes:
 
 - Immediate-context substitution failure for detection idioms and dependent
   return types, default arguments before partial-specialization matching,
@@ -64,18 +70,53 @@ The next integrated wave addresses these causes with general compiler changes:
 - Actual formal parameter lists control function-scope bindings; incidental
   allocations made by dependent probes cannot replace function parameters.
 
-Packed resume27 verification: Templates 338/0. Scratch surrounding verification
-includes Constructors 69/0, Destructors 17/0, Exceptions 31/0, StdConcurrency 6/0,
-Namespaces 32/0, OperatorOverloads 36/0, and ten MultiSource groups. The newly
-combined wave still requires surrounding packed checks. The manifest fixture
-passes original-source selection, resources, native COFF/COMDAT, SDK libraries,
-separate/unity builds, and runtime checks. MultiSource's nine groups pass after
-removing the linker coalescing exceptions. New language regressions are checked
-with Clang. External CL probes now obtain their configuration from the same
-CodeClip manifest; multi-input and compile-only fixtures have explicit metadata.
-Response-file runner fixtures cover quoted paths and more than 32 KiB of flags.
-Repeated in-process exception images now release their runtime callbacks before
-unloading; all 31 exception tests and 24 repeated image lifetimes pass with -run.
+Additional retained changes in the current wave:
+
+- Full expression pack replay, all-parameter overload deduction, trailing-return
+  substitution, std::invoke/reference_wrapper support, and generic std::async.
+- Argument-dependent lookup for operators, merged candidate identity, and enum
+  integral promotion ranking, including fixed-underlying-type preference.
+- Saved template token records preserve payload boundaries and declaration
+  namespaces. Primitive type arguments parse full specifier sequences such as
+  long long and long double. Original upstream nanoflann now passes 32 nearest
+  neighbor queries with serial and concurrent index construction.
+- Source-based Microsoft names for free functions, members, namespaces and
+  template arguments; ordinary inline/template definitions use weak ODR linkage.
+- Microsoft primary-vfptr/base layout, secondary-override receiver adjustment,
+  and member record return ABI (including 4/8-byte records). Mixed native/CPC
+  gates cover constructors, methods, operators, static members, record returns,
+  secondary virtual calls and qualified calls in both directions. Native RTTI,
+  deleting-destructor ABI, virtual bases and cross-toolchain exceptions still
+  need separate implementation/gates; passing these fixtures does not prove
+  complete Microsoft C++ ABI compatibility.
+- A consistent UCRT target runtime, rebuilt startup archives and package inputs,
+  native/CPC shared FILE streams, formatted I/O, accessors and in-process exit
+  callbacks. The normal build and UCRT self-host bootstrap both pass.
+- Native archive rescanning/import-provider selection, code-label relocations,
+  linker-owned __ImageBase, weak externals and deferred /alternatename fallback.
+- Ordered COFF subsections, native PE TLS directory and alignment, main/child
+  dynamic TLS initialization/destruction, native C/C++ initialization arrays,
+  and module exit-table ownership. TLS callbacks, 64-byte alignment, thread
+  isolation and shutdown ordering pass direct and relocatable-link coverage.
+  A newer DLL initialized/uninitialized-global regression is under diagnosis
+  before packaging; the earlier five module-exit integration cases passed.
+- Alias-template materialization, empty argument lists, complete builtin type
+  argument specifiers, unnamed default member-template arguments, and ordinary
+  implicit default-member initialization. New regressions pass Clang as well.
+- Microsoft free-function record return classification checked against actual
+  MSVC 19.29 in both directions, including const results and cleanup-preserved
+  register results. The native fixture covers 23 record forms.
+
+Latest source checks: Templates 354/0, Destructors 19/0, Exceptions 31/0,
+Functions 6/0; surrounding snapshots include Classes 148/0, Constructors 73/0,
+Namespaces 34/0, OperatorOverloads 42/0, StdConcurrency 8/0 and C compatibility
+19/0. The mixed class-layout and member-linkage gates pass with the current
+record-return changes; four UCRT integration gates pass. Some final mangler,
+initializer and COFF changes are still being verified before packaging.
+External CL tests inherit the CodeClip manifest. Original-source manifest,
+resource, native-library, separate/unity and response-file fixtures already
+pass; repeat the relevant integration gates for the final packed wave.
+New language regressions are independently checked with Clang.
 
 Continue through full application link/startup validation and the broader
 removal of fallback runtime/STL and CPC-specific CL components. A successful

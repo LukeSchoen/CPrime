@@ -974,7 +974,9 @@ static void error1(int mode, const char *fmt, va_list ap)
   int line = 0;
 
   if (mode == ERROR_ERROR && cpp_substitution_jump)
+  {
     longjmp(*cpp_substitution_jump, 1);
+  }
   cprime_exit_state(s1);
 
   if (mode == ERROR_WARN)
@@ -1745,11 +1747,12 @@ ST_FUNC void cprime_add_pragma_library(CPRIMEState *s1, const char *library)
 ST_FUNC void cprime_add_pragma_libs(CPRIMEState *s1)
 {
   int i;
-  for (i = 0; i < s1->nb_pragma_libs; i++)
+  for (i = s1->nb_added_pragma_libs; i < s1->nb_pragma_libs; i++)
   {
     const char *library = s1->pragma_libs[i];
     size_t len = strlen(library);
     char normalized[1024];
+    s1->nb_added_pragma_libs = i + 1;
 
     /* Explicit paths are linker inputs, relative to the link working
        directory just as they are for MSVC/Clang. Preserve their suffix. */

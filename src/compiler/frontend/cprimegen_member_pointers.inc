@@ -45,6 +45,7 @@ static void mk_cpp_member_pointer(CType *type, int owner_tok)
   storage_type.t = VT_STRUCT;
   storage_type.ref = NULL;
   symbol = sym_push(type_tok | SYM_STRUCT, &storage_type, PTR_SIZE, 2 * PTR_SIZE);
+  symbol->sym_scope = 0;
   symbol->type.ref = symbol;
   word_type.t = VT_LLONG;
   word_type.ref = NULL;
@@ -75,6 +76,7 @@ static CType *make_provisional_cpp_member_pointer(CType *type, int owner_tok)
   local_stack = NULL;
   entry->symbol = sym_push(tok_alloc_const(name) | SYM_STRUCT,
                            &storage_type, PTR_SIZE, 2 * PTR_SIZE);
+  entry->symbol->sym_scope = 0;
   entry->symbol->type.ref = entry->symbol;
   local_stack = saved_local;
   entry->next = cpp_member_pointer_types;

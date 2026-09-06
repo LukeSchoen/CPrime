@@ -4124,6 +4124,10 @@ ST_INLN void unget_tok(int last_tok)
 static const char *const target_os_defs =
 #ifdef CPRIME_TARGET_PE
   "_WIN32\0"
+  "__CPRIME_NATIVE_CRT__\0"
+# if CONFIG_CPRIME_UCRT
+  "__CPRIME_UCRT__\0"
+# endif
 # if PTR_SIZE == 8
   "_WIN64\0"
 # endif

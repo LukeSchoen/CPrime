@@ -987,6 +987,10 @@ typedef struct
 
 #define R_X86_64_NUM		43
 
+/* CPC's relocatable container retains native COFF section relocations. */
+#define R_X86_64_CPC_SECREL 250
+#define R_X86_64_CPC_SECTION 251
+
 #define R_AARCH64_ABS32		258
 #define R_AARCH64_ABS64		257
 #define R_AARCH64_PREL32		261

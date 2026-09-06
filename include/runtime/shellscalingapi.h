@@ -30,8 +30,16 @@ typedef enum PROCESS_DPI_AWARENESS
   PROCESS_PER_MONITOR_DPI_AWARE = 2
 } PROCESS_DPI_AWARENESS;
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 HRESULT WINAPI GetScaleFactorForMonitor(HMONITOR monitor,
                                         DEVICE_SCALE_FACTOR *scale);
 HRESULT WINAPI SetProcessDpiAwareness(PROCESS_DPI_AWARENESS value);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

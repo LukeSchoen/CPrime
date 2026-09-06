@@ -22,6 +22,9 @@ extern "C" {
 
 #ifndef _FILE_DEFINED
   struct _iobuf {
+#ifdef __CPRIME_UCRT__
+    void *_Placeholder;
+#else
     char *_ptr;
     int _cnt;
     char *_base;
@@ -30,6 +33,7 @@ extern "C" {
     int _charbuf;
     int _bufsiz;
     char *_tmpfname;
+#endif
   };
   typedef struct _iobuf FILE;
 #define _FILE_DEFINED
@@ -91,6 +95,9 @@ extern "C" {
 #endif
 
 #ifndef _STDIO_DEFINED
+#ifdef __CPRIME_UCRT__
+  _CRTIMP FILE *__cdecl __acrt_iob_func(unsigned int);
+#else
 #ifdef _WIN64
   _CRTIMP FILE *__cdecl __iob_func(void);
 #else
@@ -101,6 +108,7 @@ extern FILE _iob[];     /* A pointer to an array of FILE */
 extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
 #define __iob_func()    (*_imp___iob)
 #define _iob __iob_func()
+#endif
 #endif
 #endif
 #endif
@@ -122,9 +130,15 @@ extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
 #ifndef _STDSTREAM_DEFINED
 #define _STDSTREAM_DEFINED
 
+#ifdef __CPRIME_UCRT__
+#define stdin (__acrt_iob_func(0))
+#define stdout (__acrt_iob_func(1))
+#define stderr (__acrt_iob_func(2))
+#else
 #define stdin (&__iob_func()[0])
 #define stdout (&__iob_func()[1])
 #define stderr (&__iob_func()[2])
+#endif
 #endif
 
 #define _IOREAD 0x0001
@@ -256,9 +270,11 @@ extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
   int __cdecl vsprintf(char *_Dest,const char *_Format,va_list _Args);
 #ifndef __NO_ISOCEXT  /* externs in libmingwex.a */
   int __cdecl snprintf(char* s, size_t n, const char*  format, ...);
+#ifndef __CPRIME_UCRT__
   __CRT_INLINE int __cdecl vsnprintf (char* s, size_t n, const char* format,va_list arg) {
     return _vsnprintf ( s, n, format, arg);
   }
+#endif
   int __cdecl vscanf(const char * Format, va_list argp);
   int __cdecl vfscanf (FILE * fp, const char * Format,va_list argp);
   int __cdecl vsscanf (const char * _Str,const char * Format,va_list argp);
@@ -308,8 +324,13 @@ extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
   _CRTIMP int __cdecl _scwprintf(const wchar_t *_Format,...);
   int __cdecl vfwprintf(FILE *_File,const wchar_t *_Format,va_list _ArgList);
   int __cdecl vwprintf(const wchar_t *_Format,va_list _ArgList);
+#ifdef __CPRIME_UCRT__
+  int __cdecl swprintf(wchar_t*, size_t, const wchar_t*, ...);
+  int __cdecl vswprintf(wchar_t*, size_t, const wchar_t*,va_list);
+#else
   _CRTIMP int __cdecl swprintf(wchar_t*, const wchar_t*, ...);
   _CRTIMP int __cdecl vswprintf(wchar_t*, const wchar_t*,va_list);
+#endif
   _CRTIMP int __cdecl _swprintf_c(wchar_t *_DstBuf,size_t _SizeInWords,const wchar_t *_Format,...);
   _CRTIMP int __cdecl _vswprintf_c(wchar_t *_DstBuf,size_t _SizeInWords,const wchar_t *_Format,va_list _ArgList);
   _CRTIMP int __cdecl _snwprintf(wchar_t *_Dest,size_t _Count,const wchar_t *_Format,...);
@@ -381,8 +402,13 @@ extern FILE (*_imp___iob)[];    /* A pointer to an array of FILE */
 #define _STDIO_DEFINED
 #endif
 
+#ifdef __CPRIME_UCRT__
+  _CRTIMP int __cdecl _fgetc_nolock(FILE *);
+  _CRTIMP int __cdecl _fputc_nolock(int, FILE *);
+#else
 #define _fgetc_nolock(_stream) (--(_stream)->_cnt >= 0 ? 0xff & *(_stream)->_ptr++ : _filbuf(_stream))
 #define _fputc_nolock(_c,_stream) (--(_stream)->_cnt >= 0 ? 0xff & (*(_stream)->_ptr++ = (char)(_c)) : _flsbuf((_c),(_stream)))
+#endif
 #define _getc_nolock(_stream) _fgetc_nolock(_stream)
 #define _putc_nolock(_c,_stream) _fputc_nolock(_c,_stream)
 #define _getchar_nolock() _getc_nolock(stdin)

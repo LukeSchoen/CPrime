@@ -2,6 +2,7 @@
 #define _CPC_FUTURE
 
 #include <utility>
+#include <functional>
 #include <mutex>
 #include <thread>
 #include <exception>
@@ -144,28 +145,21 @@ namespace std
     return future<T>(state);
   }
 
-  template<class Function, class Object, class... Args>
-  auto async(launch policy, Function function, Object *object, Args... args)
-    -> future<decltype((object->*function)(args...))>
-  {
-    typedef decltype((object->*function)(args...)) result_type;
-    auto task = [=]() mutable -> result_type { return (object->*function)(args...); };
-    return __cpc_start_async<result_type>(policy, std::move(task));
-  }
-
   template<class Function, class... Args>
   auto async(launch policy, Function function, Args... args)
-    -> future<decltype(function(args...))>
+    -> future<decltype(std::invoke(std::move(function), std::move(args)...))>
   {
-    typedef decltype(function(args...)) result_type;
-    auto task = [=]() mutable -> result_type { return function(args...); };
+    typedef decltype(std::invoke(std::move(function), std::move(args)...)) result_type;
+    auto task = [=]() mutable -> result_type {
+      return std::invoke(std::move(function), std::move(args)...);
+    };
     return __cpc_start_async<result_type>(policy, std::move(task));
   }
 
   template<class Function, class... Args>
   auto async(Function function, Args... args)
-    -> decltype(async(launch::async | launch::deferred, function, args...))
-  { return async(launch::async | launch::deferred, function, args...); }
+    -> future<decltype(std::invoke(std::move(function), std::move(args)...))>
+  { return async(launch::async | launch::deferred, std::move(function), std::move(args)...); }
 }
 
 #endif

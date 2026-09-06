@@ -35,6 +35,9 @@ extern "C" {
 
 #ifndef _FILE_DEFINED
   struct _iobuf {
+#ifdef __CPRIME_UCRT__
+    void *_Placeholder;
+#else
     char *_ptr;
     int _cnt;
     char *_base;
@@ -43,12 +46,16 @@ extern "C" {
     int _charbuf;
     int _bufsiz;
     char *_tmpfname;
+#endif
   };
   typedef struct _iobuf FILE;
 #define _FILE_DEFINED
 #endif
 
 #ifndef _STDIO_DEFINED
+#ifdef __CPRIME_UCRT__
+  _CRTIMP FILE *__cdecl __acrt_iob_func(unsigned int);
+#else
 #ifdef _WIN64
   _CRTIMP FILE *__cdecl __iob_func(void);
 #else
@@ -64,11 +71,18 @@ extern FILE (*_imp___iob)[];	/* A pointer to an array of FILE */
 
 #define _iob __iob_func()
 #endif
+#endif
 
 #ifndef _STDSTREAM_DEFINED
+#ifdef __CPRIME_UCRT__
+#define stdin (__acrt_iob_func(0))
+#define stdout (__acrt_iob_func(1))
+#define stderr (__acrt_iob_func(2))
+#else
 #define stdin (&__iob_func()[0])
 #define stdout (&__iob_func()[1])
 #define stderr (&__iob_func()[2])
+#endif
 #define _STDSTREAM_DEFINED
 #endif
 
@@ -577,8 +591,13 @@ extern FILE (*_imp___iob)[];	/* A pointer to an array of FILE */
   _CRTIMP int __cdecl _scwprintf(const wchar_t *_Format,...);
   int __cdecl vfwprintf(FILE *_File,const wchar_t *_Format,va_list _ArgList);
   int __cdecl vwprintf(const wchar_t *_Format,va_list _ArgList);
+#ifdef __CPRIME_UCRT__
+  int __cdecl swprintf(wchar_t*, size_t, const wchar_t*, ...);
+  int __cdecl vswprintf(wchar_t*, size_t, const wchar_t*,va_list);
+#else
   _CRTIMP int __cdecl swprintf(wchar_t*, const wchar_t*, ...);
   _CRTIMP int __cdecl vswprintf(wchar_t*, const wchar_t*,va_list);
+#endif
   _CRTIMP int __cdecl _swprintf_c(wchar_t *_DstBuf,size_t _SizeInWords,const wchar_t *_Format,...);
   _CRTIMP int __cdecl _vswprintf_c(wchar_t *_DstBuf,size_t _SizeInWords,const wchar_t *_Format,va_list _ArgList);
   _CRTIMP int __cdecl _snwprintf(wchar_t *_Dest,size_t _Count,const wchar_t *_Format,...);

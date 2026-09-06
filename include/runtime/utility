@@ -15,23 +15,30 @@ namespace std
   T&& declval();
 
   template<class T>
-  T&& forward(T &value)
+  constexpr T&& forward(typename remove_reference<T>::type &value) noexcept
   {
-    return value;
+    return static_cast<T&&>(value);
   }
 
   template<class T>
-  T&& move(T &value)
+  constexpr T&& forward(typename remove_reference<T>::type &&value) noexcept
   {
-    return value;
+    static_assert(!is_lvalue_reference<T>::value, "cannot forward an rvalue as an lvalue");
+    return static_cast<T&&>(value);
+  }
+
+  template<class T>
+  constexpr typename remove_reference<T>::type&& move(T &&value) noexcept
+  {
+    return static_cast<typename remove_reference<T>::type&&>(value);
   }
 
   template<class T>
   void swap(T &lhs, T &rhs)
   {
-    T temporary = lhs;
-    lhs = rhs;
-    rhs = temporary;
+    T temporary = std::move(lhs);
+    lhs = std::move(rhs);
+    rhs = std::move(temporary);
   }
 }
 

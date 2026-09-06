@@ -33,6 +33,10 @@ namespace std
       if (text)
         assign(text, wcslen(text));
     }
+    wstring(const wchar_t *text, size_t count) : m_data(0), m_len(0)
+    {
+      assign(text, count);
+    }
     ~wstring() { free(m_data); }
 
     wstring &operator=(const wstring &o)
@@ -111,6 +115,10 @@ namespace std
     {
       if (text)
         assign(text, __builtin_strlen(text));
+    }
+    string(const char *text, size_t count) : m_data(0), m_len(0)
+    {
+      assign(text, count);
     }
     ~string() { free(m_data); }
 

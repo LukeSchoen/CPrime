@@ -130,16 +130,20 @@ extern "C" {
 #define _JMP_BUF_DEFINED
 #endif
 
-  void * __cdecl __attribute__ ((__nothrow__)) mingw_getsp(void);
-
+#ifdef __CPRIME_UCRT__
+  /* The CRT intrinsic saves the complete x64 register context.  CPC's C
+     setjmp has no native C++ exception frame to unwind on longjmp. */
+  int __cdecl __intrinsic_setjmp(jmp_buf _Buf, void *_Frame);
+#define setjmp(BUF) __intrinsic_setjmp((BUF), (void *)0)
+#else
 #ifdef USE_MINGW_SETJMP_TWO_ARGS
 #ifndef _INC_SETJMPEX
-#define setjmp(BUF) _setjmp((BUF),mingw_getsp())
+#define setjmp(BUF) _setjmp((BUF),(void *)0)
   int __cdecl __attribute__ ((__nothrow__)) _setjmp(jmp_buf _Buf,void *_Ctx);
 #else
 #undef setjmp
-#define setjmp(BUF) _setjmpex((BUF),mingw_getsp())
-#define setjmpex(BUF) _setjmpex((BUF),mingw_getsp())
+#define setjmp(BUF) _setjmpex((BUF),(void *)0)
+#define setjmpex(BUF) _setjmpex((BUF),(void *)0)
   int __cdecl __attribute__ ((__nothrow__)) _setjmpex(jmp_buf _Buf,void *_Ctx);
 #endif
 #else
@@ -147,6 +151,7 @@ extern "C" {
 #define setjmp _setjmp
 #endif
   int __cdecl __attribute__ ((__nothrow__)) setjmp(jmp_buf _Buf);
+#endif
 #endif
 
   __declspec(noreturn) __attribute__ ((__nothrow__)) void __cdecl ms_longjmp(jmp_buf _Buf,int _Value)/* throw(...)*/;

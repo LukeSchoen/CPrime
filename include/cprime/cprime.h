@@ -5,6 +5,12 @@
 
 #define CPRIME_VERSION "0.9.28"
 
+/* The Windows target uses the Universal CRT.  Bootstrap hosts may still use
+   another CRT; __CPRIME_UCRT__ describes generated code, not the host build. */
+#ifndef CONFIG_CPRIME_UCRT
+# define CONFIG_CPRIME_UCRT 1
+#endif
+
 #include <stdarg.h>
 #include <stdlib.h>
 #include <stdio.h>
@@ -40,8 +46,10 @@ extern long double strtold (const char *__nptr, char **__endptr);
 #  include <stdint.h>
 # endif
 # define inline __inline
+# ifndef __CPRIME_UCRT__
 # define snprintf _snprintf
 # define vsnprintf _vsnprintf
+# endif
 #  define strtold (long double)strtod
 #  define strtof (float)strtod
 #  define strtoll _strtoi64
@@ -364,7 +372,11 @@ struct SymAttr {
     integral_constexpr : 1,
     scoped_enum : 1,
     local_tag_alias : 1,
-    xxxx        : 6;
+    cpp_field_access : 2,
+    cpp_user_constructor : 1,
+    cpp_user_destructor : 1,
+    cpp_nontrivial_copy_assignment : 1,
+    xxxx : 1;
 };
 
 struct FuncAttr {
@@ -383,7 +395,8 @@ struct FuncAttr {
     func_linkage_explicit : 1,
     func_cpp_conversion : 1,
     func_cpp_explicit : 1,
-    xxxx        : 7;
+    func_cpp_member : 1,
+    xxxx        : 6;
 };
 
 typedef struct Sym {
@@ -719,6 +732,14 @@ struct CPRIMEState {
     int *pack_stack_ptr;
     char **pragma_libs;
     int nb_pragma_libs;
+    int nb_added_pragma_libs;
+#ifdef CPRIME_TARGET_PE
+    struct pe_archive_state **pe_archives;
+    int nb_pe_archives;
+    struct pe_weak_external **pe_weak_externals;
+    int nb_pe_weak_externals;
+    unsigned pe_archive_members_loaded;
+#endif
 
     struct InlineFunc **inline_fns;
     int nb_inline_fns;
@@ -1334,6 +1355,9 @@ ST_FUNC Sym *gfunc_set_param(Sym *s, int c, int byref);
 
 ST_FUNC void cprimeelf_new(CPRIMEState *s);
 ST_FUNC void cprimeelf_delete(CPRIMEState *s);
+#ifdef CPRIME_TARGET_PE
+ST_FUNC void pe_rescan_archives(CPRIMEState *s);
+#endif
 ST_FUNC void cprimeelf_begin_file(CPRIMEState *s1);
 ST_FUNC void cprimeelf_end_file(CPRIMEState *s1);
 ST_FUNC Section *new_section(CPRIMEState *s1, const char *name, int sh_type, int sh_flags);
@@ -1420,6 +1444,8 @@ ST_FUNC int store_immediate(SValue *v, uint64_t value);
 #endif
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *align, int *regsize);
 ST_FUNC void gfunc_call(int nb_args);
+ST_FUNC void cpp_prepare_native_member_call(int nb_args);
+ST_FUNC int cpp_native_member_returns_record(CType *function_type);
 ST_FUNC void gfunc_prolog(Sym *func_sym);
 ST_FUNC void gfunc_epilog(void);
 ST_FUNC void gen_fill_nops(int);
@@ -1440,13 +1466,13 @@ ST_FUNC void gen_vla_sp_save(int addr);
 ST_FUNC void gen_vla_sp_restore(int addr);
 ST_FUNC void gen_vla_alloc(CType *type, int align);
 
-static inline uint16_t read16le(unsigned char *p) {
+static inline uint16_t read16le(const unsigned char *p) {
     return p[0] | (uint16_t)p[1] << 8;
 }
 static inline void write16le(unsigned char *p, uint16_t x) {
     p[0] = x & 255;  p[1] = x >> 8 & 255;
 }
-static inline uint32_t read32le(unsigned char *p) {
+static inline uint32_t read32le(const unsigned char *p) {
   return read16le(p) | (uint32_t)read16le(p + 2) << 16;
 }
 static inline void write32le(unsigned char *p, uint32_t x) {
@@ -1455,7 +1481,7 @@ static inline void write32le(unsigned char *p, uint32_t x) {
 static inline void add32le(unsigned char *p, int32_t x) {
     write32le(p, read32le(p) + x);
 }
-static inline uint64_t read64le(unsigned char *p) {
+static inline uint64_t read64le(const unsigned char *p) {
   return read32le(p) | (uint64_t)read32le(p + 4) << 32;
 }
 static inline void write64le(unsigned char *p, uint64_t x) {
@@ -1552,6 +1578,10 @@ ST_FUNC int pe_load_file(struct CPRIMEState *s1, int fd, const char *filename);
 ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long file_offset);
 ST_FUNC void pe_parse_linker_directives(CPRIMEState *s1, char *directives);
 ST_FUNC void pe_store_pragma_libraries(CPRIMEState *s1);
+ST_FUNC int pe_weak_external_search(CPRIMEState *s1, int symbol);
+ST_FUNC int pe_activate_alternate_names(CPRIMEState *s1);
+ST_FUNC int pe_load_weak_externals(CPRIMEState *s1, const unsigned char *data, unsigned size);
+ST_FUNC void pe_resolve_weak_externals(CPRIMEState *s1);
 ST_FUNC int pe_output_file(CPRIMEState * s1, const char *filename);
 ST_FUNC int pe_putimport(CPRIMEState *s1, int dllindex, const char *name, addr_t value);
 ST_FUNC int pe_setsubsy(CPRIMEState *s1, const char *arg);

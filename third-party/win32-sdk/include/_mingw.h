@@ -53,6 +53,12 @@
 #define _CRTIMP extern
 #define __CRT_INLINE static __inline__
 
+/* UCRT locale internals are opaque. Use its public classification entry
+   points instead of macros that inspect the legacy MSVCRT locale layout. */
+#ifdef __CPRIME_UCRT__
+#define _CTYPE_DISABLE_MACROS
+#endif
+
 #define _CRT_ALIGN(x) __attribute__((aligned(x)))
 #define DECLSPEC_ALIGN(x) __attribute__((aligned(x)))
 #define _CRT_PACKING 8
@@ -139,7 +145,6 @@ typedef struct localeinfo_struct _locale_tstruct,*_locale_t;
 #define DECLARE_STDCALL_P(type) __stdcall type
 #define NOSERVICE 1
 #define NOMCX 1
-#define NOIME 1
 #define __INTRIN_H_
 #ifndef DUMMYUNIONNAME
 #  define DUMMYUNIONNAME

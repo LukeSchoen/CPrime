@@ -1022,19 +1022,86 @@ static int using_regs(int size)
   return !(size > 8 || (size & (size - 1)));
 }
 
-/* Return the number of registers needed to return the struct, or 0 if
-   returning via struct pointer. */
-static int win64_class_requires_indirect_return(CType *type)
+static int win64_class_move_deletes_copy_assignment(CType *type)
+{
+  int owner = get_struct_type_name_tok(type);
+  int has_move = 0, has_copy_assignment = 0;
+  CppMemberDeclInfo *member;
+  for (member = cpp_member_owner_declarations[(unsigned)owner & 1023];
+       member; member = member->owner_next)
+  {
+    Sym *parameter;
+    CType argument;
+    int assignment;
+    if (member->owner_tok != owner || member->is_static || member->is_template
+        || !member->function_type.ref)
+      continue;
+    assignment = member->source_name_tok == tok_alloc_const("operator=");
+    if (member->kind != 1 && !assignment)
+      continue;
+    parameter = member->function_type.ref->next;
+    if (!parameter || parameter->next)
+      continue;
+    argument = parameter->type;
+    if (is_reference_type(&argument))
+    {
+      if (pointed_type(&argument)->ref != type->ref)
+        continue;
+      if (argument.t & VT_RVALUE_REFERENCE)
+        has_move = 1;
+      else if (assignment)
+        has_copy_assignment = 1;
+    }
+    else if (assignment && (argument.t & VT_BTYPE) == VT_STRUCT
+             && argument.ref == type->ref)
+      has_copy_assignment = 1;
+  }
+  return has_move && !has_copy_assignment;
+}
+
+/* Subobjects contribute assignment/destruction triviality. Their own
+   access labels and constructors do not affect the enclosing
+   record's return convention. */
+static int win64_class_has_nontrivial_assignment_or_destroy(CType *type)
 {
   Sym *field;
   if (type->t & VT_ARRAY)
-    return win64_class_requires_indirect_return(&type->ref->type);
+    return win64_class_has_nontrivial_assignment_or_destroy(&type->ref->type);
+  if (type->t & (VT_REFERENCE | VT_CONSTANT))
+    return 1; /* The implicit copy assignment is deleted. */
   if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref)
     return 0;
-  if (type->ref->a.lifecycle_ctor || type->ref->a.lifecycle_dtor)
+  if (type->ref->a.cpp_user_destructor
+      || type->ref->a.cpp_nontrivial_copy_assignment
+      || win64_class_move_deletes_copy_assignment(type)
+      || class_primary_virtual_root(get_struct_type_name_tok(type)))
     return 1;
   for (field = type->ref->next; field; field = field->next)
-    if (win64_class_requires_indirect_return(&field->type))
+    if (win64_class_has_nontrivial_assignment_or_destroy(&field->type))
+      return 1;
+  return 0;
+}
+
+static int win64_class_requires_indirect_return(CType *type)
+{
+  Sym *field;
+  ClassBaseInfo *base;
+  CType unqualified;
+  int class_tok;
+  if (!is_cpp_translation_unit()
+      || (type->t & VT_BTYPE) != VT_STRUCT || !type->ref)
+    return 0;
+  unqualified = *type;
+  unqualified.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  if (type->ref->a.cpp_user_constructor
+      || win64_class_has_nontrivial_assignment_or_destroy(&unqualified))
+    return 1;
+  class_tok = get_struct_type_name_tok(type);
+  for (base = class_base_infos; base; base = base->next)
+    if (base->class_tok == class_tok)
+      return 1;
+  for (field = type->ref->next; field; field = field->next)
+    if (field->a.cpp_field_access)
       return 1;
   return 0;
 }
@@ -1105,6 +1172,14 @@ void gfunc_call(int nb_args)
 #endif
 
   save_regs(nb_args);
+  cpp_prepare_native_member_call(nb_args);
+  if (nb_args >= 2 && cpp_native_member_returns_record(&vtop[-nb_args].type)) {
+    /* The frontend keeps its result destination before the explicit lowered
+       receiver. Microsoft member calls pass this in RCX and the result in RDX. */
+    SValue result = vtop[1 - nb_args];
+    vtop[1 - nb_args] = vtop[2 - nb_args];
+    vtop[2 - nb_args] = result;
+  }
 
   args_size = (nb_args < REGN ? REGN : nb_args) * PTR_SIZE;
   arg = nb_args;
@@ -1329,6 +1404,7 @@ void gfunc_prolog(Sym *func_sym)
 {
   CType *func_type = &func_sym->type;
   int addr, reg_param_index, bt, size;
+  int member_result = cpp_native_member_returns_record(func_type);
   Sym *sym;
   CType *type;
 
@@ -1347,14 +1423,18 @@ void gfunc_prolog(Sym *func_sym)
   /* if the function returns a structure, then add an
      implicit pointer parameter */
   size = gfunc_arg_size(&func_vt);
-  if (!using_regs(size) || win64_class_requires_indirect_return(&func_vt))
+  if (member_result || !using_regs(size) || win64_class_requires_indirect_return(&func_vt))
   {
-    gen_modrm64(0x89, arg_regs[reg_param_index], VT_LOCAL, NULL, addr);
+    int result_register = member_result ? 1 : reg_param_index;
+    int result_address = addr + (member_result ? 8 : 0);
+    gen_modrm64(0x89, arg_regs[result_register], VT_LOCAL, NULL, result_address);
     x86_64_asm_body("movq %%%s, %d(%%rbp)",
-                    x86_64_reg_name(arg_regs[reg_param_index], 1), addr);
-    func_vc = addr;
-    reg_param_index++;
-    addr += 8;
+                    x86_64_reg_name(arg_regs[result_register], 1), result_address);
+    func_vc = result_address;
+    if (!member_result) {
+      reg_param_index++;
+      addr += 8;
+    }
   }
 
   // Define Parameters
@@ -1396,6 +1476,10 @@ void gfunc_prolog(Sym *func_sym)
     }
     addr += 8;
     reg_param_index++;
+    if (member_result && reg_param_index == 1) {
+      addr += 8;
+      reg_param_index++;
+    }
   }
 
   while (reg_param_index < REGN)

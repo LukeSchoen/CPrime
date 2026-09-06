@@ -119,10 +119,21 @@ extern "C" {
 
 #define CLOCKS_PER_SEC 1000
 
+#ifdef __CPRIME_UCRT__
+  int *__cdecl __daylight(void);
+  long *__cdecl __dstbias(void);
+  long *__cdecl __timezone(void);
+  char **__cdecl __tzname(void);
+#define _daylight (*__daylight())
+#define _dstbias (*__dstbias())
+#define _timezone (*__timezone())
+#define _tzname (__tzname())
+#else
   __MINGW_IMPORT int _daylight;
   __MINGW_IMPORT long _dstbias;
   __MINGW_IMPORT long _timezone;
   __MINGW_IMPORT char * _tzname[2];
+#endif
   _CRTIMP errno_t __cdecl _get_daylight(int *_Daylight);
   _CRTIMP errno_t __cdecl _get_dstbias(long *_Daylight_savings_bias);
   _CRTIMP errno_t __cdecl _get_timezone(long *_Timezone);

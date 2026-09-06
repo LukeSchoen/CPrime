@@ -89,6 +89,9 @@ extern "C" {
 
 #ifndef MB_CUR_MAX
 #define MB_CUR_MAX ___mb_cur_max_func()
+#ifdef __CPRIME_UCRT__
+  int __cdecl ___mb_cur_max_func(void);
+#else
 #ifndef __mb_cur_max
 #ifdef _MSVCRT_
   extern int __mb_cur_max;
@@ -103,6 +106,7 @@ extern "C" {
 #else
   extern int* _imp____mbcur_max;
 #define ___mb_cur_max_func() (*_imp____mb_cur_max)
+#endif
 #endif
 #endif
 
@@ -145,14 +149,19 @@ extern "C" {
 #define _doserrno (*__doserrno())
   errno_t __cdecl _set_doserrno(unsigned long _Value);
   errno_t __cdecl _get_doserrno(unsigned long *_Value);
-#ifdef _MSVCRT_
+#ifdef __CPRIME_UCRT__
+  char **__cdecl __sys_errlist(void);
+  int *__cdecl __sys_nerr(void);
+#define _sys_errlist (__sys_errlist())
+#define _sys_nerr (*__sys_nerr())
+#elif defined(_MSVCRT_)
   extern char *_sys_errlist[];
   extern int _sys_nerr;
 #else
   _CRTIMP char *_sys_errlist[1];
   _CRTIMP int _sys_nerr;
 #endif
-#if (defined(_X86_) && !defined(__x86_64))
+#if defined(__CPRIME_UCRT__) || (defined(_X86_) && !defined(__x86_64))
   _CRTIMP int *__cdecl __p___argc(void);
   _CRTIMP char ***__cdecl __p___argv(void);
   _CRTIMP wchar_t ***__cdecl __p___wargv(void);
@@ -160,6 +169,17 @@ extern "C" {
   _CRTIMP wchar_t ***__cdecl __p__wenviron(void);
   _CRTIMP char **__cdecl __p__pgmptr(void);
   _CRTIMP wchar_t **__cdecl __p__wpgmptr(void);
+#endif
+#ifdef __CPRIME_UCRT__
+#define __argc (*__p___argc())
+#define __argv (*__p___argv())
+#define __wargv (*__p___wargv())
+#define _environ (*__p__environ())
+#define _wenviron (*__p__wenviron())
+#define _pgmptr (*__p__pgmptr())
+#define _wpgmptr (*__p__wpgmptr())
+  int *__cdecl __p__fmode(void);
+#define _fmode (*__p__fmode())
 #endif
 #ifndef __argc
 #ifdef _MSVCRT_
@@ -328,6 +348,10 @@ extern "C" {
   __int64 __cdecl _abs64(__int64);
 #endif
   int __cdecl atexit(void (__cdecl *)(void));
+#ifdef __CPRIME_UCRT__
+  int __cdecl at_quick_exit(void (__cdecl *)(void));
+  void __cdecl quick_exit(int _Code) __MINGW_ATTRIB_NORETURN;
+#endif
 #ifndef _CRT_ATOF_DEFINED
 #define _CRT_ATOF_DEFINED
   double __cdecl atof(const char *_String);

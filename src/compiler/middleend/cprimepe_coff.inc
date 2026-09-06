@@ -10,6 +10,130 @@ struct pe_coff_section
   unsigned short associated;
 };
 
+struct pe_weak_external {
+  int symbol, fallback;
+  unsigned search;
+  char names[1];
+};
+
+static int pe_add_weak_external(CPRIMEState *s1, const char *name,
+                                 const char *fallback, unsigned search)
+{
+  struct pe_weak_external *entry;
+  Section *metadata;
+  unsigned char *out;
+  unsigned name_size = strlen(name) + 1, fallback_size = strlen(fallback) + 1;
+  int symbol, fallback_symbol, i;
+  /* 1..3 are COFF weak-external policies; 4 is a deferred /alternatename
+     directive, which introduces no reference until its primary is needed. */
+  if (search < 1 || search > 4)
+    return cprime_error_noabort("unsupported COFF weak external search policy %u", search);
+  symbol = fallback_symbol = 0;
+  for (i = 0; i < s1->nb_pe_weak_externals; ++i) {
+    entry = s1->pe_weak_externals[i];
+    if (strcmp(entry->names, name)) continue;
+    if (strcmp(entry->names + name_size, fallback) || entry->search != search)
+      return cprime_error_noabort("conflicting COFF weak external '%s'", name);
+    return entry->symbol;
+  }
+  if (search != 4) {
+    symbol = set_elf_sym(symtab_section, 0, 0, Obj64_ST_INFO(STB_GLOBAL, STT_NOTYPE), 0, SHN_UNDEF, name);
+    fallback_symbol = set_elf_sym(symtab_section, 0, 0, Obj64_ST_INFO(STB_GLOBAL, STT_NOTYPE), 0, SHN_UNDEF, fallback);
+  }
+  entry = cprime_malloc(sizeof *entry + name_size + fallback_size);
+  entry->symbol = symbol; entry->fallback = fallback_symbol; entry->search = search;
+  memcpy(entry->names, name, name_size);
+  memcpy(entry->names + name_size, fallback, fallback_size);
+  dynarray_add(&s1->pe_weak_externals, &s1->nb_pe_weak_externals, entry);
+  /* Relocatable CPC objects preserve the COFF policy and both symbol names.
+     Names, rather than transient symbol indices, survive -r and archives. */
+  metadata = find_section(s1, ".cpc.weakrefs");
+  metadata->sh_flags &= ~SHF_ALLOC;
+  metadata->sh_addralign = 1;
+  out = section_ptr_add(metadata, 12 + name_size + fallback_size);
+  write32le(out, search); write32le(out + 4, name_size); write32le(out + 8, fallback_size);
+  memcpy(out + 12, name, name_size);
+  memcpy(out + 12 + name_size, fallback, fallback_size);
+  return symbol;
+}
+
+ST_FUNC int pe_weak_external_search(CPRIMEState *s1, int symbol)
+{
+  int i;
+  for (i = 0; i < s1->nb_pe_weak_externals; ++i)
+    if (s1->pe_weak_externals[i]->symbol == symbol)
+      return s1->pe_weak_externals[i]->search == 2
+          || s1->pe_weak_externals[i]->search == 4;
+  return 1;
+}
+
+ST_FUNC int pe_activate_alternate_names(CPRIMEState *s1)
+{
+  int i, changed = 0;
+  for (i = 0; i < s1->nb_pe_weak_externals; ++i) {
+    struct pe_weak_external *entry = s1->pe_weak_externals[i];
+    const char *name = entry->names, *fallback = name + strlen(name) + 1;
+    const char *import_name = name;
+    int symbol;
+    if (entry->search != 4 || entry->fallback) continue;
+    symbol = find_elf_sym(symtab_section, name);
+    if (!symbol || ((ObjW(Sym) *)symtab_section->data)[symbol].st_shndx != SHN_UNDEF) continue;
+    if (!strncmp(import_name, "__imp_", 6) || !strncmp(import_name, "_imp__", 6)) import_name += 6;
+    if (find_elf_sym(s1->dynsymtab_section, import_name)) continue;
+    entry->symbol = symbol;
+    /* A fallback alone need not diagnose a missing symbol if a later
+       definition satisfies the primary. The original primary reference
+       remains strong and diagnoses an unresolved alias chain normally. */
+    entry->fallback = find_elf_sym(symtab_section, fallback);
+    if (!entry->fallback)
+      entry->fallback = set_elf_sym(symtab_section, 0, 0,
+          Obj64_ST_INFO(STB_WEAK, STT_NOTYPE), 0, SHN_UNDEF, fallback);
+    changed = 1;
+  }
+  return changed;
+}
+
+ST_FUNC int pe_load_weak_externals(CPRIMEState *s1, const unsigned char *data, unsigned size)
+{
+  while (size) {
+    unsigned search, name_size, fallback_size, length;
+    if (size < 12) goto invalid;
+    search = read32le(data); name_size = read32le(data + 4); fallback_size = read32le(data + 8);
+    if (!name_size || !fallback_size || name_size > size - 12
+        || fallback_size > size - 12 - name_size) goto invalid;
+    length = 12 + name_size + fallback_size;
+    if (data[12 + name_size - 1] || data[length - 1]
+        || memchr(data + 12, 0, name_size - 1)
+        || memchr(data + 12 + name_size, 0, fallback_size - 1)) goto invalid;
+    if (pe_add_weak_external(s1, (const char *)data + 12,
+                              (const char *)data + 12 + name_size, search) < 0) return -1;
+    data += length; size -= length;
+  }
+  return 0;
+invalid:
+  return cprime_error_noabort("invalid COFF weak external metadata");
+}
+
+ST_FUNC void pe_resolve_weak_externals(CPRIMEState *s1)
+{
+  int i, changed;
+  do {
+    changed = 0;
+    for (i = 0; i < s1->nb_pe_weak_externals; ++i) {
+      struct pe_weak_external *entry = s1->pe_weak_externals[i];
+      if (!entry->symbol || !entry->fallback) continue;
+      ObjW(Sym) *symbols = (ObjW(Sym) *)symtab_section->data;
+      ObjW(Sym) *symbol = symbols + entry->symbol, *fallback = symbols + entry->fallback;
+      if (symbol->st_shndx != SHN_UNDEF || fallback->st_shndx == SHN_UNDEF) continue;
+      symbol->st_shndx = fallback->st_shndx;
+      symbol->st_value = fallback->st_value;
+      symbol->st_size = fallback->st_size;
+      symbol->st_info = Obj64_ST_INFO(Obj64_ST_BIND(symbol->st_info), Obj64_ST_TYPE(fallback->st_info));
+      ++changed;
+    }
+  } while (changed);
+}
+
 static int pe_coff_read(int fd, unsigned long base, unsigned long size,
                         unsigned long offset, void *data, unsigned long count)
 {
@@ -83,6 +207,16 @@ ST_FUNC void pe_parse_linker_directives(CPRIMEState *s1, char *directives)
       cprime_add_pragma_library(s1, token + 12);
     else if (!strnicmp(token, "/include:", 9) || !strnicmp(token, "-include:", 9))
       set_elf_sym(symtab_section, 0, 0, Obj64_ST_INFO(STB_GLOBAL, STT_NOTYPE), 0, SHN_UNDEF, token + 9);
+    else if (!strnicmp(token, "/alternatename:", 15) || !strnicmp(token, "-alternatename:", 15))
+    {
+      char *equal = strchr(token + 15, '=');
+      if (!equal || equal == token + 15 || !equal[1])
+        cprime_error_noabort("invalid COFF /alternatename directive");
+      else {
+        *equal = 0;
+        pe_add_weak_external(s1, token + 15, equal + 1, 4);
+      }
+    }
   }
 }
 
@@ -118,7 +252,8 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
   int *symbol_map = NULL;
   char *strings = NULL;
   unsigned long size, end = lseek(fd, 0, SEEK_END), table_end;
-  unsigned string_size = 0, i, j;
+  unsigned string_size = 0, i = 0, j = 0;
+  const char *input_context = "header";
   int result = -1;
 
   if (base > end || end - base < sizeof header)
@@ -128,7 +263,7 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
     goto invalid;
   if (!header.Machine && header.NumberOfSections == 0xffff)
     return pe_load_short_import(s1, fd, base, size, (BYTE *)&header);
-  if (header.Machine != IMAGE_FILE_MACHINE || header.SizeOfOptionalHeader
+  if ((header.Machine && header.Machine != IMAGE_FILE_MACHINE) || header.SizeOfOptionalHeader
       || !header.NumberOfSections || header.PointerToSymbolTable > size
       || header.NumberOfSymbols > (size - header.PointerToSymbolTable) / sizeof *symbols)
     goto invalid;
@@ -144,6 +279,7 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
       || !pe_coff_read(fd, base, size, header.PointerToSymbolTable,
                       symbols, header.NumberOfSymbols * sizeof *symbols))
     goto invalid;
+  input_context = "section table";
   for (i = 0; i < header.NumberOfSections; ++i)
   {
     IMAGE_SECTION_HEADER *h = &sections[i].header;
@@ -153,8 +289,13 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
         || h->PointerToRelocations > size
         || h->NumberOfRelocations > (size - h->PointerToRelocations) / sizeof(struct pe_rsrc_reloc))
       goto invalid;
+    /* Microsoft's architecture-neutral archive alias members contain only
+       linker metadata, never machine instructions or allocated data. */
+    if (!header.Machine && ((h->Characteristics & 0xe00000e0) || h->NumberOfRelocations))
+      goto invalid;
   }
   /* Section definition auxiliaries carry COMDAT selection and association. */
+  input_context = "section auxiliary";
   for (i = 0; i < header.NumberOfSymbols; i += 1 + symbols[i].auxiliary_count)
   {
     struct pe_rsrc_symbol *symbol = &symbols[i];
@@ -170,6 +311,7 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
   }
   /* Bind repeated COMDAT sections to the selected definition before copying
      data or publishing local section symbols and their relocations. */
+  input_context = "COMDAT binding";
   for (i = 0; i < header.NumberOfSymbols; i += 1 + symbols[i].auxiliary_count)
   {
     struct pe_rsrc_symbol *symbol = &symbols[i];
@@ -192,7 +334,8 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
     if (previous->st_shndx == SHN_UNDEF) continue;
     if (part->selection != 2 && part->selection != 3 && part->selection != 4)
     {
-      cprime_error_noabort("unsupported or conflicting COFF COMDAT selection %d for '%s'", part->selection, name);
+      cprime_error_noabort("unsupported or conflicting COFF COMDAT selection %d for '%s' (member offset %lu)",
+                           part->selection, name, base);
       goto done;
     }
     if (previous->st_shndx >= s1->nb_sections || previous->st_value < symbol->value)
@@ -216,11 +359,12 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
     }
     part->duplicate = 1;
   }
+  input_context = "section data";
   for (i = 0; i < header.NumberOfSections; ++i)
   {
     struct pe_coff_section *part = &sections[i];
     IMAGE_SECTION_HEADER *h = &part->header;
-    char short_name[9], *output_name, *suffix;
+    char short_name[9], *output_name;
     const char *name;
     unsigned align_bits = (h->Characteristics >> 20) & 15;
     unsigned align = align_bits ? 1U << (align_bits - 1) : 16;
@@ -256,10 +400,8 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
     if (h->Characteristics & 0x80) type = SHT_NOBITS;
     if (h->Characteristics & 0x80000000U) flags |= SHF_WRITE;
     if (h->Characteristics & 0x20000000U) flags |= SHF_EXECINSTR;
-    /* COFF subsection suffixes share the corresponding output section. */
+    /* Preserve subsection names for the PE writer's lexical grouping. */
     output_name = cprime_strdup(name);
-    suffix = strchr(output_name, '$');
-    if (suffix) *suffix = 0;
     part->section = have_section(s1, output_name);
     if (!part->section)
     {
@@ -276,6 +418,7 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
                          part->section->data + part->offset, h->SizeOfRawData))
       goto invalid;
   }
+  input_context = "symbol table";
   for (i = 0; i < header.NumberOfSymbols; i += 1 + symbols[i].auxiliary_count)
   {
     struct pe_rsrc_symbol *symbol = &symbols[i];
@@ -312,6 +455,25 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
     symbol_map[i] = set_elf_sym(symtab_section, value, symbol_size,
                                Obj64_ST_INFO(bind, type), 0, section, name);
   }
+  input_context = "weak external";
+  for (i = 0; i < header.NumberOfSymbols; i += 1 + symbols[i].auxiliary_count) {
+    struct pe_rsrc_symbol *symbol = &symbols[i];
+    unsigned fallback, search;
+    const char *name, *target;
+    char short_name[9], short_target[9];
+    if (symbol->storage_class != 105) continue;
+    if (symbol->auxiliary_count != 1 || symbol->section || symbol->value) goto invalid;
+    fallback = read32le((BYTE *)(symbol + 1));
+    search = read32le((BYTE *)(symbol + 1) + 4);
+    if (fallback >= header.NumberOfSymbols || search < 1 || search > 3) goto invalid;
+    name = pe_coff_name(symbol->name, strings, string_size, short_name);
+    target = pe_coff_name(symbols[fallback].name, strings, string_size, short_target);
+    if (!name || !target || (symbols[fallback].storage_class != 2
+                             && symbols[fallback].storage_class != 105)) goto invalid;
+    symbol_map[i] = pe_add_weak_external(s1, name, target, search);
+    if (symbol_map[i] < 0) goto done;
+  }
+  input_context = "relocation";
   for (i = 0; i < header.NumberOfSections; ++i)
   {
     struct pe_coff_section *part = &sections[i];
@@ -329,6 +491,8 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
       else if (rel.type == 2) type = R_X86_64_32;
       else if (rel.type == 3) type = R_X86_64_RELATIVE;
       else if (rel.type >= 4 && rel.type <= 9) { type = R_X86_64_PC32; addend = -(long long)rel.type; }
+      else if (rel.type == 10) { type = R_X86_64_CPC_SECTION; width = 2; }
+      else if (rel.type == 11) type = R_X86_64_CPC_SECREL;
       else { cprime_error_noabort("unsupported AMD64 COFF relocation %d", rel.type); goto done; }
       if (rel.offset > h->SizeOfRawData || width > h->SizeOfRawData - rel.offset
           || rel.symbol_index >= header.NumberOfSymbols || !symbol_map[rel.symbol_index]) goto invalid;
@@ -339,7 +503,8 @@ ST_FUNC int pe_load_coff_object(CPRIMEState *s1, int fd, unsigned long base)
   result = 0;
   goto done;
 invalid:
-  cprime_error_noabort("invalid AMD64 COFF object");
+  cprime_error_noabort("invalid AMD64 COFF object (%s, index %u, relocation %u, member offset %lu)",
+                       input_context, i, j, base);
 done:
   cprime_free(sections);
   cprime_free(symbols);

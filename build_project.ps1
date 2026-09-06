@@ -434,6 +434,8 @@ if ($applications[0].entryPoint) {
     else { $linkArguments += '-Xlinker', ('/ENTRY:' + $applications[0].entryPoint) }
 }
 $linkArguments += '-o', $ExePath
+@{ Compiler = $CompilerPath; Arguments = $linkArguments; Directory = $applications[0].directory } |
+    ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $OutDir 'link_inputs.json') -Encoding UTF8
 try {
     Invoke-BuildTool $CompilerPath $linkArguments $applications[0].directory 'link'
     if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) { throw 'The linker did not produce the selected executable' }

@@ -185,7 +185,7 @@ static void print_search_dirs(CPRIMEState *s)
 
 static void set_environment(CPRIMEState *s)
 {
-  char * path;
+  const char *path;
 
   path = getenv("C_INCLUDE_PATH");
   if (path != NULL)

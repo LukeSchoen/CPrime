@@ -36,3 +36,42 @@ source, or ambiguous source selection is a test setup failure, not a skipped tes
 The runner does not substitute library sources or add machine-specific include paths.
 Compile-only, multiple-source, and manifest-dependent tests always compile fresh;
 they do not reuse the optional shared executable cache.
+
+`Tests/check_ucrt_runtime.ps1` checks the default Windows UCRT target against
+a native Clang object. It passes file streams and allocations between compilers,
+checks formatted I/O, buffered file positions, locale/global accessors, startup
+arguments, exit callbacks, `setjmp`/`longjmp`, and generated-code shutdown with
+`-run`. The PE import check rejects accidental legacy MSVCRT composition.
+Use `-CompilerPath` and `-RuntimeRoot` together when testing an unpacked compiler;
+the runtime archive must have been rebuilt by the same target compiler.
+
+`Tests/test_NativeTls.ps1` links native COFF TLS objects directly and through
+`-r`. It checks ordered initialization/callback subsections, 64-byte TLS
+alignment, main/child thread isolation, native global constructors, dynamic TLS
+initialization/destruction, and exit/pretermination/termination ordering.
+The Destructors suite also checks interleaved class destructors and ordinary
+`atexit` callbacks; the same ordering is required for executable and `-run` use.
+
+`Tests/test_MsvcRecordReturn.ps1` compiles a native provider with MSVC and checks
+small C++ record returns in both directions, including access, bases, special
+members, nested records, and const results. It discovers the installed MSVC x64
+toolchain with `vswhere`; `-NativeCompilerPath` can select another installation.
+This gate uses MSVC itself because older Clang releases use a different POD
+classification for some defaulted and nested records.
+
+`Tests/check_ucrt_module_exit.ps1` checks executable and DLL ownership of
+termination callbacks, mixed native/CPC `_onexit` and `atexit` ordering,
+`quick_exit`, and `-run` callback lifetime. Its native thread-static fixture
+links the installed MSVC runtime guard implementation and checks thread-local
+storage on four worker threads. Pass `-NativeLibraryPath` if the MSVC x64
+library directory is outside the standard Visual Studio installation paths.
+
+`Tests/test_CoffWeakExternals.ps1` checks native weak aliases, deferred
+`/alternatename` directives, archive fallback selection, DLL import aliases,
+and `SECTION`/`SECREL` relocations, including relocatable output. Together with
+`Tests/test_CoffLabels.ps1`, it verifies archive order and native object metadata
+without changing the external project's source or library list.
+The label tests also query Windows' unwind lookup for native functions whose
+code and `.pdata$` contributions have different ordering and alignment. The
+final x64 exception directory must pack and sort runtime-function records by
+their relocated code addresses, including inputs combined with `-r`.

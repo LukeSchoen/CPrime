@@ -63,5 +63,7 @@ int main() {
   if (Tracked::alive != 0) return 10;
   Small small;
   Small returned = makeSmall(small);
-  return returned.selected != 1;
+  // Named return value optimization is optional: either retain the local's
+  // copy-construction state, or move that local into the result.
+  return returned.selected != 1 && returned.selected != 2;
 }

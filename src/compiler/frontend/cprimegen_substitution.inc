@@ -11,12 +11,14 @@ static int template_probe_type(TokenString *tokens, int argument,
     CValue value;
     SValue values[1 + VSTACK_SIZE];
     struct temp_local_variable temporaries[MAX_TEMP_LOCAL_VARIABLE_NUMBER];
-    Sym *locals, *globals, *parameter_frame;
-    Sym **local_bindings;
+    Sym *locals, *globals, *parameter_frame, *probe_globals;
+    Sym **local_bindings, **global_bindings;
+    CppMemberDeclContext *member_declaration_context;
+    LambdaExpression *lambda;
     jmp_buf *previous;
     int token, depth, nocode, local_offset, temporary_count, namespace_tok;
     int member_class, declaration_auto, declaration_typedef, declaration_decltype;
-    int scope, deferred_members, binding_count;
+    int scope, deferred_members, binding_count, global_binding_count;
   } *saved = cprime_malloc(sizeof(*saved));
   jmp_buf recovery;
   volatile int success = 0;
@@ -29,26 +31,44 @@ static int template_probe_type(TokenString *tokens, int argument,
   saved->locals = local_stack;
   saved->globals = NULL; saved->parameter_frame = NULL;
   saved->local_bindings = NULL; saved->binding_count = 0;
+  saved->global_bindings = NULL; saved->global_binding_count = 0;
   saved->scope = local_scope;
   saved->deferred_members = defer_pending_member_funcs;
   saved->nocode = nocode_wanted; saved->local_offset = loc;
   saved->temporary_count = nb_temp_local_vars;
   saved->namespace_tok = current_namespace_scope_tok();
   saved->member_class = active_member_class_tok;
+  saved->member_declaration_context = cpp_member_decl_context;
   saved->declaration_auto = last_decl_was_auto;
   saved->declaration_typedef = last_btype_was_typedef;
   saved->declaration_decltype = last_btype_was_decltype;
   saved->previous = cpp_substitution_jump;
+  saved->lambda = lambda_probe;
   /* Lookup belongs to the template's declaration context. Even a caller's
      local typedef must not hide a name in that context. Substituted type
      arguments already have stable global spellings from template_subst_token. */
   if (saved->locals)
     saved->local_bindings = sym_hide_local_bindings(saved->locals,
                                                     &saved->binding_count);
-  else if (saved->scope)
+  if (saved->scope)
   {
     Sym *frame;
-    for (frame = global_stack; frame; frame = frame->prev)
+    /* Types materialized inside a parameter declaration can add anonymous
+       frames ahead of that declaration's own boundary. Hide all currently
+       linked parameter-scope names, including the suspended outer frames. */
+    for (frame = global_stack; frame; frame = frame->prev) {
+      int name = frame->v & ~SYM_STRUCT;
+      TokenSym *token;
+      Sym *binding;
+      if (name < TOK_IDENT || name >= SYM_FIRST_ANOM || sym_scope_ex(frame) <= 0)
+        continue;
+      token = table_ident[name - TOK_IDENT];
+      binding = frame->v & SYM_STRUCT ? token->sym_struct : token->sym_identifier;
+      if (binding != frame) continue;
+      dynarray_add(&saved->global_bindings, &saved->global_binding_count, frame);
+      sym_link(frame, 0);
+    }
+    for (frame = saved->locals ? NULL : global_stack; frame; frame = frame->prev)
       if (frame->v == SYM_FIELD && frame->sym_scope == 0)
       {
         saved->globals = global_stack;
@@ -59,6 +79,7 @@ static int template_probe_type(TokenString *tokens, int argument,
   }
   local_stack = NULL;
   local_scope = 0;
+  saved->probe_globals = global_stack;
   defer_pending_member_funcs = 1;
   vtop = vstack - 1;
   cpp_substitution_jump = &recovery;
@@ -67,10 +88,44 @@ static int template_probe_type(TokenString *tokens, int argument,
     AttributeDef attributes;
     enter_namespace_scope(namespace_tok);
     active_member_class_tok = 0;
+    cpp_member_decl_context = NULL;
+    lambda_probe = NULL;
     ++nocode_wanted;
     begin_macro(&saved->replay, 0);
     next();
-    if (argument)
+    if (argument == 3)
+    {
+      CType target = *result;
+      int braced = tok == '{';
+      if (braced) next();
+      nocode_wanted += CONST_WANTED_BIT;
+      if (braced && tok == '}') vpushi(0);
+      else expr_eq();
+      nocode_wanted -= CONST_WANTED_BIT;
+      if (braced) {
+        if (tok == ',') next();
+        skip('}');
+      }
+      if (is_reference_type(&target)) {
+        decay_reference_type(&target);
+        if (is_reference_type(&vtop->type)) decay_reference_type(&vtop->type);
+        else { test_lvalue(); mk_pointer(&vtop->type); gaddrof(); }
+      }
+      gen_assign_cast(&target);
+      success = tok == TOK_EOF
+          && (vtop->r & (VT_VALMASK | VT_LVAL | VT_NONCONST)) == VT_CONST;
+      vpop();
+    }
+    else if (argument == 2)
+    {
+      /* Only generated declarations reach this mode. Their interfaces may
+         be needed while the outer worklist is parsing another signature;
+         publishing them must not recursively drain function bodies. */
+      while (tok != TOK_EOF && tok != ';')
+        decl(VT_CONST);
+      success = 1;
+    }
+    else if (argument)
     {
       int token = parse_one_template_type_arg();
       if (token && tok == TOK_EOF)
@@ -88,16 +143,30 @@ static int template_probe_type(TokenString *tokens, int argument,
     }
   }
   cpp_substitution_jump = saved->previous;
+  lambda_probe = saved->lambda;
   while (macro_stack && macro_stack != saved->macro) end_macro();
   macro_ptr = saved->ptr; tok = saved->token; tokc = saved->value;
   /* A failed nested replay can abandon its own local stack. The caller's
      stack is detached, so cleanup never depends on it remaining an ancestor. */
   sym_pop(&local_stack, NULL, 0);
+  {
+    Sym *symbol;
+    /* An error may leave a parameter declarator on the global symbol arena.
+       Keep its retained type storage, but end every newly entered local
+       binding before restoring the suspended declaration's parameter frame. */
+    for (symbol = global_stack; symbol && symbol != saved->probe_globals;
+         symbol = symbol->prev)
+      if ((symbol->v & ~SYM_STRUCT) >= TOK_IDENT
+          && (symbol->v & ~SYM_STRUCT) < SYM_FIRST_ANOM
+          && sym_scope_ex(symbol) > 0)
+        sym_link(symbol, 0);
+  }
   if (saved->parameter_frame)
   {
     saved->parameter_frame->prev = global_stack;
     global_stack = saved->globals;
   }
+  sym_relink_stack(saved->global_bindings, saved->global_binding_count);
   sym_relink_stack(saved->local_bindings, saved->binding_count);
   local_stack = saved->locals;
   local_scope = saved->scope;
@@ -109,6 +178,7 @@ static int template_probe_type(TokenString *tokens, int argument,
   loc = saved->local_offset; nocode_wanted = saved->nocode;
   enter_namespace_scope(saved->namespace_tok);
   active_member_class_tok = saved->member_class;
+  cpp_member_decl_context = saved->member_declaration_context;
   last_decl_was_auto = saved->declaration_auto;
   last_btype_was_typedef = saved->declaration_typedef;
   last_btype_was_decltype = saved->declaration_decltype;
@@ -147,10 +217,132 @@ static int template_substituted_pattern_argument(TemplateDef *definition,
   return valid ? parsed.t : 0;
 }
 
-static int template_return_substitution_matches(TemplateDef *definition,
-                                                CType *arguments, int count)
+/* Form an abstract function declarator so post_type() installs the actual
+   parameter names while substituting a dependent trailing return type. */
+static int template_trailing_return_type(TemplateDef *definition,
+                                         TemplateArgList *bindings,
+                                         int name_index, CType *result)
 {
-  TemplateArgList bindings;
+  TokenString *header, *tail, *expanded;
+  TokenString *source = definition->def_str;
+  int i, j, start, end, close = -1, depth = 0, valid;
+  int pack = definition->variadic_param_index;
+  int pack_type = pack >= 0 ? definition->type_param_toks[pack] : 0;
+  int pack_name = 0;
+  for (i = name_index + 1; i < source->len; ++i) {
+    int token = source->str[i];
+    if (TOK_HAS_VALUE(token)) {
+      i += tok_str_value_extra_words(source->str, source->len, i);
+      continue;
+    }
+    if (token == '(') ++depth;
+    else if (token == ')' && !--depth) { close = i; break; }
+  }
+  if (close < 0) return -1;
+  for (i = close + 1; i < source->len; ++i) {
+    int token = source->str[i];
+    if (token == TOK_ARROW) break;
+    if (token == '{' || token == ';' || token == TOK_EOF) return -1;
+    if (TOK_HAS_VALUE(token))
+      i += tok_str_value_extra_words(source->str, source->len, i);
+  }
+  if (i == source->len) return -1;
+  header = tok_str_alloc();
+  for (i = 0; i < name_index; ++i) {
+    int token = source->str[i];
+    if (token == TOK_STATIC || token == TOK_EXTERN || token == TOK_INLINE1
+        || token == TOK_INLINE2 || token == TOK_INLINE3 || token == tok_constexpr)
+      continue;
+    if (TOK_HAS_VALUE(token))
+      tok_str_add_record(header, source->str, source->len, &i);
+    else tok_str_add(header, template_subst_token(definition, bindings, 0,
+                                                   NULL, NULL, 0, token));
+  }
+  tok_str_add(header, '(');
+  start = name_index + 2;
+  while (start < close) {
+    int parens = 0, brackets = 0, angles = 0, has_pack = 0, element, count = 1;
+    for (end = start; end < close; ++end) {
+      int token = source->str[end];
+      if (TOK_HAS_VALUE(token)) {
+        end += tok_str_value_extra_words(source->str, source->len, end);
+        continue;
+      }
+      if (!parens && !brackets && !angles && token == ',') break;
+      if (token == '(') ++parens;
+      else if (token == ')') --parens;
+      else if (token == '[') ++brackets;
+      else if (token == ']') --brackets;
+      else if (!parens && !brackets && token == TOK_LT) ++angles;
+      else if (!parens && !brackets && token == TOK_GT) --angles;
+      else if (!parens && !brackets && token == TOK_SAR) angles -= 2;
+      if (token == TOK_DOTS && pack_type) has_pack = 1;
+    }
+    if (has_pack) {
+      count = bindings->nb - pack;
+      for (j = start; j < end; ++j) {
+        int token = source->str[j];
+        if (TOK_HAS_VALUE(token)) {
+          j += tok_str_value_extra_words(source->str, source->len, j);
+          continue;
+        }
+        if (token >= TOK_UIDENT && token != pack_type
+            && template_param_index(definition, token) < 0)
+          pack_name = token;
+      }
+    }
+    for (element = 0; element < count; ++element) {
+      char name[256];
+      if (header->str[header->len - 1] != '(') tok_str_add(header, ',');
+      for (j = start; j < end; ++j) {
+        int token = source->str[j];
+        if (has_pack && token == TOK_DOTS) continue;
+        if (has_pack && token == pack_type)
+          tok_str_add(header, bindings->toks[pack + element]);
+        else if (has_pack && token == pack_name && element) {
+          snprintf(name, sizeof(name), "%s__pack%d", get_tok_str(pack_name, NULL), element);
+          tok_str_add(header, tok_alloc_const(name));
+        }
+        else if (TOK_HAS_VALUE(token))
+          tok_str_add_record(header, source->str, source->len, &j);
+        else tok_str_add(header, template_subst_token(definition, bindings, 0,
+                                                       NULL, NULL, 0, token));
+      }
+    }
+    start = end + 1;
+  }
+  tok_str_add(header, ')');
+  tail = tok_str_alloc();
+  depth = 0;
+  for (i = close + 1; i < source->len; ++i) {
+    int token = source->str[i];
+    if (!depth && (token == '{' || token == ';' || token == TOK_EOF)) break;
+    if (token == '(') ++depth;
+    else if (token == ')') --depth;
+    tok_str_add_record(tail, source->str, source->len, &i);
+  }
+  tok_str_add(tail, TOK_EOF);
+  expanded = pack_name ? expand_template_expression_packs(tail, pack_type,
+      pack_name, pack_name, bindings->toks + pack, bindings->nb - pack) : tail;
+  for (i = 0; i < expanded->len; ++i) {
+    int token = expanded->str[i];
+    if (token == TOK_EOF) break;
+    if (TOK_HAS_VALUE(token))
+      tok_str_add_record(header, expanded->str, expanded->len, &i);
+    else tok_str_add(header, template_subst_token(definition, bindings, 0,
+                                                   NULL, NULL, 0, token));
+  }
+  tok_str_add(header, TOK_EOF);
+  valid = template_probe_type(header, 0, definition->namespace_tok, result);
+  tok_str_free(header);
+  if (expanded != tail) tok_str_free(expanded);
+  tok_str_free(tail);
+  return valid;
+}
+
+static int template_return_substitution_matches_bound(TemplateDef *definition,
+                                                TemplateArgList *bindings)
+{
   TokenString *tokens;
   CType result;
   int i, end = -1, dependent = 0, valid;
@@ -167,9 +359,10 @@ static int template_return_substitution_matches(TemplateDef *definition,
     { end = i; break; }
     if (template_param_index(definition, token) >= 0) dependent = 1;
   }
-  if (!dependent || end < 0) return 1;
-  if (!infer_template_args_from_call(definition, arguments, count, &bindings))
-    return 0;
+  if (end < 0) return 1;
+  valid = template_trailing_return_type(definition, bindings, end, &result);
+  if (valid >= 0) return valid;
+  if (!dependent) return 1;
   tokens = tok_str_alloc();
   for (i = 0; i < end; ++i)
   {
@@ -179,11 +372,20 @@ static int template_return_substitution_matches(TemplateDef *definition,
       continue;
     if (TOK_HAS_VALUE(token))
       tok_str_add_record(tokens, definition->def_str->str, definition->def_str->len, &i);
-    else tok_str_add(tokens, template_subst_token(definition, &bindings, 0,
+    else tok_str_add(tokens, template_subst_token(definition, bindings, 0,
                                                    NULL, NULL, 0, token));
   }
   tok_str_add(tokens, TOK_EOF);
   valid = template_probe_type(tokens, 0, definition->namespace_tok, &result);
   tok_str_free(tokens);
   return valid;
+}
+
+static int template_return_substitution_matches(TemplateDef *definition,
+                                                CType *arguments, int count)
+{
+  TemplateArgList bindings;
+  if (!infer_template_args_from_call(definition, arguments, count, &bindings))
+    return 0;
+  return template_return_substitution_matches_bound(definition, &bindings);
 }

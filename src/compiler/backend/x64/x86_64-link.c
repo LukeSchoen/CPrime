@@ -30,6 +30,8 @@ ST_FUNC int code_reloc (int reloc_type)
   switch (reloc_type)
   {
   case R_X86_64_32:
+  case R_X86_64_CPC_SECREL:
+  case R_X86_64_CPC_SECTION:
   case R_X86_64_32S:
   case R_X86_64_64:
   case R_X86_64_GOTPC32:
@@ -73,6 +75,9 @@ ST_FUNC int gotplt_entry_type (int reloc_type)
   case R_X86_64_JUMP_SLOT:
   case R_X86_64_COPY:
   case R_X86_64_RELATIVE:
+    return NO_GOTPLT_ENTRY;
+  case R_X86_64_CPC_SECREL:
+  case R_X86_64_CPC_SECTION:
     return NO_GOTPLT_ENTRY;
 
   /* The following relocs wouldn't normally need GOT or PLT
@@ -416,6 +421,45 @@ plt32pc32:
   }
   break;
   case R_X86_64_NONE:
+    break;
+  case R_X86_64_CPC_SECREL:
+  case R_X86_64_CPC_SECTION:
+#ifdef CPRIME_TARGET_PE
+  {
+    Section *target;
+    ObjW(Sym) *sym = (ObjW(Sym) *)s1->symtab->data + sym_index;
+    addr_t base, value;
+    int i;
+    if (!sym->st_shndx || sym->st_shndx >= s1->nb_sections) {
+      cprime_error_noabort("COFF section relocation requires a section-defined symbol");
+      break;
+    }
+    target = s1->sections[sym->st_shndx];
+    if (type == R_X86_64_CPC_SECTION) {
+      value = target->sh_info + read16le(ptr);
+      if (value > 0xffff) {
+        cprime_error_noabort("COFF SECTION relocation overflow");
+        break;
+      }
+      write16le(ptr, value);
+      break;
+    }
+    /* Input subsections can share a single PE output section. SECREL is
+       relative to that containing section, including for native TLS. */
+    base = target->sh_addr;
+    for (i = 1; i < s1->nb_sections; ++i) {
+      Section *part = s1->sections[i];
+      if ((part->sh_flags & SHF_ALLOC) && part->sh_info == target->sh_info
+          && part->sh_addr < base) base = part->sh_addr;
+    }
+    value = val - base + read32le(ptr);
+    if (value > 0xffffffffULL) {
+      cprime_error_noabort("COFF SECREL relocation overflow");
+      break;
+    }
+    write32le(ptr, value);
+  }
+#endif
     break;
   case R_X86_64_RELATIVE:
 #ifdef CPRIME_TARGET_PE

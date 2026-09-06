@@ -121,6 +121,7 @@ static void new_scope(struct scope *o)
   o->llstk = local_label_stack;
   o->stack_loc = loc;
   o->stack_min = loc;
+  o->using_namespace_count = nb_using_namespace_toks;
   ++local_scope;
 }
 
@@ -172,6 +173,7 @@ static void prev_scope(struct scope *o, int is_expr)
   if (!is_expr)
     nb_temp_local_vars = 0;
   cur_scope = o->prev;
+  nb_using_namespace_toks = o->using_namespace_count;
   --local_scope;
 }
 
@@ -189,12 +191,14 @@ static void leave_scope(struct scope *o)
 static void new_scope_s(struct scope *o)
 {
   o->lstk = local_stack;
+  o->using_namespace_count = nb_using_namespace_toks;
   ++local_scope;
 }
 
 static void prev_scope_s(struct scope *o)
 {
   sym_pop(&local_stack, o->lstk, 0);
+  nb_using_namespace_toks = o->using_namespace_count;
   --local_scope;
 }
 
@@ -975,7 +979,14 @@ again:
   if (debug_modes)
     cprime_tcov_check_line (cprime_state, 0), cprime_tcov_block_begin (cprime_state);
 
-  if (t >= TOK_UIDENT && !strcmp(get_tok_str(t, NULL), "using"))
+  if (t >= TOK_UIDENT && !strcmp(get_tok_str(t, NULL), "using")
+      && tok == TOK_NAMESPACE)
+  {
+    unget_tok(tok);
+    tok = t;
+    try_parse_using_namespace_directive();
+  }
+  else if (t >= TOK_UIDENT && !strcmp(get_tok_str(t, NULL), "using"))
   {
     int alias_tok, dummy_v = 0;
     CType alias_type;
@@ -1085,6 +1096,8 @@ again:
   }
   else if (t == TOK_RETURN)
   {
+    CType aggregate_return_register_type;
+    int aggregate_return_registers = 0;
     if (lambda_probe)
     {
       lambda_note_return();
@@ -1154,7 +1167,8 @@ again:
           if (is_reference_type(&vtop->type))
             decay_reference_type(&vtop->type);
           else {
-            test_lvalue();
+            if ((vtop->type.t & VT_BTYPE) != VT_FUNC)
+              test_lvalue();
             mk_pointer(&vtop->type);
             gaddrof();
           }
@@ -1182,7 +1196,11 @@ again:
               converting_ctor = 1;
           }
           if (!converting_ctor)
-            gen_assign_cast(&func_vt);
+          {
+            CType result_initialization_type = func_vt;
+            result_initialization_type.t &= ~VT_CONSTANT;
+            gen_assign_cast(&result_initialization_type);
+          }
         }
       }
       else
@@ -1205,9 +1223,46 @@ again:
         gfunc_return(&func_vt);
         a = 1;
       }
+      {
+        int return_align, return_regsize, n;
+        aggregate_return_registers = cpp_current_return_regs(&func_vt,
+          &aggregate_return_register_type, &return_align, &return_regsize);
+        /* Keep packed results live on the value stack while temporary and
+           local destructors run. Ordinary call spilling then preserves all
+           return registers, including for records with defaulted dtors. */
+        for (n = aggregate_return_registers; --n >= 0;)
+        {
+          int r, rc = RC_RET(aggregate_return_register_type.t) << n;
+          for (r = 0; r < NB_REGS; ++r)
+            if (reg_classes[r] & rc)
+              break;
+          vset(&aggregate_return_register_type, r, 0);
+        }
+      }
     }
     cpp_temp_end(temporary_mark);
     leave_scope(root_scope);
+    if (aggregate_return_registers > 0)
+    {
+      int n;
+      for (n = 0; n < aggregate_return_registers; ++n)
+      {
+        gv(RC_RET(aggregate_return_register_type.t) << n);
+        vtop--;
+      }
+    }
+#if defined(CPRIME_TARGET_PE) && defined(CPRIME_TARGET_X86_64)
+    else if (b && a && (func_vt.t & VT_BTYPE) == VT_STRUCT)
+    {
+      /* Win64 also returns the indirect result address in RAX. Emit this
+         after cleanups, which are allowed to clobber that register. */
+      CType result_pointer = func_vt;
+      mk_pointer(&result_pointer);
+      vset(&result_pointer, VT_LOCAL | VT_LVAL, func_vc);
+      gv(RC_RET(result_pointer.t));
+      vtop--;
+    }
+#endif
     if (b && !a)
       gfunc_return(e ? &ref_ret_type : &func_vt);
     skip(';');

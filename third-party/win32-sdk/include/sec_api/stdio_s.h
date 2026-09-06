@@ -140,6 +140,40 @@ extern "C" {
 
 #ifdef __cplusplus
 }
+
+/* The C++ secure-format overloads retain the destination array extent. */
+#include <stdarg.h>
+template <size_t _Size>
+inline int __cdecl sprintf_s(char (&_DstBuf)[_Size], const char *_Format, ...)
+{
+  va_list _Args;
+  va_start(_Args, _Format);
+  int _Result = vsprintf_s(_DstBuf, _Size, _Format, _Args);
+  va_end(_Args);
+  return _Result;
+}
+
+template <size_t _Size>
+inline int __cdecl vsprintf_s(char (&_DstBuf)[_Size], const char *_Format, va_list _Args)
+{
+  return vsprintf_s(_DstBuf, _Size, _Format, _Args);
+}
+
+template <size_t _Size>
+inline int __cdecl swprintf_s(wchar_t (&_DstBuf)[_Size], const wchar_t *_Format, ...)
+{
+  va_list _Args;
+  va_start(_Args, _Format);
+  int _Result = vswprintf_s(_DstBuf, _Size, _Format, _Args);
+  va_end(_Args);
+  return _Result;
+}
+
+template <size_t _Size>
+inline int __cdecl vswprintf_s(wchar_t (&_DstBuf)[_Size], const wchar_t *_Format, va_list _Args)
+{
+  return vswprintf_s(_DstBuf, _Size, _Format, _Args);
+}
 #endif
 #endif
 #endif

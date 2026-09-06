@@ -5,6 +5,7 @@
 
 #include <windows.h>
 #include <stdlib.h>
+#include <cprime_crt.h>
 
 #define __UNKNOWN_APP    0
 #define __CONSOLE_APP    1
@@ -28,12 +29,13 @@ int __cdecl __tgetmainargs(int *pargc, _TCHAR ***pargv, _TCHAR ***penv, int glob
 
 #include "crtinit.c"
 
-static int go_winmain(TCHAR *arg1)
+static int go_winmain(int argc, _TCHAR **argv)
 {
     STARTUPINFO si;
     _TCHAR *szCmd, *p;
     int fShow;
     int retval;
+    _TCHAR *arg1 = argc > 1 ? argv[1] : NULL;
 
     GetStartupInfo(&si);
     if (si.dwFlags & STARTF_USESHOWWINDOW)
@@ -51,7 +53,7 @@ static int go_winmain(TCHAR *arg1)
 #if defined __i386__ || defined __x86_64__
     _controlfp(0x10000, 0x30000);
 #endif
-    run_ctors(__argc, __targv, _tenviron);
+    run_ctors(argc, argv, _tenviron);
     retval = _tWinMain(GetModuleHandle(NULL), NULL, szCmd, fShow);
     run_dtors();
     return retval;
@@ -67,22 +69,44 @@ int _twinstart(void)
     _startupinfo start_info_con = {0};
     SetUnhandledExceptionFilter(catch_sig);
     __set_app_type(__GUI_APP);
+#ifdef __CPRIME_UCRT__
+    initialize_arguments(0);
+#else
     __tgetmainargs(&__argc, &__targv, &_tenviron, 0, &start_info_con);
-    exit(go_winmain(__argc > 1 ? __targv[1] : NULL));
+#endif
+    exit(go_winmain(__argc, __targv));
 }
+
+__attribute__((weak)) extern int __run_on_exit();
 
 int _runtwinmain(int argc, /* as cpc passed in */ char **argv)
 {
+    int result;
+    int program_argc = argc;
+    _TCHAR **program_argv;
+#ifdef __CPRIME_NATIVE_CRT__
+    cpc_runtime_in_memory = 1;
+#endif
 #ifdef UNICODE
     _startupinfo start_info = {0};
-    __tgetmainargs(&__argc, &__targv, &_tenviron, 0, &start_info);
-    /* may be wrong when cpc has received wildcards (*.c) */
-    if (argc < __argc)
-        __targv += __argc - argc, __argc = argc;
+#ifdef __CPRIME_UCRT__
+    initialize_arguments(0);
 #else
-    __argc = argc, __targv = argv;
+    __tgetmainargs(&__argc, &__targv, &_tenviron, 0, &start_info);
 #endif
-    return go_winmain(__argc > 1 ? __targv[1] : NULL);
+    /* may be wrong when cpc has received wildcards (*.c) */
+    program_argc = __argc;
+    program_argv = __targv;
+    if (argc < program_argc) {
+        program_argv += program_argc - argc;
+        program_argc = argc;
+    }
+#else
+    program_argv = argv;
+#endif
+    result = go_winmain(program_argc, program_argv);
+    __run_on_exit(result);
+    return result;
 }
 
 

@@ -2,9 +2,79 @@
 #define _CPC_FUNCTIONAL
 
 #include <type_traits>
+#include <utility>
 
 namespace std
 {
+  template<class T> class reference_wrapper;
+
+  // Expression substitution selects the applicable INVOKE rule. Each int
+  // overload is preferred to its long fallback only when its expression is
+  // well-formed; the underlying member access enforces the declaring class.
+  template<class Function, class Object>
+  auto __cpc_invoke_pointer_data(Function &&function, Object &&object)
+    -> decltype((*std::forward<Object>(object)).*std::forward<Function>(function))
+  { return (*std::forward<Object>(object)).*std::forward<Function>(function); }
+
+  template<class Function, class Object, class... Args>
+  auto __cpc_invoke_pointer(Function &&function, Object &&object, int, Args&&... args)
+    -> decltype(((*std::forward<Object>(object)).*std::forward<Function>(function))(std::forward<Args>(args)...))
+  { return ((*std::forward<Object>(object)).*std::forward<Function>(function))(std::forward<Args>(args)...); }
+  template<class Function, class Object>
+  auto __cpc_invoke_pointer(Function &&function, Object &&object, long)
+    -> decltype(__cpc_invoke_pointer_data(std::forward<Function>(function), std::forward<Object>(object)))
+  { return __cpc_invoke_pointer_data(std::forward<Function>(function), std::forward<Object>(object)); }
+
+  template<class Function, class Object>
+  auto __cpc_invoke_wrapper_data(Function &&function, reference_wrapper<Object> object, int)
+    -> decltype(object.get().*std::forward<Function>(function))
+  { return object.get().*std::forward<Function>(function); }
+  template<class Function, class Object, class... Args>
+  auto __cpc_invoke_wrapper_data(Function &&function, Object &&object, long, Args&&... args)
+    -> decltype(__cpc_invoke_pointer(std::forward<Function>(function), std::forward<Object>(object), 0, std::forward<Args>(args)...))
+  { return __cpc_invoke_pointer(std::forward<Function>(function), std::forward<Object>(object), 0, std::forward<Args>(args)...); }
+
+  template<class Function, class Object, class... Args>
+  auto __cpc_invoke_wrapper(Function &&function, reference_wrapper<Object> object, int, Args&&... args)
+    -> decltype((object.get().*std::forward<Function>(function))(std::forward<Args>(args)...))
+  { return (object.get().*std::forward<Function>(function))(std::forward<Args>(args)...); }
+  template<class Function, class Object, class... Args>
+  auto __cpc_invoke_wrapper(Function &&function, Object &&object, long, Args&&... args)
+    -> decltype(__cpc_invoke_wrapper_data(std::forward<Function>(function), std::forward<Object>(object), 0, std::forward<Args>(args)...))
+  { return __cpc_invoke_wrapper_data(std::forward<Function>(function), std::forward<Object>(object), 0, std::forward<Args>(args)...); }
+
+  template<class Function, class Object>
+  auto __cpc_invoke_object_data(Function &&function, Object &&object, int)
+    -> decltype(std::forward<Object>(object).*std::forward<Function>(function))
+  { return std::forward<Object>(object).*std::forward<Function>(function); }
+  template<class Function, class Object, class... Args>
+  auto __cpc_invoke_object_data(Function &&function, Object &&object, long, Args&&... args)
+    -> decltype(__cpc_invoke_wrapper(std::forward<Function>(function), std::forward<Object>(object), 0, std::forward<Args>(args)...))
+  { return __cpc_invoke_wrapper(std::forward<Function>(function), std::forward<Object>(object), 0, std::forward<Args>(args)...); }
+
+  template<class Function, class Object, class... Args>
+  auto __cpc_invoke_object(Function &&function, Object &&object, int, Args&&... args)
+    -> decltype((std::forward<Object>(object).*std::forward<Function>(function))(std::forward<Args>(args)...))
+  { return (std::forward<Object>(object).*std::forward<Function>(function))(std::forward<Args>(args)...); }
+  template<class Function, class Object, class... Args>
+  auto __cpc_invoke_object(Function &&function, Object &&object, long, Args&&... args)
+    -> decltype(__cpc_invoke_object_data(std::forward<Function>(function), std::forward<Object>(object), 0, std::forward<Args>(args)...))
+  { return __cpc_invoke_object_data(std::forward<Function>(function), std::forward<Object>(object), 0, std::forward<Args>(args)...); }
+
+  template<class Function, class... Args>
+  auto __cpc_invoke(Function &&function, int, Args&&... args)
+    -> decltype(std::forward<Function>(function)(std::forward<Args>(args)...))
+  { return std::forward<Function>(function)(std::forward<Args>(args)...); }
+  template<class Function, class Object, class... Args>
+  auto __cpc_invoke(Function &&function, long, Object &&object, Args&&... args)
+    -> decltype(__cpc_invoke_object(std::forward<Function>(function), std::forward<Object>(object), 0, std::forward<Args>(args)...))
+  { return __cpc_invoke_object(std::forward<Function>(function), std::forward<Object>(object), 0, std::forward<Args>(args)...); }
+
+  template<class Function, class... Args>
+  auto invoke(Function &&function, Args&&... args)
+    -> decltype(__cpc_invoke(std::forward<Function>(function), 0, std::forward<Args>(args)...))
+  { return __cpc_invoke(std::forward<Function>(function), 0, std::forward<Args>(args)...); }
+
   template<class T>
   class reference_wrapper
   {
@@ -18,6 +88,10 @@ namespace std
     }
     operator T &() const { return *m_pointer; }
     T &get() const { return *m_pointer; }
+    template<class... Args>
+    auto operator()(Args&&... args) const
+      -> decltype(std::invoke(get(), std::forward<Args>(args)...))
+    { return std::invoke(get(), std::forward<Args>(args)...); }
 
   private:
     T *m_pointer;

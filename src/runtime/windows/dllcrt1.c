@@ -2,6 +2,7 @@
 
 #include <tchar.h>
 #include <windows.h>
+#define CPC_RUNTIME_DLL 1
 #include "crtinit.c"
 
 BOOL WINAPI DllMain (HINSTANCE hDll, DWORD dwReason, LPVOID lpReserved);

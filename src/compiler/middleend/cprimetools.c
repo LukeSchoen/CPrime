@@ -63,8 +63,9 @@ static int ar_index_coff(const unsigned char *data, unsigned size,
     int section = (short)read16le(symbol + 12);
     unsigned auxiliary = symbol[17];
     if (auxiliary >= symbols - i) return -1;
-    if (symbol[16] == 2 && (section > 0 || section == -1
-                            || (!section && read32le(symbol + 8))))
+    if ((symbol[16] == 2 && (section > 0 || section == -1
+                             || (!section && read32le(symbol + 8))))
+        || (symbol[16] == 105 && auxiliary == 1 && !section))
     {
       const char *name;
       char short_name[9];
@@ -261,7 +262,9 @@ finish:
     fclose(fi);
 
 #ifdef CPRIME_TARGET_PE
-    if (fsize >= 20 && read16le((unsigned char *)buf) == 0x8664)
+    if (fsize >= 20 && (read16le((unsigned char *)buf) == 0x8664
+        || (!read16le((unsigned char *)buf)
+            && read16le((unsigned char *)buf + 2) != 0xffff)))
     {
       if (ar_index_coff((unsigned char *)buf, fsize, fpos,
                         &anames, &strpos, &afpos, &funccnt, &funcmax) < 0)

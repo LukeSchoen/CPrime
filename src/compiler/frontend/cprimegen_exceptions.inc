@@ -30,6 +30,14 @@ typedef struct CppEhFunction {
 static CppEhFunction cpp_eh_function;
 static CType cpp_eh_void_type = { VT_VOID, NULL };
 
+static int cpp_current_return_regs(CType *return_type, CType *register_type,
+    int *alignment, int *register_size)
+{
+  Sym *function = cpp_eh_function.function;
+  return cpp_function_return_regs(return_type, function ? function->type.ref : NULL,
+      func_var, register_type, alignment, register_size);
+}
+
 static void new_scope(struct scope *o);
 static void prev_scope(struct scope *o, int is_expr);
 static void cpp_eh_parse_try(void);
@@ -66,7 +74,7 @@ static int cpp_parse_class_return_expression(void)
   const int *parent_pointer;
   CppConstructionDestination construction, *saved_destination;
   if (!is_cpp_translation_unit() || (func_vt.t & VT_BTYPE) != VT_STRUCT
-      || gfunc_sret(&func_vt, func_var, &register_type, &alignment, &register_size) != 0)
+      || cpp_current_return_regs(&func_vt, &register_type, &alignment, &register_size) != 0)
     return 0;
   skip_or_save_block_ex(&expression, 1);
   while (tok == ',') {
@@ -790,6 +798,9 @@ static void cpp_delete_pointer(int array_delete)
     if (root_offset) { vpushi(root_offset); gen_op('+'); }
     vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
     vtop->type = char_pointer_type;
+    /* Dereference the saved pointer before dereferencing the vfptr field.
+       A zero field offset performs no pointer arithmetic to force this load. */
+    gv(RC_INT);
     if (field_offset) { vpushi(field_offset); gen_op('+'); }
     vtop->r |= VT_LVAL; gv(RC_INT);
     vpushi(PTR_SIZE); gen_op('-');

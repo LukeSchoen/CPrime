@@ -7,6 +7,7 @@
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <cprime_crt.h>
 
 #define _UNKNOWN_APP    0
 #define _CONSOLE_APP    1
@@ -60,7 +61,11 @@ void _tstart(void)
     _controlfp(_PC_53, _MCW_PC);
 #endif
 
+#ifdef __CPRIME_UCRT__
+    initialize_arguments(_dowildcard);
+#else
     __tgetmainargs( &__argc, &__targv, &_tenviron, _dowildcard, &start_info);
+#endif
     run_ctors(__argc, __targv, _tenviron);
     ret = _tmain(__argc, __targv, _tenviron);
     run_dtors();
@@ -75,24 +80,36 @@ __attribute__((weak)) extern int __run_on_exit();
 int _runtmain(int argc, /* as cpc passed in */ char **argv)
 {
     int ret;
+    int program_argc = argc;
+    _TCHAR **program_argv;
+#ifdef __CPRIME_NATIVE_CRT__
+    cpc_runtime_in_memory = 1;
+#endif
 #ifdef UNICODE
     _startupinfo start_info = {0};
 
+#ifdef __CPRIME_UCRT__
+    initialize_arguments(_dowildcard);
+#else
     __tgetmainargs(&__argc, &__targv, &_tenviron, _dowildcard, &start_info);
+#endif
     /* may be wrong when cpc has received wildcards (*.c) */
-    if (argc < __argc) {
-        __targv += __argc - argc;
-        __argc = argc;
+    program_argc = __argc;
+    program_argv = __targv;
+    if (argc < program_argc) {
+        program_argv += program_argc - argc;
+        program_argc = argc;
     }
 #else
-    __argc = argc;
-    __targv = argv;
+    program_argv = argv;
 #endif
 #if defined __i386__ || defined __x86_64__
     _controlfp(_PC_53, _MCW_PC);
 #endif
-    run_ctors(__argc, __targv, _tenviron);
-    ret = _tmain(__argc, __targv, _tenviron);
+    /* The host CRT owns its argv allocation. Replacing that global with
+       a slice of the compiler's arguments corrupts CRT shutdown ownership. */
+    run_ctors(program_argc, program_argv, _tenviron);
+    ret = _tmain(program_argc, program_argv, _tenviron);
     run_dtors();
     __run_on_exit(ret);
     return ret;

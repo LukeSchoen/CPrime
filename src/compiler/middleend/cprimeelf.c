@@ -3,6 +3,15 @@
 // Define this to get some debug output during relocation processing.
 #undef DEBUG_RELOC
 
+#ifdef CPRIME_TARGET_PE
+struct pe_archive_state {
+  char *filename;
+  unsigned char *loaded;
+  char *symbol_names;
+  int symbol_count;
+};
+#endif
+
 //******************************************************
 // Global Variables
 
@@ -106,6 +115,20 @@ ST_FUNC void free_section(Section *s)
 
 ST_FUNC void cprimeelf_delete(CPRIMEState *s1)
 {
+#ifdef CPRIME_TARGET_PE
+  int archive;
+  for (archive = 0; archive < s1->nb_pe_archives; ++archive) {
+    struct pe_archive_state *state = s1->pe_archives[archive];
+    cprime_free(state->filename);
+    cprime_free(state->loaded);
+    cprime_free(state->symbol_names);
+    cprime_free(state);
+  }
+  cprime_free(s1->pe_archives);
+  s1->pe_archives = NULL;
+  s1->nb_pe_archives = 0;
+  dynarray_reset(&s1->pe_weak_externals, &s1->nb_pe_weak_externals);
+#endif
   int i;
 
 #ifndef ELF_OBJ_ONLY
@@ -3867,6 +3890,14 @@ invalid:
       continue;
     sh = &shdr[i];
 #ifdef CPRIME_TARGET_PE
+    if (sh->sh_type == SHT_PROGBITS && !strcmp(strsec + sh->sh_name, ".cpc.weakrefs"))
+    {
+      unsigned char *metadata = load_data(fd, file_offset + sh->sh_offset, sh->sh_size);
+      int status = metadata ? pe_load_weak_externals(s1, metadata, sh->sh_size) : -1;
+      cprime_free(metadata);
+      if (status < 0) goto the_end;
+      continue;
+    }
     if (sh->sh_type == SHT_PROGBITS && !strcmp(strsec + sh->sh_name, ".drectve"))
     {
       char *directives = cprime_malloc(sh->sh_size + 1);
@@ -4155,6 +4186,24 @@ static int read_ar_header(int fd, int offset, ArchiveHeader *hdr)
 }
 
 // Load Only The Objects Which Resolve Undefined Symbols
+#ifdef CPRIME_TARGET_PE
+static int pe_earlier_archive_provider(CPRIMEState *s1,
+                                       struct pe_archive_state *current,
+                                       const char *name)
+{
+  int i, j;
+  if (!current) return 0;
+  for (i = 0; i < s1->nb_pe_archives; ++i) {
+    struct pe_archive_state *candidate = s1->pe_archives[i];
+    const char *symbol = candidate->symbol_names;
+    if (candidate == current) break;
+    for (j = 0; j < candidate->symbol_count; ++j, symbol += strlen(symbol) + 1)
+      if (!candidate->loaded[j] && !strcmp(symbol, name)) return 1;
+  }
+  return 0;
+}
+#endif
+
 static int cprime_load_alacarte(CPRIMEState *s1, int fd, int size, int entrysize)
 {
   int i, bound, nsyms, sym_index, len, ret = -1;
@@ -4164,6 +4213,9 @@ static int cprime_load_alacarte(CPRIMEState *s1, int fd, int size, int entrysize
   const uint8_t *ar_index;
   ObjW(Sym) *sym;
   ArchiveHeader hdr;
+#ifdef CPRIME_TARGET_PE
+  struct pe_archive_state *archive = NULL;
+#endif
 
   data = cprime_malloc(size);
   if (size < entrysize || full_read(fd, data, size) != size)
@@ -4173,7 +4225,34 @@ static int cprime_load_alacarte(CPRIMEState *s1, int fd, int size, int entrysize
     goto invalid;
   ar_index = data + entrysize;
   ar_names = (char *) ar_index + nsyms * entrysize;
-  loaded = cprime_mallocz(nsyms);
+#ifdef CPRIME_TARGET_PE
+  if (s1->current_filename) {
+#ifdef _WIN32
+    char *absolute = _fullpath(NULL, s1->current_filename, 0);
+#else
+    char *absolute = realpath(s1->current_filename, NULL);
+#endif
+    const char *filename = absolute ? absolute : s1->current_filename;
+    for (i = 0; i < s1->nb_pe_archives; ++i)
+      if (!PATHCMP(s1->pe_archives[i]->filename, filename)) {
+        archive = s1->pe_archives[i];
+        break;
+      }
+    if (!archive) {
+      archive = cprime_mallocz(sizeof(*archive));
+      archive->filename = cprime_strdup(filename);
+      archive->symbol_count = nsyms;
+      archive->loaded = cprime_mallocz(nsyms);
+      archive->symbol_names = cprime_malloc(size - (ar_names - (const char *)data));
+      memcpy(archive->symbol_names, ar_names, size - (ar_names - (const char *)data));
+      dynarray_add(&s1->pe_archives, &s1->nb_pe_archives, archive);
+    }
+    libc_free(absolute);
+    if (archive->symbol_count != nsyms) goto invalid;
+    loaded = archive->loaded;
+  } else
+#endif
+    loaded = cprime_mallocz(nsyms);
 
   do
   {
@@ -4190,6 +4269,25 @@ static int cprime_load_alacarte(CPRIMEState *s1, int fd, int size, int entrysize
       sym = &((ObjW(Sym) *)s->data)[sym_index];
       if (sym->st_shndx != SHN_UNDEF)
         continue;
+#ifdef CPRIME_TARGET_PE
+      if (!pe_weak_external_search(s1, sym_index))
+        continue;
+      /* A late dependency still uses the first archive on the link line.
+         Defer competing later providers until the ordered rescan reaches
+         the earlier archive, instead of greedily binding a new CRT copy. */
+      if (pe_earlier_archive_provider(s1, archive, p))
+        continue;
+      /* PE import providers are resolved into thunks/IAT slots only when
+         the image is laid out. Their ordinary symbols remain undefined
+         meanwhile, but must not pull competing archive definitions. */
+      {
+        const char *import_name = p;
+        if (!strncmp(import_name, "__imp_", 6)) import_name += 6;
+        else if (!strncmp(import_name, "_imp__", 6)) import_name += 6;
+        if (find_elf_sym(s1->dynsymtab_section, import_name))
+          continue;
+      }
+#endif
       off = get_be(ar_index + i *entrysize, entrysize);
       if (loaded[i])
         continue;
@@ -4208,19 +4306,45 @@ invalid:
       }
       off += len;
       if (s1->verbose == 2)
-        printf("   -> %s\n", hdr.ar_name);
+        printf("   -> %s (for %s)\n", hdr.ar_name, p);
       if (cprime_load_object_file(s1, fd, off) < 0)
         goto the_end;
+#ifdef CPRIME_TARGET_PE
+      ++s1->pe_archive_members_loaded;
+#endif
       ++bound;
     }
   }
   while (bound);
   ret = 0;
 the_end:
-  cprime_free(loaded);
+#ifdef CPRIME_TARGET_PE
+  if (!archive)
+#endif
+    cprime_free(loaded);
   cprime_free(data);
   return ret;
 }
+
+#ifdef CPRIME_TARGET_PE
+/* Native PE linkers retain archive candidates for references introduced by
+   later libraries. Rescan in the original order until neither extraction nor
+   DEFAULTLIB discovery makes progress; persistent member state prevents
+   import members and multiply indexed members from being loaded twice. */
+ST_FUNC void pe_rescan_archives(CPRIMEState *s1)
+{
+  unsigned before;
+  int i;
+  do {
+    before = s1->pe_archive_members_loaded;
+    for (i = 0; i < s1->nb_pe_archives && !s1->nb_errors; ++i)
+      cprime_add_file_internal(s1, s1->pe_archives[i]->filename,
+                               AFF_TYPE_LIB | AFF_PRINT_ERROR);
+    cprime_add_pragma_libs(s1);
+  } while (!s1->nb_errors && (s1->pe_archive_members_loaded != before
+                             || pe_activate_alternate_names(s1)));
+}
+#endif
 
 // Load A '.A' File
 ST_FUNC int cprime_load_archive(CPRIMEState *s1, int fd, int alacarte)

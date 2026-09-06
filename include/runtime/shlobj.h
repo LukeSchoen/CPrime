@@ -2,6 +2,7 @@
 #define _CPRIME_SHLOBJ_H
 
 #include <windows.h>
+#include <combaseapi.h>
 
 #ifndef SHSTDAPI
 #if !defined(_SHELL32_)
