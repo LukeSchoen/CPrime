@@ -1,12 +1,23 @@
 ## Implementation resumed (2026-09-06)
 
-The task is active. The canonical CPC application now links to
-`C:\Luke\Src\CPrime\build\canonical-ucrt.exe` (4,838,400 bytes), using the
-original 66-source manifest object set and native libraries. It is not ready
-to test: the startup smoke test reaches Racer image loading, then reports heap
-corruption during a class swap/copy. A fresh packed-source build and runtime
-fix are being completed. Historical successful builds below used workarounds
-and do not establish readiness for this wave.
+The task is active. Packed resume34 compiles and links all 66 original sources
+from the CodeClip manifest with zero warnings in 9.517 seconds. The verified
+compiler is copied to the measurement project and produces
+`C:\Luke\Src\OT\cl\builds\racer\Racer.exe`. Startup now opens Racer, remains
+running for the eight-second smoke test, and exits 0 after WM_CLOSE. It is
+not ready for gameplay testing: the window currently shows the green clear
+color without the track/car. The Clang reference renders the car correctly.
+Historical successful builds below used workarounds and do not establish
+readiness for this wave.
+
+The latest investigation has two concrete remaining differences in isolated
+original-CL probes. Asset-path decoding produces different bytes from Clang:
+the entropy engine's initial atom state agrees, but its first update diverges.
+With the expected asset path supplied only in the diagnostic probe, the image
+loads and uploads correctly, but stored MVP matrix values are incorrect.
+No path substitution or drawing workaround was added to the application.
+Logs are `build/racer-smoke-packed34-window.log`, `build/probe-entropy.log`,
+`build/probe-entropy-clang.log` and `build/probe-draw.log`.
 
 CodeClip exports one selected solution/project graph to a schema-2 manifest.
 Prime and Clang consume the same original sources, effective per-file settings,
@@ -34,16 +45,12 @@ The retained compiler wave now includes:
   value, reference, void, and exception results. Integration regressions are
   still being checked against the packed compiler.
 
-Latest source measurement: build/canonical-ucrt-native.log compiled all 66
-original manifest sources in 10.421 seconds while other checks were running,
-then reached link. That original object set now links successfully. Native C++
-names and UCRT selection now resolve the earlier ordinary CL/Imagine interface
-failures. COFF weak externals, machine-neutral alias objects, deferred alternate
-names, SECTION/SECREL relocations and native TLS/CRT initialization now pass
-focused native integration tests.
-The latest packed resume30 measurement predates these native ABI/runtime fixes
-and exposed overload-candidate duplication, which is now fixed in source.
-A fresh packed compile/link/runtime gate remains required.
+Latest packed measurement: `build/canonical-resume34.log`, 66 original sources,
+9.517 seconds compilation, zero warnings, successful link. Native C++ names
+and UCRT selection resolve the earlier ordinary CL/Imagine interface failures.
+COFF weak externals, machine-neutral alias objects, deferred alternate names,
+SECTION/SECREL relocations and native TLS/CRT initialization pass focused native
+integration tests. Gameplay/render validation remains required.
 
 The current integrated wave addresses these causes with general compiler changes:
 
@@ -98,21 +105,39 @@ Additional retained changes in the current wave:
   dynamic TLS initialization/destruction, native C/C++ initialization arrays,
   and module exit-table ownership. TLS callbacks, 64-byte alignment, thread
   isolation and shutdown ordering pass direct and relocatable-link coverage.
-  A newer DLL initialized/uninitialized-global regression is under diagnosis
-  before packaging; the earlier five module-exit integration cases passed.
+  All six module-exit integration cases pass, including GUI in-memory execution,
+  DLL unload/reload and native thread-static initialization. Scalar constant
+  initialization is emitted before dynamic initialization. Individual static
+  destructors retain their registration order relative to atexit callbacks.
 - Alias-template materialization, empty argument lists, complete builtin type
   argument specifiers, unnamed default member-template arguments, and ordinary
   implicit default-member initialization. New regressions pass Clang as well.
 - Microsoft free-function record return classification checked against actual
   MSVC 19.29 in both directions, including const results and cleanup-preserved
   register results. The native fixture covers 23 record forms.
+- Defaulted constructors are synthesized from the completed class, producing
+  consistent bodies across translation units. Poisoned-storage and original
+  cl2DDraw tests cover base/member initialization, nested arrays and cleanup
+  after an element constructor throws. Explicit calls synthesize implicit
+  derived destructors and destroy members/bases in reverse order.
+- Move-based std::swap supports move-only values; constructor lowering preserves
+  both source and destination addresses before evaluating call operands.
+- Named nested class declarations introduce types without phantom object
+  storage, member lookup or destructor calls. Empty complete C++ objects have
+  nonzero size, and anonymous unions still occupy their normal storage. This
+  fixes the later Racer shutdown crash and incorrect render-resource lookup.
+- Final x64 PE exception directories contain contiguous 12-byte entries sorted
+  by relocated code address, independent of input subsection order/alignment.
+  Original input addresses remain available to native references.
 
-Latest source checks: Templates 354/0, Destructors 19/0, Exceptions 31/0,
-Functions 6/0; surrounding snapshots include Classes 148/0, Constructors 73/0,
-Namespaces 34/0, OperatorOverloads 42/0, StdConcurrency 8/0 and C compatibility
-19/0. The mixed class-layout and member-linkage gates pass with the current
-record-return changes; four UCRT integration gates pass. Some final mangler,
-initializer and COFF changes are still being verified before packaging.
+Latest source checks: Templates 357/0, Classes 151/0, Constructors 78/0,
+Destructors 22/0 and Exceptions 32/0. The final nested-layout change also passes
+the actual MSVC class-layout and 23-form record-return gates. Surrounding
+snapshots include Namespaces 34/0, OperatorOverloads 42/0, StdConcurrency 8/0
+and C compatibility 19/0. Packed resume33 native gates passed 43/43 (COFF labels
+10, weak/alternate/SECTION 21, UCRT 4, module exit 6, TLS 2); resume34 changes
+only C++ class layout/declaration handling. No compiler-name return deduction
+shortcuts have yet been removed by the private next-wave prototype.
 External CL tests inherit the CodeClip manifest. Original-source manifest,
 resource, native-library, separate/unity and response-file fixtures already
 pass; repeat the relevant integration gates for the final packed wave.
@@ -121,6 +146,8 @@ New language regressions are independently checked with Clang.
 Continue through full application link/startup validation and the broader
 removal of fallback runtime/STL and CPC-specific CL components. A successful
 measurement build remains a compatibility milestone, not full C++ conformance.
+`CL_MIGRATION.md` records the string API comparison, useful overlap-handling
+behavior, semantic differences and remaining legacy consumers before deletion.
 
 Continue through a complete original-source application compile and link,
 verify the executable and runtime behavior, then preserve the implementation,

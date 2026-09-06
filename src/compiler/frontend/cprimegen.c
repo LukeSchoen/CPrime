@@ -9367,6 +9367,8 @@ new_field:
     if (a < bt)
       a = bt;
   }
+  if (!c && is_cpp_translation_unit())
+    c = 1; /* Distinct complete C++ objects require distinct addresses. */
   c = (c + a - 1) & -a;
   type->ref->c = c;
 
@@ -10264,6 +10266,14 @@ enum_done:
             if (v == 0)
             {
               if (tok == ';' && IS_ENUM(type1.t))
+                break;
+              /* A named nested class declaration introduces a type, not an
+                 anonymous object member. The C Microsoft extension below
+                 accepts named anonymous fields, but applying it to C++
+                 class declarations adds phantom storage and lifetimes. */
+              if (tok == ';' && is_cpp_translation_unit()
+                  && (type1.t & VT_BTYPE) == VT_STRUCT && type1.ref
+                  && (type1.ref->v & ~SYM_STRUCT) < SYM_FIRST_ANOM)
                 break;
               if ((type1.t & VT_BTYPE) != VT_STRUCT)
                 expect("identifier");
