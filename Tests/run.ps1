@@ -229,7 +229,7 @@ function Resolve-SharedOutDir {
         return $null
     }
 
-    $default = Join-Path $scriptDir "batch\out"
+    $default = Join-Path $rootDir "build\tests\batch"
     $resolvedDefault = Resolve-Path -LiteralPath $default -ErrorAction SilentlyContinue
     if ($resolvedDefault) { return $resolvedDefault.Path }
     return $null

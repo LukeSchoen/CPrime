@@ -6,7 +6,7 @@ Purpose:
   compiler build-time measurements.
 
 Cases:
-- Put runtime profile inputs in codeProfile\cases.
+- Put runtime profile inputs in Tests\benchmarks\runtime.
 - Files named test_*.c or test_*.cpp are compiled once, then the executable is
   run once per sample.
 - Optional metadata in the first 12 lines:
@@ -20,5 +20,5 @@ Run:
 - codeProfile.cmd -CompilerPath path\to\cpc.exe
 
 Output:
-- codeProfile\out\code-profile.csv
+- build\profiles\runtime\code-profile.csv
 - Console summary with average runtime per case.

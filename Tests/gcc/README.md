@@ -4,13 +4,10 @@ Upstream: https://github.com/gcc-mirror/gcc
 
 Pinned revision: `5f6257c26b814de1a14c71b2d3a49291765b6577` (2026-09-07).
 
-The sparse checkout at `build/gcc-upstream` contains `gcc/testsuite/g++.dg`,
+The runner fetches a sparse checkout at `build/gcc-upstream` contains `gcc/testsuite/g++.dg`,
 `g++.old-deja`, `c-c++-common`, and shared test support. Upstream source and
 copyright/license files remain unchanged in that checkout. The pin makes the
 download reproducible; it is not a rolling dependency.
-
-See [RESULTS.md](RESULTS.md) for the measured baseline, compiler fixes,
-verification results, and remaining compatibility gaps.
 
 Run from the CPrime root:
 

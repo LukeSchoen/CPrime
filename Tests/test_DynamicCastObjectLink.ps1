@@ -2,7 +2,7 @@ param([string]$CompilerPath = '', [string]$RuntimeRoot = '')
 $ErrorActionPreference = 'Stop'
 if (!$CompilerPath) { $CompilerPath = Join-Path $PSScriptRoot '..\cpc.exe' }
 $compiler = (Resolve-Path -LiteralPath $CompilerPath).Path
-$work = Join-Path $PSScriptRoot 'out\dynamic-cast-object'
+$work = Join-Path $PSScriptRoot '..\build\tests\dynamic-cast-object'
 [IO.Directory]::CreateDirectory($work) | Out-Null
 $arguments = @('-Werror')
 if ($RuntimeRoot) { $arguments += '-B' + (Resolve-Path -LiteralPath $RuntimeRoot).Path }

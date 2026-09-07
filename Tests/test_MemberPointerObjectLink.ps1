@@ -2,7 +2,7 @@ param([string]$CompilerPath = '', [string]$RuntimeRoot = '')
 $ErrorActionPreference = 'Stop'
 if (!$CompilerPath) { $CompilerPath = Join-Path $PSScriptRoot '..\cpc.exe' }
 $compiler = (Resolve-Path -LiteralPath $CompilerPath).Path
-$work = Join-Path $PSScriptRoot 'out\member-pointer-object'
+$work = Join-Path $PSScriptRoot '..\build\tests\member-pointer-object'
 [IO.Directory]::CreateDirectory($work) | Out-Null
 $object = Join-Path $work 'worker.obj'
 $executable = Join-Path $work 'worker.exe'

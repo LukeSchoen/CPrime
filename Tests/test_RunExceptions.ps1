@@ -5,7 +5,7 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 if (!$CompilerPath) { $CompilerPath = Join-Path $root "cpc.exe" }
-if (!$RuntimeRoot) { $RuntimeRoot = Join-Path $root "build/scripts/windows" }
+if (!$RuntimeRoot) { $RuntimeRoot = $root }
 $CompilerPath = (Resolve-Path -LiteralPath $CompilerPath).Path
 $RuntimeRoot = (Resolve-Path -LiteralPath $RuntimeRoot).Path
 $work = Join-Path $root "build/run-exception-tests"

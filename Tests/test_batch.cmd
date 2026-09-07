@@ -2,8 +2,8 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 set "ROOT=%~dp0.."
-set "MANIFEST=%ROOT%\Tests\batch\targets.txt"
-set "OUTDIR=%ROOT%\Tests\batch\out"
+set "MANIFEST=%ROOT%\build\tests\batch\targets.txt"
+set "OUTDIR=%ROOT%\build\tests\batch"
 
 if exist "%OUTDIR%" rmdir /s /q "%OUTDIR%"
 mkdir "%OUTDIR%" >nul 2>nul

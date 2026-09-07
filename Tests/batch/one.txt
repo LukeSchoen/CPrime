@@ -1,1 +1,0 @@
-C:/Luke/Src/CPrime/Tests/features/All/pass/test_cpp_style_all_in_one.cpp -o C:/Luke/Src/CPrime/Tests/batch/out/test_cpp_style_all_in_one.exe

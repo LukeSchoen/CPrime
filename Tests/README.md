@@ -85,3 +85,21 @@ between checked results and unverified GCC-specific expectations.
 
 The shared runner rejects abnormal compiler exits even for tests marked
 `EXPECT_COMPILE_FAIL`; crashing is never a successful diagnostic test.
+
+`powershell -NoProfile -ExecutionPolicy Bypass -File Tests/test_PortablePackaging.ps1`
+builds the native C helper and checks header normalization, BOM decoding and
+recursive processing, then copies the compiler
+to an isolated temporary directory and compiles/runs a Windows/C++ probe using
+only its embedded headers and runtime. Pass `-CompilerPath` to select a build.
+
+## Layout
+
+- Language suites, ABI fixtures, integration tests, and test runners live here.
+- benchmarks/compile and benchmarks/runtime contain the inputs used by
+  BuildProfile and codeProfile.
+- repro/ preserves standalone reductions and external-project probes. These
+  are investigation inputs, not automatically discovered passing regressions;
+  some require CommonLib headers from the measurement project.
+- Third-party upstream tests remain with their vendored dependencies.
+- Generated compiler and test output belongs under build/ or the runner's
+  temporary directory, not beside source files.

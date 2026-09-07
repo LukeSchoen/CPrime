@@ -119,7 +119,7 @@ $yasm = Resolve-Executable -ExplicitPath $YasmPath -Name "yasm.exe" -Candidates 
     (Join-Path $rootDir "third-party\yasm\yasm.exe")
 )
 
-if (-not $OutDir) { $OutDir = Join-Path $scriptDir "out" }
+if (-not $OutDir) { $OutDir = Join-Path $rootDir "build\profiles\compile" }
 if (-not $SamplesCsvPath) { $SamplesCsvPath = Join-Path $OutDir "asm-compare-samples.csv" }
 if (-not $SummaryCsvPath) { $SummaryCsvPath = Join-Path $OutDir "asm-compare-summary.csv" }
 

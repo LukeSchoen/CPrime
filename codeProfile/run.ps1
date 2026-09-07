@@ -102,8 +102,8 @@ if ($Iterations -lt 1) { throw "Iterations must be at least 1." }
 if ($Warmups -lt 0) { throw "Warmups must be 0 or greater." }
 
 $compiler = Resolve-CompilerPath -ExplicitPath $CompilerPath
-if (-not $CasesRoot) { $CasesRoot = Join-Path $scriptDir "cases" }
-if (-not $OutDir) { $OutDir = Join-Path $scriptDir "out" }
+if (-not $CasesRoot) { $CasesRoot = Join-Path $rootDir "Tests\benchmarks\runtime" }
+if (-not $OutDir) { $OutDir = Join-Path $rootDir "build\profiles\runtime" }
 if (-not $CsvPath) { $CsvPath = Join-Path $OutDir "code-profile.csv" }
 
 if (-not (Test-Path -LiteralPath $CasesRoot)) {

@@ -46,8 +46,16 @@ CPrime asks a simple question:
 
 ## Build
 
-The build.and script expects `cpc.exe` at the repo root: It builds a fresh
-new compiler and replaces the old compiler with the newly built one.
+Run `Build.cmd` with the bootstrap `cpc.exe` at the repository root to self-build
+the compiler and runtime serially with CPC. Run `BuildClang.cmd` to use Clang
+for the optimized compiler host when available. Both commands
+package and replace the root `cpc.exe`.
+Build scripts live in `scripts/windows/`; generated compiler and runtime files
+go into `build/compiler/`. A successful build packages and replaces the root
+`cpc.exe`. Keep that executable and `lib/` for bootstrapping.
+
+Compiler/runtime sources live in `src/`, headers in `include/`, and tests,
+benchmark inputs, and preserved reproducers in `Tests/`.
 
 ## Test
 

@@ -1,6 +1,31 @@
-/Tests/batch/out
-/BuildProfile/out
-/codeProfile/out
+# Generated build and profiling output
+/build/
+/BuildProfile/out/
+/BuildProfile/clang-build/
+/codeProfile/out/
+/Tests/batch/out/
+/Tests/**/.tmp*/
+/Tests/.tmp*/
+/Tests/tmp_*
+/Tests/**/*.exe
+/Tests/**/*.obj
+/Tests/**/*.o
+/Tests/**/*.s
+/Tests/**/*.err
+/cpc-*.exe
+/*.o
+/*.obj
+/*.pdb
+/*.bak
+/tmp_*
+/racer_stack_trace.*
+
+# Local diagnostics
+*.log
+*.err
+*.out
+
+# Vendored TCC build output
 /third-party/tcc/config.h
 /third-party/tcc/config.texi
 /third-party/tcc/win32/*.exe
@@ -16,36 +41,4 @@
 /third-party/tcc/win32/lib/*.a
 /third-party/tcc/win32/lib/*.o
 /third-party/tcc/win32/libtcc/
-/BuildProfile/clang-build/
-/build/scripts/windows/cpc.exe
-/BuildProfile/out/asm-compare-*.csv
-
-# Generated compiler/test outputs. Keep the checked-in packaging inputs under
-# build/scripts, but never commit ad-hoc probes, traces, screenshots, or test
-# executables from the build workspace.
-/build/*
-!/build/scripts/
-/build/scripts/windows/*.exe
-/build/scripts/windows/*.dll
-/build/scripts/windows/*.pdb
-/build/scripts/windows/*.log
-/Tests/**/*.exe
-/Tests/**/*.obj
-/Tests/**/*.s
-/Tests/**/*.err
-/cpc-*.exe
-/racer_stack_trace.*
-/vc140.pdb
-
-# Local compiler debugging artifacts
-*.log
-*.err
-*.out
-/tmp_*
-/Tests/tmp_*
-/build/*.log
-/build/probe_*
-/build/reduced_*
-/build_trace.log
-/build.log
-/temp_trace.log
+/Tests/**/__pycache__/

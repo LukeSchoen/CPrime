@@ -1,3 +1,0 @@
-C:/Luke/Src/CPrime/Tests/c_compat/pass/test_array_loop.c -o C:/Luke/Src/CPrime/Tests/batch/out/test_array_loop.exe
-C:/Luke/Src/CPrime/Tests/c_compat/pass/test_basic_arithmetic.c -o C:/Luke/Src/CPrime/Tests/batch/out/test_basic_arithmetic.exe
-C:/Luke/Src/CPrime/Tests/c_compat/pass/test_enum_values.c -o C:/Luke/Src/CPrime/Tests/batch/out/test_enum_values.exe

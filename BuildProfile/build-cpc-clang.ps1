@@ -15,7 +15,7 @@ if (-not $ClangPath) {
     $ClangPath = Join-Path $rootDir "third-party\clang\bin\clang.exe"
 }
 if (-not $OutDir) {
-    $OutDir = Join-Path $scriptDir "clang-build"
+    $OutDir = Join-Path $rootDir "build\clang"
 }
 
 $clang = Resolve-Path -LiteralPath $ClangPath -ErrorAction SilentlyContinue

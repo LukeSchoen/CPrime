@@ -66,7 +66,7 @@ if not exist "%COMPILER_PATH%" (
 if defined SHARED_OUT_DIR (
   for %%I in ("%SHARED_OUT_DIR%") do set "SHARED_OUT_DIR=%%~fI"
 ) else (
-  if exist "%SCRIPT_DIR%\batch\out" set "SHARED_OUT_DIR=%SCRIPT_DIR%\batch\out"
+  if exist "%SCRIPT_DIR%\..\build\tests\batch" set "SHARED_OUT_DIR=%SCRIPT_DIR%\..\build\tests\batch"
 )
 
 set "TESTS_ROOT=%SCRIPT_DIR%\%SUITE%"
