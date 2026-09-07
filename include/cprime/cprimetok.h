@@ -151,6 +151,7 @@
      DEF(TOK_ALWAYS_INLINE1, "always_inline")
      DEF(TOK_ALWAYS_INLINE2, "__always_inline__")
      DEF(TOK_NOINLINE, "__noinline__")
+     DEF(TOK_NOINLINE2, "noinline")
      DEF(TOK_PURE1, "pure")
      DEF(TOK_PURE2, "__pure__")
 

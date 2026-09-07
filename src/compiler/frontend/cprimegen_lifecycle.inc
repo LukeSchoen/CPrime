@@ -221,7 +221,7 @@ static int class_has_virtual_destructor(CType *type)
   if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref) return 0;
   if (type->ref->a.virtual_destructor) return 1;
   name = get_struct_type_name_tok(type);
-  for (base = class_base_infos; base; base = base->next)
+  for (base = class_base_candidates(name); base; base = base->bucket_next)
     if (base->class_tok == name && base->field
         && class_has_virtual_destructor(&base->field->type)) return 1;
   return 0;
@@ -1530,7 +1530,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
     return;
   }
 
-  if (getenv("CPC_TRACE_PLACEMENT"))
+  if (compiler_trace.trace_placement)
   {
     fprintf(stderr, "CPC_PLACEMENT type=%s argc=%d current=%s stack=%p args=",
             get_tok_str(get_struct_type_name_tok(type), NULL), call_arg_count,
@@ -1557,7 +1557,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
     fprintf(stderr, "\n");
   }
   infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
-  if (getenv("CPC_TRACE_PLACEMENT"))
+  if (compiler_trace.trace_placement)
     fprintf(stderr, "CPC_PLACEMENT after-infer current=%s stack=%p len=%d\n",
             get_tok_str(tok, &tokc), (void *)macro_stack,
             macro_stack ? macro_stack->len : -1);
@@ -1618,7 +1618,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   if (!ctor_func && !use_implicit_memberwise_copy)
     ctor_func = call_arg_count == 0 ? resolve_autoctor_func(type)
                                    : resolve_lifecycle_func(type, TOK_CONSTRUCTOR1);
-  if (getenv("CPC_TRACE_PLACEMENT"))
+  if (compiler_trace.trace_placement)
   {
     Sym *trace_param = ctor_func && ctor_func->type.ref
                        ? ctor_func->type.ref->next : NULL;
@@ -1717,7 +1717,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   for (ai = 0; ai < call_arg_count; ++ai)
   {
     TokenString *trace_parent = macro_stack;
-    if (getenv("CPC_TRACE_PLACEMENT"))
+    if (compiler_trace.trace_placement)
     {
       const int *tp = call_args[ai]->str;
       const int *te = tp + call_args[ai]->len;
@@ -1735,7 +1735,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
     }
     saved_tok = tok;
     saved_tokc = tokc;
-    if (getenv("CPC_TRACE_PLACEMENT"))
+    if (compiler_trace.trace_placement)
       fprintf(stderr, "CPC_PLACEMENT emit-begin%d\n", ai);
     /* Placement owns these clauses and releases them after replay. */
     if (saved_arg_is_braced(call_args[ai]) && sa
@@ -1745,15 +1745,15 @@ static void call_placement_constructor(CType *type, TokenString *placement,
       emit_saved_arg_for_param(call_args[ai], sa);
     else
       replay_saved_placement_expr(call_args[ai]);
-    if (getenv("CPC_TRACE_PLACEMENT"))
+    if (compiler_trace.trace_placement)
       fprintf(stderr, "CPC_PLACEMENT emit-done%d parent=%p current=%p\n",
               ai, (void *)trace_parent, (void *)macro_stack);
     tok = saved_tok;
     tokc = saved_tokc;
-    if (getenv("CPC_TRACE_PLACEMENT"))
+    if (compiler_trace.trace_placement)
       fprintf(stderr, "CPC_PLACEMENT param-begin%d\n", ai);
     gfunc_param_typed_with_conversions(func_type, sa);
-    if (getenv("CPC_TRACE_PLACEMENT"))
+    if (compiler_trace.trace_placement)
       fprintf(stderr, "CPC_PLACEMENT param-done%d\n", ai);
     nb_args++;
     if (sa)
@@ -1767,10 +1767,10 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   }
 
   vcheck_cmp();
-  if (getenv("CPC_TRACE_PLACEMENT"))
+  if (compiler_trace.trace_placement)
     fprintf(stderr, "CPC_PLACEMENT call-begin\n");
   gfunc_call(nb_args);
-  if (getenv("CPC_TRACE_PLACEMENT"))
+  if (compiler_trace.trace_placement)
   {
     const int *tp = macro_ptr;
     const int *te = macro_stack ? macro_stack->str + macro_stack->len : tp;
@@ -1828,6 +1828,12 @@ static int try_parse_cpp_placement_new_after_name(void)
   int call_arg_count = 0, saved_tok;
   CValue saved_tokc;
 
+  /* The static-initializer probe has no function scope. Allocation is a
+     runtime expression in our C++14 mode: defer it to the generated startup
+     function instead of attempting array cleanup/code generation here. */
+  if (CONST_WANTED && !cpp_unevaluated_expression_depth)
+    cprime_error("allocation is not a constant expression");
+
   if (tok != '(')
   {
     CType ptr_type;
@@ -1875,15 +1881,58 @@ static int try_parse_cpp_placement_new_after_name(void)
   }
   else
   {
+    TokenString *allocation_args[CPC_MAX_CALL_ARGUMENTS];
+    CType allocation_types[CPC_MAX_CALL_ARGUMENTS + 1];
+    Sym *allocation_function;
+    int allocation_count, ai, size, align;
     next();
-    skip_or_save_block(&placement);
+    allocation_count = count_saved_call_args(allocation_args, CPC_MAX_CALL_ARGUMENTS);
     skip(')');
+    if (!allocation_count) cprime_error("placement new requires an allocation argument");
 
     memset(&ad, 0, sizeof(ad));
     if (!parse_btype(&type, &ad, 0))
       cprime_error("placement new requires a type before '%s'", get_tok_str(tok, &tokc));
+    allocation_types[0].t = VT_SIZE_T;
+    allocation_types[0].ref = NULL;
+    infer_saved_arg_types(allocation_args, allocation_types + 1, allocation_count);
+    allocation_function = resolve_free_func_by_arg_types(tok_alloc_const("operator new"),
+                                 allocation_types, allocation_count + 1, 0);
+    if (!allocation_function && allocation_count == 1)
+      placement = allocation_args[0]; /* Standard non-allocating placement new. */
+    else
+    {
+      if (!allocation_function) cprime_error("no matching placement operator new");
+      size = type_size(&type, &align);
+      if (size < 0) cprime_error("placement new requires a complete element type");
+      placement = tok_str_alloc();
+      tok_str_add(placement, allocation_function->v);
+      tok_str_add(placement, '(');
+      tok_str_add(placement, '(');
+      add_ctype_tokens(placement, &allocation_types[0]);
+      tok_str_add(placement, ')');
+      tok_str_add_cint(placement, size);
+      for (ai = 0; ai < allocation_count; ++ai) {
+        tok_str_add(placement, ',');
+        tok_str_append_without_eof(placement, allocation_args[ai]);
+        tok_str_free(allocation_args[ai]);
+      }
+      tok_str_add(placement, ')');
+      tok_str_add(placement, TOK_EOF);
+    }
   }
 
+  if (tok == '{')
+  {
+    TokenString *initializer;
+    skip_or_save_block(&initializer);
+    // Initialize the allocated object directly, preserving aggregate reference
+    // bindings, constructor list-initialization, and scalar brace semantics.
+    emit_placement_aggregate_initializer(&type, placement, initializer);
+    tok_str_free(initializer);
+    tok_str_free(placement);
+    return 1;
+  }
   if (tok == '(')
   {
     next();
@@ -2064,7 +2113,7 @@ static Sym *resolve_member_func_by_arg_count(CType *type, int method_tok,
     MemberFuncOverload *next_o = o->bucket_next;
     Sym *s;
     if (profile_scans_enabled) ++profile_other_overload_scans[0];
-    if (getenv("CPC_TRACE_CLBITREF")
+    if (compiler_trace.trace_clbitref
         && struct_tok >= TOK_UIDENT
         && strstr(get_tok_str(struct_tok, NULL), "clBitRef")
         && method_tok == tok_alloc_const("operator="))
@@ -2077,7 +2126,7 @@ static Sym *resolve_member_func_by_arg_count(CType *type, int method_tok,
       goto next_overload;
     if (!member_overload_receiver_ok(o, receiver_const, type))
     {
-      if (getenv("CPC_TRACE_CLBITREF")
+      if (compiler_trace.trace_clbitref
           && struct_tok >= TOK_UIDENT
           && strstr(get_tok_str(struct_tok, NULL), "clBitRef")
           && method_tok == tok_alloc_const("operator="))
@@ -2107,7 +2156,7 @@ next_overload:
     o = next_o;
   }
   match = member_overload_pick_match(match, const_match, receiver_const);
-  if (match && getenv("CPC_DUMP_MEMBER_RESOLVE")
+  if (match && compiler_trace.dump_member_resolve
       && (method_tok >= TOK_UIDENT || method_tok == TOK_CONSTRUCTOR1))
   {
     const char *method_name = get_tok_str(method_tok, NULL);
@@ -2127,7 +2176,7 @@ next_overload:
   if (is_lifecycle_member_tok(method_tok)) return NULL;
   {
     ClassBaseInfo *info;
-    for (info = class_base_infos; info; info = info->next)
+    for (info = class_base_candidates(struct_tok); info; info = info->bucket_next)
     {
       CType base_type;
       Sym *base_match;
@@ -2166,7 +2215,7 @@ static int member_overload_exists_for_call(CType *type, int method_tok,
       return 1;
   }
   if (is_lifecycle_member_tok(method_tok)) return 0;
-  for (info = class_base_infos; info; info = info->next)
+  for (info = class_base_candidates(struct_tok); info; info = info->bucket_next)
   {
     CType base_type;
 
@@ -2202,7 +2251,7 @@ static int member_func_owner_for_call(CType *type, int method_tok,
       return struct_tok;
   }
   if (is_lifecycle_member_tok(method_tok)) return 0;
-  for (info = class_base_infos; info; info = info->next)
+  for (info = class_base_candidates(struct_tok); info; info = info->bucket_next)
   {
     CType base_type;
     int owner_tok;
@@ -2240,7 +2289,7 @@ static int member_overload_count_for_call(CType *type, int method_tok,
       ++count;
   }
   if (is_lifecycle_member_tok(method_tok)) return count;
-  for (info = class_base_infos; info; info = info->next)
+  for (info = class_base_candidates(struct_tok); info; info = info->bucket_next)
   {
     CType base_type;
 
@@ -2282,7 +2331,7 @@ static int class_has_single_arg_constructor_for(CType *class_type,
     int arg_btype;
   } ctor_match_stack[64];
 
-  if ((class_type->t & VT_BTYPE) != VT_STRUCT)
+  if (cpp_standard_conversion_only || (class_type->t & VT_BTYPE) != VT_STRUCT)
     return 0;
   arg_value_type = *arg_type;
   arg_value_type.t &= ~VT_RVALUE_REFERENCE;
@@ -2316,6 +2365,8 @@ static int class_has_single_arg_constructor_for(CType *class_type,
   ctor_match_stack[ctor_match_depth].arg_tok = arg_key_tok;
   ctor_match_stack[ctor_match_depth].arg_btype = arg_key_btype;
   ctor_match_depth++;
+  /* A converting constructor consumes the sequence's sole user conversion. */
+  cpp_standard_conversion_only++;
 
   materialize_incomplete_template_type(class_type);
   instantiate_template_member_for_call(class_type, TOK_CONSTRUCTOR1, arg_type, 1);
@@ -2395,6 +2446,7 @@ static int class_has_single_arg_constructor_for(CType *class_type,
     }
   }
 done:
+  cpp_standard_conversion_only--;
   ctor_match_depth--;
   return result;
 }
@@ -2515,7 +2567,8 @@ static int is_same_template_family_conversion_ctor(CType *class_type,
                                                    CType *arg_type)
 {
   CType arg_value_type;
-  int class_tok, arg_tok, i, j;
+  int class_tok, arg_tok;
+  TemplateInstOwner *class_owner, *arg_owner;
 
   if (!class_type || !arg_type
       || (class_type->t & VT_BTYPE) != VT_STRUCT)
@@ -2532,27 +2585,12 @@ static int is_same_template_family_conversion_ctor(CType *class_type,
     return 0;
   if (!class_or_inst_has_member_template_name(class_tok, TOK_CONSTRUCTOR1))
     return 0;
-  for (i = 0; i < nb_template_defs; ++i)
-  {
-    TemplateDef *td = template_defs[i];
-    int class_seen = 0, arg_seen = 0;
-    if (!td->is_class)
-      continue;
-    for (j = 0; j < td->nb_inst; ++j)
-    {
-      if (td->inst_name_toks[j] == class_tok
-          || !strcmp(get_tok_str(td->inst_name_toks[j], NULL),
-                     get_tok_str(class_tok, NULL)))
-        class_seen = 1;
-      if (td->inst_name_toks[j] == arg_tok
-          || !strcmp(get_tok_str(td->inst_name_toks[j], NULL),
-                     get_tok_str(arg_tok, NULL)))
-        arg_seen = 1;
-    }
-    if (class_seen && arg_seen)
-      return 1;
-  }
-  return 0;
+  /* Named tokens are interned; the instance-owner index identifies the
+     family without comparing every instantiated class name. */
+  class_owner = find_template_inst_owner_entry(class_tok);
+  arg_owner = find_template_inst_owner_entry(arg_tok);
+  return class_owner && arg_owner && class_owner->owner->is_class
+         && class_owner->owner == arg_owner->owner;
 }
 
 static int member_field_func_arg_match_rank(Sym *field, CType *arg_types,
@@ -2771,7 +2809,7 @@ static int member_function_matches_explicit_arguments(int function_tok,
 {
   MemberFunctionScope *scope;
   if (!argument_key) return 1;
-  for (scope = member_function_scopes[(unsigned)function_tok & 1023];
+  for (scope = member_function_scopes[(unsigned)function_tok & (MEMBER_SCOPE_BUCKETS - 1)];
        scope; scope = scope->next)
     if (scope->function_tok == function_tok)
     {
@@ -2863,8 +2901,8 @@ static Sym *resolve_member_func_by_arg_types_filtered(CType *type, int method_to
                                          explicit_arg_count);
   if (method_tok == TOK_CONSTRUCTOR1 && nb_pending_member_funcs)
     compile_pending_member_funcs(0);
-  if (getenv("CPC_TRACE_RESOLVE_STACK")
-      && funcname && strstr(funcname, getenv("CPC_TRACE_RESOLVE_STACK"))
+  if (compiler_trace.trace_resolve_stack
+      && funcname && strstr(funcname, compiler_trace.trace_resolve_stack)
       && macro_stack != entry_macro_stack)
     fprintf(stderr,
             "CPC_RESOLVE_STACK func=%s recv=%s method=%s argc=%d arg0=%s before=%p after=%p top_len=%d\n",
@@ -2880,7 +2918,7 @@ static Sym *resolve_member_func_by_arg_types_filtered(CType *type, int method_to
     MemberFuncOverload *next_o = o->bucket_next;
     Sym *s;
     if (profile_scans_enabled) ++profile_overload_scans;
-    if (getenv("CPC_TRACE_CLBITREF")
+    if (compiler_trace.trace_clbitref
         && struct_tok >= TOK_UIDENT
         && strstr(get_tok_str(struct_tok, NULL), "clBitRef")
         && method_tok == tok_alloc_const("operator="))
@@ -2898,7 +2936,7 @@ static Sym *resolve_member_func_by_arg_types_filtered(CType *type, int method_to
       goto next_overload;
     if (!member_overload_receiver_ok(o, receiver_const, type))
     {
-      if (getenv("CPC_TRACE_CLBITREF")
+      if (compiler_trace.trace_clbitref
           && struct_tok >= TOK_UIDENT
           && strstr(get_tok_str(struct_tok, NULL), "clBitRef")
           && method_tok == tok_alloc_const("operator="))
@@ -2923,7 +2961,7 @@ static Sym *resolve_member_func_by_arg_types_filtered(CType *type, int method_to
     {
       int arg_rank = member_func_arg_match_rank(s, arg_types,
                                                 explicit_arg_count);
-      if (getenv("CPC_TRACE_CLBITREF")
+      if (compiler_trace.trace_clbitref
           && struct_tok >= TOK_UIDENT
           && strstr(get_tok_str(struct_tok, NULL), "clBitRef")
           && method_tok == tok_alloc_const("operator="))
@@ -2989,7 +3027,7 @@ next_overload:
     o = next_o;
   }
   match = member_overload_pick_match(match, const_match, receiver_const);
-  if (getenv("CPC_TRACE_MATRIX")
+  if (compiler_trace.trace_matrix
       && strstr(get_tok_str(struct_tok, NULL), "clMatrix4x4")
       && method_tok == tok_alloc_const("operator*")
       && arg_types && explicit_arg_count == 1)
@@ -3010,7 +3048,7 @@ next_overload:
   if (is_lifecycle_member_tok(method_tok)) return NULL;
   {
     ClassBaseInfo *info;
-    for (info = class_base_infos; info; info = info->next)
+    for (info = class_base_candidates(struct_tok); info; info = info->bucket_next)
     {
       CType base_type;
       Sym *base_match;
@@ -3050,39 +3088,30 @@ static Sym *resolve_implicit_constructor_func(CType *type, CType *arguments,
 
 static int same_concrete_template_instantiation(CType *type1, CType *type2)
 {
-  int tok1, tok2, i, j, k;
-
+  int tok1, tok2, k;
+  TemplateInstOwner *first, *second;
+  TemplateArgList *args1, *args2;
   if (!type1 || !type2
       || (type1->t & VT_BTYPE) != VT_STRUCT
       || (type2->t & VT_BTYPE) != VT_STRUCT)
     return 0;
   tok1 = get_struct_type_name_tok(type1);
   tok2 = get_struct_type_name_tok(type2);
-  if (tok1 == tok2)
-    return 1;
-  for (i = 0; i < nb_template_defs; ++i)
-  {
-    TemplateDef *td = template_defs[i];
-    int inst1 = -1, inst2 = -1;
-    if (!td->is_class)
-      continue;
-    for (j = 0; j < td->nb_inst; ++j)
-    {
-      if (td->inst_name_toks[j] == tok1)
-        inst1 = j;
-      if (td->inst_name_toks[j] == tok2)
-        inst2 = j;
-    }
-    if (inst1 < 0 || inst2 < 0)
-      continue;
-    for (k = 0; k < td->nb_type_params; ++k)
-      if (!template_type_arg_toks_match(
-            td->inst_type_toks[inst1 * td->nb_type_params + k],
-            td->inst_type_toks[inst2 * td->nb_type_params + k]))
-        return 0;
-    return 1;
-  }
-  return 0;
+  if (tok1 == tok2) return 1;
+  first = find_template_inst_owner_entry(tok1);
+  second = find_template_inst_owner_entry(tok2);
+  if (!first || !second || first->owner != second->owner
+      || !first->owner->is_class) return 0;
+  args1 = &first->owner->inst_arg_lists[first->inst_index];
+  args2 = &second->owner->inst_arg_lists[second->inst_index];
+  /* A parameter pack contributes zero or more actual arguments. Comparing
+     only the declared parameter count both misses later pack elements and
+     reads unused token slots for an empty pack. */
+  if (args1->nb != args2->nb) return 0;
+  for (k = 0; k < args1->nb; ++k)
+    if (!template_type_arg_toks_match(args1->toks[k], args2->toks[k]))
+      return 0;
+  return 1;
 }
 
 static int exact_template_signature_type_inner(CType *type1, CType *type2,
@@ -3562,7 +3591,7 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   pm->auto_return_state = is_auto_return ? 1 : 0;
   pm->auto_return_kind = is_auto_return;
   pm->is_local_class_member = is_local_class_member;
-  dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
+  queue_pending_member(pm);
 }
 
 static Sym *declare_member_func(CType *struct_type, int method_tok,
@@ -3648,10 +3677,11 @@ static void add_pending_static_member_func(CType *struct_type, int method_tok,
   }
   tok_str_add(str, ')');
   append_function_exception_spec(str, &func_type->ref->f);
+  int cursor = 0, previous = -1;
   for (i = 0; i < body->len && body->str[i] != TOK_EOF; ++i)
   {
     int bt = body->str[i];
-    int prev_i = tok_str_prev_token_index(body->str, body->len, i);
+    int prev_i = tok_str_prev_token_index_from(body->str, body->len, i, &cursor, &previous);
     int next_i = tok_str_next_non_linenum_index(body->str, body->len, i + 1);
     if (TOK_HAS_VALUE(bt))
     {
@@ -3717,7 +3747,7 @@ static void add_pending_static_member_func(CType *struct_type, int method_tok,
   pm->auto_return_state = is_auto_return ? 1 : 0;
   pm->auto_return_kind = is_auto_return;
   pm->is_local_class_member = is_local_class_member;
-  dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
+  queue_pending_member(pm);
 }
 
 /* A member with a deduced return type must use the completed class
@@ -3731,13 +3761,9 @@ static void deduce_pending_member_return(int function_tok)
   CType result;
   Sym *function;
   int i, name_at = -1;
-  for (i = 0; i < nb_pending_member_funcs; ++i)
-    if (pending_member_funcs[i]
-        && pending_member_funcs[i]->func_tok == function_tok
-        && pending_member_funcs[i]->auto_return_state) {
-      pending = pending_member_funcs[i];
-      break;
-    }
+  for (pending = pending_auto_members[(unsigned)function_tok & 4095];
+       pending; pending = pending->auto_next)
+    if (pending->func_tok == function_tok && pending->auto_return_state) break;
   if (!pending) return;
   if (pending->auto_return_state == 2)
     cprime_error("use of '%s' before deduction of its auto return type",
@@ -3902,7 +3928,7 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
   if (pm->is_defaulted_default_constructor)
     note_struct_member_init_list(struct_tok);
   pm->is_local_class_member = is_local_class_member;
-  dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
+  queue_pending_member(pm);
 }
 
 static void add_pending_lifecycle_decl(CType *struct_type, int method_tok,
@@ -3959,7 +3985,7 @@ static void add_pending_lifecycle_decl(CType *struct_type, int method_tok,
   pm->token_filter_valid = 0;
   pm->struct_tok = struct_tok;
   pm->is_local_class_member = is_local_class_member;
-  dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
+  queue_pending_member(pm);
 }
 
 static int type_requires_class_construction(CType *type)
@@ -4703,7 +4729,7 @@ close_initializer:
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
   pm->token_filter_valid = 0;
-  dynarray_add(&pending_member_funcs, &nb_pending_member_funcs, pm);
+  queue_pending_member(pm);
 }
 
 static int pending_lifecycle_is_constructor(PendingMemberFunc *pm)
@@ -4800,8 +4826,7 @@ static void inject_omitted_constructor_member_initializers(
   int body_open = -1, prefix_end, i, insert_at, delegating = 0;
   int new_tok = tok_alloc_const("new");
 
-  if (!pending_lifecycle_is_constructor(pm)
-      || !struct_has_member_init_list(pm->struct_tok))
+  if (!pending_lifecycle_is_constructor(pm))
     return;
 
   for (i = 0; i < pm->str->len; ++i)
@@ -4911,6 +4936,7 @@ static void inject_omitted_constructor_member_initializers(
   tok_str_free(initialized);
   tok_str_free(pm->str);
   pm->str = dst;
+  index_pending_member_tokens(pm);
   pm->token_filter_valid = 0;
 }
 
@@ -5039,6 +5065,7 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
   if (!pm->is_defaulted_default_constructor)
     inject_omitted_constructor_member_initializers(pm, &class_type, this_tok);
   prepare_saved_cpp_lambdas(pm->str);
+  index_pending_member_tokens(pm);
   pm->token_filter_valid = 0;
   dst = tok_str_alloc();
   for (i = 0; i < pm->str->len && pm->str->str[i] != TOK_EOF; ++i)
@@ -5171,17 +5198,19 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
   tok_str_add(dst, TOK_EOF);
   tok_str_free(pm->str);
   pm->str = dst;
+  index_pending_member_tokens(pm);
   pm->token_filter_valid = 0;
 }
 
 static void rewrite_pending_static_member_calls(PendingMemberFunc *pm)
 {
-  int i, in_body = 0;
+  int i, in_body = 0, cursor = 0, previous = -1;
   TokenString *dst;
 
   if (!pm || !pm->is_static_member || !pm->struct_tok || !pm->str)
     return;
   prepare_saved_cpp_lambdas(pm->str);
+  index_pending_member_tokens(pm);
   pm->token_filter_valid = 0;
   dst = tok_str_alloc();
   for (i = 0; i < pm->str->len && pm->str->str[i] != TOK_EOF; ++i)
@@ -5202,7 +5231,7 @@ static void rewrite_pending_static_member_calls(PendingMemberFunc *pm)
     }
     if (append_nested_lambda_tokens(dst, pm->str, &i))
       continue;
-    prev_i = tok_str_prev_token_index(pm->str->str, pm->str->len, i);
+    prev_i = tok_str_prev_token_index_from(pm->str->str, pm->str->len, i, &cursor, &previous);
     next_i = tok_str_next_non_linenum_index(pm->str->str, pm->str->len,
                                              i + 1);
     if (t >= TOK_UIDENT
@@ -5226,6 +5255,7 @@ static void rewrite_pending_static_member_calls(PendingMemberFunc *pm)
   tok_str_add(dst, TOK_EOF);
   tok_str_free(pm->str);
   pm->str = dst;
+  index_pending_member_tokens(pm);
   pm->token_filter_valid = 0;
 }
 
@@ -5249,7 +5279,9 @@ static void compile_pending_member_funcs(int start)
      operator bodies).  The outer pass iterates with a live bound, so it picks
      up every entry appended during the pass; nested flushes must simply stay
      out of the way. */
-  if (compiling_pending_member_funcs || cpp_template_probe_depth)
+  if (compiling_pending_member_funcs || cpp_template_probe_depth
+      || start >= nb_pending_member_funcs
+      || ((local_stack || local_scope) && !compile_local_member_funcs_now))
     return;
   compiling_pending_member_funcs++;
 
@@ -5295,16 +5327,22 @@ static void compile_pending_member_funcs(int start)
     int saved_namespace_tok;
     if (compile_lifecycle_member_funcs_only && !pm->is_lifecycle_member)
     {
+      if (out != i)
+        pending_member_funcs[i] = NULL;
       pending_member_funcs[out++] = pm;
       continue;
     }
     if (compile_local_member_funcs_now && !pm->is_local_class_member)
     {
+      if (out != i)
+        pending_member_funcs[i] = NULL;
       pending_member_funcs[out++] = pm;
       continue;
     }
     if ((local_stack || local_scope) && !compile_local_member_funcs_now)
     {
+      if (out != i)
+        pending_member_funcs[i] = NULL;
       pending_member_funcs[out++] = pm;
       continue;
     }
@@ -5313,6 +5351,8 @@ static void compile_pending_member_funcs(int start)
       Sym *class_sym = struct_find(pm->struct_tok);
       if (!class_sym || class_sym->c < 0)
       {
+        if (out != i)
+          pending_member_funcs[i] = NULL;
         pending_member_funcs[out++] = pm;
         continue;
       }
@@ -5320,6 +5360,8 @@ static void compile_pending_member_funcs(int start)
     if (pm->str->len > 0
         && pm->str->str[0] == TOK_AUTO)
     {
+      if (out != i)
+        pending_member_funcs[i] = NULL;
       pending_member_funcs[out++] = pm;
       continue;
     }
@@ -5327,15 +5369,17 @@ static void compile_pending_member_funcs(int start)
        A selected call or function-address expression demands its return type. */
     if (pm->auto_return_state == 1
         && is_class_template_instantiation_tok(pm->struct_tok)) {
+      if (out != i)
+        pending_member_funcs[i] = NULL;
       pending_member_funcs[out++] = pm;
       continue;
     }
     deduce_pending_member_return(pm->func_tok);
     rewrite_pending_member_field_access(pm);
     rewrite_pending_static_member_calls(pm);
-    if (getenv("CPC_TRACE_PENDING"))
+    if (compiler_trace.trace_pending)
     {
-      const char *filter = getenv("CPC_TRACE_PENDING");
+      const char *filter = compiler_trace.trace_pending;
       int pi, matched = 0;
       for (pi = 0; pi < pm->str->len; ++pi)
       {
@@ -5373,7 +5417,8 @@ static void compile_pending_member_funcs(int start)
     member_macro_ptr = macro_ptr;
     saved_namespace_tok = current_namespace_scope_tok();
     enter_namespace_scope(symbol_namespace_scope_tok(pm->struct_tok));
-    begin_macro(pm->str, 1);
+    /* The queue owns the body even if declaration replay fails. */
+    begin_macro(pm->str, 3);
     next();
     defer_pending_member_funcs = 1;
     if (pm->func_tok && pm->struct_tok)
@@ -5381,23 +5426,7 @@ static void compile_pending_member_funcs(int start)
     decl(VT_CONST);
     enter_namespace_scope(saved_namespace_tok);
     defer_pending_member_funcs = saved_defer_pending_member_funcs;
-    if (pm->func_tok
-        && !compiled_pending_member_func_has_tok(pm->func_tok))
-    {
-      if (nb_compiled_pending_member_func_toks
-          >= al_compiled_pending_member_func_toks)
-      {
-        al_compiled_pending_member_func_toks =
-          al_compiled_pending_member_func_toks
-            ? al_compiled_pending_member_func_toks * 2 : 32;
-        compiled_pending_member_func_toks = cprime_realloc(
-          compiled_pending_member_func_toks,
-          al_compiled_pending_member_func_toks
-            * sizeof(*compiled_pending_member_func_toks));
-      }
-      compiled_pending_member_func_toks[
-        nb_compiled_pending_member_func_toks++] = pm->func_tok;
-    }
+    token_set_add(&compiled_pending_members, pm->func_tok);
     /* Each replayed member body is an independent function definition.
        decl() leaves the enclosing local scope live, so restore the saved
        scope before the next queued member is inspected; otherwise a member
@@ -5413,10 +5442,11 @@ static void compile_pending_member_funcs(int start)
     macro_ptr = member_macro_ptr;
     if (guard_non_lifecycle)
       compiling_non_lifecycle_template_member_body--;
-    /* The compiled body's token string is freed by end_macro(); clear the
-       queue slot so nested scans (pending_member_func_has_body_tok) cannot
-       read the dangling token string before the queue is compacted. */
+    /* Release the queue entry only after replay has restored its parent. */
     pending_member_funcs[i] = NULL;
+    tok_str_free(pm->str);
+    unindex_pending_auto_member(pm);
+    cprime_free(pm);
     /* Member calls discovered while replaying this body stay on the body
        dependency worklist until the outer finalization loop.  Instantiating
        them here would nest template-specialization replay inside the shared

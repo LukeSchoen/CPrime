@@ -17,6 +17,7 @@ if ($Toolchain -eq 'Prime' -and $Jobs -ne 1) {
     throw 'Cprime builds require -Jobs 1. Optimize compiler work instead of enabling parallel compilation.'
 }
 $buildTimer = [Diagnostics.Stopwatch]::StartNew()
+$script:toolMeasurements = [Collections.Generic.List[object]]::new()
 $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot)
 if (-not $CompilerPath) {
     $CompilerPath = if ($Toolchain -eq 'Prime') { Join-Path $PSScriptRoot 'cpc.exe' }
@@ -48,10 +49,20 @@ function Quote-Native([string]$Argument) {
     return '"' + [regex]::Replace([regex]::Replace($Argument, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1') + '"'
 }
 
-function Start-BuildTool([string]$ToolPath, [string[]]$Arguments, [string]$Directory) {
+function Start-BuildTool([string]$ToolPath, [string[]]$Arguments, [string]$Directory, [switch]$StreamErrors) {
     $start = [Diagnostics.ProcessStartInfo]::new()
     $start.FileName = $ToolPath
-    $start.Arguments = ($Arguments | ForEach-Object { Quote-Native $_ }) -join ' '
+    $commandLine = [Text.StringBuilder]::new()
+    foreach ($argument in $Arguments) {
+        $argument = [string]$argument
+        if ($commandLine.Length) { [void]$commandLine.Append(' ') }
+        if ($argument.Contains('"') -or $argument.EndsWith('\')) {
+            [void]$commandLine.Append((Quote-Native $argument))
+        } else {
+            [void]$commandLine.Append('"').Append($argument).Append('"')
+        }
+    }
+    $start.Arguments = $commandLine.ToString()
     $start.WorkingDirectory = $Directory
     $start.UseShellExecute = $false
     $start.CreateNoWindow = $true
@@ -65,8 +76,16 @@ function Start-BuildTool([string]$ToolPath, [string[]]$Arguments, [string]$Direc
     return @{
         Process = $process
         Output = $process.StandardOutput.ReadToEndAsync()
-        Error = $process.StandardError.ReadToEndAsync()
+        Error = if ($StreamErrors) { $null } else { $process.StandardError.ReadToEndAsync() }
     }
+}
+
+function Record-ToolTiming($Process, [string]$Label, [string]$Kind) {
+    $script:toolMeasurements.Add([pscustomobject]@{
+        Label = $Label; Kind = $Kind
+        Seconds = ($Process.ExitTime - $Process.StartTime).TotalSeconds
+        CpuSeconds = $Process.TotalProcessorTime.TotalSeconds
+    })
 }
 
 function Invoke-BuildTool([string]$ToolPath, [string[]]$Arguments, [string]$Directory, [string]$Label) {
@@ -74,6 +93,8 @@ function Invoke-BuildTool([string]$ToolPath, [string[]]$Arguments, [string]$Dire
     try {
         $timedOut = -not $started.Process.WaitForExit($CompileTimeoutSeconds * 1000)
         if ($timedOut) { $started.Process.Kill(); $started.Process.WaitForExit() }
+        $kind = if ($ToolPath -eq $CompilerPath) { 'compiler' } else { 'resource' }
+        Record-ToolTiming $started.Process $Label $kind
         $stdout = $started.Output.GetAwaiter().GetResult()
         $stderr = $started.Error.GetAwaiter().GetResult()
         $stdout | Set-Content -LiteralPath (Join-Path $OutDir ($Label + '.log'))
@@ -126,10 +147,10 @@ function Find-MsvcToolchain([string]$RequestedVersion, [switch]$Required) {
     return $null
 }
 
-function Find-MsvcTool([string]$Name) {
+function Find-MsvcTool([string]$Name, $Toolchain) {
     $command = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
     if ($command) { return $command.Source }
-    $toolchain = Find-MsvcToolchain
+    if (-not $Toolchain) { $Toolchain = Find-MsvcToolchain }
     if ($toolchain) {
         $tool = Join-Path $toolchain.Tools $Name
         if (Test-Path -LiteralPath $tool -PathType Leaf) { return $tool }
@@ -166,11 +187,11 @@ function Find-WindowsSdk([string]$RequestedVersion, [switch]$Required) {
     return $null
 }
 
-function Find-ResourceTools($Sdk) {
+function Find-ResourceTools($Sdk, $Msvc) {
     if (-not $Sdk -or -not (Test-Path -LiteralPath $Sdk.Compiler -PathType Leaf)) {
         throw 'The selected Windows SDK resource compiler rc.exe was not found.'
     }
-    return @{ Compiler = $Sdk.Compiler; Converter = (Find-MsvcTool 'cvtres.exe'); Includes = $Sdk.Includes }
+    return @{ Compiler = $Sdk.Compiler; Converter = (Find-MsvcTool 'cvtres.exe' $Msvc); Includes = $Sdk.Includes }
 }
 
 function Get-EffectiveSettings($ProjectSettings, $SourceSettings) {
@@ -232,6 +253,8 @@ foreach ($project in $manifest.projects) {
     # The generated graph is authoritative. No exclusions, renamed sources,
     # application macros, or replacement implementations belong here.
     $groups = [ordered]@{}
+    $projectFlags = @{}
+    $projectFlagKeys = @{}
     $projectBuild = @{
         Project = $project; Objects = [Collections.ArrayList]::new(); Resources = [Collections.ArrayList]::new()
         Label = 'project_{0:d4}' -f $projectBuilds.Count
@@ -239,11 +262,26 @@ foreach ($project in $manifest.projects) {
     $projectBuilds += $projectBuild
     if ($project.projectFile) { $projectsByPath[$project.projectFile] = $projectBuild }
     foreach ($source in $project.sources) {
-        if (-not (Test-Path -LiteralPath $source.path -PathType Leaf)) { throw "Selected source is missing: $($source.path)" }
-        $flags = @(Get-CompileFlags $project $source)
-        $key = if ($Unity -and [IO.Path]::GetExtension($source.path) -in @('.cpp', '.cxx', '.cc')) {
+        if (-not [IO.File]::Exists($source.path)) { throw "Selected source is missing: $($source.path)" }
+        $extension = [IO.Path]::GetExtension($source.path)
+        $language = if ($Toolchain -eq 'Clang' -and $extension -ne '.c') { 'cpp' } else { 'default' }
+        if (-not $source.settings -and -not $source.PSObject.Properties['includeDirectories'] -and
+            -not $source.PSObject.Properties['defines']) {
+            # Project-wide settings are shared by these sources; generate
+            # their argument list once, while still compiling every source.
+            if (-not $projectFlags.ContainsKey($language)) {
+                $projectFlags[$language] = @(Get-CompileFlags $project $source)
+                $projectFlagKeys[$language] = $projectFlags[$language] -join "`n"
+            }
+            $flags = $projectFlags[$language]
+            $flagKey = $projectFlagKeys[$language]
+        } else {
+            $flags = @(Get-CompileFlags $project $source)
+            $flagKey = $flags -join "`n"
+        }
+        $key = if ($Unity -and $extension -in @('.cpp', '.cxx', '.cc')) {
             $unityGroup = if ($source.PSObject.Properties['unityGroup']) { [string]$source.unityGroup } else { '' }
-            ($flags -join "`n") + "`nunity-group:" + $unityGroup
+            $flagKey + "`nunity-group:" + $unityGroup
         } else { 'single:' + $index }
         if (-not $groups.Contains($key)) { $groups[$key] = [Collections.ArrayList]::new() }
         [void]$groups[$key].Add(@{ Source = $source.path; Flags = $flags; Index = $index++ })
@@ -265,7 +303,9 @@ foreach ($project in $manifest.projects) {
                     Set-Content -LiteralPath $inputSource -Encoding UTF8
             }
             $object = Join-Path $OutDir ($label + '.obj')
-            if (Test-Path -LiteralPath $object) { Remove-Item -LiteralPath $object -Force }
+            [IO.File]::Delete($object)
+            [IO.File]::Delete((Join-Path $OutDir ($label + '.log')))
+            [IO.File]::Delete((Join-Path $OutDir ($label + '.err.log')))
             $objects += $object
             [void]$projectBuild.Objects.Add($object)
             $jobsToRun += @{
@@ -283,12 +323,18 @@ $timer = [Diagnostics.Stopwatch]::StartNew()
 
 function Complete-Compiles([switch]$Drain) {
     do {
+        if ($Jobs -eq 1 -and $active.Count) {
+            $job = $active[0]
+            $remaining = [Math]::Max(0, [Math]::Ceiling($CompileTimeoutSeconds * 1000 - $job.Timer.Elapsed.TotalMilliseconds))
+            [void]$job.Process.WaitForExit([int]$remaining)
+        }
         foreach ($job in @($active)) {
             $timedOut = -not $job.Process.HasExited -and $job.Timer.Elapsed.TotalSeconds -ge $CompileTimeoutSeconds
             if (-not $job.Process.HasExited -and -not $timedOut) { continue }
             if ($timedOut) { $job.Process.Kill() }
             $job.Process.WaitForExit()
             $job.Process.Refresh()
+            Record-ToolTiming $job.Process $job.Label 'compiler'
             $code = if ($timedOut) { -999 } else { $job.Process.ExitCode }
             $diagnostics = $job.Error.GetAwaiter().GetResult()
             $job.Output.GetAwaiter().GetResult() | Set-Content -LiteralPath (Join-Path $OutDir ($job.Label + '.log'))
@@ -308,6 +354,108 @@ function Complete-Compiles([switch]$Drain) {
     } while ($active.Count -and ($Drain -or $active.Count -ge $Jobs))
 }
 
+function Invoke-PrimeBatch($BatchJobs, [int]$BatchIndex) {
+    $label = 'compile_batch_{0:d4}' -f $BatchIndex
+    $batchPath = Join-Path $OutDir ($label + '.txt')
+    $lines = [Collections.Generic.List[string]]::new()
+    $flagLines = [Collections.Generic.Dictionary[object,string]]::new()
+    foreach ($job in $BatchJobs) {
+        [string]$prefix = $null
+        # Identical project settings share their immutable argument array.
+        # Format that array once; every source is still compiled from scratch.
+        if (-not $flagLines.TryGetValue($job.Flags, [ref]$prefix)) {
+            $flags = [Text.StringBuilder]::new()
+            foreach ($argument in $job.Flags) {
+                if ($argument.Contains("`n") -or $argument.Contains("`r")) { throw 'Newline in compiler argument' }
+                if ($flags.Length) { [void]$flags.Append(' ') }
+                [void]$flags.Append('"').Append($argument.Replace('\', '\\').Replace('"', '\"')).Append('"')
+            }
+            $prefix = $flags.ToString()
+            $flagLines.Add($job.Flags, $prefix)
+        }
+        $line = [Text.StringBuilder]::new($prefix)
+        foreach ($argument in @('-c', $job.Source, '-o', $job.Object)) {
+            # CPC response files escape every backslash, unlike Windows argv.
+            if ($argument.Contains("`n") -or $argument.Contains("`r")) { throw 'Newline in compiler argument' }
+            if ($line.Length) { [void]$line.Append(' ') }
+            [void]$line.Append('"').Append($argument.Replace('\', '\\').Replace('"', '\"')).Append('"')
+        }
+        $lines.Add($line.ToString())
+    }
+    [IO.File]::WriteAllLines($batchPath, $lines, [Text.UTF8Encoding]::new($false))
+    $started = Start-BuildTool $CompilerPath @('@' + $batchPath) $BatchJobs[0].Directory -StreamErrors
+    $deadline = [Diagnostics.Stopwatch]::StartNew()
+    $diagnostics = [Text.StringBuilder]::new()
+    $batchDiagnostics = [Text.StringBuilder]::new()
+    $completed = 0
+    $timedOut = $false
+    try {
+        while ($true) {
+            $read = $started.Process.StandardError.ReadLineAsync()
+            $remaining = [Math]::Max(0, [Math]::Ceiling($CompileTimeoutSeconds * 1000 - $deadline.Elapsed.TotalMilliseconds))
+            if (-not $read.Wait([int]$remaining)) { $timedOut = $true; break }
+            $line = $read.GetAwaiter().GetResult()
+            if ($null -eq $line) { break }
+            [void]$batchDiagnostics.AppendLine($line)
+            if ($line -match '^# cprime batch start (\d+)$') {
+                if ([int]$Matches[1] -ne $completed + 1) { throw 'Invalid compiler batch job sequence' }
+                $deadline.Restart()
+            } elseif ($line -match '^# cprime batch end (\d+) (-?\d+) (\d+)$') {
+                if ([int]$Matches[1] -ne $completed + 1 -or $completed -ge $BatchJobs.Count) { throw 'Invalid compiler batch result sequence' }
+                $job = $BatchJobs[$completed]
+                $code = [int]$Matches[2]
+                $seconds = [double]$Matches[3] / 1000
+                $warnings = [regex]::Matches($diagnostics.ToString(), 'warning:').Count
+                [IO.File]::WriteAllText((Join-Path $OutDir ($job.Label + '.err.log')), $diagnostics.ToString())
+                Write-Host ('{0} {1,7:n3}s exit={2} warnings={3} {4}' -f $job.Label, $seconds, $code, $warnings, $job.Inputs[0])
+                if ($code -ne 0 -or -not [IO.File]::Exists($job.Object)) {
+                    $script:failed = $true
+                    Write-Host $diagnostics.ToString()
+                }
+                [void]$diagnostics.Clear()
+                ++$completed
+                $deadline.Restart()
+            } else {
+                [void]$diagnostics.AppendLine($line)
+            }
+        }
+        $remaining = [Math]::Max(0, [Math]::Ceiling($CompileTimeoutSeconds * 1000 - $deadline.Elapsed.TotalMilliseconds))
+        if ($timedOut -or -not $started.Process.WaitForExit([int]$remaining)) {
+            $timedOut = $true
+            $started.Process.Kill()
+        }
+        $started.Process.WaitForExit()
+        Record-ToolTiming $started.Process $label 'compiler'
+        [IO.File]::WriteAllText((Join-Path $OutDir ($label + '.log')), $started.Output.GetAwaiter().GetResult())
+        [IO.File]::WriteAllText((Join-Path $OutDir ($label + '.err.log')), $batchDiagnostics.ToString())
+        if ($timedOut -or $started.Process.ExitCode -ne 0 -or $completed -ne $BatchJobs.Count) {
+            $script:failed = $true
+            if ($completed -lt $BatchJobs.Count) {
+                [IO.File]::WriteAllText((Join-Path $OutDir ($BatchJobs[$completed].Label + '.err.log')), $diagnostics.ToString())
+            }
+            Write-Host ("$label failed after $completed/$($BatchJobs.Count) jobs; exit=" + $started.Process.ExitCode)
+            if ($timedOut) { Write-Host "Compile timed out after ${CompileTimeoutSeconds}s" }
+            Write-Host $diagnostics.ToString()
+        }
+    } finally {
+        if (-not $started.Process.HasExited) { $started.Process.Kill(); $started.Process.WaitForExit() }
+        $started.Process.Dispose()
+    }
+}
+
+if ($Toolchain -eq 'Prime') {
+    # Batch execution is serial and cprime_run_job creates/deletes the complete
+    # compiler state for every unit. Keep each original working directory.
+    $batchIndex = 0
+    for ($first = 0; $first -lt $jobsToRun.Count;) {
+        $last = $first
+        while ($last + 1 -lt $jobsToRun.Count -and $jobsToRun[$last + 1].Directory -eq $jobsToRun[$first].Directory) { ++$last }
+        Invoke-PrimeBatch @($jobsToRun[$first..$last]) $batchIndex
+        if ($script:failed) { break }
+        ++$batchIndex
+        $first = $last + 1
+    }
+} else {
 foreach ($job in $jobsToRun) {
     Complete-Compiles
     $arguments = @($job.Flags) + @('-c', $job.Source, '-o', $job.Object)
@@ -320,6 +468,7 @@ foreach ($job in $jobsToRun) {
     [void]$active.Add($job)
 }
 Complete-Compiles -Drain
+}
 Write-Host ('Compile elapsed: {0:n3}s; {1} source files' -f $timer.Elapsed.TotalSeconds, $index)
 if ($script:failed) { Write-Host 'Executable: NOT PRODUCED'; exit 1 }
 if ($SkipLink) { exit 0 }
@@ -360,12 +509,17 @@ if ($manifest.schemaVersion -ge 2) {
     }
 
     $resourceTools = $null
+    $msvcSelections = @{}
     foreach ($build in $projectBuilds) {
         $project = $build.Project
         $sdk = Find-WindowsSdk $project.windowsSdkVersion -Required:([bool]$project.resources.Count)
         $build.Sdk = $sdk
-        $build.Msvc = Find-MsvcToolchain $project.msvcToolsVersion
-        if ($project.resources.Count) { $resourceTools = Find-ResourceTools $sdk }
+        $msvcVersion = [string]$project.msvcToolsVersion
+        if (-not $msvcSelections.ContainsKey($msvcVersion)) {
+            $msvcSelections[$msvcVersion] = Find-MsvcToolchain $msvcVersion
+        }
+        $build.Msvc = $msvcSelections[$msvcVersion]
+        if ($project.resources.Count) { $resourceTools = Find-ResourceTools $sdk $build.Msvc }
         if ($project.kind -notin @('Application', 'StaticLibrary')) { throw "Unsupported project kind: $($project.kind)" }
         foreach ($resource in $project.resources) {
             $label = $build.Label + '_resource_' + $build.Resources.Count
@@ -399,7 +553,7 @@ if ($manifest.schemaVersion -ge 2) {
             if ($Toolchain -eq 'Prime') {
                 Invoke-BuildTool $CompilerPath (@('-ar', 'rcs', $build.Archive) + $archiveObjects) $project.directory ($build.Label + '_archive')
             } else {
-                Invoke-BuildTool (Find-MsvcTool 'lib.exe') (@('/NOLOGO', ('/OUT:' + $build.Archive)) + $archiveObjects) $project.directory ($build.Label + '_archive')
+                Invoke-BuildTool (Find-MsvcTool 'lib.exe' $build.Msvc) (@('/NOLOGO', ('/OUT:' + $build.Archive)) + $archiveObjects) $project.directory ($build.Label + '_archive')
             }
             Write-Host "Library: $($build.Archive)"
         }
@@ -455,3 +609,16 @@ try {
 }
 Write-Host "Executable: $ExePath"
 Write-Host ('Build elapsed: {0:n3}s; {1} translation units; unity={2}' -f $buildTimer.Elapsed.TotalSeconds, $jobsToRun.Count, [bool]$Unity)
+
+$compilerWork = [double](($script:toolMeasurements | Where-Object Kind -eq 'compiler' | Measure-Object Seconds -Sum).Sum)
+$resourceWork = [double](($script:toolMeasurements | Where-Object Kind -eq 'resource' | Measure-Object Seconds -Sum).Sum)
+$metrics = [ordered]@{
+    Compiler = $CompilerPath; Configuration = $manifest.configuration; Jobs = $Jobs
+    Sources = $index; TranslationUnits = $jobsToRun.Count; Unity = [bool]$Unity
+    BuildSeconds = $buildTimer.Elapsed.TotalSeconds; CompilerSeconds = $compilerWork
+    ResourceSeconds = $resourceWork
+    DriverSeconds = if ($Jobs -eq 1) { $buildTimer.Elapsed.TotalSeconds - $compilerWork - $resourceWork } else { $null }
+    Processes = @($script:toolMeasurements)
+}
+$metrics | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutDir 'build_metrics.json') -Encoding UTF8
+Write-Host ('Compiler process time: {0:n3}s; resource tools: {1:n3}s' -f $compilerWork, $resourceWork)

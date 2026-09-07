@@ -68,6 +68,16 @@ int main() { return helper() != 42; }
     $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Suite $suite @compilerArguments -BuildManifestPath $manifestPath 2>&1
     if ($LASTEXITCODE -eq 0 -or ($output -join "`n") -notmatch 'must select exactly one source') { throw ($output -join "`n") }
     Write-Output 'PASS missing manifest source is a setup failure'
+    $crashSuite = Join-Path $fixtureRoot 'crash'
+    New-Item -ItemType Directory -Path (Join-Path $crashSuite 'pass') | Out-Null
+    Set-Content -Encoding ASCII -LiteralPath (Join-Path $crashSuite 'pass/test_reject.cpp') -Value @(
+        '// EXPECT_COMPILE_FAIL: 1', 'invalid source'
+    )
+    $fakeCompiler = Join-Path $fixtureRoot 'crash-compiler.cmd'
+    Set-Content -Encoding ASCII -LiteralPath $fakeCompiler -Value '@exit /b -1073741819'
+    $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Suite ($suite + '/crash') -CompilerPath $fakeCompiler 2>&1
+    if ($LASTEXITCODE -eq 0 -or ($output -join "`n") -notmatch 'compiler crashed') { throw ($output -join "`n") }
+    Write-Output 'PASS compiler crash cannot satisfy an expected compile failure'
 } finally {
     $env:CPRIME_TEST_BUILD_MANIFEST = $savedManifest
     $target = [IO.Path]::GetFullPath($fixtureRoot)

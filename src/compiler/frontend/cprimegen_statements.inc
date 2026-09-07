@@ -128,7 +128,6 @@ static void new_scope(struct scope *o)
 static void prev_scope(struct scope *o, int is_expr)
 {
   int keep_local_member_types = 0;
-  int pending_i;
 
   vla_leave(o->prev);
 
@@ -152,13 +151,7 @@ static void prev_scope(struct scope *o, int is_expr)
   /* A local class's lowered member helpers are emitted after the enclosing
      function body is complete.  Keep this scope's symbol storage alive until
      then, while still unlinking its names from ordinary lookup. */
-  for (pending_i = 0; pending_i < nb_pending_member_funcs; ++pending_i)
-    if (pending_member_funcs[pending_i]
-        && pending_member_funcs[pending_i]->is_local_class_member)
-    {
-      keep_local_member_types = 1;
-      break;
-    }
+  keep_local_member_types = nb_pending_local_members != 0;
 
   // Pop Locally Defined Symbols
   sym_pop(&local_stack, o->lstk, is_expr || keep_local_member_types);
@@ -244,6 +237,7 @@ static void skip_or_save_balanced_tokens(TokenString *dst)
 
 static void skip_or_save_statement_tokens(TokenString *dst, int nested)
 {
+statement_again:
   while (tok == TOK_LINENUM)
   {
     tok_str_add_tok(dst);
@@ -279,7 +273,8 @@ static void skip_or_save_statement_tokens(TokenString *dst, int nested)
     {
       tok_str_add_tok(dst);
       next();
-      skip_or_save_statement_tokens(dst, 1);
+      nested = 1;
+      goto statement_again;
     }
     return;
   }
@@ -476,6 +471,8 @@ static int try_parse_range_for(void)
   tok_str_add(range_expr, TOK_EOF);
   range_tok = range_expr->len == 2 ? range_expr->str[0] : 0;
   range_sym = sym_find(range_tok);
+  if (!range_sym) range_sym = find_lambda_static_symbol(range_tok);
+  if (range_sym) range_sym = lambda_capture_symbol(range_sym);
   is_array_range = range_sym && (range_sym->type.t & VT_ARRAY);
   array_count = is_array_range ? range_sym->type.ref->c : 0;
   if (range_sym)
@@ -771,6 +768,8 @@ again:
     cpp_eh_constructor_body();
   else if (t == TOK_IF)
   {
+    int end_chain = 0;
+if_chain:
     new_scope_s(&o);
     skip('(');
     gexpr_decl();
@@ -780,32 +779,45 @@ again:
     block(0);
     if (tok == TOK_ELSE)
     {
-      d = gjmp(0);
+      end_chain = gjmp(end_chain);
       gsym(a);
       next();
+      /* An else-if with no condition-scope declarations needs no suspended
+         parser frame. Thread its exit into the same jump list. Preserve the
+         recursive path when a declaration must remain visible in the else. */
+      if (tok == TOK_IF && local_stack == o.lstk
+          && nb_using_namespace_toks == o.using_namespace_count)
+      {
+        prev_scope_s(&o);
+        next();
+        if (debug_modes)
+          cprime_tcov_check_line(cprime_state, 0), cprime_tcov_block_begin(cprime_state);
+        goto if_chain;
+      }
       block(0);
-      gsym(d); // patch else jmp
     }
     else
       gsym(a);
+    gsym(end_chain);
     prev_scope_s(&o);
 
   }
   else if (t == TOK_WHILE)
   {
-    new_scope_s(&o);
+    new_scope(&o);
     d = gind();
     skip('(');
-    gexpr();
+    gexpr_decl();
     cpp_temp_end_condition(temporary_mark);
     a = gvtst(1, 0);
     skip(')');
     b = 0;
     lblock(&a, &b);
+    gsym(b);
+    try_call_scope_cleanup(o.prev->cl.s);
     gjmp_addr(d);
-    gsym_addr(b, d);
     gsym(a);
-    prev_scope_s(&o);
+    prev_scope(&o, 0);
 
   }
   else if (t == '{')
@@ -1377,6 +1389,7 @@ static void skip_or_save_block_ex(TokenString **str, int allow_eof)
   int angle = 0;
   int prev_sig = 0;
   int prev_prev_sig = 0;
+  int qualified_name = 0;
   if (str)
     *str = tok_str_alloc();
 
@@ -1405,6 +1418,7 @@ static void skip_or_save_block_ex(TokenString **str, int allow_eof)
             || (prev_sig >= TOK_UIDENT
                 && (find_template_def(prev_sig)
                     || find_template_def(find_current_namespace_tok(prev_sig))
+                    || (qualified_name && find_template_def(qualified_name))
                     || is_template_keyword_tok(prev_prev_sig)))))
       ++angle;
     else if ((t == TOK_SAR || t == TOK_SHR) && angle > 0)
@@ -1425,6 +1439,12 @@ static void skip_or_save_block_ex(TokenString **str, int allow_eof)
     }
     if (t != TOK_LINENUM && !TOK_HAS_VALUE(t))
     {
+      if (t >= TOK_UIDENT) {
+        if (prev_sig == ':' && prev_prev_sig == ':' && qualified_name) {
+          int parts[2] = { qualified_name, t };
+          qualified_name = find_namespace_tok_from_parts(parts, 2);
+        } else qualified_name = find_current_namespace_tok(t);
+      }
       prev_prev_sig = prev_sig;
       prev_sig = t;
     }

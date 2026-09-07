@@ -75,3 +75,13 @@ The label tests also query Windows' unwind lookup for native functions whose
 code and `.pdata$` contributions have different ordering and alignment. The
 final x64 exception directory must pack and sort runtime-function records by
 their relocated code addresses, including inputs combined with `-r`.
+
+## GCC C++ regressions
+
+`python Tests/gcc/run.py --fetch` downloads a pinned GCC testsuite checkout and
+runs the supported standalone checks serially. See [gcc/README.md](gcc/README.md)
+for selecting cases, collecting a full source survey, and the distinction
+between checked results and unverified GCC-specific expectations.
+
+The shared runner rejects abnormal compiler exits even for tests marked
+`EXPECT_COMPILE_FAIL`; crashing is never a successful diagnostic test.

@@ -1384,6 +1384,7 @@ static void parse_asm_operands(ASMOperand *operands, int *nb_operands_ptr,
 // parse the GCC asm() instruction
 ST_FUNC void asm_instr(void)
 {
+  x64_fast_disable();
   CString astr, *astr1;
 
   ASMOperand operands[MAX_ASM_OPERANDS];

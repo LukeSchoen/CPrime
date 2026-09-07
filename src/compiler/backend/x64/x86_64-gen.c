@@ -466,6 +466,8 @@ void load(int r, SValue *sv)
   int v, t, ft, fc, fr;
   SValue v1;
 
+  if (sv->type.t & VT_VOLATILE) x64_fast_disable();
+
   fr = sv->r;
   ft = sv->type.t & ~(VT_DEFSIGN | VT_RVALUE_REFERENCE);
   fc = sv->c.i;
@@ -746,6 +748,8 @@ int store_immediate(SValue *v, uint64_t value)
 {
   int fr, bt, ft, fc;
 
+  if (v->type.t & VT_VOLATILE) x64_fast_disable();
+
   fr = v->r & VT_VALMASK;
   ft = v->type.t & ~(VT_VOLATILE | VT_CONSTANT);
   bt = ft & VT_BTYPE;
@@ -795,6 +799,8 @@ void store(int r, SValue *v)
   int op64 = 0;
   // store the REX prefix in this variable when PIC is enabled
   int pic = 0;
+
+  if (v->type.t & VT_VOLATILE) x64_fast_disable();
 
   fr = v->r &VT_VALMASK;
   ft = v->type.t;
@@ -887,9 +893,12 @@ void store(int r, SValue *v)
 }
 
 // 'is_jmp' is '1' if it is a jump
+#include "x86_64-fastopt.inc"
+
 static void gcall_or_jmp(int is_jmp)
 {
   int r;
+  if (cprime_state->optimize && !is_jmp && x64_fast_inline_call()) return;
   if ((vtop->r & (VT_VALMASK | VT_LVAL)) == VT_CONST &&
       ((vtop->r & VT_SYM) && (vtop->c.i - 4) == (int)(vtop->c.i - 4)))
   {
@@ -1155,6 +1164,69 @@ static int gfunc_arg_size(CType *type)
   return type_size(type, &align);
 }
 
+static void x64_small_copy(int size)
+{
+  int offset = 0;
+  while (offset < size) {
+    int remaining = size - offset;
+    int width = remaining >= 8 ? 8 : remaining >= 4 ? 4 : remaining >= 2 ? 2 : 1;
+    if (width == 2) o(0x66);
+    if (width == 8) o(0x48);
+    o(width == 1 ? 0x8a : 0x8b);
+    o(0x42); g(offset);
+    if (width == 2) o(0x66);
+    if (width == 8) o(0x48);
+    o(width == 1 ? 0x88 : 0x89);
+    o(0x41); g(offset);
+    offset += width;
+  }
+}
+
+static int x64_small_memory_call(int nb_args)
+{
+  SValue *fn;
+  int size, name, offset;
+  uint64_t fill;
+  if (nb_args != 3 || !cprime_state->optimize || x86_64_asm_enabled()
+      || cprime_state->do_bounds_check || cprime_state->no_builtin) return 0;
+  fn = vtop - 3;
+  if ((fn->r & (VT_VALMASK | VT_LVAL | VT_SYM)) != (VT_CONST | VT_SYM)
+      || fn->c.i || !fn->sym || (fn->sym->type.t & VT_STATIC)) return 0;
+  name = fn->sym->v;
+  if (name != TOK_memcpy && name != TOK_memset) return 0;
+  if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) != VT_CONST
+      || vtop->c.i < 0 || vtop->c.i > 128) return 0;
+  if (name == TOK_memset
+      && (vtop[-1].r & (VT_VALMASK | VT_LVAL | VT_SYM)) != VT_CONST) return 0;
+  size = vtop->c.i;
+  fill = (unsigned char)vtop[-1].c.i;
+  save_regs(3);
+  vpop();
+  if (name == TOK_memcpy) {
+    gv2(RC_RCX, RC_RDX);
+    x64_small_copy(size);
+    vpop(); vpop();
+  } else {
+    vpop();
+    gv(RC_RCX);
+    fill *= UINT64_C(0x0101010101010101);
+    if (!fill) o(0xc031); /* xor eax,eax */
+    else { o(0xb848); gen_le64(fill); }
+    for (offset = 0; offset < size;) {
+      int n = size - offset;
+      int width = n >= 8 ? 8 : n >= 4 ? 4 : n >= 2 ? 2 : 1;
+      if (width == 2) o(0x66);
+      if (width == 8) o(0x48);
+      o(width == 1 ? 0x88 : 0x89); o(0x41); g(offset);
+      offset += width;
+    }
+    vpop();
+  }
+  o(0xc88948); /* return the original destination in rax */
+  vpop();
+  return 1;
+}
+
 void gfunc_call(int nb_args)
 {
   int size, r, args_size, i, d, bt, struct_size;
@@ -1162,6 +1234,8 @@ void gfunc_call(int nb_args)
   int is_alloca_call;
   Sym *argument_cleanup_stop = cur_scope ? cur_scope->cl.s : NULL;
   int argument_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
+
+  if (cprime_state->optimize && x64_small_memory_call(nb_args)) return;
 
   is_alloca_call = nb_args == 1
                    && (vtop[-nb_args].r & VT_SYM)
@@ -1413,10 +1487,18 @@ void gfunc_prolog(Sym *func_sym)
   func_ret_sub = 0;
   func_scratch = 32;
   func_alloca = 0;
-  loc = 0;
+  x64_fast_frame = cprime_state->optimize && !is_cpp_translation_unit()
+                   && !cprime_state->do_debug && !x86_64_asm_enabled() && !cprime_state->do_bounds_check;
+  x64_fast_saved = 0;
+  x64_fast_compacted = 0;
+  loc = x64_fast_frame ? -32 : 0;
+  x64_fast_sym = func_sym;
+  x64_fast_disabled = 0;
+  x64_fast_reloc_start = cur_text_section->reloc ? cur_text_section->reloc->data_offset : 0;
 
   addr = PTR_SIZE * 2;
   ind += FUNC_PROLOG_SIZE;
+  if (x64_fast_frame) ind += 16;
   func_sub_sp_offset = ind;
   reg_param_index = 0;
 
@@ -1513,7 +1595,24 @@ void gfunc_prolog(Sym *func_sym)
 // Generate Function Epilog
 void gfunc_epilog(void)
 {
-  int v, start;
+  int v, start, saved_reg;
+
+  if (cprime_state->optimize) x64_fast_optimize(func_sub_sp_offset, ind);
+  if (x64_fast_frame && x64_fast_compacted && !x64_fast_saved) {
+    Section *rs = cur_text_section->reloc;
+    /* No nonvolatile registers were needed. Remove their reserved prolog
+       space as part of the already validated, non-debug C compaction. */
+    memmove(cur_text_section->data + func_sub_sp_offset - 16,
+            cur_text_section->data + func_sub_sp_offset, ind - func_sub_sp_offset);
+    if (rs) {
+      ObjW_Rel *r, *end = (ObjW_Rel *)(rs->data + rs->data_offset);
+      for (r = (ObjW_Rel *)(rs->data + x64_fast_reloc_start); r < end; ++r)
+        if (r->r_offset >= func_sub_sp_offset && r->r_offset < ind) r->r_offset -= 16;
+    }
+    ind -= 16;
+    func_sub_sp_offset -= 16;
+    x64_fast_frame = 0;
+  }
 
   // Align Local Size To Word & Save Local Variables
   func_scratch = (func_scratch + 15) & -16;
@@ -1524,6 +1623,10 @@ void gfunc_epilog(void)
     gen_bounds_epilog();
 #endif
 
+  for (saved_reg = 0; saved_reg < 4; ++saved_reg)
+    if (x64_fast_saved & (1 << saved_reg)) {
+      o(0x8b4c); g(0x65 + saved_reg * 8); g(-8 * (saved_reg + 1));
+    }
   o(0xc9); // Leave
   x86_64_asm_body("leave");
   if (func_ret_sub == 0)
@@ -1549,9 +1652,9 @@ void gfunc_epilog(void)
   }
 
   v = -loc;
-  start = func_sub_sp_offset - FUNC_PROLOG_SIZE;
+  start = func_sub_sp_offset - FUNC_PROLOG_SIZE - (x64_fast_frame ? 16 : 0);
   cur_text_section->data_offset = ind;
-  pe_add_unwind_data(start, ind, v);
+  pe_add_unwind_data(start, ind, v, x64_fast_saved);
   x86_64_asm_func_finish(v);
 
   ind = start;
@@ -1568,6 +1671,16 @@ void gfunc_epilog(void)
     o(0xe5894855);  // Push %Rbp, Mov %Rsp, %Rbp
     o(0xec8148);  // Sub Rsp, Stacksize
     gen_le32(v);
+  }
+  if (x64_fast_frame) {
+    int remaining;
+    for (saved_reg = 0; saved_reg < 4; ++saved_reg)
+      if (x64_fast_saved & (1 << saved_reg)) {
+        o(0x894c); g(0x65 + saved_reg * 8); g(-8 * (saved_reg + 1));
+      }
+    remaining = func_sub_sp_offset - ind;
+    if (remaining >= 2) { g(0xeb); g(remaining - 2); remaining -= 2; }
+    while (remaining--) g(0x90);
   }
   ind = cur_text_section->data_offset;
 
@@ -2324,7 +2437,12 @@ gen_op8:
       r = gv(RC_INT);
       vswap();
       c = vtop->c.i;
-      if (c == (char)c)
+      if (cprime_state->optimize && c == 0 && opc == 7 && !x86_64_asm_enabled())
+      {
+        orex(ll, r, r, 0x85);
+        o(0xc0 | REG_VALUE(r) * 9);
+      }
+      else if (c == (char)c)
       {
         // XXX: generate inc and dec for smaller code ?
         orex(ll, r, 0, 0x83);
@@ -2402,6 +2520,16 @@ gen_op8:
     opc = 1;
     goto gen_op8;
   case '*':
+    if (cprime_state->optimize && cc && (!ll || (int)vtop->c.i == vtop->c.i)
+        && !x86_64_asm_enabled()) {
+      c = vtop->c.i;
+      vswap(); r = gv(RC_INT); vswap();
+      orex(ll, r, r, c == (signed char)c ? 0x6b : 0x69);
+      o(0xc0 | REG_VALUE(r) * 9);
+      if (c == (signed char)c) g(c); else gen_le32(c);
+      vtop--;
+      break;
+    }
     gv2(RC_INT, RC_INT);
     r = vtop[-1].r;
     fr = vtop[0].r;
@@ -2937,6 +3065,7 @@ ST_FUNC void ggoto(void)
 // Save the stack pointer onto the stack and return the location of its address
 ST_FUNC void gen_vla_sp_save(int addr)
 {
+  x64_fast_disable();
   // Mov %Rsp,Addr(%Rbp)
   gen_modrm64(0x89, TREG_RSP, VT_LOCAL, NULL, addr);
 }
@@ -2944,6 +3073,7 @@ ST_FUNC void gen_vla_sp_save(int addr)
 // Restore the SP from a location on the stack
 ST_FUNC void gen_vla_sp_restore(int addr)
 {
+  x64_fast_disable();
   gen_modrm64(0x8b, TREG_RSP, VT_LOCAL, NULL, addr);
 }
 
@@ -2994,6 +3124,17 @@ ST_FUNC void gen_vla_alloc(CType *type, int align)
 ST_FUNC void gen_struct_copy(int size)
 {
   int n = size / PTR_SIZE;
+#ifdef CPRIME_TARGET_PE
+  if (cprime_state->optimize && size <= 128 && !x86_64_asm_enabled()) {
+    /* Small fixed copies are common for frontend values. Avoid the string
+       engine startup and saving RSI/RDI for a handful of scalar moves. */
+    save_reg(TREG_RAX);
+    gv2(RC_RCX, RC_RDX);
+    x64_small_copy(size);
+    vpop(); vpop();
+    return;
+  }
+#endif
 #ifdef CPRIME_TARGET_PE
   o(0x5756); // Push Rsi, Rdi
 #endif

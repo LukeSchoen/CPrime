@@ -55,6 +55,19 @@ if not exist "%NEW_CPC%" (
   exit /b 1
 )
 
+rem The bootstrap above rebuilds the target runtime with CPrime. Optimize the
+rem compiler host itself so normal rebuilds retain its measured performance.
+if exist "%ROOT%\third-party\clang\bin\clang.exe" (
+  echo Building optimized CPrime compiler host.
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\BuildProfile\build-cpc-clang.ps1" -OutDir "%BUILD_DIR%"
+  if errorlevel 1 (
+    echo ERROR: Optimized compiler build failed. Current cpc.exe was not replaced.
+    exit /b 1
+  )
+  move /y "%BUILD_DIR%\cpc-clang.exe" "%NEW_CPC%" >nul
+  if errorlevel 1 exit /b 1
+)
+
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PACK_SCRIPT%" -ExePath "%NEW_CPC%" -RootPath "%ROOT%" -RuntimeLibPath "%RUNTIME_LIB%" -Profile "%CPC_PACK_PROFILE%"
 if errorlevel 1 (
   echo ERROR: Portable packaging failed.

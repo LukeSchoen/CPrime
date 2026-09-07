@@ -152,6 +152,8 @@ static int try_parse_cpp_member_pointer_owner(void)
       if (make_type_from_saved_type_tokens(&owner_type, owner)
           && (owner_type.t & VT_BTYPE) == VT_STRUCT)
         owner_tok = get_struct_type_name_tok(&owner_type);
+      /* Saved-type parsing consumes its token string. */
+      owner = NULL;
       if (!owner_tok)
         cprime_error("pointer-to-member declarator requires a class type");
       next();
@@ -160,7 +162,7 @@ static int try_parse_cpp_member_pointer_owner(void)
     tok_str_add(owner, ':');
     tok_str_add(owner, ':');
   }
-  tok_str_free(owner);
+  if (owner) tok_str_free(owner);
   if (owner_tok) tok_str_free(replay);
   else restore_cpp_lifecycle_probe(replay);
   return owner_tok;
@@ -230,6 +232,11 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
     }
   }
   mk_cpp_member_pointer(&member_type, class_tok);
+  if (NODATA_WANTED) {
+    vset(&member_type, VT_CONST | VT_LVAL, 0);
+    forming_cpp_member_address = 0;
+    return 1;
+  }
   location = section_add(data_section, sizeof(words), PTR_SIZE);
   memcpy(data_section->data + location, words, sizeof(words));
   if (function && !vm)

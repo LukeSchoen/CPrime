@@ -20,11 +20,13 @@ ST_DATA CString tokcstr; // current parsed string, if any
 // Display Benchmark Infos
 ST_DATA int tok_ident;
 ST_DATA TokenSym **table_ident;
+static unsigned table_ident_capacity;
 ST_DATA int pp_expr;
 
 // -------------------------------------------------------------------------
 
-static TokenSym *hash_ident[TOK_HASH_SIZE];
+static TokenSym **hash_ident;
+static unsigned hash_ident_size;
 static char token_buf[STRING_MAX_SIZE + 1];
 static CString cstr_buf;
 static TokenString tokstr_buf;
@@ -299,6 +301,7 @@ typedef struct TinyAlloc
 typedef struct tal_header_t
 {
   size_t  size; // Word Align
+  TinyAlloc *owner;
 #if TAL_DEBUG
   int     line_num; // negative line_num used for double free check
   char    file_name[40];
@@ -387,11 +390,10 @@ static void tal_free_impl(TinyAlloc **pal, void *p TAL_DEBUG_PARAMS)
   else
     header->line_num = -header->line_num;
 #endif
-  al = *pal;
-  while ((uint8_t * )p < al->buffer || (uint8_t * )p > al->bufend)
-    al = *(pal = &al->next);
+  al = header->owner;
   if (0 == --al->nb_allocs)
   {
+    while (*pal != al) pal = &(*pal)->next;
     *pal = al->next;
     if ((al->bufend - al->buffer) > al->size)
     {
@@ -419,9 +421,8 @@ static void *tal_realloc_impl(TinyAlloc **pal, void *p, unsigned size TAL_DEBUG_
   if (p)
   {
     // Reallpc Case
-    while ((uint8_t * )p < al->buffer || (uint8_t * )p > al->bufend)
-      al = al->next;
     header = (tal_header_t *)p - 1;
+    al = header->owner;
     if ((uint8_t * )p + header->size == al->p)
       al->p = (uint8_t * )header; // Maybe Reuse
     if (al->p + adj_size > al->bufend)
@@ -461,6 +462,7 @@ static void *tal_realloc_impl(TinyAlloc **pal, void *p, unsigned size TAL_DEBUG_
   }
   header = (tal_header_t *)al->p;
   header->size = adj_size - sizeof(tal_header_t);
+  header->owner = al;
   al->p += adj_size;
   ret = header + 1;
 #if  TAL_DEBUG
@@ -624,7 +626,7 @@ static void add_char(CString *cstr, int c)
 
 // -------------------------------------------------------------------------
 // Allocate A New Token
-static TokenSym *tok_alloc_new(TokenSym **pts, const char *str, int len)
+static TokenSym *tok_alloc_new(TokenSym **pts, const char *str, int len, unsigned hash)
 {
   TokenSym *ts, **ptable;
   int i;
@@ -634,9 +636,10 @@ static TokenSym *tok_alloc_new(TokenSym **pts, const char *str, int len)
 
   // expand token table if needed
   i = tok_ident - TOK_IDENT;
-  if ((i % TOK_ALLOC_INCR) == 0)
+  if ((unsigned)i == table_ident_capacity)
   {
-    ptable = cprime_realloc(table_ident, (i + TOK_ALLOC_INCR) * sizeof(TokenSym *));
+    table_ident_capacity = table_ident_capacity ? table_ident_capacity * 2 : TOK_ALLOC_INCR;
+    ptable = cprime_realloc(table_ident, table_ident_capacity * sizeof(TokenSym *));
     table_ident = ptable;
   }
 
@@ -648,15 +651,33 @@ static TokenSym *tok_alloc_new(TokenSym **pts, const char *str, int len)
   ts->sym_struct = NULL;
   ts->sym_identifier = NULL;
   ts->len = len;
+  ts->hash = hash;
   ts->hash_next = NULL;
   memcpy(ts->str, str, len);
   ts->str[len] = '\0';
   *pts = ts;
+  /* Keep identifier lookup proportional to the bucket load even in a
+     template-heavy unity translation unit. Token addresses stay stable. */
+  if ((unsigned)(tok_ident - TOK_IDENT) > hash_ident_size) {
+    unsigned bucket;
+    TokenSym **grown;
+    hash_ident_size *= 2;
+    grown = cprime_mallocz(hash_ident_size * sizeof(*grown));
+    for (i = 0; i < tok_ident - TOK_IDENT; ++i) {
+      TokenSym *entry = table_ident[i];
+      bucket = entry->hash & (hash_ident_size - 1);
+      entry->hash_next = grown[bucket];
+      grown[bucket] = entry;
+    }
+    cprime_free(hash_ident);
+    hash_ident = grown;
+  }
   return ts;
 }
 
 #define TOK_HASH_INIT 1
 #define TOK_HASH_FUNC(h, c) ((h) + ((h) << 5) + ((h) >> 27) + (c))
+
 
 
 // find a token and add it if not found
@@ -669,19 +690,17 @@ ST_FUNC TokenSym *tok_alloc(const char *str, int len)
   h = TOK_HASH_INIT;
   for (i = 0; i < len; i++)
     h = TOK_HASH_FUNC(h, ((unsigned char *)str)[i]);
-  h &= (TOK_HASH_SIZE - 1);
-
-  pts = &hash_ident[h];
+  pts = &hash_ident[h & (hash_ident_size - 1)];
   for (;;)
   {
     ts = *pts;
     if (!ts)
       break;
-    if (ts->len == len && !memcmp(ts->str, str, len))
+    if (ts->hash == h && ts->len == len && !memcmp(ts->str, str, len))
       return ts;
     pts = &(ts->hash_next);
   }
-  return tok_alloc_new(pts, str, len);
+  return tok_alloc_new(pts, str, len, h);
 }
 
 ST_FUNC int tok_alloc_const(const char *str)
@@ -698,6 +717,8 @@ ST_FUNC const char *get_tok_str(int v, CValue *cv)
   int i, len;
 
   cstr_reset(&cstr_buf);
+  if ((unsigned)(v - TOK_IDENT) < (unsigned)(tok_ident - TOK_IDENT))
+    return table_ident[v - TOK_IDENT]->str;
   p = cstr_buf.data;
 
   switch (v)
@@ -1339,6 +1360,9 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
     if (len + nb_words >= s->allocated_len)
       str = tok_str_realloc(s, len + nb_words + 1);
     str[len] = cv->str.size;
+    /* Saved-token signature hashes include payload words. Keep the unused
+       tail bytes independent of previous allocations and translation units. */
+    str[len + nb_words - 1] = 0;
     memcpy(&str[len + 1], cv->str.data, cv->str.size);
     len += nb_words;
   }
@@ -3349,18 +3373,17 @@ parse_ident_fast:
 
       /* fast case : no stray found, so we have the full token
          and we have already hashed it */
-      h &= (TOK_HASH_SIZE - 1);
-      pts = &hash_ident[h];
+      pts = &hash_ident[h & (hash_ident_size - 1)];
       for (;;)
       {
         ts = *pts;
         if (!ts)
           break;
-        if (ts->len == len && !memcmp(ts->str, p1, len))
+        if (ts->hash == h && ts->len == len && !memcmp(ts->str, p1, len))
           goto token_found;
         pts = &(ts->hash_next);
       }
-      ts = tok_alloc_new(pts, (char *) p1, len);
+      ts = tok_alloc_new(pts, (char *) p1, len, h);
 token_found: ;
     }
     else
@@ -4490,7 +4513,8 @@ ST_FUNC void cprimepp_new(CPRIMEState *s)
   tal_new(&toksym_alloc, TOKSYM_TAL_SIZE);
   tal_new(&tokstr_alloc, TOKSTR_TAL_SIZE);
 
-  memset(hash_ident, 0, TOK_HASH_SIZE *sizeof(TokenSym *));
+  hash_ident_size = TOK_HASH_SIZE;
+  hash_ident = cprime_mallocz(hash_ident_size * sizeof(*hash_ident));
   memset(s->cached_includes_hash, 0, sizeof s->cached_includes_hash);
 
   cstr_new(&tokcstr);
@@ -4543,6 +4567,7 @@ ST_FUNC void cprimepp_delete(CPRIMEState *s)
     tal_free(&toksym_alloc, table_ident[i]);
   cprime_free(table_ident);
   table_ident = NULL;
+  table_ident_capacity = 0;
 
   // Free Static Buffers
   cstr_free(&tokcstr);
@@ -4555,7 +4580,9 @@ ST_FUNC void cprimepp_delete(CPRIMEState *s)
   tal_delete(&tokstr_alloc);
 
   // Reset parser globals for the next translation unit.
-  memset(hash_ident, 0, sizeof hash_ident);
+  cprime_free(hash_ident);
+  hash_ident = NULL;
+  hash_ident_size = 0;
   file = NULL;
   macro_ptr = NULL;
   macro_stack = NULL;

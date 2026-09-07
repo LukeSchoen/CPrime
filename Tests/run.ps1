@@ -335,7 +335,10 @@ foreach ($test in $tests) {
     $ok = $true
     $reason = ""
 
-    if ($expectCompileFail) {
+    if ($compileExit -lt 0 -or $compileExit -gt 255) {
+        $ok = $false
+        $reason = "compiler crashed (exit $compileExit): $compileOutput"
+    } elseif ($expectCompileFail) {
         if ($compileExit -eq 0) {
             $ok = $false
             $reason = "expected compile failure but compilation succeeded"

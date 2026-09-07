@@ -3,12 +3,9 @@
    semantic fields instead of decoding that spelling. */
 static const CppMemberDeclInfo *lookup_cpp_member_decl(int function_tok)
 {
-  CppMemberDeclInfo *member;
   function_tok &= ~SYM_FIELD;
-  for (member = cpp_member_declarations[(unsigned)function_tok & 1023];
-       member; member = member->next)
-    if (member->function_tok == function_tok) return member;
-  return NULL;
+  return (unsigned)function_tok < cpp_member_declaration_capacity
+       ? cpp_member_declarations[function_tok] : NULL;
 }
 
 static CppMemberDeclInfo *note_cpp_member_decl(int owner_tok, int source_name_tok,
@@ -21,7 +18,16 @@ static CppMemberDeclInfo *note_cpp_member_decl(int owner_tok, int source_name_to
   unsigned bucket;
   function_tok &= ~SYM_FIELD;
   if (!owner_tok || !source_name_tok || !function_tok) return NULL;
-  bucket = (unsigned)function_tok & 1023;
+  bucket = (unsigned)function_tok;
+  if (bucket >= cpp_member_declaration_capacity) {
+    unsigned old = cpp_member_declaration_capacity;
+    cpp_member_declaration_capacity = old ? old : 1024;
+    while (bucket >= cpp_member_declaration_capacity) cpp_member_declaration_capacity *= 2;
+    cpp_member_declarations = cprime_realloc(cpp_member_declarations,
+      cpp_member_declaration_capacity * sizeof(*cpp_member_declarations));
+    memset(cpp_member_declarations + old, 0,
+      (cpp_member_declaration_capacity - old) * sizeof(*cpp_member_declarations));
+  }
   member = (CppMemberDeclInfo *)lookup_cpp_member_decl(function_tok);
   if (!member) {
     member = cprime_mallocz(sizeof(*member));
@@ -30,7 +36,6 @@ static CppMemberDeclInfo *note_cpp_member_decl(int owner_tok, int source_name_to
     member->source_name_tok = source_name_tok;
     owner = struct_find(owner_tok);
     member->access = owner && owner->a.is_class_tag ? 2 : 0;
-    member->next = cpp_member_declarations[bucket];
     cpp_member_declarations[bucket] = member;
     member->owner_next = cpp_member_owner_declarations[(unsigned)owner_tok & 1023];
     cpp_member_owner_declarations[(unsigned)owner_tok & 1023] = member;
@@ -101,14 +106,12 @@ static void note_cpp_template_member_decl(TemplateMemberDef *definition,
 static void free_cpp_member_declarations(void)
 {
   int bucket;
+  for (bucket = 0; bucket < cpp_member_declaration_capacity; ++bucket)
+    cprime_free(cpp_member_declarations[bucket]);
+  cprime_free(cpp_member_declarations);
+  cpp_member_declarations = NULL;
+  cpp_member_declaration_capacity = 0;
   for (bucket = 0; bucket < 1024; ++bucket) {
-    CppMemberDeclInfo *member = cpp_member_declarations[bucket];
-    while (member) {
-      CppMemberDeclInfo *next = member->next;
-      cprime_free(member);
-      member = next;
-    }
-    cpp_member_declarations[bucket] = NULL;
     cpp_member_owner_declarations[bucket] = NULL;
     {
       CppRecordDeclInfo *record = cpp_record_declarations[bucket];
@@ -146,6 +149,7 @@ static void note_cpp_record_decl(int type_tok, int source_name_tok,
   record->type_tok = type_tok;
   record->source_name_tok = source_name_tok;
   record->owner_tok = owner_tok == type_tok ? 0 : owner_tok;
+  record->lexical_owner_tok = record->owner_tok;
   record->namespace_tok = namespace_tok;
   record->next = cpp_record_declarations[bucket];
   cpp_record_declarations[bucket] = record;

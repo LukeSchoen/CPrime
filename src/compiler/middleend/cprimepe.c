@@ -2254,7 +2254,7 @@ static unsigned pe_add_cpp_unwind_info(CPRIMEState *s1)
   return offset;
 }
 
-ST_FUNC void pe_add_unwind_data(unsigned start, unsigned end, unsigned stack)
+ST_FUNC void pe_add_unwind_data(unsigned start, unsigned end, unsigned stack, unsigned saved)
 {
   CPRIMEState *s1 = cprime_state;
   Section *pd;
@@ -2267,6 +2267,26 @@ ST_FUNC void pe_add_unwind_data(unsigned start, unsigned end, unsigned stack)
   } *p;
 
   d = pe_add_uwwind_info(s1);
+  if (saved) {
+    unsigned char info[32];
+    int reg, count = 0, code = 4, off;
+    for (reg = 0; reg < 4; ++reg) if (saved & (1 << reg)) ++count;
+    memset(info, 0, sizeof(info));
+    info[0] = 1; info[1] = 11 + count * 4;
+    info[2] = count * 2 + 3;
+    off = info[1];
+    for (reg = 3; reg >= 0; --reg) if (saved & (1 << reg)) {
+      unsigned slot = (stack - 8 * (reg + 1)) / 8;
+      info[code++] = off; off -= 4;
+      info[code++] = 4 | ((reg + 12) << 4); /* UWOP_SAVE_NONVOL */
+      info[code++] = slot; info[code++] = slot >> 8;
+    }
+    info[code++] = 11; info[code++] = 1; /* UWOP_ALLOC_LARGE */
+    info[code++] = stack / 8; info[code++] = (stack / 8) >> 8;
+    info[code++] = 1; info[code++] = 0x50; /* UWOP_PUSH_NONVOL rbp */
+    d = section_add(text_section, (code + 3) & ~3, 4);
+    memcpy(text_section->data + d, info, (code + 3) & ~3);
+  }
   {
     unsigned cpp_info = pe_add_cpp_unwind_info(s1);
     if (cpp_info) d = cpp_info;

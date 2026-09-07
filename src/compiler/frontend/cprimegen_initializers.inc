@@ -1553,6 +1553,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
   Sym *ctor_func = NULL;
   int has_expr_struct_init, initialize_class_array;
   int initialize_nonlocal_vtables = 0;
+  int initialize_declared_constant = 0;
 
   Section *sec;
   Sym *flexible_array;
@@ -1586,7 +1587,10 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
     sym = sym_find(v);
     if (sym)
     {
+      initialize_declared_constant = !has_init && sym->a.integral_constexpr
+                                     && (sym->type.t & VT_EXTERN);
       patch_storage(sym, ad, type);
+      if (initialize_declared_constant) sym->r = r | VT_SYM;
       // We Accept Several Definitions Of The Same Global Variable.
       if (!has_init && sym->c && elfsym(sym)->st_shndx != SHN_UNDEF)
         return;
@@ -1903,6 +1907,14 @@ err_size:
     // For Possible Subsequent Similar Declarations
     if (flexible_array)
       flexible_array->type.ref->c = -1;
+  }
+
+  if (initialize_declared_constant) {
+    /* The initializer belongs to the in-class declaration; the definition
+       supplies its addressable storage without repeating that initializer. */
+    p.sec = sec;
+    vpush64(type->t & ~VT_STORAGE, sym->const_value);
+    init_putv(&p, type, addr);
   }
 
   /* Unreachable statements still require constructor argument parsing and

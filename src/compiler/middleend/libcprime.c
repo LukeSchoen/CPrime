@@ -2187,6 +2187,8 @@ static const FlagDef options_W[] =
 
 static const FlagDef options_f[] =
 {
+  { offsetof(CPRIMEState, no_builtin), FD_INVERT, "builtin" },
+  { offsetof(CPRIMEState, no_inline), FD_INVERT, "inline" },
   { offsetof(CPRIMEState, char_is_unsigned), 0, "unsigned-char" },
   { offsetof(CPRIMEState, char_is_unsigned), FD_INVERT, "signed-char" },
   { offsetof(CPRIMEState, nocommon), FD_INVERT, "common" },
@@ -2754,8 +2756,6 @@ PUB_FUNC void cprime_print_stats(CPRIMEState *s1, unsigned total_time)
   fprintf(stderr, " %d max (bytes)\n", mem_max_size);
 #endif
 }
-
-
 
 
 

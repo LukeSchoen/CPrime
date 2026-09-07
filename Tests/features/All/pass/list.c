@@ -1,4 +1,5 @@
 #include "list.h"
+#include <stdlib.h>
 
 template <typename T>
 List<T>::List()

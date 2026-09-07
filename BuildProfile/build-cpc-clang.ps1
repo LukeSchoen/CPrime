@@ -51,6 +51,7 @@ try {
         "-Dfdopen=_fdopen",
         "-Dgetcwd=_getcwd",
         "-Dstricmp=_stricmp",
+        "-Dstrnicmp=_strnicmp",
         "-Dstrlwr=_strlwr",
         "-Wno-pragma-pack",
         "-Wno-comment",
@@ -58,8 +59,7 @@ try {
         "-Wno-implicit-function-declaration",
         "-Wno-incompatible-library-redeclaration",
         "-Wno-deprecated-declarations",
-        "-MD",
-        "-O2",
+        "-O3",
         (Join-Path $rootDir "src\compiler\driver\cprime.c"),
         "-o",
         $exePath

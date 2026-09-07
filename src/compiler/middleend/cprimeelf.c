@@ -4296,6 +4296,8 @@ static int cprime_load_alacarte(CPRIMEState *s1, int fd, int size, int entrysize
       if (p >= (const char *)data + size
           || !memchr(p, 0, (const char *)data + size - p))
         goto invalid;
+      if (loaded[i])
+        continue;
       sym_index = find_elf_sym(s, p);
       if (!sym_index)
         continue;
@@ -4322,8 +4324,6 @@ static int cprime_load_alacarte(CPRIMEState *s1, int fd, int size, int entrysize
       }
 #endif
       off = get_be(ar_index + i *entrysize, entrysize);
-      if (loaded[i])
-        continue;
       /* Import members publish dynamic symbols, which remain undefined in
          the ordinary symbol table until PE imports are assigned. Extract
          each archive member once even when it exports several symbols. */

@@ -483,8 +483,14 @@ static int cprime_run_batch_file(const char *path)
     batch_split_args(&ba, trimmed);
     {
       int argc_job = ba.argc;
+      unsigned started = getclock_ms();
       dynarray_add(&ba.argv, &ba.argc, NULL);
+      fprintf(stderr, "# cprime batch start %d\n", job);
+      fflush(stderr);
       ret = cprime_run_job(argc_job, ba.argv);
+      fprintf(stderr, "# cprime batch end %d %d %u\n", job, ret,
+              getclock_ms() - started);
+      fflush(stderr);
     }
     batch_args_free(&ba);
     if (ret)

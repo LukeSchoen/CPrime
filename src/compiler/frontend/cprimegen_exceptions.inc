@@ -173,7 +173,7 @@ static void cpp_eh_collect_bases(int class_tok, int offset, int public_path,
                                 CppEhBaseEntry **entries, int *count)
 {
   ClassBaseInfo *base;
-  for (base = class_base_infos; base; base = base->next) {
+  for (base = class_base_candidates(class_tok); base; base = base->bucket_next) {
     int i, accessible;
     CppEhBaseEntry *entry;
     if (base->class_tok != class_tok || !base->field) continue;

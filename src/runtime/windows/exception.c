@@ -5,6 +5,7 @@
 #include <string.h>
 #include <stdint.h>
 #include "cprime_exception.h"
+#include "rtti.inc"
 
 void __cpc_eh_destroy_array(void *context)
 {

@@ -1,4 +1,5 @@
 // EXPECT_EXIT: 0
+// EXPECT_COMPILE_ARGS: -O2
 
 typedef unsigned int Uint32;
 typedef int Sint32;

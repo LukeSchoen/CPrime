@@ -12,6 +12,7 @@
 #endif
 
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 
@@ -42,9 +43,6 @@ extern long double strtold (const char *__nptr, char **__endptr);
 # include <io.h>
 # include <direct.h>
 # include <malloc.h>
-# ifndef _MSC_VER
-#  include <stdint.h>
-# endif
 # define inline __inline
 # ifndef __CPRIME_UCRT__
 # define snprintf _snprintf
@@ -302,6 +300,7 @@ typedef struct TokenSym {
     struct Sym *sym_identifier;
     int tok;
     int len;
+    unsigned hash;
     char str[1];
 } TokenSym;
 
@@ -388,6 +387,7 @@ struct FuncAttr {
     func_dtor   : 1,
     func_args   : 8,
     func_alwinl : 1,
+    func_noinline : 1,
     func_noexcept : 1,
     func_noexcept_specified : 1,
     func_cxx_destructor : 1,
@@ -398,7 +398,7 @@ struct FuncAttr {
     func_cpp_member : 1,
     func_ref_qualifier : 2,
     func_unresolved_template : 1,
-    xxxx        : 3;
+    xxxx        : 2;
 };
 
 typedef struct Sym {
@@ -618,6 +618,8 @@ struct CPRIMEState {
     unsigned char znodelete;
     unsigned char filetype;
     unsigned char optimize;
+    unsigned char no_builtin;
+    unsigned char no_inline;
     unsigned char option_pthread;
     unsigned char enable_new_dtags;
     unsigned int  cversion;
@@ -1289,6 +1291,8 @@ ST_DATA const char *funcname;
 
 ST_FUNC void cprimegen_init(CPRIMEState *s1);
 ST_FUNC int cprimegen_compile(CPRIMEState *s1);
+ST_FUNC void x64_fast_reset(void);
+ST_FUNC void x64_fast_disable(void);
 ST_FUNC void cprimegen_finish(CPRIMEState *s1);
 ST_FUNC void check_vstack(void);
 
@@ -1607,7 +1611,7 @@ ST_FUNC int pe_output_file(CPRIMEState * s1, const char *filename);
 ST_FUNC int pe_putimport(CPRIMEState *s1, int dllindex, const char *name, addr_t value);
 ST_FUNC int pe_setsubsy(CPRIMEState *s1, const char *arg);
 #ifdef CPRIME_TARGET_X86_64
-ST_FUNC void pe_add_unwind_data(unsigned start, unsigned end, unsigned stack);
+ST_FUNC void pe_add_unwind_data(unsigned start, unsigned end, unsigned stack, unsigned saved);
 #endif
 PUB_FUNC int cprime_get_dllexports(const char *filename, char **pp);
 

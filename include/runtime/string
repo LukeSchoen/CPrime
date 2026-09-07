@@ -48,6 +48,7 @@ public:
   basic_string& operator=(C c) { return assign(&c,1); }
   basic_string& operator=(const C* s) { return assign(s,Traits::length(s)); }
   basic_string& operator=(basic_string&& s) noexcept { if(this!=&s) { if(m_data) Alloc().deallocate(m_data,m_capacity+1); m_data=s.m_data; m_len=s.m_len; m_capacity=s.m_capacity; s.m_data=0; s.m_len=0; s.m_capacity=0; } return *this; }
+  void swap(basic_string& other) noexcept { std::swap(m_data,other.m_data);std::swap(m_len,other.m_len);std::swap(m_capacity,other.m_capacity); }
   size_t size() const { return m_len; }
   size_t length() const { return m_len; }
   size_t capacity() const { return m_capacity; }

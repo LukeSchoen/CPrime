@@ -207,7 +207,7 @@ static int member_order_deduces(MemberOrderPattern *pattern,
 static TemplateMemberDef *member_order_definition(int function_tok)
 {
   MemberFunctionScope *scope;
-  for (scope = member_function_scopes[(unsigned)function_tok & 1023];
+  for (scope = member_function_scopes[(unsigned)function_tok & (MEMBER_SCOPE_BUCKETS - 1)];
        scope; scope = scope->next)
     if (scope->function_tok == function_tok) return scope->template_definition;
   return NULL;

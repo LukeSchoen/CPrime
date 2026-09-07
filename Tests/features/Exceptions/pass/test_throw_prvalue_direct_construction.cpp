@@ -18,6 +18,6 @@ int main() {
     try { throw make_trivial(); }
     catch (const Trivial& error) { if (error.value != 151) return 3; }
     try { int flag = 1; int unused = flag ? throw codes::value : 0; }
-    catch (int code) { if (code != 157) return 4; }
+    catch (decltype(codes::value) code) { if (code != codes::value) return 4; }
     return 0;
 }

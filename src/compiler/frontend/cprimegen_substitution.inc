@@ -20,7 +20,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     int declarator_depth;
     int member_class, declaration_auto, declaration_typedef, declaration_decltype;
     int scope, deferred_members, binding_count, global_binding_count;
-    int unevaluated_depth, probe_depth;
+    int unevaluated_depth, probe_depth, standard_conversion_only;
     SValue values[1];
   } *saved = cprime_malloc(sizeof(*saved)
                            + (vtop - _vstack) * sizeof(SValue));
@@ -50,6 +50,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   saved->declaration_decltype = last_btype_was_decltype;
   saved->previous = cpp_substitution_jump;
   saved->probe_depth = cpp_template_probe_depth++;
+  saved->standard_conversion_only = cpp_standard_conversion_only;
   saved->unevaluated_depth = cpp_unevaluated_expression_depth;
   saved->lambda = lambda_probe;
   saved->construction = cpp_construction_destination;
@@ -209,6 +210,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   }
   cpp_substitution_jump = saved->previous;
   cpp_template_probe_depth = saved->probe_depth;
+  cpp_standard_conversion_only = saved->standard_conversion_only;
   cpp_unevaluated_expression_depth = saved->unevaluated_depth;
   lambda_probe = saved->lambda;
   cpp_construction_destination = saved->construction;
@@ -454,13 +456,4 @@ static int template_return_substitution_matches_bound(TemplateDef *definition,
   valid = template_probe_type(tokens, 0, definition->namespace_tok, &result);
   tok_str_free(tokens);
   return valid;
-}
-
-static int template_return_substitution_matches(TemplateDef *definition,
-                                                CType *arguments, int count)
-{
-  TemplateArgList bindings;
-  if (!infer_template_args_from_call(definition, arguments, count, &bindings))
-    return 0;
-  return template_return_substitution_matches_bound(definition, &bindings);
 }

@@ -1,0 +1,494 @@
+{
+  "baseline": {
+    "source_metadata": {
+      "revision": "5f6257c26b814de1a14c71b2d3a49291765b6577",
+      "compiler": "C:\\Luke\\Src\\CPrime\\cpc.exe",
+      "compiler_sha256": "8357a110252f622836c34a38c5bce16beb0608d2aca2d68efba7cc9329092fd5",
+      "selected": 26451,
+      "serial": true,
+      "probe": true,
+      "note": "CPC default language mode; no claim of GCC diagnostic or standard-mode conformance"
+    },
+    "cpp_statuses": {
+      "PROBE_ACCEPTED": 7477,
+      "PROBE_REJECTED": 11242,
+      "CRASH": 156,
+      "FAIL_COMPILE": 1324,
+      "PASS_RUN": 566,
+      "PASS_COMPILE": 1278,
+      "FAIL_RUN": 106,
+      "PASS_ASSEMBLE": 811,
+      "PASS_LINK": 69,
+      "TIMEOUT": 5,
+      "PASS_PREPROCESS": 1
+    },
+    "all_source_statuses": {
+      "PROBE_ACCEPTED": 9633,
+      "PROBE_REJECTED": 12095,
+      "FAIL_COMPILE": 1461,
+      "PASS_COMPILE": 1509,
+      "PASS_RUN": 590,
+      "FAIL_RUN": 109,
+      "CRASH": 160,
+      "PASS_PREPROCESS": 9,
+      "PASS_ASSEMBLE": 811,
+      "PASS_LINK": 69,
+      "TIMEOUT": 5
+    }
+  },
+  "after": {
+    "source_metadata": {
+      "revision": "5f6257c26b814de1a14c71b2d3a49291765b6577",
+      "compiler": "C:\\Luke\\Src\\CPrime\\build\\gcc-stage1.exe",
+      "compiler_sha256": "907d689986ca3a18b90938386f86c71813ad0ae13dfef84ab2c48bf025346069",
+      "selected": 26451,
+      "serial": true,
+      "probe": true,
+      "note": "CPC default language mode; no claim of GCC diagnostic or standard-mode conformance"
+    },
+    "cpp_statuses": {
+      "PROBE_ACCEPTED": 7538,
+      "PROBE_REJECTED": 11181,
+      "PASS_COMPILE": 1293,
+      "PASS_RUN": 569,
+      "FAIL_RUN": 106,
+      "FAIL_COMPILE": 1313,
+      "PASS_ASSEMBLE": 816,
+      "PASS_LINK": 69,
+      "CRASH": 144,
+      "TIMEOUT": 5,
+      "PASS_PREPROCESS": 1
+    },
+    "all_source_statuses": {
+      "PROBE_ACCEPTED": 9694,
+      "PROBE_REJECTED": 12034,
+      "FAIL_COMPILE": 1450,
+      "PASS_COMPILE": 1524,
+      "PASS_RUN": 593,
+      "FAIL_RUN": 109,
+      "CRASH": 148,
+      "PASS_PREPROCESS": 9,
+      "PASS_ASSEMBLE": 816,
+      "PASS_LINK": 69,
+      "TIMEOUT": 5
+    }
+  },
+  "fixed_cases": [
+    {
+      "path": "g++.dg/abi/abi-tag15.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/conversion/op7.C",
+      "before": "CRASH",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/expr/bitfield2.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/expr/static_cast1.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/expr/static_cast4.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/ext/tmplattr7.C",
+      "before": "CRASH",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/init/bitfield4.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/init/new3.C",
+      "before": "CRASH",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/init/new4.C",
+      "before": "CRASH",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/lookup/struct-hack1.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/opt/pr88478.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/parse/stack1.C",
+      "before": "CRASH",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/parse/union4.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/pr77812.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.dg/tc1/dr74.C",
+      "before": "CRASH",
+      "after": "PASS_COMPILE"
+    },
+    {
+      "path": "g++.old-deja/g++.jason/ref10.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_RUN"
+    },
+    {
+      "path": "g++.old-deja/g++.jason/scoping9.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_ASSEMBLE"
+    },
+    {
+      "path": "g++.old-deja/g++.jason/this.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_ASSEMBLE"
+    },
+    {
+      "path": "g++.old-deja/g++.law/arm10.C",
+      "before": "CRASH",
+      "after": "PASS_ASSEMBLE"
+    },
+    {
+      "path": "g++.old-deja/g++.law/array1.C",
+      "before": "CRASH",
+      "after": "PASS_RUN"
+    },
+    {
+      "path": "g++.old-deja/g++.law/ctors8.C",
+      "before": "CRASH",
+      "after": "PASS_RUN"
+    },
+    {
+      "path": "g++.old-deja/g++.other/array4.C",
+      "before": "CRASH",
+      "after": "PASS_ASSEMBLE"
+    },
+    {
+      "path": "g++.old-deja/g++.pt/mangle1.C",
+      "before": "FAIL_COMPILE",
+      "after": "PASS_ASSEMBLE"
+    }
+  ],
+  "regressions": [],
+  "scope_note": "Standalone CPC default-mode assessment, not full DejaGnu conformance; PROBE outcomes do not count as passes. C++ totals exclude shared C/C++ source trees.",
+  "final_verification": {
+    "bootstrap_code_sha256": "129e7bc59e8eeda672324e9e0b7db69002615d0f728752f9fc0850fbbbecb649",
+    "binaries": {
+      "C:\\Luke\\Src\\CPrime\\cpc.exe": {
+        "bytes": 2613442,
+        "sha256": "5d04a8446955d3181856c0a274056785244911f40530874ea190657d0f3e006a"
+      },
+      "C:\\Luke\\Src\\CPrime\\build\\cpc-selfhost.exe": {
+        "bytes": 2222274,
+        "sha256": "8d582c77d7e57829bba160146a0080780a77c288ba8bebbc854f1eddaa988f21"
+      }
+    },
+    "cpc_tests_per_host": {
+      "passed": 1164,
+      "failed": 0
+    },
+    "gcc_fixed_cases_per_host": {
+      "passed": 23,
+      "failed": 0
+    },
+    "hosts": [
+      "Clang -O3",
+      "CPC -O2 self-host"
+    ],
+    "otserv": [
+      {
+        "host": "clang",
+        "seconds": 14.66467840000405,
+        "machine_code": {
+          "source_0000.obj": "31bd32cc776ece1d2b9bb1903eedb206616e7b369cb160e21bd8e1763f490b9c",
+          "source_0035.obj": "a7d599151bc7ae1a80ebb2d8cc168bf33aac04f59a061ce8d8bc3f47ad359338",
+          "source_0073.obj": "5a337b010933ed40db54c21ed496ffc27036f223e6b34e53b580535f79e559fb",
+          "source_0004.obj": "9c185316adbf4e99cf549c59a6d8216e01c68f14ab379bd7218410b2ebd5d6cf",
+          "source_0006.obj": "0ee0e61a5e47955729d2c8aad185ffc7d3da8731ad3980873d70187a11213341",
+          "source_0007.obj": "306458901f53d1c0ee55807635927887c4548a1f7db8ae11d00d5fd11c6d2cad",
+          "source_0060.obj": "d04dcf7b39162e06bd011ae32c6f6919d6a2f9bbea40d615c5c182c9172cc30b",
+          "source_0062.obj": "1e5626e12aeef6981c781009bfc2b4894d09299a4eb8befb6dd0681c4040fbc8",
+          "source_0064.obj": "b8d2ad2ef883a14298fbc1f2e5afde223b2fc7a9edf3cddbbcb304dc5ded947a",
+          "source_0065.obj": "bbf779d8e1cb22a360349fdb1caf91aa2b4810fb2de1921501c077a84bd321f8",
+          "source_0066.obj": "bb4678112d3f7e3594eb1e929b9f1cdd04d74c606c448edbdcc995eb2c6afe01",
+          "source_0067.obj": "cd028eb4e32b7109659844dfa7da2322a34f6ea2fff705d1720d42b8f10f2393",
+          "source_0075.obj": "ba297d3baf180d0549ccb4b130db29cfbdbb28842c476c69c80a447283c0188d",
+          "source_0108.obj": "b2b93125fac7b8c94f5e74c1dde7e60713e02997646601eb1b0eb5ff6cb85d50",
+          "source_0141.obj": "9fe39c9bf3a379423e7cc0ebb3eeb7db841e6cf0fc15dd7b562219c9d0ebc4d6",
+          "source_0173.obj": "81d5d29974f54d0cc50470ba12b497d8baa8798961ffef42c8223f2ed92d962f",
+          "source_0205.obj": "9f9320fbe7b64ec8c9f02957c2d8a5873bdc456a3d50e471bdd6a30de30b44e4",
+          "source_0092.obj": "24f0f35f6980dd93b60f379349d60480a43f87bf51dafba9c3528a4aeb11d8b1",
+          "source_0115.obj": "8840b06f62de2690bc4a46ac5a19b3b1f4409283c02b58db59119aed3e91c4f8"
+        },
+        "metrics": {
+          "Compiler": "C:\\Luke\\Src\\CPrime\\cpc.exe",
+          "Configuration": "Debug",
+          "Jobs": 1,
+          "Sources": 215,
+          "TranslationUnits": 19,
+          "Unity": true,
+          "BuildSeconds": 13.7619534,
+          "CompilerSeconds": 12.799218099999997,
+          "ResourceSeconds": 0.11768319999999999,
+          "DriverSeconds": 0.8451621000000015,
+          "Processes": [
+            {
+              "Label": "compile_batch_0000",
+              "Kind": "compiler",
+              "Seconds": 8.0722197,
+              "CpuSeconds": 8.046875
+            },
+            {
+              "Label": "compile_batch_0001",
+              "Kind": "compiler",
+              "Seconds": 4.1695611999999995,
+              "CpuSeconds": 4.140625
+            },
+            {
+              "Label": "project_0000_resource_0",
+              "Kind": "resource",
+              "Seconds": 0.0931914,
+              "CpuSeconds": 0.09375
+            },
+            {
+              "Label": "project_0001_archive",
+              "Kind": "compiler",
+              "Seconds": 0.0397763,
+              "CpuSeconds": 0.03125
+            },
+            {
+              "Label": "linked_resources",
+              "Kind": "resource",
+              "Seconds": 0.024491799999999998,
+              "CpuSeconds": 0
+            },
+            {
+              "Label": "link",
+              "Kind": "compiler",
+              "Seconds": 0.5176609,
+              "CpuSeconds": 0.484375
+            }
+          ]
+        }
+      },
+      {
+        "host": "selfhost",
+        "seconds": 22.16674139999668,
+        "machine_code": {
+          "source_0000.obj": "31bd32cc776ece1d2b9bb1903eedb206616e7b369cb160e21bd8e1763f490b9c",
+          "source_0035.obj": "a7d599151bc7ae1a80ebb2d8cc168bf33aac04f59a061ce8d8bc3f47ad359338",
+          "source_0073.obj": "5a337b010933ed40db54c21ed496ffc27036f223e6b34e53b580535f79e559fb",
+          "source_0004.obj": "9c185316adbf4e99cf549c59a6d8216e01c68f14ab379bd7218410b2ebd5d6cf",
+          "source_0006.obj": "0ee0e61a5e47955729d2c8aad185ffc7d3da8731ad3980873d70187a11213341",
+          "source_0007.obj": "306458901f53d1c0ee55807635927887c4548a1f7db8ae11d00d5fd11c6d2cad",
+          "source_0060.obj": "d04dcf7b39162e06bd011ae32c6f6919d6a2f9bbea40d615c5c182c9172cc30b",
+          "source_0062.obj": "1e5626e12aeef6981c781009bfc2b4894d09299a4eb8befb6dd0681c4040fbc8",
+          "source_0064.obj": "b8d2ad2ef883a14298fbc1f2e5afde223b2fc7a9edf3cddbbcb304dc5ded947a",
+          "source_0065.obj": "bbf779d8e1cb22a360349fdb1caf91aa2b4810fb2de1921501c077a84bd321f8",
+          "source_0066.obj": "bb4678112d3f7e3594eb1e929b9f1cdd04d74c606c448edbdcc995eb2c6afe01",
+          "source_0067.obj": "cd028eb4e32b7109659844dfa7da2322a34f6ea2fff705d1720d42b8f10f2393",
+          "source_0075.obj": "ba297d3baf180d0549ccb4b130db29cfbdbb28842c476c69c80a447283c0188d",
+          "source_0108.obj": "b2b93125fac7b8c94f5e74c1dde7e60713e02997646601eb1b0eb5ff6cb85d50",
+          "source_0141.obj": "9fe39c9bf3a379423e7cc0ebb3eeb7db841e6cf0fc15dd7b562219c9d0ebc4d6",
+          "source_0173.obj": "81d5d29974f54d0cc50470ba12b497d8baa8798961ffef42c8223f2ed92d962f",
+          "source_0205.obj": "9f9320fbe7b64ec8c9f02957c2d8a5873bdc456a3d50e471bdd6a30de30b44e4",
+          "source_0092.obj": "24f0f35f6980dd93b60f379349d60480a43f87bf51dafba9c3528a4aeb11d8b1",
+          "source_0115.obj": "8840b06f62de2690bc4a46ac5a19b3b1f4409283c02b58db59119aed3e91c4f8"
+        },
+        "metrics": {
+          "Compiler": "C:\\Luke\\Src\\OT\\intermediate\\prime\\selfhost-root\\cpc.exe",
+          "Configuration": "Debug",
+          "Jobs": 1,
+          "Sources": 215,
+          "TranslationUnits": 19,
+          "Unity": true,
+          "BuildSeconds": 21.3051669,
+          "CompilerSeconds": 20.363079499999998,
+          "ResourceSeconds": 0.1105398,
+          "DriverSeconds": 0.8316705000000029,
+          "Processes": [
+            {
+              "Label": "compile_batch_0000",
+              "Kind": "compiler",
+              "Seconds": 12.952511099999999,
+              "CpuSeconds": 12.96875
+            },
+            {
+              "Label": "compile_batch_0001",
+              "Kind": "compiler",
+              "Seconds": 6.767133899999999,
+              "CpuSeconds": 6.75
+            },
+            {
+              "Label": "project_0000_resource_0",
+              "Kind": "resource",
+              "Seconds": 0.0891973,
+              "CpuSeconds": 0.0625
+            },
+            {
+              "Label": "project_0001_archive",
+              "Kind": "compiler",
+              "Seconds": 0.0388362,
+              "CpuSeconds": 0.046875
+            },
+            {
+              "Label": "linked_resources",
+              "Kind": "resource",
+              "Seconds": 0.0213425,
+              "CpuSeconds": 0.015625
+            },
+            {
+              "Label": "link",
+              "Kind": "compiler",
+              "Seconds": 0.6045982999999999,
+              "CpuSeconds": 0.578125
+            }
+          ]
+        }
+      }
+    ],
+    "otserv_executable": "C:/Luke/Src/OT/cl/builds/OTServ_prime.exe",
+    "otserv_runtime_tested": false,
+    "historical_selfhost_comparison": [
+      {
+        "host": "new",
+        "seconds": 25.994911600006162
+      },
+      {
+        "host": "old",
+        "seconds": 23.982200800004648
+      }
+    ],
+    "final_adjacent_selfhost_comparison": [
+      {
+        "host": "previous",
+        "seconds": 22.009180299995933,
+        "metrics": {
+          "Compiler": "C:\\Luke\\Src\\OT\\intermediate\\prime\\selfhost-root\\cpc.exe",
+          "Configuration": "Debug",
+          "Jobs": 1,
+          "Sources": 215,
+          "TranslationUnits": 19,
+          "Unity": true,
+          "BuildSeconds": 21.1188622,
+          "CompilerSeconds": 20.233521699999997,
+          "ResourceSeconds": 0.11735209999999999,
+          "DriverSeconds": 0.7681211000000034,
+          "Processes": [
+            {
+              "Label": "compile_batch_0000",
+              "Kind": "compiler",
+              "Seconds": 12.863909,
+              "CpuSeconds": 12.84375
+            },
+            {
+              "Label": "compile_batch_0001",
+              "Kind": "compiler",
+              "Seconds": 6.7241409999999995,
+              "CpuSeconds": 6.703125
+            },
+            {
+              "Label": "project_0000_resource_0",
+              "Kind": "resource",
+              "Seconds": 0.09102729999999999,
+              "CpuSeconds": 0.078125
+            },
+            {
+              "Label": "project_0001_archive",
+              "Kind": "compiler",
+              "Seconds": 0.037737599999999996,
+              "CpuSeconds": 0.015625
+            },
+            {
+              "Label": "linked_resources",
+              "Kind": "resource",
+              "Seconds": 0.0263248,
+              "CpuSeconds": 0.015625
+            },
+            {
+              "Label": "link",
+              "Kind": "compiler",
+              "Seconds": 0.6077340999999999,
+              "CpuSeconds": 0.609375
+            }
+          ]
+        }
+      },
+      {
+        "host": "updated",
+        "seconds": 22.223551100003533,
+        "metrics": {
+          "Compiler": "C:\\Luke\\Src\\OT\\intermediate\\prime\\selfhost-root\\cpc.exe",
+          "Configuration": "Debug",
+          "Jobs": 1,
+          "Sources": 215,
+          "TranslationUnits": 19,
+          "Unity": true,
+          "BuildSeconds": 21.3535102,
+          "CompilerSeconds": 20.380788600000002,
+          "ResourceSeconds": 0.1127936,
+          "DriverSeconds": 0.8600605999999968,
+          "Processes": [
+            {
+              "Label": "compile_batch_0000",
+              "Kind": "compiler",
+              "Seconds": 12.9519127,
+              "CpuSeconds": 12.96875
+            },
+            {
+              "Label": "compile_batch_0001",
+              "Kind": "compiler",
+              "Seconds": 6.783671699999999,
+              "CpuSeconds": 6.75
+            },
+            {
+              "Label": "project_0000_resource_0",
+              "Kind": "resource",
+              "Seconds": 0.09226849999999999,
+              "CpuSeconds": 0.09375
+            },
+            {
+              "Label": "project_0001_archive",
+              "Kind": "compiler",
+              "Seconds": 0.036302799999999996,
+              "CpuSeconds": 0.015625
+            },
+            {
+              "Label": "linked_resources",
+              "Kind": "resource",
+              "Seconds": 0.020525099999999998,
+              "CpuSeconds": 0
+            },
+            {
+              "Label": "link",
+              "Kind": "compiler",
+              "Seconds": 0.6089013999999999,
+              "CpuSeconds": 0.59375
+            }
+          ]
+        }
+      }
+    ]
+  }
+}
