@@ -36,89 +36,6 @@ static int pp_debug_tok, pp_debug_symv;
 static int pp_counter;
 static void tok_print(const int *str, const char *msg, ...);
 
-/* Frontend diagnostics are controlled by environment variables, and many of
-   their guards live in token/expression hot paths.  The environment is fixed
-   for a compiler process, so querying the CRT more than once per name is pure
-   overhead.  Keep this deliberately small and allocation-free. */
-#define CPRIME_ENV_CACHE_SIZE 64
-#define CPRIME_ENV_CALLSITE_CACHE_SIZE 256
-typedef struct CPrimeEnvCacheEntry
-{
-  const char *name;
-  const char *value;
-} CPrimeEnvCacheEntry;
-static CPrimeEnvCacheEntry cprime_env_cache[CPRIME_ENV_CACHE_SIZE];
-static CPrimeEnvCacheEntry
-  cprime_env_callsite_cache[CPRIME_ENV_CALLSITE_CACHE_SIZE];
-
-static const char *cprime_cached_getenv_name(const char *name)
-{
-  unsigned hash = 2166136261u;
-  unsigned slot, start;
-  const unsigned char *p;
-  const char *value;
-
-  for (p = (const unsigned char *)name; *p; ++p)
-    hash = (hash ^ *p) * 16777619u;
-  start = slot = hash & (CPRIME_ENV_CACHE_SIZE - 1);
-  do
-  {
-    CPrimeEnvCacheEntry *entry = &cprime_env_cache[slot];
-    if (!entry->name)
-    {
-      value = getenv(name);
-      entry->name = name;
-      entry->value = value;
-      return value;
-    }
-    if (entry->name == name || !strcmp(entry->name, name))
-      return entry->value;
-    slot = (slot + 1) & (CPRIME_ENV_CACHE_SIZE - 1);
-  }
-  while (slot != start);
-  return getenv(name);
-}
-
-static const char *cprime_cached_getenv(const char *name)
-{
-  size_t key = (size_t)name;
-  unsigned slot = (unsigned)((key >> 4) ^ (key >> 12))
-                  & (CPRIME_ENV_CALLSITE_CACHE_SIZE - 1);
-  unsigned start = slot;
-
-  do
-  {
-    CPrimeEnvCacheEntry *entry = &cprime_env_callsite_cache[slot];
-    if (entry->name == name)
-      return entry->value;
-    if (!entry->name)
-    {
-      entry->name = name;
-      entry->value = cprime_cached_getenv_name(name);
-      return entry->value;
-    }
-    slot = (slot + 1) & (CPRIME_ENV_CALLSITE_CACHE_SIZE - 1);
-  }
-  while (slot != start);
-  return cprime_cached_getenv_name(name);
-}
-
-#ifdef __TINYC__
-/* CPC supports GNU statement expressions.  Give every diagnostic guard its
-   own two-word cache in self-hosted builds, so the disabled steady-state path
-   is one branch and one load rather than a function call and hash probe. */
-#define getenv(name)                                                       \
-  ({ static const char *cprime_env_value;                                  \
-     static unsigned char cprime_env_initialized;                          \
-     if (!cprime_env_initialized)                                          \
-     {                                                                     \
-       cprime_env_value = cprime_cached_getenv_name(name);                 \
-       cprime_env_initialized = 1;                                         \
-     }                                                                     \
-     cprime_env_value; })
-#else
-#define getenv(name) cprime_cached_getenv(name)
-#endif
 static void next_nomacro(void);
 static void parse_number(const char *p);
 static void parse_string(const char *p, int len);
@@ -190,32 +107,6 @@ ST_FUNC void skip(int c)
   if (tok != c)
   {
     char tmp[40];
-    if (getenv("CPC_TRACE_EXPECT"))
-    {
-      int mi = macro_stack && macro_ptr
-                 ? (int)(macro_ptr - macro_stack->str) : -1;
-      fprintf(stderr, "CPC_EXPECT func=%s expected=%s got=%s macro=%p\n",
-              funcname ? funcname : "<none>", get_tok_str(c, &tokc),
-              get_tok_str(tok, &tokc), (void *)macro_stack);
-      if (macro_stack && mi >= 0)
-      {
-        int i, begin = mi > 5 ? mi - 5 : 0;
-        fprintf(stderr, "CPC_EXPECT_CONTEXT index=%d toks=", mi);
-        for (i = begin; i < macro_stack->len && i < mi + 6; ++i)
-        {
-          if (TOK_HAS_VALUE(macro_stack->str[i]))
-          {
-            fprintf(stderr, "%s<value>", i == begin ? "" : " ");
-            i += tok_str_value_extra_words(macro_stack->str,
-                                           macro_stack->len, i);
-            continue;
-          }
-          fprintf(stderr, "%s%s", i == begin ? "" : " ",
-                  get_tok_str(macro_stack->str[i], NULL));
-        }
-        fprintf(stderr, "\n");
-      }
-    }
     pstrcpy(tmp, sizeof tmp, get_tok_str(c, &tokc));
     cprime_error("'%s' expected (got '%s')", tmp, get_tok_str(tok, &tokc));
   }
@@ -224,32 +115,6 @@ ST_FUNC void skip(int c)
 
 ST_FUNC void expect(const char *msg)
 {
-  if (getenv("CPC_TRACE_EXPECT"))
-  {
-    int mi = macro_stack && macro_ptr
-               ? (int)(macro_ptr - macro_stack->str) : -1;
-    fprintf(stderr, "CPC_EXPECT func=%s expected=%s got=%s macro=%p\n",
-            funcname ? funcname : "<none>", msg,
-            get_tok_str(tok, &tokc), (void *)macro_stack);
-    if (macro_stack && mi >= 0)
-    {
-      int i, begin = mi > 8 ? mi - 8 : 0;
-      fprintf(stderr, "CPC_EXPECT_CONTEXT index=%d toks=", mi);
-      for (i = begin; i < macro_stack->len && i < mi + 9; ++i)
-      {
-        if (TOK_HAS_VALUE(macro_stack->str[i]))
-        {
-          fprintf(stderr, "%s<value>", i == begin ? "" : " ");
-          i += tok_str_value_extra_words(macro_stack->str,
-                                         macro_stack->len, i);
-          continue;
-        }
-        fprintf(stderr, "%s%s", i == begin ? "" : " ",
-                get_tok_str(macro_stack->str[i], NULL));
-      }
-      fprintf(stderr, "\n");
-    }
-  }
   cprime_error("%s expected", msg);
 }
 

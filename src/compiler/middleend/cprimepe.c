@@ -2611,6 +2611,19 @@ ST_FUNC int pe_output_file(CPRIMEState *s1, const char *filename)
 #ifdef CPRIME_TARGET_X86_64
       pe_finish_exception_directory(&pe);
 #endif
+      if (0 == s1->nb_errors && s1->mapfile) {
+        FILE *map = fopen(s1->mapfile, "w");
+        if (!map) cprime_error_noabort("cannot open linker map '%s'", s1->mapfile);
+        else {
+          ObjW(Sym) *symbol;
+          for (symbol = (ObjW(Sym) *)s1->symtab->data + 1;
+               symbol < (ObjW(Sym) *)(s1->symtab->data + s1->symtab->data_offset); ++symbol)
+            if (symbol->st_shndx != SHN_UNDEF && symbol->st_name)
+              fprintf(map, "%016llx %s\n", (unsigned long long)symbol->st_value,
+                      (char *)s1->symtab->link->data + symbol->st_name);
+          if (fclose(map)) cprime_error_noabort("cannot write linker map '%s'", s1->mapfile);
+        }
+      }
       if (0 == s1->nb_errors)
         pe_write(&pe);
     }

@@ -38,7 +38,7 @@ int main() { return helper() != 42; }
     Set-Content -Encoding ASCII -LiteralPath (Join-Path $pass 'helper with spaces.cpp') -Value 'int helper() { return 42; }'
     $manifestPath = Join-Path $fixtureRoot 'manifest with spaces.json'
     $manifest = @{
-        generator = 'CodeClip'; schemaVersion = 2; platform = 'x64'; projectRoot = $fixtureRoot
+        generator = 'Fixture'; schemaVersion = 2; platform = 'x64'; projectRoot = $fixtureRoot
         projects = @(@{
             name = 'fixture'; directory = $fixtureRoot
             includeDirectories = @('missing-project-includes'); defines = @('PROJECT_ONLY=1')
@@ -61,7 +61,7 @@ int main() { return helper() != 42; }
     if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch 'Summary: 2 passed, 0 failed') { throw ($output -join "`n") }
     Write-Output 'PASS compile-only probes, source overrides, quoted paths and macros, >32KiB arguments, multiple inputs'
     $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Suite $suite @compilerArguments 2>&1
-    if ($LASTEXITCODE -eq 0 -or ($output -join "`n") -notmatch 'test setup failed: This test requires a CodeClip manifest') { throw ($output -join "`n") }
+    if ($LASTEXITCODE -eq 0 -or ($output -join "`n") -notmatch 'test setup failed: This test requires a build manifest') { throw ($output -join "`n") }
     Write-Output 'PASS missing manifest is a setup failure'
     $manifest.projects[0].sources[0].path = Join-Path $fixtureRoot 'different.cpp'
     $manifest | ConvertTo-Json -Depth 8 | Set-Content -Encoding UTF8 -LiteralPath $manifestPath

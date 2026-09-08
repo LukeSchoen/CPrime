@@ -13,29 +13,31 @@ Each test compiles, links, and runs by default. A test's first 12 lines may cont
 - `EXPECT_COMPILE_FAIL: 1`: compilation must reject an invalid program.
 - `EXPECT_COMPILE_ARGS`: additional compiler arguments separated by whitespace.
 - `EXPECT_COMPILE_ONLY: 1`: produce and verify an object file without linking or running.
-  Use this for translation-unit probes whose external definitions live in another project.
+  Use this for translation-unit probes that do not need to link or run.
 - `EXPECT_SOURCES`: a JSON array of additional source paths relative to the test,
   for example `["helper.cpp", "subdirectory/another helper.cpp"]`. The runner passes
   each source as a separate input, links the executable, and runs its assertions.
   Name helper files without the `test_` prefix so they are not independent tests.
-- `EXPECT_MANIFEST_SOURCE`: a source path relative to the CodeClip manifest's
+- `EXPECT_MANIFEST_SOURCE`: a source path relative to the build manifest's
   `projectRoot`, or an absolute path, selecting the translation unit whose
   preprocessing settings the test requires. The runner inherits its include
   directories, definitions, undefinitions, and forced includes, including source
   overrides. Optimization and warning policy belong to `EXPECT_COMPILE_ARGS`.
 
-For external CommonLib probes in the Templates suite, pass the canonical manifest:
-
-```powershell
-./Tests/run.ps1 -Suite features/Templates -BuildManifestPath 'path/to/cl/builds/manifest/Release-x64.json'
-```
-
-Alternatively, set `CPRIME_TEST_BUILD_MANIFEST` to that path. Generate the manifest
-with CodeClip for the selected project first. A missing manifest, missing selected
-source, or ambiguous source selection is a test setup failure, not a skipped test.
+Optional manifest fixtures can pass `-BuildManifestPath` or set
+`CPRIME_TEST_BUILD_MANIFEST` to a schema-version-2 manifest. Generate one with
+`scripts/windows/export-build-manifest.ps1 -ProjectRoot <root> -SolutionPath <solution>`.
+A missing manifest, missing selected source, or ambiguous source selection is
+a test setup failure, not a skipped test.
 The runner does not substitute library sources or add machine-specific include paths.
 Compile-only, multiple-source, and manifest-dependent tests always compile fresh;
 they do not reuse the optional shared executable cache.
+
+The Includes suite covers scalar and array `new` before a later `<cstdlib>`
+include, with an intervening function to exercise symbol reuse. The synthesized
+`malloc` declaration must retain its `void*` return type after the allocating
+function's scope ends. Both regressions also run the allocations and ordinary
+`malloc`/`free` calls. This guards against return-type corruption across function scopes.
 
 `Tests/check_ucrt_runtime.ps1` checks the default Windows UCRT target against
 a native Clang object. It passes file streams and allocations between compilers,
@@ -78,7 +80,7 @@ their relocated code addresses, including inputs combined with `-r`.
 
 ## GCC C++ regressions
 
-`python Tests/gcc/run.py --fetch` downloads a pinned GCC testsuite checkout and
+`powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/run.ps1 -Fetch` downloads a pinned GCC testsuite checkout and
 runs the supported standalone checks serially. See [gcc/README.md](gcc/README.md)
 for selecting cases, collecting a full source survey, and the distinction
 between checked results and unverified GCC-specific expectations.
@@ -94,12 +96,14 @@ only its embedded headers and runtime. Pass `-CompilerPath` to select a build.
 
 ## Layout
 
+The test tools use PowerShell without Python or embedded C#. Run
+`Tests/check_fast_codegen.ps1` for code-generation and batch-state checks,
+`Tests/test_include_search.ps1` for include lookup, and
+`Tests/check_source_languages.ps1` to check the first-party language policy.
+
 - Language suites, ABI fixtures, integration tests, and test runners live here.
 - benchmarks/compile and benchmarks/runtime contain the inputs used by
   BuildProfile and codeProfile.
-- repro/ preserves standalone reductions and external-project probes. These
-  are investigation inputs, not automatically discovered passing regressions;
-  some require CommonLib headers from the measurement project.
 - Third-party upstream tests remain with their vendored dependencies.
 - Generated compiler and test output belongs under build/ or the runner's
   temporary directory, not beside source files.

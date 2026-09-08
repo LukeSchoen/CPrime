@@ -974,6 +974,10 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
           && is_cpp_translation_unit() && (type->t & VT_BTYPE) == VT_STRUCT
           && parse_direct_class_initializer(p, type, c)))
       parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
+    if (!p->sec && is_cpp_translation_unit()
+        && (type->t & VT_BTYPE) == VT_STRUCT
+        && !is_compatible_unqualified_types(type, &vtop->type))
+      try_call_cpp_conversion_operator(type, 0);
     nocode_wanted = ncw_prev;
     flags |= DIF_HAVE_ELEM;
   }
@@ -1543,6 +1547,46 @@ static void emit_automatic_class_array_initialization(Sym *symbol,
    are parsed. If 'v' is zero, then a reference to the new object
    is put in the value stack. If 'has_init' is 2, a special parsing
    is done to handle string constants. */
+/* An anonymous union declares one object and exposes each member at that
+   object's address in the enclosing scope. */
+static void declare_anonymous_union(CType *type, AttributeDef *ad, int scope)
+{
+  Sym *field;
+  MemberFuncOverload *method;
+  int size, align, address, static_storage = scope == VT_CONST || (type->t & VT_STATIC);
+  for (method = member_func_overloads; method; method = method->next)
+    if (method->struct_tok == (type->ref->v & ~SYM_STRUCT))
+      cprime_error("anonymous union cannot declare member functions");
+  if (scope == VT_CONST && !(type->t & VT_STATIC)
+      && !symbol_has_internal_namespace_linkage(make_current_namespace_tok(tok_alloc_const("__anonymous_union"))))
+    cprime_error("namespace-scope anonymous union must be static");
+  size = type_size(type, &align);
+  if (ad->a.aligned && (1 << (ad->a.aligned - 1)) > align) align = 1 << (ad->a.aligned - 1);
+  if (static_storage) address = section_add(bss_section, size, align);
+  else { loc = (loc - size) & -align; address = loc; }
+  for (field = type->ref->next; field; field = field->next) {
+    CType member_type = field->type;
+    int name = field->v & ~SYM_FIELD;
+    Sym *binding, *previous;
+    if (name >= SYM_FIRST_ANOM) continue;
+    if (field->a.cpp_field_access) cprime_error("anonymous union members must be public");
+    if (type_requires_class_construction(&member_type) || type_requires_class_destruction(&member_type))
+      cprime_error("anonymous union member requires nontrivial lifetime operations");
+    if (scope == VT_CONST) name = make_current_namespace_tok(name);
+    previous = sym_find(name);
+    if (previous && previous->sym_scope == local_scope)
+      cprime_error("anonymous union member redeclares '%s'", get_tok_str(name, NULL));
+    member_type.t |= type->t & (VT_CONSTANT | VT_VOLATILE);
+    if (static_storage) member_type.t |= VT_STATIC;
+    binding = sym_push(name, &member_type,
+                       ((member_type.t & VT_ARRAY) ? 0 : VT_LVAL)
+                         | (static_storage ? VT_CONST | VT_SYM : VT_LOCAL),
+                       static_storage ? 0 : address + field->c);
+    binding->a = ad->a;
+    if (static_storage) put_extern_sym(binding, bss_section, address + field->c, size);
+  }
+}
+
 static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
                                    int has_init, int has_ctor_init,
                                    TokenString *copy_ctor_init, int v, int decl_scope, int direct_init)

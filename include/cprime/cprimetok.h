@@ -57,6 +57,7 @@
      DEF(TOK_TRUE, "true")
      DEF(TOK_FALSE, "false")
      DEF(TOK_NULLPTR, "nullptr")
+     DEF(TOK_GNU_NULL, "__null")
      DEF(TOK_COMPLEX, "_Complex")
      DEF(TOK_SHORT, "short")
      DEF(TOK_LONG, "long")

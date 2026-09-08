@@ -3,7 +3,7 @@ static int infer_template_args_from_call_with_explicit(TemplateDef *, CType *, i
                                                        TemplateArgList *, TemplateArgList *);
 /* Bind an explicit function specialization through its declaration. A '<'
    inside the body is never part of the specialization's declarator. */
-static void parse_explicit_function_specialization(void)
+static void parse_explicit_function_specialization(int instantiation)
 {
   TokenString *parameters = tok_str_alloc(), *definition = tok_str_alloc();
   CType result, function, actual[16];
@@ -123,6 +123,24 @@ static void parse_explicit_function_specialization(void)
     explicit_member_template_arg_tok = old_explicit;
     nb_template_member_call_arg_types = old_count;
     memcpy(template_member_call_arg_types, old_actual, sizeof(old_actual));
+    if (!function_tok && !explicit_args.nb && (instantiation || record)) {
+      MemberFuncOverload *ordinary;
+      for (ordinary = member_func_overloads; ordinary; ordinary = ordinary->next) {
+        const CppMemberDeclInfo *info;
+        if (ordinary->struct_tok != owner || ordinary->method_tok != name) continue;
+        info = lookup_cpp_member_decl(ordinary->mangled_tok);
+        if (!info || info->cv_qualifiers != cv
+            || !same_func_param_signature((CType *)&info->function_type, &function)
+            || !compare_types(&info->function_type.ref->type, &result, 1)) continue;
+        if (function_tok && function_tok != ordinary->mangled_tok)
+          cprime_error("ambiguous explicit member instantiation");
+        function_tok = ordinary->mangled_tok;
+      }
+      if (function_tok && instantiation) {
+        CType receiver = { VT_STRUCT, struct_find(owner) };
+        instantiate_template_member_body_for_func_tok(&receiver, name, function_tok);
+      }
+    }
   } else {
     TemplateDef *candidate;
     for (candidate = template_def_candidates(qualified); candidate;
@@ -150,6 +168,16 @@ static void parse_explicit_function_specialization(void)
   if (!function_tok)
     cprime_error("no matching function template for specialization '%s'", get_tok_str(name, NULL));
   symbol = global_symbol_find(function_tok);
+  if (instantiation) {
+    skip(';');
+    if (!symbol) cprime_error("explicit instantiation has no function symbol");
+    /* Register emission demand even when this translation unit never calls
+       the function. The normal deferred drain supplies the primary's body. */
+    put_extern_sym(symbol, NULL, 0, 0);
+    tok_str_free(parameters);
+    tok_str_free(definition);
+    return;
+  }
   for (i = 0; i < nb_explicit_function_specializations; ++i)
     if (explicit_function_specializations[i] == function_tok) break;
   if (i == nb_explicit_function_specializations) {
@@ -163,6 +191,15 @@ static void parse_explicit_function_specialization(void)
      identity, while this declaration supplies the specialization's body. */
   if (owner) {
     int m, j;
+    for (m = 0; m < nb_pending_member_funcs; ++m) {
+      PendingMemberFunc *pending = pending_member_funcs[m];
+      if (pending && pending->func_tok == function_tok) {
+        unindex_pending_auto_member(pending);
+        tok_str_free(pending->str);
+        cprime_free(pending);
+        pending_member_funcs[m] = NULL;
+      }
+    }
     for (m = 0; m < nb_template_member_defs; ++m) {
       TemplateMemberDef *member = template_member_defs[m];
       for (j = 0; j < member->nb_inst; ++j)

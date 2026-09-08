@@ -90,13 +90,20 @@ static void cpp_ms_template_name(CppMsMangleContext *ctx, int source_tok,
     int64_t value;
     if (i < 32 && (value_mask & (1u << i))) {
       Sym *address = global_symbol_find(args->toks[i]);
-      if (address && address->template_address_target) {
-        Sym *target = address->template_address_target;
+      if (address && (address->template_address_target
+                      || (address->type.t & VT_BTYPE) == VT_FUNC)) {
+        Sym *target = address->template_address_target ? address->template_address_target : address;
         int label = target->asm_label;
-        if ((target->type.t & VT_BTYPE) != VT_FUNC)
-          cprime_error("object address template argument native linkage is not supported yet");
-        if (!label) label = cpp_ms_linkage_tok(target->v, &target->type);
         cstr_cat(&name, "$1", 2);
+        if ((target->type.t & VT_BTYPE) != VT_FUNC) {
+          cstr_ccat(&name, '?');
+          cpp_ms_mangle_qualified_name(&nested, target->v, 0, symbol_namespace_scope_tok(target->v));
+          cstr_ccat(&name, '3');
+          cpp_ms_mangle_type(&nested, &target->type, CPP_MS_TYPE_DROP);
+          cstr_ccat(&name, 'A' + cpp_ms_cv(target->type.t));
+          continue;
+        }
+        if (!label) label = cpp_ms_linkage_tok(target->v, &target->type);
         cstr_cat(&name, get_tok_str(label, NULL), -1);
         continue;
       }
@@ -106,6 +113,17 @@ static void cpp_ms_template_name(CppMsMangleContext *ctx, int source_tok,
       cstr_cat(&name, "$0", 2);
       cpp_ms_number(&nested, value);
     } else {
+      TemplateDef *template_argument = find_class_template_def(args->toks[i]);
+      if (template_argument) {
+        /* A class template argument has the tag's qualified name, without
+           an instantiation argument list (Microsoft template-name ABI). */
+        int first = tok_str_next_non_linenum_index(template_argument->def_str->str,
+                                                    template_argument->def_str->len, 0);
+        cstr_ccat(&name, template_argument->def_str->str[first] == TOK_CLASS ? 'V' : 'U');
+        cpp_ms_mangle_qualified_name(&nested, template_argument->name_tok, 0,
+                                      template_argument->namespace_tok);
+        continue;
+      }
       if (!make_type_from_type_arg_tok(&argument, args->toks[i]))
         cprime_error("unresolved type template argument in native linkage");
       cpp_ms_mangle_type(&nested, &argument, CPP_MS_TYPE_ESCAPE);

@@ -100,7 +100,6 @@ static int evaluate_constexpr_function(Sym *function, SValue *result)
   if (valid) {
     gen_cast(&function->type.ref->type);
     *result = *vtop;
-    if (compiler_trace.trace_constexpr) fprintf(stderr, "CPC_CONSTEXPR %s type=%x value=%llx\n", get_tok_str(function->v, NULL), result->type.t, result->c.i);
   }
   vpop();
   while (macro_stack && macro_stack != parent) end_macro();

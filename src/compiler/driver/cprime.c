@@ -420,7 +420,7 @@ help2: fputs(help2, stdout);
       if (!s->just_deps)
         ret = cprime_output_file(s, s->outfile);
       if (!ret && s->gen_deps)
-        gen_makedeps(s, s->outfile, s->deps_outfile);
+        ret = gen_makedeps(s, s->outfile, s->deps_outfile);
     }
   }
 

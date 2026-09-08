@@ -2,6 +2,7 @@
 
 typedef struct CppEhNode {
   Sym *symbol;
+  int hash_next;
   CpcEhCleanup data;
   Sym *action;
 } CppEhNode;
@@ -14,8 +15,11 @@ typedef struct CppEhCatchEntry {
 typedef struct CppEhFunction {
   CpcEhState *states;
   int state_count;
+  int state_capacity;
   CppEhNode *nodes;
   int node_count;
+  int node_capacity;
+  int node_buckets[1024];
   CppEhCatchEntry *catches;
   int catch_count;
   Sym **initializing;
@@ -379,20 +383,26 @@ static int cpp_eh_cleanup_index(Sym *symbol)
 {
   CppEhFunction *eh = &cpp_eh_function;
   CppEhNode *node;
-  int i, parent;
+  int i, parent, bucket;
   if (!symbol) return -1;
   for (i = 0; i < eh->initializing_count; ++i)
     if (eh->initializing[i] == symbol->cleanup_sym)
       return cpp_eh_cleanup_index(symbol->next);
-  for (i = 0; i < eh->node_count; ++i)
-    if (eh->nodes[i].symbol == symbol) return i;
+  bucket = ((uintptr_t)symbol >> 4) & 1023;
+  for (i = eh->node_buckets[bucket]; i; i = eh->nodes[i - 1].hash_next)
+    if (eh->nodes[i - 1].symbol == symbol) return i - 1;
   parent = cpp_eh_cleanup_index(symbol->next);
   if (!symbol->cleanup_func || !symbol->cleanup_sym) return parent;
   i = eh->node_count++;
-  eh->nodes = cprime_realloc(eh->nodes, eh->node_count * sizeof(*eh->nodes));
+  if (eh->node_count > eh->node_capacity) {
+    eh->node_capacity = eh->node_capacity ? eh->node_capacity * 2 : 32;
+    eh->nodes = cprime_realloc(eh->nodes, eh->node_capacity * sizeof(*eh->nodes));
+  }
   node = eh->nodes + i;
   memset(node, 0, sizeof(*node));
   node->symbol = symbol;
+  node->hash_next = eh->node_buckets[bucket];
+  eh->node_buckets[bucket] = i + 1;
   node->action = symbol->cleanup_func;
   node->data.parent = parent;
   node->data.object_offset = symbol->cleanup_sym->c;
@@ -411,7 +421,10 @@ static void cpp_eh_note_call(void)
   cleanup = cpp_eh_cleanup_index(eh->has_cleanup_override
       ? eh->cleanup_override : cur_scope->cl.s);
   if (cleanup < 0) return;
-  eh->states = cprime_realloc(eh->states, (eh->state_count + 1) * sizeof(*eh->states));
+  if (eh->state_count == eh->state_capacity) {
+    eh->state_capacity = eh->state_capacity ? eh->state_capacity * 2 : 32;
+    eh->states = cprime_realloc(eh->states, eh->state_capacity * sizeof(*eh->states));
+  }
   state = eh->states + eh->state_count++;
   state->begin_rva = ind - 1;
   state->end_rva = ind;

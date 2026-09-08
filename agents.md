@@ -11,10 +11,11 @@
 - Revert failed experiments. Do not retain name-specific hacks or turn active
   reproducers into expected failures to disguise incomplete work. Keep changes
   buildable and reviewable as meaningful commit-sized units.
-- For Racer compatibility work, rebuild CPC, copy the verified compiler to the
-  measurement project, and exercise the real compile/link build repeatedly.
-  Before declaring it ready, verify the executable exists, report its exact
-  path, and disclose runtime-affecting warnings or limitations.
+- Keep CPC a general-purpose compiler. Tests and build tools must not depend
+  on sibling application repositories or application-specific libraries.
 - Keep implementation in src/, headers in include/, tests and benchmark inputs
   in Tests/, build scripts in scripts/, and generated output in build/.
   Preserve the root cpc.exe and lib/ bootstrap/portable runtime inputs.
+- Use only C, C++, assembly, batch (.bat/.cmd), and PowerShell (.ps1) for
+  first-party code, including test tools. Do not embed C# or require Python.
+  Leave third-party sources/tooling unchanged; documentation and data are exempt.

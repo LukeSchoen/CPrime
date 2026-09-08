@@ -2,6 +2,8 @@ param(
     [string]$Suite = "c_compat",
     [Alias("TccPath")]
     [string]$CompilerPath = "",
+    [string]$RuntimeRoot = '',
+    [ValidateRange(0.001, 5)][double]$Timeout = 5,
     [switch]$UseSharedBinaries,
     [string]$SharedOutDir = "",
     [switch]$RequireSharedHits,
@@ -9,6 +11,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
+. (Join-Path $PSScriptRoot 'gcc/assessment.ps1')
 if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
     $global:PSNativeCommandUseErrorActionPreference = $false
 }
@@ -119,14 +122,13 @@ function Get-ManifestCompileContext {
     param([string]$SourcePath)
 
     if (-not $BuildManifestPath -or -not (Test-Path -LiteralPath $BuildManifestPath -PathType Leaf)) {
-        throw 'This test requires a CodeClip manifest. Pass -BuildManifestPath or set CPRIME_TEST_BUILD_MANIFEST to the generated manifest JSON path.'
+        throw 'This test requires a build manifest. Pass -BuildManifestPath or set CPRIME_TEST_BUILD_MANIFEST to the generated manifest JSON path.'
     }
     if (-not $script:testBuildManifest) {
         $script:testBuildManifest = Get-Content -Raw -LiteralPath $BuildManifestPath | ConvertFrom-Json
-        if ($script:testBuildManifest.generator -ne 'CodeClip' -or
-            $script:testBuildManifest.schemaVersion -notin @(1, 2) -or
+        if ($script:testBuildManifest.schemaVersion -notin @(1, 2) -or
             $script:testBuildManifest.platform -ne 'x64') {
-            throw "Unsupported CodeClip manifest: $BuildManifestPath"
+            throw "Unsupported build manifest: $BuildManifestPath"
         }
     }
     $manifest = $script:testBuildManifest
@@ -145,7 +147,7 @@ function Get-ManifestCompileContext {
         }
     }
     if ($selected.Count -ne 1) {
-        throw "EXPECT_MANIFEST_SOURCE must select exactly one source in the CodeClip manifest: $SourcePath (found $($selected.Count))."
+        throw "EXPECT_MANIFEST_SOURCE must select exactly one source in the build manifest: $SourcePath (found $($selected.Count))."
     }
     if (-not (Test-Path -LiteralPath $selectedPath -PathType Leaf)) {
         throw "Selected manifest source is missing: $selectedPath"
@@ -194,6 +196,7 @@ function Invoke-Compiler {
     )
 
     $arguments = @($CompilerArgs) + $SourcePaths
+    if ($RuntimeRoot) { $arguments = @('-B' + (Resolve-Path -LiteralPath $RuntimeRoot).Path) + $arguments }
     # CPC response files escape backslashes and quotes independently of the
     # shell. Keep manifest-sized settings out of Windows process and wrapper
     # command lines, preserving each original argument exactly.
@@ -207,8 +210,15 @@ function Invoke-Compiler {
     try {
         # A sole @file selects CPC's line-per-job batch mode. Keep the output
         # option outside so this is ordinary response-file expansion.
-        $output = & $CompilerPath ("@" + $responsePath) '-o' $OutputPath 2>&1
-        $exitCode = $LASTEXITCODE
+        $command = @($CompilerPath, ("@" + $responsePath), '-o', $OutputPath)
+        if ([IO.Path]::GetExtension($CompilerPath) -in @('.cmd', '.bat')) {
+            $script = '& ' + (($command | ForEach-Object { "'" + $_.Replace("'", "''") + "'" }) -join ' ') + '; exit $LASTEXITCODE'
+            $command = @((Join-Path $PSHOME 'powershell.exe'), '-NoProfile', '-EncodedCommand',
+                [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script)))
+        }
+        $processResult = Invoke-GccProcess $command $Timeout
+        $output = $processResult.output
+        $exitCode = $processResult.exit
     } finally {
         $ErrorActionPreference = $savedEap
         Remove-Item -LiteralPath $responsePath -ErrorAction SilentlyContinue
@@ -216,6 +226,7 @@ function Invoke-Compiler {
 
     return @{
         ExitCode = $exitCode
+        OutputComplete = $processResult.output_complete
         Output = (Normalize-LineEndings (($output | Out-String))).Trim()
     }
 }
@@ -330,12 +341,20 @@ foreach ($test in $tests) {
         $compile = Invoke-Compiler -CompilerPath $compiler -SourcePaths $sourcePaths -OutputPath $outExe -CompilerArgs $compileArgs
         $compileOutput = $compile.Output
         $compileExit = $compile.ExitCode
+        if (-not $compile.OutputComplete) {
+            Write-Output "FAIL $($test.Name): compiler output capture did not complete"
+            ++$failed
+            continue
+        }
     }
 
     $ok = $true
     $reason = ""
 
-    if ($compileExit -lt 0 -or $compileExit -gt 255) {
+    if ($null -eq $compileExit) {
+        $ok = $false
+        $reason = "compiler exceeded $Timeout second budget"
+    } elseif ($compileExit -lt 0 -or $compileExit -gt 255) {
         $ok = $false
         $reason = "compiler crashed (exit $compileExit): $compileOutput"
     } elseif ($expectCompileFail) {
@@ -351,11 +370,17 @@ foreach ($test in $tests) {
             $ok = $false
             $reason = "compile succeeded but output $extension missing"
         } elseif (-not $compileOnly) {
-            $runOutput = & $exeToRun 2>&1
-            $runExit = $LASTEXITCODE
-            $normStdout = Normalize-LineEndings ($runOutput -join "`n")
+            $runResult = Invoke-GccProcess @($exeToRun) $Timeout
+            $runExit = $runResult.exit
+            $normStdout = (Normalize-LineEndings $runResult.output).TrimEnd("`n")
 
-            if ($runExit -ne $expectExit) {
+            if ($null -eq $runExit) {
+                $ok = $false
+                $reason = "runtime exceeded $Timeout second budget"
+            } elseif (-not $runResult.output_complete) {
+                $ok = $false
+                $reason = 'runtime output capture did not finish'
+            } elseif ($runExit -ne $expectExit) {
                 $ok = $false
                 $reason = "expected exit $expectExit, got $runExit"
             } elseif ($expectStdout -and $normStdout -ne $expectStdout) {

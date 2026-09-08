@@ -105,7 +105,7 @@ void MiniWindow::Clear(ui32 color)
 int main()
 {
   MiniVec2I res(704, 552);
-  MiniWindow window("Racer", true, false, res, MiniWindowDefault);
+  MiniWindow window("Window", true, false, res, MiniWindowDefault);
   window.Clear(0xff009500);
   return 0;
 }

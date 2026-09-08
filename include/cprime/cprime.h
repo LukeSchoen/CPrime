@@ -375,7 +375,9 @@ struct SymAttr {
     cpp_user_constructor : 1,
     cpp_user_destructor : 1,
     cpp_nontrivial_copy_assignment : 1,
-    cpp_mutable_field : 1;
+    cpp_mutable_field : 1,
+    cpp_trivial_construction : 1,
+    cpp_trivial_destruction : 1;
 };
 
 struct FuncAttr {

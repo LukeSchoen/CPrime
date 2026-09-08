@@ -615,8 +615,10 @@ static char *escape_target_dep(const char *s)
   int j;
   for (j = 0; *s; s++, j++)
   {
-    if (is_space(*s))
+    if (is_space(*s) || *s == '#')
       res[j++] = '\\';
+    else if (*s == '$')
+      res[j++] = '$';
     res[j] = *s;
   }
   res[j] = '\0';
@@ -659,7 +661,11 @@ ST_FUNC int gen_makedeps(CPRIMEState *s1, const char *target, const char *filena
 next:;
   }
 
-  fprintf(depout, "%s:", target);
+  {
+    char *escaped_target = escape_target_dep(target);
+    fprintf(depout, "%s:", escaped_target);
+    cprime_free(escaped_target);
+  }
   for (i = 0; i < num_targets; ++i)
     fprintf(depout, " \\\n  %s", escaped_targets[i]);
   fprintf(depout, "\n");

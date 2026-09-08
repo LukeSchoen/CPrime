@@ -5,7 +5,8 @@
 CPrime is a fast assembler, C compiler, and C++ compiler for people who want
 near instant builds, tiny native outputs, and the full expressiveness of C++.
 
-The compiler is called **CPC**. It is a full C++ compiler: you can throw a big
+The compiler is called **CPC**. It is general purpose and requires no
+application-specific libraries. It is a full C++ compiler: you can throw a big
 C++ project at it and it will compile. CPC takes assembler, C, and C++ code and
 almost instantly produces lightweight native outputs, without bulky C++
 toolchains.
@@ -54,8 +55,13 @@ Build scripts live in `scripts/windows/`; generated compiler and runtime files
 go into `build/compiler/`. A successful build packages and replaces the root
 `cpc.exe`. Keep that executable and `lib/` for bootstrapping.
 
-Compiler/runtime sources live in `src/`, headers in `include/`, and tests,
-benchmark inputs, and preserved reproducers in `Tests/`.
+Compiler/runtime sources live in `src/`, headers in `include/`, and tests
+and benchmark inputs in `Tests/`.
+
+For solution builds, `scripts/windows/export-build-manifest.ps1 -ProjectRoot <root>
+-SolutionPath <solution>` exports a manifest to `build/manifest/Release-x64.json`.
+`build_project.ps1 -ProjectRoot <root>` consumes it. Build-driver defaults use
+`build/`; explicit manifest, output, and compiler paths remain configurable.
 
 ## Test
 

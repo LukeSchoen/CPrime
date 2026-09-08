@@ -1,5 +1,5 @@
 param(
-    [string]$ExporterPath = 'C:\Luke\Src\OT\cl\export_build_manifest.ps1',
+    [string]$ExporterPath = (Join-Path $PSScriptRoot '../scripts/windows/export-build-manifest.ps1'),
     [ValidateSet('Prime', 'Clang')][string]$Toolchain = 'Prime',
     [string]$CompilerPath = (Join-Path $PSScriptRoot '..\cpc.exe'),
     [string]$NativeCompilerPath = ''
@@ -10,7 +10,7 @@ $CompilerPath = [IO.Path]::GetFullPath($CompilerPath)
 $fixtureJobs = if ($Toolchain -eq 'Prime') { 1 } else { 2 }
 if (-not $NativeCompilerPath) {
     $NativeCompilerPath = if ($Toolchain -eq 'Clang') { $CompilerPath }
-        else { Join-Path (Split-Path $ExporterPath -Parent) 'CommonLib\Assets\Programs\Clang\clang.exe' }
+        else { Join-Path $PSScriptRoot '../third-party/clang/bin/clang.exe' }
 }
 if (-not (Test-Path -LiteralPath $NativeCompilerPath -PathType Leaf)) { throw 'Pass -NativeCompilerPath for the Clang compiler used to create native COFF inputs.' }
 $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
@@ -44,7 +44,7 @@ Project("{fixture}") = "Right", "library\Right.vcxproj", "{right}"
 EndProject
 Project("{fixture}") = "Resources", "library\Resources.vcxproj", "{resources}"
 EndProject
-'@ | Set-Content -LiteralPath (Join-Path $fixture 'commonTool.sln')
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'fixture.sln')
     @'
 <Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
   <ItemGroup><ProjectConfiguration Include="Release|x64" /></ItemGroup>
@@ -155,6 +155,8 @@ int main() {
 LANGUAGE 9, 1
 RESOURCE_ID RCDATA BEGIN RESOURCE_VALUE END
 '@ | Set-Content -LiteralPath (Join-Path $fixture 'first.rc'), (Join-Path $fixture 'second.rc')
+    'resource payload' | Set-Content -LiteralPath (Join-Path $fixture 'asset.payload')
+    Add-Content -LiteralPath (Join-Path $fixture 'second.rc') -Value '987 RCDATA "asset.payload"'
     '#error Excluded resource was compiled' | Set-Content -LiteralPath (Join-Path $fixture 'excluded.rc')
     'extern "C" int value(void); int helper() { return value(); }' | Set-Content -LiteralPath (Join-Path $fixture 'helper.cpp')
     'int value(void) { return BASE + EXTRA; }' | Set-Content -LiteralPath (Join-Path $fixture 'per_file.c')
@@ -192,8 +194,8 @@ const int *native_other_address(void) { return &native_shared_value; }
     & $NativeCompilerPath -c (Join-Path $fixture 'lib folder\other.c') -o (Join-Path $fixture 'lib folder\other.obj')
     if ($LASTEXITCODE -ne 0) { throw 'Failed to compile the second native COFF dependency' }
     '#error Excluded source was compiled' | Set-Content -LiteralPath (Join-Path $fixture 'excluded.cpp')
-    & $ExporterPath -ProjectRoot $fixture
-    $manifestPath = Join-Path $fixture 'builds\manifest\Release-x64.json'
+    & $ExporterPath -ProjectRoot $fixture -SolutionPath (Join-Path $fixture 'fixture.sln')
+    $manifestPath = Join-Path $fixture 'build\manifest\Release-x64.json'
     $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
     if ($manifest.projects[0].sources.Count -ne 6) { throw 'Source selection did not preserve item-group conditions and ExcludedFromBuild' }
     if ($manifest.projects[0].sources[2].defines -notcontains 'EXTRA=2') { throw 'Per-file definitions were lost' }
@@ -206,7 +208,7 @@ const int *native_other_address(void) { return &native_shared_value; }
     $selectedProject = $appProjectText.Replace('<WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>',
         '<WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion><VCToolsVersion>0.0.0</VCToolsVersion>')
     $selectedProject | Set-Content -LiteralPath $appProjectPath
-    & $ExporterPath -ProjectRoot $fixture
+    & $ExporterPath -ProjectRoot $fixture -SolutionPath (Join-Path $fixture 'fixture.sln')
     $selectedManifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
     if ($selectedManifest.projects[0].msvcToolsVersion -ne '0.0.0') { throw 'MSVC tools selection was not preserved' }
     $selectionLog = Join-Path $fixture 'missing-toolset.log'
@@ -221,7 +223,7 @@ const int *native_other_address(void) { return &native_shared_value; }
         throw 'An unavailable explicit MSVC toolset selection was ignored'
     }
     $appProjectText | Set-Content -LiteralPath $appProjectPath
-    & $ExporterPath -ProjectRoot $fixture
+    & $ExporterPath -ProjectRoot $fixture -SolutionPath (Join-Path $fixture 'fixture.sln')
     foreach ($unity in @($false, $true)) {
         $output = Join-Path $fixture $(if ($unity) { 'unity' } else { 'separate' })
         $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-CompilerPath', $CompilerPath,
@@ -248,9 +250,38 @@ const int *native_other_address(void) { return &native_shared_value; }
                 throw 'Static-library output is not an archive'
             }
         }
+        if ($Toolchain -eq 'Prime') {
+            $checker = Join-Path (Split-Path $driver -Parent) 'build/check_project_build.exe'
+            $snapshot = Join-Path $output $(if ($unity) { 'check-unity.bin' } else { 'check-separate.bin' })
+            & $checker $snapshot
+            if ($LASTEXITCODE) { throw 'Fresh manifest snapshot was not accepted by the native checker' }
+            & powershell @arguments -ProjectRoot $fixture
+            if ($LASTEXITCODE) { throw 'Incremental manifest rebuild failed' }
+            $metrics = Get-Content -Raw (Join-Path $output 'build_metrics.json') | ConvertFrom-Json
+            if ($metrics.CompiledUnits -or $metrics.Processes.Count) { throw 'Unchanged manifest build ran tools' }
+            Add-Content -LiteralPath (Join-Path $fixture 'helper.cpp') -Value '// incremental source edit'
+            & powershell @arguments -ProjectRoot $fixture
+            if ($LASTEXITCODE) { throw 'Selective source rebuild failed' }
+            $metrics = Get-Content -Raw (Join-Path $output 'build_metrics.json') | ConvertFrom-Json
+            if ($metrics.CompiledUnits -ne 1) { throw 'Source edit rebuilt more than its translation unit/unity group' }
+            Add-Content -LiteralPath (Join-Path $fixture 'first.rc') -Value '// incremental resource edit'
+            & powershell @arguments -ProjectRoot $fixture
+            if ($LASTEXITCODE) { throw 'Resource incremental rebuild failed' }
+            $metrics = Get-Content -Raw (Join-Path $output 'build_metrics.json') | ConvertFrom-Json
+            if ($metrics.CompiledUnits -or -not @($metrics.Processes | Where-Object Kind -eq 'resource').Count) { throw 'Resource edit did not rebuild resources independently' }
+            Add-Content -LiteralPath (Join-Path $fixture 'asset.payload') -Value 'changed binary resource'
+            & $checker $snapshot | Out-Null
+            if ($LASTEXITCODE -eq 0) { throw 'Native checker missed a resource asset change' }
+            & powershell @arguments -ProjectRoot $fixture
+            if ($LASTEXITCODE) { throw 'Resource asset incremental rebuild failed' }
+            $metrics = Get-Content -Raw (Join-Path $output 'build_metrics.json') | ConvertFrom-Json
+            if ($metrics.CompiledUnits -or -not @($metrics.Processes | Where-Object Kind -eq 'resource').Count) { throw 'External resource payload dependency was missed' }
+            & $executable
+            if ($LASTEXITCODE) { throw 'Incrementally linked resources are incorrect' }
+        }
     }
     # The selected warning policy is enforced, and a diagnostic build can
-    # explicitly relax it without changing CodeClip's project settings.
+    # explicitly relax it without changing the project settings.
     Add-Content -LiteralPath (Join-Path $fixture 'empty.c') -Value '#warning manifest_fixture_warning'
     $warningOutput = Join-Path $fixture 'warnings'
     $warningArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-CompilerPath', $CompilerPath,
@@ -273,7 +304,7 @@ const int *native_other_address(void) { return &native_shared_value; }
     $legacyManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $legacyPath
     & powershell -NoProfile -ExecutionPolicy Bypass -File $driver -CompilerPath $CompilerPath -Toolchain $Toolchain -ProjectRoot $fixture -ManifestPath $legacyPath -OutDir (Join-Path $fixture 'legacy')
     if ($LASTEXITCODE -ne 0) { throw 'Legacy manifest build failed' }
-    & (Join-Path $fixture 'builds\Legacy.exe')
+    & (Join-Path $fixture 'build\Legacy.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Legacy manifest executable failed' }
     Write-Host 'Build manifest: conditional selection, effective settings/warning policy, expanded output, archive dependencies, resource data, native COFF/COMDAT/default libraries, selected MSVC/SDK libraries, spaced paths, unity, and legacy compatibility passed.'
 } finally {

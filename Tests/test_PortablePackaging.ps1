@@ -75,6 +75,31 @@ int main() {
         if ($LASTEXITCODE -ne 0 -or $output -cne 'portable payload ok') { throw 'Standalone payload runtime check failed' }
     } finally { Pop-Location }
     Write-Output 'PASS isolated portable Windows, C runtime and C++ headers'
+
+    # Native libraries call __chkstk using the MSVC x64 ABI. A bootstrap
+    # archive can link and run ordinary CPC code yet corrupt native frames.
+    $abiSource = Join-Path $root 'src/tools/check_runtime_abi.c'
+    $abiAssembly = Join-Path $root 'src/tools/check_runtime_abi.S'
+    $abiExe = Join-Path $work 'runtime-abi.exe'
+    & $portable $abiSource $abiAssembly -o $abiExe
+    if ($LASTEXITCODE) { throw 'Portable stack-probe ABI fixture did not build' }
+    & $abiExe
+    if ($LASTEXITCODE) { throw 'Portable payload contains an incompatible native stack probe' }
+    Write-Output 'PASS isolated portable native stack-probe ABI'
+
+    $bootstrapObject = Join-Path $work 'bootstrap-probe.o'
+    & $portable -DCPRIME_BOOTSTRAP_CHKSTK -c (Join-Path $root 'src/runtime/windows/chkstk.S') -o $bootstrapObject
+    if ($LASTEXITCODE) { throw 'Bootstrap stack-probe fixture did not build' }
+    & $portable $abiSource $abiAssembly $bootstrapObject -o $abiExe
+    if ($LASTEXITCODE) { throw 'Bootstrap ABI rejection fixture did not link' }
+    $savedPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & $abiExe 2> (Join-Path $work 'bootstrap-rejected.log')
+        $bootstrapExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $savedPreference }
+    if ($bootstrapExit -ne 1) { throw 'ABI check did not cleanly reject the bootstrap stack probe' }
+    Write-Output 'PASS bootstrap stack-probe rejection'
 } finally {
     $resolved = [IO.Path]::GetFullPath($work)
     if (-not $resolved.StartsWith($temporaryRoot.TrimEnd('\') + '\', [StringComparison]::OrdinalIgnoreCase)) {

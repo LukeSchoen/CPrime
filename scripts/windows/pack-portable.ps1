@@ -75,6 +75,18 @@ try {
     Copy-Tree -From (Join-Path $RootPath "third-party\win32-sdk\lib") -To $stageLib
     Copy-Item -Path (Join-Path $RuntimeLibPath "*") -Destination $stageLib -Force
 
+    # Check the selected archive, not the runtime used to build this helper.
+    # Root lib/ may intentionally contain a bootstrap-only __chkstk which is
+    # incompatible with native COFF objects despite linking successfully.
+    $runtimeCheck = Join-Path $toolDir 'check-runtime-abi.exe'
+    & $ExePath "-B$stage" `
+        (Join-Path $PSScriptRoot '../../src/tools/check_runtime_abi.c') `
+        (Join-Path $PSScriptRoot '../../src/tools/check_runtime_abi.S') `
+        (Join-Path $stageLib 'libcprime1.a') -o $runtimeCheck
+    if ($LASTEXITCODE -ne 0) { throw 'Failed to build the runtime ABI check' }
+    & $runtimeCheck
+    if ($LASTEXITCODE -ne 0) { throw "Refusing to package an incompatible runtime: $RuntimeLibPath" }
+
     $requiredLibs = @(
         "kernel32", "user32", "gdi32", "ws2_32", "msvcrt", "ucrtbase",
         "comdlg32", "shell32", "uxtheme", "dwmapi", "msimg32",
@@ -95,6 +107,12 @@ try {
 
 } finally {
     if (Test-Path $stage) {
-        Remove-Item -LiteralPath $stage -Recurse -Force
+        $temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\', '/') + '\'
+        $resolvedStage = [IO.Path]::GetFullPath($stage)
+        if (-not $resolvedStage.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            [IO.Path]::GetFileName($resolvedStage) -notlike 'cprime-pack-*') {
+            throw "Refusing to remove an unexpected packaging directory: $resolvedStage"
+        }
+        Remove-Item -LiteralPath $resolvedStage -Recurse -Force
     }
 }

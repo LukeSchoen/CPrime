@@ -5,10 +5,12 @@ param(
     [string]$ManifestPath = '',
     [string]$OutDir = '',
     [string]$ExePath = '',
+    [string[]]$BuildInputs = @(),
     [ValidateRange(1, 64)][int]$Jobs = $(if ($Toolchain -eq 'Prime') { 1 } else { [Environment]::ProcessorCount }),
     [ValidateRange(1, 3600)][int]$CompileTimeoutSeconds = 60,
     [switch]$Unity,
     [switch]$SkipLink,
+    [switch]$Rebuild,
     [switch]$AllowWarnings
 )
 
@@ -21,15 +23,15 @@ $script:toolMeasurements = [Collections.Generic.List[object]]::new()
 $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot)
 if (-not $CompilerPath) {
     $CompilerPath = if ($Toolchain -eq 'Prime') { Join-Path $PSScriptRoot 'cpc.exe' }
-        else { Join-Path $ProjectRoot 'CommonLib\Assets\Programs\Clang\clang.exe' }
+        else { Join-Path $PSScriptRoot 'third-party/clang/bin/clang.exe' }
 }
 $CompilerPath = [IO.Path]::GetFullPath($CompilerPath)
-if (-not $ManifestPath) { $ManifestPath = Join-Path $ProjectRoot 'builds\manifest\Release-x64.json' }
-if (-not $OutDir) { $OutDir = Join-Path $ProjectRoot ('builds\' + $Toolchain.ToLowerInvariant()) }
+if (-not $ManifestPath) { $ManifestPath = Join-Path $ProjectRoot 'build\manifest\Release-x64.json' }
+if (-not $OutDir) { $OutDir = Join-Path $ProjectRoot ('build\' + $Toolchain.ToLowerInvariant()) }
 $OutDir = [IO.Path]::GetFullPath($OutDir)
 if (-not (Test-Path -LiteralPath $CompilerPath -PathType Leaf)) { throw "Compiler not found: $CompilerPath" }
 if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
-    throw "CodeClip manifest not found: $ManifestPath. Run CodeClip.exe to regenerate the selected project."
+    throw "Build manifest not found: $ManifestPath. Generate it with scripts/windows/export-build-manifest.ps1 or pass -ManifestPath."
 }
 $manifest = Get-Content -Raw -LiteralPath $ManifestPath | ConvertFrom-Json
 if ($manifest.schemaVersion -notin @(1, 2) -or $manifest.platform -ne 'x64') { throw 'Unsupported build manifest schema or platform' }
@@ -37,11 +39,11 @@ $applications = @($manifest.projects | Where-Object { $_.kind -eq 'Application' 
 if ($applications.Count -ne 1) { throw 'The manifest must select one application project.' }
 if (-not $ExePath) {
     $ExePath = if ($manifest.schemaVersion -ge 2) { $applications[0].targetPath }
-        else { Join-Path $ProjectRoot ('builds\' + $applications[0].targetName + '.exe') }
+        else { Join-Path $ProjectRoot ('build\' + $applications[0].targetName + '.exe') }
 }
 $ExePath = [IO.Path]::GetFullPath($ExePath)
 New-Item -ItemType Directory -Force -Path $OutDir, (Split-Path $ExePath -Parent) | Out-Null
-if (-not $SkipLink -and (Test-Path -LiteralPath $ExePath -PathType Leaf)) { Remove-Item -LiteralPath $ExePath -Force }
+. (Join-Path $PSScriptRoot 'scripts/windows/incremental-build.ps1')
 
 function Quote-Native([string]$Argument) {
     # CommandLineToArgvW quoting, including spaces, embedded quotes, and a
@@ -100,6 +102,10 @@ function Invoke-BuildTool([string]$ToolPath, [string[]]$Arguments, [string]$Dire
         $stdout | Set-Content -LiteralPath (Join-Path $OutDir ($Label + '.log'))
         $stderr | Set-Content -LiteralPath (Join-Path $OutDir ($Label + '.err.log'))
         if ($timedOut -or $started.Process.ExitCode -ne 0) {
+            if (-not $SkipLink) {
+                [IO.File]::Delete($ExePath)
+                [IO.File]::Delete("$ExePath.state.json")
+            }
             Write-Host $stdout
             Write-Host $stderr
             throw "$Label failed$(if ($timedOut) { ' (timed out)' })"
@@ -299,24 +305,39 @@ foreach ($project in $manifest.projects) {
             $inputSource = $chunk[0].Source
             if ($chunk.Count -gt 1) {
                 $inputSource = Join-Path $OutDir ($label + '.cpp')
-                $chunk | ForEach-Object { '#include "' + $_.Source.Replace('\', '/') + '"' } |
-                    Set-Content -LiteralPath $inputSource -Encoding UTF8
+                Write-ChangedText $inputSource (($chunk | ForEach-Object { '#include "' + $_.Source.Replace('\', '/') + '"' }) -join "`n")
             }
             $object = Join-Path $OutDir ($label + '.obj')
-            [IO.File]::Delete($object)
-            [IO.File]::Delete((Join-Path $OutDir ($label + '.log')))
-            [IO.File]::Delete((Join-Path $OutDir ($label + '.err.log')))
             $objects += $object
             [void]$projectBuild.Objects.Add($object)
             $jobsToRun += @{
                 Label = $label; Source = $inputSource; Object = $object; Directory = $project.directory
                 Flags = $chunk[0].Flags; Inputs = @($chunk | ForEach-Object { $_.Source })
+                Depfile = Join-Path $OutDir ($label + '.d')
             }
         }
     }
 }
 if (-not $jobsToRun.Count) { throw 'The manifest contains no compile sources.' }
 $jobsToRun | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutDir 'compile_inputs.json') -Encoding UTF8
+$allJobs = @($jobsToRun)
+$jobsToRun = @($allJobs | Where-Object {
+    $_.Key = Get-BuildKey $CompilerPath (@($_.Flags) + @($_.Source, $_.Object)) $_.Directory
+    -not (Test-BuildState $_.Object $_.Key)
+})
+foreach ($job in $jobsToRun) {
+    [IO.File]::Delete("$($job.Object).state.json")
+    [IO.File]::Delete($job.Object)
+    [IO.File]::Delete($job.Depfile)
+}
+Write-Host ('Incremental: {0} to compile; {1} up to date' -f $jobsToRun.Count, ($allJobs.Count - $jobsToRun.Count))
+if ($jobsToRun.Count -and -not $SkipLink) {
+    # Keep the existing failure contract: a failed changed build must not
+    # leave a stale executable looking like its result. No-op builds retain it.
+    [IO.File]::Delete($ExePath)
+    [IO.File]::Delete("$ExePath.state.json")
+    $script:fileStamps.Remove($ExePath)
+}
 $active = [Collections.ArrayList]::new()
 $script:failed = $false
 $timer = [Diagnostics.Stopwatch]::StartNew()
@@ -374,7 +395,7 @@ function Invoke-PrimeBatch($BatchJobs, [int]$BatchIndex) {
             $flagLines.Add($job.Flags, $prefix)
         }
         $line = [Text.StringBuilder]::new($prefix)
-        foreach ($argument in @('-c', $job.Source, '-o', $job.Object)) {
+        foreach ($argument in @('-MD', '-MF', $job.Depfile, '-c', $job.Source, '-o', $job.Object)) {
             # CPC response files escape every backslash, unlike Windows argv.
             if ($argument.Contains("`n") -or $argument.Contains("`r")) { throw 'Newline in compiler argument' }
             if ($line.Length) { [void]$line.Append(' ') }
@@ -458,7 +479,7 @@ if ($Toolchain -eq 'Prime') {
 } else {
 foreach ($job in $jobsToRun) {
     Complete-Compiles
-    $arguments = @($job.Flags) + @('-c', $job.Source, '-o', $job.Object)
+    $arguments = @($job.Flags) + @('-MD', '-MF', $job.Depfile, '-c', $job.Source, '-o', $job.Object)
     $job.ErrorLog = Join-Path $OutDir ($job.Label + '.err.log')
     $job.Timer = [Diagnostics.Stopwatch]::StartNew()
     $started = Start-BuildTool $CompilerPath $arguments $job.Directory
@@ -471,6 +492,15 @@ Complete-Compiles -Drain
 }
 Write-Host ('Compile elapsed: {0:n3}s; {1} source files' -f $timer.Elapsed.TotalSeconds, $index)
 if ($script:failed) { Write-Host 'Executable: NOT PRODUCED'; exit 1 }
+foreach ($job in $jobsToRun) {
+    $dependencies = @(Read-BuildDependencies $job.Depfile $job.Directory)
+    $includeDirs = @($job.Flags | Where-Object { $_.StartsWith('-I') } | ForEach-Object {
+        $path = $_.Substring(2)
+        if (-not [IO.Path]::IsPathRooted($path)) { $path = Join-Path $job.Directory $path }
+        [IO.Path]::GetFullPath($path)
+    }) + @($dependencies | ForEach-Object { Split-Path $_ -Parent })
+    Save-BuildState $job.Object $job.Key ($dependencies + @($job.Inputs)) $includeDirs
+}
 if ($SkipLink) { exit 0 }
 
 $linkedBuilds = @($projectBuilds)
@@ -533,27 +563,31 @@ if ($manifest.schemaVersion -ge 2) {
             if ($settings.Culture) { $resourceArgs += '/l', $settings.Culture }
             if ($settings.CodePage) { $resourceArgs += '/c', $settings.CodePage }
             $resourceArgs += $resource.path
-            Invoke-BuildTool $resourceTools.Compiler $resourceArgs $project.directory $label
+            $resourceKey = Get-BuildKey $resourceTools.Compiler $resourceArgs $project.directory
+            if (-not (Test-BuildState $resFile $resourceKey)) {
+                $resourceDirs = @($includes) + @($resourceTools.Includes) + @((Split-Path $resource.path -Parent))
+                $resourceInputs = @(Get-ResourceInputs $resource.path $resourceDirs @($defines))
+                Invoke-CachedTool $resourceTools.Compiler $resourceArgs $project.directory $label $resFile $resourceInputs -Directories $resourceDirs
+            }
             [void]$build.Resources.Add($resFile)
         }
         $archiveObjects = @($build.Objects)
         if ($build.Resources.Count -and $project.kind -eq 'StaticLibrary') {
             $resourceObject = Join-Path $OutDir ($build.Label + '_resources.obj')
-            Invoke-BuildTool $resourceTools.Converter (@('/NOLOGO', '/MACHINE:X64', ('/OUT:' + $resourceObject)) + @($build.Resources)) $project.directory ($build.Label + '_resources')
+            Invoke-CachedTool $resourceTools.Converter (@('/NOLOGO', '/MACHINE:X64', ('/OUT:' + $resourceObject)) + @($build.Resources)) $project.directory ($build.Label + '_resources') $resourceObject @($build.Resources)
             if ($Toolchain -eq 'Prime') {
                 $archiveResource = Join-Path $OutDir ($build.Label + '_resources.o')
-                Invoke-BuildTool $CompilerPath @('-r', $resourceObject, '-o', $archiveResource) $project.directory ($build.Label + '_resource_object')
+                Invoke-CachedTool $CompilerPath @('-r', $resourceObject, '-o', $archiveResource) $project.directory ($build.Label + '_resource_object') $archiveResource @($resourceObject)
                 $resourceObject = $archiveResource
             }
             $archiveObjects += $resourceObject
         }
         if ($project.kind -eq 'StaticLibrary') {
             $build.Archive = Join-Path $OutDir ($build.Label + '_' + $project.targetName + '.lib')
-            if (Test-Path -LiteralPath $build.Archive) { Remove-Item -LiteralPath $build.Archive -Force }
             if ($Toolchain -eq 'Prime') {
-                Invoke-BuildTool $CompilerPath (@('-ar', 'rcs', $build.Archive) + $archiveObjects) $project.directory ($build.Label + '_archive')
+                Invoke-CachedTool $CompilerPath (@('-ar', 'rcs', $build.Archive) + $archiveObjects) $project.directory ($build.Label + '_archive') $build.Archive $archiveObjects
             } else {
-                Invoke-BuildTool (Find-MsvcTool 'lib.exe' $build.Msvc) (@('/NOLOGO', ('/OUT:' + $build.Archive)) + $archiveObjects) $project.directory ($build.Label + '_archive')
+                Invoke-CachedTool (Find-MsvcTool 'lib.exe' $build.Msvc) (@('/NOLOGO', ('/OUT:' + $build.Archive)) + $archiveObjects) $project.directory ($build.Label + '_archive') $build.Archive $archiveObjects
             }
             Write-Host "Library: $($build.Archive)"
         }
@@ -564,7 +598,7 @@ if ($manifest.schemaVersion -ge 2) {
         # Resource directories must be merged by the resource tool. Merely
         # concatenating .rsrc sections loses resources from later projects.
         $linkedResourceObject = Join-Path $OutDir 'linked_resources.obj'
-        Invoke-BuildTool $resourceTools.Converter (@('/NOLOGO', '/MACHINE:X64', ('/OUT:' + $linkedResourceObject)) + $linkedResources) $applications[0].directory 'linked_resources'
+        Invoke-CachedTool $resourceTools.Converter (@('/NOLOGO', '/MACHINE:X64', ('/OUT:' + $linkedResourceObject)) + $linkedResources) $applications[0].directory 'linked_resources' $linkedResourceObject $linkedResources
     }
 }
 
@@ -597,10 +631,12 @@ if ($applications[0].entryPoint) {
     else { $linkArguments += '-Xlinker', ('/ENTRY:' + $applications[0].entryPoint) }
 }
 $linkArguments += '-o', $ExePath
+$linkDepfile = if ($Toolchain -eq 'Prime') { Join-Path $OutDir 'link.d' } else { '' }
+if ($linkDepfile) { $linkArguments += '-MD', '-MF', $linkDepfile }
 @{ Compiler = $CompilerPath; Arguments = $linkArguments; Directory = $applications[0].directory } |
     ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $OutDir 'link_inputs.json') -Encoding UTF8
 try {
-    Invoke-BuildTool $CompilerPath $linkArguments $applications[0].directory 'link'
+    Invoke-CachedTool $CompilerPath $linkArguments $applications[0].directory 'link' $ExePath @() $linkDepfile
     if (-not (Test-Path -LiteralPath $ExePath -PathType Leaf)) { throw 'The linker did not produce the selected executable' }
 } catch {
     if (Test-Path -LiteralPath $ExePath -PathType Leaf) { Remove-Item -LiteralPath $ExePath -Force }
@@ -608,13 +644,15 @@ try {
     throw
 }
 Write-Host "Executable: $ExePath"
-Write-Host ('Build elapsed: {0:n3}s; {1} translation units; unity={2}' -f $buildTimer.Elapsed.TotalSeconds, $jobsToRun.Count, [bool]$Unity)
+Ensure-FastBuildChecker
+Write-Host ('Build elapsed: {0:n3}s; {1}/{2} translation units compiled; unity={3}' -f $buildTimer.Elapsed.TotalSeconds, $jobsToRun.Count, $allJobs.Count, [bool]$Unity)
 
 $compilerWork = [double](($script:toolMeasurements | Where-Object Kind -eq 'compiler' | Measure-Object Seconds -Sum).Sum)
 $resourceWork = [double](($script:toolMeasurements | Where-Object Kind -eq 'resource' | Measure-Object Seconds -Sum).Sum)
 $metrics = [ordered]@{
     Compiler = $CompilerPath; Configuration = $manifest.configuration; Jobs = $Jobs
-    Sources = $index; TranslationUnits = $jobsToRun.Count; Unity = [bool]$Unity
+    Sources = $index; TranslationUnits = $allJobs.Count; CompiledUnits = $jobsToRun.Count
+    SkippedUnits = $allJobs.Count - $jobsToRun.Count; Unity = [bool]$Unity
     BuildSeconds = $buildTimer.Elapsed.TotalSeconds; CompilerSeconds = $compilerWork
     ResourceSeconds = $resourceWork
     DriverSeconds = if ($Jobs -eq 1) { $buildTimer.Elapsed.TotalSeconds - $compilerWork - $resourceWork } else { $null }
@@ -622,3 +660,4 @@ $metrics = [ordered]@{
 }
 $metrics | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutDir 'build_metrics.json') -Encoding UTF8
 Write-Host ('Compiler process time: {0:n3}s; resource tools: {1:n3}s' -f $compilerWork, $resourceWork)
+Save-FastBuildSnapshot

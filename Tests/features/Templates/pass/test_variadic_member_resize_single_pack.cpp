@@ -1,35 +1,23 @@
 // EXPECT_STDOUT: 20
-// EXPECT_MANIFEST_SOURCE: CommonLib/CommonLib/src/Strings/clString.cpp
-#include "clScan.h"
-#include "clSort.h"
-#include "clStream.h"
-
-#include <stdlib.h>
+#include <new>
 #include <stdio.h>
-#include <string.h>
-
-// Minimal runtime allocator stubs so the focused test links standalone.
-void *_clAlloc(int lineNumber, const char *fileName, i64 size, bool zeroMemory)
-{
-  (void)lineNumber;
-  (void)fileName;
-  void *p = malloc((size_t)size);
-  if (p && zeroMemory)
-    memset(p, 0, (size_t)size);
-  return p;
-}
-
-void _clFree(const void *pData)
-{
-  free((void *)pData);
-}
-
-int main()
-{
-  clList<char> buf;
-  buf.Resize(10);
-  clList<char> buf2;
-  buf2.Resize(10, 'x');
-  printf("%d", (int)(buf.Size() + buf2.Size()));
+template<class T> struct Buffer {
+  T elements[16];
+  int count;
+  Buffer() : count(0) {}
+  template<class... Args> void Resize(int size, Args&&... args) {
+    for (int i = count; i < size; ++i)
+      new (&elements[i]) T(static_cast<Args&&>(args)...);
+    count = size;
+  }
+  int Size() const { return count; }
+};
+int main() {
+  Buffer<char> first, second;
+  first.Resize(10);
+  second.Resize(10, 'x');
+  for (int i = 0; i < 10; ++i)
+    if (first.elements[i] != 0 || second.elements[i] != 'x') return 1;
+  printf("%d", first.Size() + second.Size());
   return 0;
 }

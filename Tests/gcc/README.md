@@ -4,7 +4,7 @@ Upstream: https://github.com/gcc-mirror/gcc
 
 Pinned revision: `5f6257c26b814de1a14c71b2d3a49291765b6577` (2026-09-07).
 
-The runner fetches a sparse checkout at `build/gcc-upstream` contains `gcc/testsuite/g++.dg`,
+The runner fetches a sparse checkout at `build/gcc-upstream` containing `gcc/testsuite/g++.dg`,
 `g++.old-deja`, `c-c++-common`, and shared test support. Upstream source and
 copyright/license files remain unchanged in that checkout. The pin makes the
 download reproducible; it is not a rolling dependency.
@@ -12,17 +12,34 @@ download reproducible; it is not a rolling dependency.
 Run from the CPrime root:
 
 ```powershell
-python Tests/gcc/run.py --fetch
-python Tests/gcc/run.py --select g++.dg/init/ --out build/gcc-init
-python Tests/gcc/run.py --probe --timeout 2 --out build/gcc-all
-python Tests/gcc/test_runner.py
+powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/run.ps1 -Fetch
+powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/run.ps1 -Select g++.dg/init/ -Out build/gcc-init
+powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/run.ps1 -Probe -Timeout 2 -Out build/gcc-all
+powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/test_runner.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/test_provenance.ps1
 ```
 
-`--select` accepts repeatable relative path prefixes, including individual
-filenames. `--compiler` selects a compiler executable. All invocations are
+`-Select` accepts an array of relative path prefixes, including individual
+filenames (for example, `./Tests/gcc/run.ps1 -Select 'g++.dg/init/', 'g++.dg/cpp/'`
+inside PowerShell). `-Compiler` selects a compiler executable; `-Limit` bounds
+the number of selected files. All invocations are
 serial, with a freshly removed output artifact before each compilation.
 Timeouts apply separately to compilation and execution; timed-out processes
-are killed and waited for by Python before continuing.
+are killed and waited for before continuing. Windows PowerShell 5.1 is sufficient;
+Python, Pester and embedded C# are not required.
+
+Each run writes `inputs.json` with relative paths and SHA-256 hashes for selected
+sources and, when `-RuntimeRoot` is supplied, every file under its `include/`
+and `lib/` directories. `metadata.json` records the input manifest hash and the
+provenance helper hash alongside compiler and runner identities. Implicit runtime
+search is explicitly marked unresolved; these hashes do not establish a target
+or standard-version conformance matrix.
+
+`test_runner.ps1` covers directive classification, argument quoting, output
+capture, timeout cleanup and Windows crash codes. The PowerShell port was
+compared with the previous runner on the first 40 `g++.dg/init/` cases, both
+normally and with `-Probe`: every per-case classification and process exit
+matched, including existing compiler/runtime failures and the probe timeout.
 
 This is a conservative CPC assessment adapter, **not a replacement for
 DejaGnu and not a claim that the whole GCC testsuite passes**. It inventories

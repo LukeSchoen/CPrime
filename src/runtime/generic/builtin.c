@@ -8,7 +8,7 @@
 #endif
 
 /* Microsoft-compatible byte string intrinsics are declared by the Windows
-   headers and used by CommonLibrary's memory wrappers.  They are ordinary
+   headers and used by application memory wrappers.  They are ordinary
    runtime functions on targets where the frontend does not inline them. */
 void __movsb(unsigned char *dst, const unsigned char *src,
              unsigned long long count)

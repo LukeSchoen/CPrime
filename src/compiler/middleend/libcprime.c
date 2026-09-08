@@ -1630,10 +1630,10 @@ ST_FUNC int cprime_add_file_internal(CPRIMEState *s1, const char *filename, int 
     return FILE_NOT_FOUND;
   }
 
+  dynarray_add(&s1->target_deps, &s1->nb_target_deps, cprime_strdup(filename));
   if (flags & AFF_TYPE_BIN)
     return cprime_add_binary(s1, flags, filename, fd);
 
-  dynarray_add(&s1->target_deps, &s1->nb_target_deps, cprime_strdup(filename));
   return cprime_compile(s1, flags, filename, fd, NULL);
 }
 
@@ -1885,7 +1885,6 @@ static int cprime_set_linker(CPRIMEState *s, const char *optarg)
     else if (link_option(&o, "Map="))
     {
       cprime_set_str(&s->mapfile, o.arg);
-      ignoring = 1;
     }
     else if (link_option(&o, "oformat="))
     {
@@ -2756,8 +2755,6 @@ PUB_FUNC void cprime_print_stats(CPRIMEState *s1, unsigned total_time)
   fprintf(stderr, " %d max (bytes)\n", mem_max_size);
 #endif
 }
-
-
 
 
 

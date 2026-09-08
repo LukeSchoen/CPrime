@@ -676,12 +676,6 @@ static void gexpr_decl(void)
     }
     restore_cpp_lifecycle_probe(replay);
   }
-  if ((tok >= TOK_UIDENT
-          && find_class_template_def(find_current_namespace_tok(tok))))
-  {
-    gexpr();
-    return;
-  }
   int v = decl(VT_JMP);
   if (v > 1 && tok != ';')
   {
@@ -1097,6 +1091,7 @@ if_chain:
   }
   else if (t == TOK_FOR)
   {
+    struct scope condition_scope;
     new_scope(&o);
 
     skip('(');
@@ -1117,30 +1112,32 @@ if_chain:
       }
     }
     skip(';');
+    new_scope(&condition_scope);
     a = b = 0;
     c = d = gind();
     if (tok != ';')
     {
-      gexpr();
+      gexpr_decl();
       cpp_temp_end_condition(temporary_mark);
       a = gvtst(1, 0);
     }
     skip(';');
-    if (tok != ')')
-    {
-      e = gjmp(0);
-      d = gind();
+    e = gjmp(0);
+    d = gind();
+    if (tok != ')') {
       gexpr();
       vpop();
       cpp_temp_end(temporary_mark);
-      gjmp_addr(c);
-      gsym(e);
     }
+    try_call_scope_cleanup(condition_scope.prev->cl.s);
+    gjmp_addr(c);
+    gsym(e);
     skip(')');
     lblock(&a, &b);
     gjmp_addr(d);
     gsym_addr(b, d);
     gsym(a);
+    prev_scope(&condition_scope, 0);
     prev_scope(&o, 0);
 
   }
@@ -1178,6 +1175,8 @@ if_chain:
     skip('(');
     gexpr_decl();
     cpp_temp_end(temporary_mark);
+    if ((vtop->type.t & VT_BTYPE) == VT_STRUCT)
+      try_call_cpp_conversion_operator(&int_type, 0);
     if (!is_integer_btype(vtop->type.t & VT_BTYPE))
       cprime_error("switch value not an integer");
     skip(')');
