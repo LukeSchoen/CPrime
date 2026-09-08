@@ -648,7 +648,7 @@ static int try_parse_range_for(void)
 }
 
 // c2y if/switch declaration
-static void gexpr_decl(void)
+static void gexpr_decl(int for_condition)
 {
   if (tok >= TOK_UIDENT)
   {
@@ -676,8 +676,24 @@ static void gexpr_decl(void)
     }
     restore_cpp_lifecycle_probe(replay);
   }
+  if (tok >= TOK_UIDENT && find_class_template_def(find_current_namespace_tok(tok))) {
+    TokenString *replay = tok_str_alloc();
+    int depth = 0, expression;
+    tok_str_add_tok(replay); next();
+    if (tok == TOK_LT) {
+      do {
+        if (tok == TOK_LT) ++depth;
+        else if (tok == TOK_GT) --depth;
+        else if (tok == TOK_SAR) depth -= 2;
+        tok_str_add_tok(replay); next();
+      } while (depth > 0 && tok != TOK_EOF);
+    }
+    expression = tok == ':' || tok == '(' || tok == '{';
+    restore_cpp_lifecycle_probe(replay);
+    if (expression) { gexpr(); return; }
+  }
   int v = decl(VT_JMP);
-  if (v > 1 && tok != ';')
+  if (v > 1 && (tok != ';' || for_condition))
   {
     Sym *s = sym_find(v);
     vset(&s->type, s->r, (s->r &VT_SYM) ? 0 : s->c);
@@ -766,7 +782,7 @@ again:
 if_chain:
     new_scope_s(&o);
     skip('(');
-    gexpr_decl();
+    gexpr_decl(0);
     cpp_temp_end_condition(temporary_mark);
     a = gvtst(1, 0);
     skip(')');
@@ -801,7 +817,7 @@ if_chain:
     new_scope(&o);
     d = gind();
     skip('(');
-    gexpr_decl();
+    gexpr_decl(0);
     cpp_temp_end_condition(temporary_mark);
     a = gvtst(1, 0);
     skip(')');
@@ -1117,7 +1133,7 @@ if_chain:
     c = d = gind();
     if (tok != ';')
     {
-      gexpr_decl();
+      gexpr_decl(1);
       cpp_temp_end_condition(temporary_mark);
       a = gvtst(1, 0);
     }
@@ -1173,7 +1189,7 @@ if_chain:
 
     new_scope_s(&o);
     skip('(');
-    gexpr_decl();
+    gexpr_decl(0);
     cpp_temp_end(temporary_mark);
     if ((vtop->type.t & VT_BTYPE) == VT_STRUCT)
       try_call_cpp_conversion_operator(&int_type, 0);
@@ -1381,7 +1397,16 @@ expr:
    with a '{').  If STR then allocates and stores the skipped tokens
    in *STR.  This doesn't check if () and {} are nested correctly,
    i.e. "({)}" is accepted.  */
-static void skip_or_save_block_ex(TokenString **str, int allow_eof)
+static int saved_member_template_name(int name)
+{
+  int i;
+  for (i = 0; i < nb_template_member_defs; ++i)
+    if (template_member_defs[i]
+        && template_member_def_method_tok(template_member_defs[i]) == name) return 1;
+  return 0;
+}
+
+static void skip_or_save_block_mode(TokenString **str, int allow_eof, int logical_operator)
 {
   int braces = tok == '{';
   int level = 0;
@@ -1395,6 +1420,9 @@ static void skip_or_save_block_ex(TokenString **str, int allow_eof)
   while (1)
   {
     int t = tok;
+    if (logical_operator && level == 0 && angle == 0
+        && (t == TOK_LOR || (logical_operator == TOK_LAND && t == TOK_LAND)
+            || t == '?' || t == '=' || TOK_ASSIGN(t))) break;
     if (level == 0 && angle == 0
         && (t == ','
             || t == ';'
@@ -1416,6 +1444,7 @@ static void skip_or_save_block_ex(TokenString **str, int allow_eof)
         && (angle > 0
             || (prev_sig >= TOK_UIDENT
                 && (find_template_def(prev_sig)
+                    || (logical_operator && saved_member_template_name(prev_sig))
                     || find_template_def(find_current_namespace_tok(prev_sig))
                     || (qualified_name && find_template_def(qualified_name))
                     || is_template_keyword_tok(prev_prev_sig)))))
@@ -1450,6 +1479,11 @@ static void skip_or_save_block_ex(TokenString **str, int allow_eof)
   }
   if (str)
     tok_str_add(*str, TOK_EOF);
+}
+
+static void skip_or_save_block_ex(TokenString **str, int allow_eof)
+{
+  skip_or_save_block_mode(str, allow_eof, 0);
 }
 
 static void skip_or_save_block(TokenString **str)

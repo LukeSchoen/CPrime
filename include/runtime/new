@@ -2,6 +2,7 @@
 #define _CPC_NEW
 
 #include <exception>
+#include <cstddef>
 
 namespace std {
   struct nothrow_t {

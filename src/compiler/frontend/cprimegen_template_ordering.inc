@@ -96,6 +96,7 @@ static int member_order_pattern(TemplateMemberDef *definition,
     {
       int begin = pattern->starts[pattern->parameters];
       int end = pattern->count;
+      int reference_pattern;
       /* An optional declarator identifier does not participate in deduction. */
       if (end > begin + 1 && pattern->tokens[end - 1] >= TOK_UIDENT
           && !member_order_cv(pattern->tokens[end - 1])
@@ -103,9 +104,10 @@ static int member_order_pattern(TemplateMemberDef *definition,
         --end;
       /* Partial ordering compares referred-to types. Conversion ranking has
          already accounted for reference binding and top-level qualifiers. */
-      if (end > begin && (pattern->tokens[end - 1] == '&'
-                         || pattern->tokens[end - 1] == TOK_LAND)) --end;
-      {
+      reference_pattern = end > begin && (pattern->tokens[end - 1] == '&'
+                                         || pattern->tokens[end - 1] == TOK_LAND);
+      if (reference_pattern) --end;
+      if (!reference_pattern) {
         int at, nesting = 0, outer_pointer = 0;
         for (at = begin; at < end; ++at)
         {
@@ -341,6 +343,7 @@ static int class_partial_order_pattern(TemplateDef *definition,
    inside another template or behind a pointer. */
 typedef struct ClassOrderType {
   int variable, wrapper, qualifiers;
+  int nondeduced;
   int name_start, name_length, child, next;
 } ClassOrderType;
 
@@ -375,6 +378,15 @@ static int class_order_type(ClassOrderTypes *types, int *at, int end)
   root = ++types->count;
   node = &types->nodes[root];
   token = pattern->tokens[*at];
+  if (token >= TOK_UIDENT && !strcmp(get_tok_str(token, NULL), "typename")) {
+    int scan;
+    for (scan = *at + 1; scan + 1 < end; ++scan)
+      if (pattern->tokens[scan] == ':' && pattern->tokens[scan + 1] == ':') {
+        node->nondeduced = 1;
+        *at = end;
+        return root;
+      }
+  }
   if (token < 0) {
     node->variable = -token;
     ++*at;
@@ -456,6 +468,8 @@ static int class_order_deduce_type(ClassOrderTypes *pattern, int pattern_node,
   ClassOrderType *p = &pattern->nodes[pattern_node];
   ClassOrderType *a = &actual->nodes[actual_node];
   int i, left, right;
+  if (p->nondeduced) return 1;
+  if (a->nondeduced) return 0;
   if (p->variable) {
     ClassOrderTypeBinding *binding = &bindings[p->variable - 1];
     if ((a->qualifiers & p->qualifiers) != p->qualifiers) return 0;

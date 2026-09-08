@@ -8,6 +8,16 @@ inline long long abs(long long value) { return ::llabs(value); }
 
 namespace std
 {
+  using ::abort;
+  using ::atexit;
+  using ::exit;
+  using ::calloc;
+  using ::free;
+  using ::malloc;
+  using ::realloc;
+  using ::getenv;
+  using ::system;
+  using ::bsearch;
   inline int abs(int value) { return ::abs(value); }
   inline long abs(long value) { return ::labs(value); }
   inline long long abs(long long value) { return ::llabs(value); }

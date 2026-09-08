@@ -19,3 +19,8 @@
 - Use only C, C++, assembly, batch (.bat/.cmd), and PowerShell (.ps1) for
   first-party code, including test tools. Do not embed C# or require Python.
   Leave third-party sources/tooling unchanged; documentation and data are exempt.
+- Test exact reproducers and curated subsystem gates first (Tests/DEVELOPMENT.md).
+  Batch coherent fixes before full inventory checkpoints; use runner summaries.
+- Keep Markdown limited to usage, current requirements, and remaining work.
+  Keep decisions and completed-work history in git; preserve regression coverage
+  in tests and clean old build logs routinely.

@@ -19,7 +19,7 @@ goto parse_args
 
 :args_done
 if defined COMPILER_PATH set "COMPILER=%COMPILER_PATH%"
-set "SRC_DIR=%SCRIPT_DIR%features\MultiSource\pass"
+set "SRC_DIR=%SCRIPT_DIR%integration\multi_source\pass"
 set "WORK_DIR=%TEMP%\cprime-multisource-tests-%RANDOM%-%RANDOM%"
 
 if not exist "%COMPILER%" (

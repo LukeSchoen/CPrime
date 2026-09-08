@@ -1,8 +1,86 @@
 static int compare_free_function_template_order(TemplateDef *, TemplateDef *);
 static int infer_template_args_from_call_with_explicit(TemplateDef *, CType *, int,
                                                        TemplateArgList *, TemplateArgList *);
+/* A qualified friend declaration can name a deduced specialization without
+   an explicit template argument list. It must not introduce a new overload. */
+static int bind_qualified_friend_template(int name, CType *function)
+{
+  CType actual[16];
+  Sym *parameter;
+  TemplateDef *candidate;
+  TemplateDef *selected_template = NULL;
+  FreeFuncOverload *ordinary;
+  int count = 0, selected = 0;
+  for (ordinary = free_func_candidates(name); ordinary; ordinary = ordinary->name_next)
+    if (ordinary->name_tok == name
+        && same_func_param_signature(&ordinary->func_type, function)
+        && compare_types(&ordinary->func_type.ref->type, &function->ref->type, 1))
+      return 1;
+  for (parameter = function->ref->next; parameter; parameter = parameter->next) {
+    if (count == 16) return 0;
+    actual[count] = parameter->type;
+    if (is_reference_type(&actual[count])) {
+      int category = actual[count].t & (VT_REFERENCE | VT_RVALUE_REFERENCE);
+      actual[count] = *pointed_type(&actual[count]);
+      actual[count].t |= category;
+    }
+    ++count;
+  }
+  for (candidate = template_def_candidates(name); candidate;
+       candidate = candidate->lookup_bucket_next) {
+    TemplateArgList arguments;
+    Sym *symbol;
+    int instantiated;
+    if (candidate->is_class || candidate->is_alias
+        || template_def_lookup_tok(candidate) != name
+        || candidate->func_max_args != count) continue;
+    if (!infer_template_args_from_call_with_explicit(candidate, actual, count,
+                                                    &arguments, NULL)) continue;
+    instantiated = instantiate_template_if_needed(candidate, &arguments);
+    compile_pending_template_specs_without_member_flush();
+    symbol = global_symbol_find(instantiated);
+    if (!symbol || !same_func_param_signature(&symbol->type, function)
+        || !compare_types(&symbol->type.ref->type, &function->ref->type, 1)) continue;
+    if (selected && selected != instantiated) {
+      int order = compare_free_function_template_order(candidate, selected_template);
+      if (order < 0) continue;
+      if (!order) cprime_error("ambiguous qualified friend function");
+    }
+    selected = instantiated;
+    selected_template = candidate;
+  }
+  return selected != 0;
+}
+
 /* Bind an explicit function specialization through its declaration. A '<'
    inside the body is never part of the specialization's declarator. */
+static int explicit_lifecycle_declarator(void)
+{
+  TokenString *prefix = tok_str_alloc();
+  int angle = 0, parenthesis = 0, previous = 0, qualifier = 0;
+  int name = 0, destructor = 0, result = 0;
+  while (tok != TOK_EOF && tok != ';' && tok != '{') {
+    if (!angle && !parenthesis && tok == '(') {
+      if (qualifier && name == qualifier) result = destructor ? 2 : 1;
+      break;
+    }
+    if (!angle && !parenthesis) {
+      if (tok >= TOK_UIDENT) name = tok;
+      else if (tok == ':' && previous == ':') qualifier = name;
+      else if (tok == '~') destructor = 1;
+    }
+    if (tok == '(') ++parenthesis;
+    else if (tok == ')' && parenthesis) --parenthesis;
+    else if (!parenthesis && tok == TOK_LT) ++angle;
+    else if (!parenthesis && tok == TOK_GT && angle) --angle;
+    else if (!parenthesis && tok == TOK_SAR && angle) angle = angle > 1 ? angle - 2 : 0;
+    previous = tok;
+    tok_str_add_tok(prefix); next();
+  }
+  restore_cpp_lifecycle_probe(prefix);
+  return result;
+}
+
 static void parse_explicit_function_specialization(int instantiation)
 {
   TokenString *parameters = tok_str_alloc(), *definition = tok_str_alloc();
@@ -16,8 +94,12 @@ static void parse_explicit_function_specialization(int instantiation)
   CValue saved_tokc;
   Sym *parameter, *symbol;
   TemplateDef *selected_free = NULL;
+  int lifecycle = explicit_lifecycle_declarator();
 
-  if (!parse_btype(&result, &attributes, 0)) expect("specialization return type");
+  if (lifecycle) {
+    memset(&attributes, 0, sizeof(attributes));
+    result.t = VT_VOID; result.ref = NULL;
+  } else if (!parse_btype(&result, &attributes, 0)) expect("specialization return type");
   is_inline = !!(result.t & VT_INLINE);
   while (tok == '*' || tok == '&' || tok == TOK_LAND) {
     int reference = tok == '&' ? VT_REFERENCE : tok == TOK_LAND ? VT_RVALUE_REFERENCE : 0;
@@ -31,7 +113,11 @@ static void parse_explicit_function_specialization(int instantiation)
   for (;;) {
     TemplateArgList component_args = {{0}, 0};
     int has_args = 0;
-    if (tok < TOK_UIDENT) expect("specialization name");
+    if (lifecycle == 2 && tok == '~') next();
+    if (tok == TOK_OPERATOR) {
+      name = parse_cpp_operator_method_tok();
+      unget_tok(name);
+    } else if (tok < TOK_UIDENT) expect("specialization name");
     name = tok;
     if (qualifier && is_namespace_tok(qualifier)) {
       int parts[2] = { qualifier, name };
@@ -52,9 +138,45 @@ static void parse_explicit_function_specialization(int instantiation)
       TemplateDef *record = find_class_template_def(qualified);
       if (!record) cprime_error("class template expected in specialization qualifier");
       qualified = instantiate_template_if_needed(record, &component_args);
+      compile_pending_template_specs_without_member_flush();
     }
     qualifier = qualified;
     if (struct_find(qualifier)) owner = qualifier;
+  }
+  if (lifecycle) {
+    if (!owner || !class_tok_matches_unqualified_name(owner, name))
+      cprime_error("lifecycle specialization requires its class name");
+    name = lifecycle == 1 ? TOK_CONSTRUCTOR1 : TOK_DESTRUCTOR1;
+  }
+  if (owner && tok != '(' && !instantiation && !explicit_args.nb) {
+    int braces = 0, parentheses = 0, brackets = 0;
+    Sym *member = global_symbol_find(make_static_member_tok(owner, name));
+    if (!member || (member->type.t & VT_BTYPE) == VT_FUNC)
+      cprime_error("specialization requires a declared static data member");
+    add_ctype_tokens(definition, &result);
+    tok_str_add(definition, owner);
+    tok_str_add(definition, ':'); tok_str_add(definition, ':');
+    tok_str_add(definition, name);
+    while (tok != TOK_EOF) {
+      int finished = tok == ';' && !braces && !parentheses && !brackets;
+      if (tok == '{') ++braces;
+      else if (tok == '}') --braces;
+      else if (tok == '(') ++parentheses;
+      else if (tok == ')') --parentheses;
+      else if (tok == '[') ++brackets;
+      else if (tok == ']') --brackets;
+      tok_str_add_tok(definition); next();
+      if (finished) break;
+    }
+    tok_str_add(definition, TOK_EOF);
+    saved_tok = tok; saved_tokc = tokc;
+    enter_namespace_scope(symbol_namespace_scope_tok(owner));
+    begin_macro(definition, 1); next();
+    decl(VT_CONST);
+    end_macro(); tok = saved_tok; tokc = saved_tokc;
+    enter_namespace_scope(saved_namespace);
+    tok_str_free(parameters);
+    return;
   }
   skip('(');
   while (tok != TOK_EOF && (tok != ')' || depth)) {
@@ -136,7 +258,7 @@ static void parse_explicit_function_specialization(int instantiation)
           cprime_error("ambiguous explicit member instantiation");
         function_tok = ordinary->mangled_tok;
       }
-      if (function_tok && instantiation) {
+      if (function_tok && instantiation == 1) {
         CType receiver = { VT_STRUCT, struct_find(owner) };
         instantiate_template_member_body_for_func_tok(&receiver, name, function_tok);
       }
@@ -173,7 +295,7 @@ static void parse_explicit_function_specialization(int instantiation)
     if (!symbol) cprime_error("explicit instantiation has no function symbol");
     /* Register emission demand even when this translation unit never calls
        the function. The normal deferred drain supplies the primary's body. */
-    put_extern_sym(symbol, NULL, 0, 0);
+    if (instantiation == 1) put_extern_sym(symbol, NULL, 0, 0);
     tok_str_free(parameters);
     tok_str_free(definition);
     return;

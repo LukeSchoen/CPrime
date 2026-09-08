@@ -1,4 +1,4 @@
-/* Native portable-package helper. Built serially by CPC on every full build. */
+/* Prepare portable data once; validate and attach it during compiler rebuilds. */
 #include <windows.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -48,6 +48,23 @@ static int whitespace(unsigned c) {
 
 static int punctuation(unsigned c) {
     return c && c < 128 && strchr(",;:{}()[]=+-*/%&|^!?<>~", (int)c) != NULL;
+}
+
+static int joins_token(unsigned left, unsigned right) {
+    /* Whitespace can separate operators as well as identifiers. */
+    if ((left == '+' && (right == '+' || right == '=')) ||
+        (left == '-' && (right == '-' || right == '=' || right == '>')) ||
+        (left == '<' && (right == '<' || right == '=' || right == ':' || right == '%')) ||
+        (left == '>' && (right == '>' || right == '=')) ||
+        (left == '&' && (right == '&' || right == '=')) ||
+        (left == '|' && (right == '|' || right == '=')) ||
+        (left == ':' && (right == ':' || right == '>')) ||
+        (left == '%' && (right == '>' || right == ':' || right == '=')) ||
+        (left == '/' && (right == '/' || right == '*' || right == '=')) ||
+        (left == '.' && right == '*') ||
+        ((left == '*' || left == '^' || left == '!' || left == '=') && right == '='))
+        return 1;
+    return 0;
 }
 
 static void minify(const char *path) {
@@ -119,22 +136,33 @@ static void minify(const char *path) {
         }
     }
     output = allocate(count + 2);
+    state = 0;
     for (i = 0; i < count;) {
         size_t start = i, end;
         int directive;
         while (i < count && text[i] != '\n') ++i;
         end = i;
         if (i < count) ++i;
-        while (start < end && whitespace(text[start])) ++start;
+        while (!state && start < end && whitespace(text[start])) ++start;
         while (end > start && whitespace(text[end-1])) --end;
         if (start == end) continue;
         directive = text[start] == '#';
         while (start < end) {
             unsigned c = text[start++];
-            if (whitespace(c)) {
+            if (state) {
+                output[used++] = c < 128 ? (char)c : '?';
+                if (c == '\\' && start < end) {
+                    c = text[start++];
+                    output[used++] = c < 128 ? (char)c : '?';
+                } else if (c == (unsigned)state) state = 0;
+            } else if (c == '"' || c == '\'') {
+                state = c;
+                output[used++] = c;
+            } else if (whitespace(c)) {
                 unsigned previous = text[start-2];
                 while (start < end && whitespace(text[start])) ++start;
-                if (directive || (!punctuation(previous) && !punctuation(text[start])))
+                if (directive || joins_token(previous, text[start]) ||
+                    (!punctuation(previous) && !punctuation(text[start])))
                     output[used++] = ' ';
             } else output[used++] = c < 128 ? (char)c : '?';
         }
@@ -224,13 +252,11 @@ static void number(Buffer *buffer, uint64_t value, unsigned width) {
     append(buffer, bytes, width);
 }
 
-static void pack(const char *exe, const char *stage, const char *manifest) {
+static void prepare(const char *destination, const char *stage, const char *manifest) {
     Buffer payload = {0}, trailer = {0};
     size_t length, i = 0, compressed_size;
     unsigned char *list = read_file(manifest, &length), *compressed;
     uint32_t count = 0;
-    FILE *file;
-    long offset;
     number(&payload, 0, 4);
     while (i < length) {
         size_t start = i, path_length, file_size;
@@ -254,27 +280,71 @@ static void pack(const char *exe, const char *stage, const char *manifest) {
     }
     for (i = 0; i < 4; ++i) payload.data[i] = (count >> (8*i)) & 255;
     compressed = compress_data(payload.data, payload.size, &compressed_size);
-    file = fopen(exe, "ab");
-    if (!file || fseek(file, 0, SEEK_END) || (offset = ftell(file)) < 0) fail("open executable", exe);
     number(&trailer, payload.size, 8);
     number(&trailer, compressed_size, 8);
     append(&trailer, compressed, compressed_size);
-    append(&trailer, "CPCPAY11", 8);
-    number(&trailer, (uint64_t)offset, 8);
-    if (fwrite(trailer.data, 1, trailer.size, file) != trailer.size) fail("append payload", exe);
-    if (fclose(file)) fail("close executable", exe);
+    write_file(destination, trailer.data, trailer.size);
     free(list);
     free(payload.data);
     free(trailer.data);
     free(compressed);
 }
 
+static uint64_t read_number(const unsigned char *p) {
+    uint64_t value = 0;
+    unsigned i;
+    for (i = 0; i < 8; ++i) value |= (uint64_t)p[i] << (8*i);
+    return value;
+}
+
+static void attach(const char *exe, const char *prepared) {
+    size_t exe_size, payload_size, base;
+    unsigned char *original = read_file(exe, &exe_size);
+    unsigned char *payload = read_file(prepared, &payload_size);
+    Buffer output = {0};
+    char temporary[4096];
+    if (payload_size < 16 || read_number(payload + 8) != payload_size - 16)
+        fail("invalid prepared payload", prepared);
+    base = exe_size;
+    if (exe_size >= 32 && !memcmp(original + exe_size - 16, "CPCPAY11", 8)) {
+        uint64_t previous = read_number(original + exe_size - 8);
+        if (previous > exe_size - 32 ||
+            read_number(original + (size_t)previous + 8) != exe_size - (size_t)previous - 32)
+            fail("invalid existing payload", exe);
+        base = (size_t)previous;
+    }
+    append(&output, original, base);
+    append(&output, payload, payload_size);
+    append(&output, "CPCPAY11", 8);
+    number(&output, base, 8);
+    if (strlen(exe) + 16 >= sizeof temporary) fail("path too long", exe);
+    sprintf(temporary, "%s.pack.tmp", exe);
+    write_file(temporary, output.data, output.size);
+    if (!MoveFileExA(temporary, exe, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
+        fail("publish executable", exe);
+    free(original);
+    free(payload);
+    free(output.data);
+}
+
+#include "portable_cache.inc"
+
 int main(int argc, char **argv) {
     if (argc == 3 && !strcmp(argv[1], "minify")) minify(argv[2]);
     else if (argc == 3 && !strcmp(argv[1], "headers")) minify_directory(argv[2]);
-    else if (argc == 5 && !strcmp(argv[1], "pack")) pack(argv[2], argv[3], argv[4]);
+    else if (argc == 5 && !strcmp(argv[1], "prepare")) prepare(argv[2], argv[3], argv[4]);
+    else if (argc == 4 && !strcmp(argv[1], "attach")) attach(argv[2], argv[3]);
+    else if (argc == 5 && !strcmp(argv[1], "seal")) return cache_seal(argv[2], argv[3], argv[4]);
+    else if (argc == 5 && !strcmp(argv[1], "check")) return cache_matches(argv[2], argv[3], argv[4]) ? 0 : 2;
+    else if (argc == 6 && !strcmp(argv[1], "cached")) {
+        char payload[4096];
+        if (!cache_matches(argv[3], argv[4], argv[5])) return 2;
+        join_path(payload, sizeof payload, argv[3], "payload.bin");
+        attach(argv[2], payload);
+        puts("Portable payload: cached");
+    }
     else {
-        fprintf(stderr, "usage: portable-payload minify FILE | headers DIRECTORY | pack EXE STAGE MANIFEST\n");
+        fprintf(stderr, "usage: portable-payload minify FILE | headers DIRECTORY | prepare PAYLOAD STAGE MANIFEST | attach EXE PAYLOAD | seal CACHE ROOT RUNTIME | check CACHE ROOT RUNTIME | cached EXE CACHE ROOT RUNTIME\n");
         return 1;
     }
     return 0;

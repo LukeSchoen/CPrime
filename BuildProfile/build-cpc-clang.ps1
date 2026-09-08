@@ -1,6 +1,9 @@
 param(
     [string]$ClangPath = "",
-    [string]$OutDir = ""
+    [string]$OutDir = "",
+    [ValidateSet('0', '1', '2', '3', 's', 'z')][string]$Optimization = '3',
+    [switch]$Map,
+    [switch]$SystemCRT
 )
 
 $ErrorActionPreference = "Stop"
@@ -59,19 +62,30 @@ try {
         "-Wno-implicit-function-declaration",
         "-Wno-incompatible-library-redeclaration",
         "-Wno-deprecated-declarations",
-        "-O3",
+        "-O$Optimization",
+        "-g0",
+        "-Wl,/DEBUG:NONE,/INCREMENTAL:NO",
         (Join-Path $rootDir "src\compiler\driver\cprime.c"),
         "-o",
         $exePath
     )
 
+    if ($SystemCRT) {
+        $defines += @('-D_DLL', '-D_MT', '-Xclang', '--dependent-lib=msvcrt',
+            '-Wl,/NODEFAULTLIB:libcmt,/NODEFAULTLIB:libucrt,/NODEFAULTLIB:vcruntime,/NODEFAULTLIB:libvcruntime,/DEFAULTLIB:ucrt',
+            '-Xlinker', 'libvcruntime.lib')
+    }
+    if ($Map) { $defines += '-Wl,/MAP:' + (Join-Path ([IO.Path]::GetFullPath($OutDir)) 'cpc-clang.map') }
+    $compileTimer = [System.Diagnostics.Stopwatch]::StartNew()
     & $clang.Path @includeArgs @defines
+    $compileTimer.Stop()
     if ($LASTEXITCODE -ne 0) {
         throw "clang CPC build failed with exit code $LASTEXITCODE."
     }
     if (-not (Test-Path -LiteralPath $exePath)) {
         throw "Expected built compiler was not produced: $exePath"
     }
+    Write-Host ('Clang compile/link: {0:N3}s (-O{1} -g0; one compiler process).' -f $compileTimer.Elapsed.TotalSeconds, $Optimization)
 } finally {
     $env:PATH = $oldPath
 }

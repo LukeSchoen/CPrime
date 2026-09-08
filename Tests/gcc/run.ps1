@@ -3,6 +3,8 @@ param(
     [Alias('CompilerPath')][string]$Compiler = '',
     [string]$RuntimeRoot = '',
     [string[]]$Select = @(),
+    [string]$Baseline = '',
+    [ValidateRange(1, 60)][int]$ProgressSeconds = 15,
     [switch]$Probe,
     [ValidateRange(0.001, 5)][double]$Timeout = 5,
     [switch]$ContinueAfterTimeout,
@@ -12,6 +14,10 @@ param(
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'assessment.ps1')
 . (Join-Path $PSScriptRoot 'provenance.ps1')
+. (Join-Path $PSScriptRoot 'progress.ps1')
+$elapsed = [Diagnostics.Stopwatch]::StartNew()
+$progress = New-GccProgress $Baseline
+$lastProgress = 0.0
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $revision = '5f6257c26b814de1a14c71b2d3a49291765b6577'
 $upstream = Join-Path $root 'build/gcc-upstream'
@@ -64,6 +70,8 @@ $metadata.timeout_seconds = $Timeout
 $metadata.timeout_scope = 'each compiler or test process, including startup; cleanup recorded separately'
 $metadata.continue_after_timeout = [bool]$ContinueAfterTimeout
 $metadata.concurrency = 1
+$metadata.baseline = $Baseline
+$metadata.progress_sha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'progress.ps1')).Hash
 $metadata.runtime_root = $RuntimeRoot
 $metadata.language = 'c++'
 $metadata.language_standard = 'compiler default; standard-version matrix not implemented'
@@ -126,6 +134,11 @@ try {
         $counts[$row.status]++
         $log.WriteLine(($row | ConvertTo-Json -Depth 12 -Compress))
         $log.Flush()
+        Add-GccProgress $progress $row
+        if ($elapsed.Elapsed.TotalSeconds - $lastProgress -ge $ProgressSeconds) {
+            Write-GccProgress $progress $counts $files.Count $elapsed.Elapsed.TotalSeconds $Out $false
+            $lastProgress = $elapsed.Elapsed.TotalSeconds
+        }
         if ($row.status -in @('TIMEOUT', 'FAIL_RUN_TIMEOUT')) {
             $phase = if ($row.status -eq 'TIMEOUT') { 'compile' } else { 'run' }
             $slowFailures.Add([ordered]@{ path = $relative; phase = $phase; status = $row.status;
@@ -135,9 +148,10 @@ try {
             Write-Warning "Time budget exceeded: $relative ($phase). Fix correctness/performance; do not increase the budget."
             if (-not $ContinueAfterTimeout) { ++$index; break }
         }
-        if ((++$index % 1000) -eq 0) { Write-Host "$index / $($files.Count) $($counts | ConvertTo-Json -Compress)" }
+        ++$index
     }
 } finally { $log.Dispose() }
+Write-GccProgress $progress $counts $files.Count $elapsed.Elapsed.TotalSeconds $Out ($index -eq $files.Count)
 [IO.File]::WriteAllText((Join-Path $Out 'slow-failures.json'), (ConvertTo-Json -InputObject @($slowFailures.ToArray()) -Depth 12), $utf8)
 [IO.File]::WriteAllText((Join-Path $Out 'execution.json'), (ConvertTo-Json -InputObject ([ordered]@{
     selected = $files.Count; recorded = $index; remaining = $files.Count - $index;

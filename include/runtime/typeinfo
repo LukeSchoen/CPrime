@@ -1,0 +1,45 @@
+#ifndef _CPC_TYPEINFO
+#define _CPC_TYPEINFO
+#include <exception>
+#include <stddef.h>
+#include <string.h>
+#include <cprime_rtti.h>
+
+namespace std {
+  class type_info {
+  public:
+    virtual ~type_info() noexcept {}
+    const char *name() const noexcept { return _M_name; }
+    bool operator==(const type_info& other) const noexcept {
+      return this == &other || strcmp(_M_name, other._M_name) == 0;
+    }
+    bool operator!=(const type_info& other) const noexcept { return !(*this == other); }
+    bool before(const type_info& other) const noexcept { return strcmp(_M_name, other._M_name) < 0; }
+    size_t hash_code() const noexcept {
+      size_t result = 2166136261u;
+      for (const unsigned char *at = (const unsigned char *)_M_name; *at; ++at)
+        result = (result ^ *at) * 16777619u;
+      return result;
+    }
+  private:
+    const char *_M_name;
+    type_info(const type_info&) = delete;
+    type_info& operator=(const type_info&) = delete;
+  };
+  class bad_typeid : public exception {
+  public:
+    const char *what() const noexcept { return "std::bad_typeid"; }
+  };
+  class bad_cast : public exception {
+  public:
+    const char *what() const noexcept { return "std::bad_cast"; }
+  };
+}
+
+inline const std::type_info *__cpc_typeid_dynamic(const void *object, long long vptr_offset) {
+  if (!object) throw std::bad_typeid();
+  const void *const *vtable = *(const void *const *const *)((const char *)object + vptr_offset);
+  const CpcRttiTable *table = (const CpcRttiTable *)vtable[-2];
+  return (const std::type_info *)table->type_info;
+}
+#endif

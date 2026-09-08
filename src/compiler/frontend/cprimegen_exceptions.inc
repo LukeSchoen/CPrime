@@ -676,13 +676,43 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment)
 {
   CType pointer = *type, count_type = { VT_LLONG | VT_UNSIGNED, NULL };
   Sym *destructor = resolve_autodtor_func(type), *constructor;
-  Sym *old_cleanup = cur_scope->cl.s, *object, *cleanup;
-  int old_depth = cur_scope->cl.n, count_slot, pointer_slot, allocation_slot;
+  Sym *old_cleanup, *object, *cleanup;
+  int old_depth, count_slot, pointer_slot, allocation_slot;
   int cookie = cpp_array_cookie_size(type, destructor), context = 0;
-  int index_slot, loop, done, value_initialize = 0;
+  int index_slot, loop, done, value_initialize = 0, null_allocation_jump = 0;
   (void)alignment;
-  mk_pointer(&pointer);
   next(); expr_eq(); skip(']');
+  if ((vtop->type.t & VT_BTYPE) == VT_STRUCT)
+    try_call_cpp_conversion_operator(&count_type, 0);
+  if (!is_integer_btype(vtop->type.t & VT_BTYPE))
+    cprime_error("array new bound requires an integral expression");
+  if (tok == '[') {
+    TokenString *dimensions = tok_str_alloc();
+    int extent_size, extent_align;
+    add_ctype_tokens(dimensions, type);
+    while (tok == '[') skip_or_save_balanced_tokens(dimensions);
+    tok_str_add(dimensions, TOK_EOF);
+    if (!template_probe_type(dimensions, 6, current_namespace_scope_tok(), &pointer))
+      cprime_error("invalid array new dimensions");
+    tok_str_free(dimensions);
+    extent_size = type_size(&pointer, &extent_align);
+    if (extent_size < 0 || size <= 0) cprime_error("invalid array new element type");
+    vpushi(extent_size / size); gen_op('*');
+  }
+  mk_pointer(&pointer);
+  if ((type->t & VT_BTYPE) == VT_STRUCT && type->ref
+      && type->ref->a.cpp_user_constructor && !resolve_autoctor_func(type))
+    cprime_error("array new requires a viable default constructor");
+  if (NOEVAL_WANTED) {
+    if (tok == '(' || tok == '{') {
+      int end = tok == '(' ? ')' : '}';
+      next(); skip(end);
+    }
+    vpop(); vset(&pointer, VT_CONST, 0);
+    return;
+  }
+  old_cleanup = cur_scope->cl.s;
+  old_depth = cur_scope->cl.n;
   loc = (loc - 8) & -8; count_slot = loc;
   vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
   vswap(); vstore(); vpop();
@@ -700,6 +730,10 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment)
   vset(&pointer, VT_LOCAL | VT_LVAL, allocation_slot);
   vpush(&pointer); PUT_R_RET(vtop, pointer.t);
   vstore(); vpop();
+  if (allocation->type.ref->f.func_noexcept) {
+    vset(&pointer, VT_LOCAL | VT_LVAL, allocation_slot);
+    null_allocation_jump = gvtst(1, 0);
+  }
   pointer_slot = allocation_slot;
   if (cookie) {
     loc = (loc - PTR_SIZE) & -PTR_SIZE; pointer_slot = loc;
@@ -723,7 +757,15 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment)
       vpushi(size); gen_op('*');
       gfunc_call(3);
     }
-    vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+    gsym(null_allocation_jump);
+    vset(&pointer, VT_LOCAL | VT_LVAL, allocation_slot);
+    if (cookie) {
+      int null_result;
+      vtop->type = char_pointer_type; gv(RC_INT);
+      vdup(); null_result = gvtst(1, 0);
+      vpushi(cookie); gen_op('+');
+      gsym(null_result); vtop->type = pointer;
+    }
     return;
   }
   object = sym_push2(&local_stack, SYM_FIELD, 0, allocation_slot);
@@ -765,17 +807,31 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment)
   vdup(); vpushi(1); gen_op('+'); vstore(); vpop();
   gjmp_addr(loop); gsym(done);
   cur_scope->cl.s = old_cleanup; cur_scope->cl.n = old_depth;
-  vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+  gsym(null_allocation_jump);
+  vset(&pointer, VT_LOCAL | VT_LVAL, allocation_slot);
+  if (cookie) {
+    int null_result;
+    vtop->type = char_pointer_type; gv(RC_INT);
+    vdup(); null_result = gvtst(1, 0);
+    vpushi(cookie); gen_op('+');
+    gsym(null_result); vtop->type = pointer;
+  }
 }
 
 static void cpp_delete_pointer(int array_delete)
 {
   CType pointer = vtop->type, object_type = *pointed_type(&pointer);
-  Sym *destructor = resolve_autodtor_func(&object_type);
+  Sym *destructor;
   Sym *free_function, *cleanup = NULL, *object;
   VirtualMethodInfo *virtual_destructor = NULL;
   int pointer_slot, allocation_slot, skip_null, class_name, cleanup_depth;
   int free_name = tok_alloc_const("free");
+  /* Preserve the GNU pointer-to-array delete extension. Such a pointer
+     denotes array allocation even when the expression omits []. */
+  if (object_type.t & VT_ARRAY) array_delete = 1;
+  if (array_delete)
+    while (object_type.t & VT_ARRAY) object_type = *pointed_type(&object_type);
+  destructor = resolve_autodtor_func(&object_type);
   if (!array_delete && destructor && class_has_virtual_destructor(&object_type))
     virtual_destructor = find_virtual_method_for_symbol(
         get_struct_type_name_tok(&object_type), destructor->v);
@@ -854,7 +910,8 @@ static void cpp_delete_pointer(int array_delete)
       vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
       vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
       vpushi(size); gen_op('*'); gen_op('+');
-      vtop->type = pointer;
+      vtop->type = object_type;
+      mk_pointer(&vtop->type);
       gfunc_param_typed(destructor->type.ref, destructor->type.ref->next);
       gfunc_call(1); drop_leaked_call_target(destructor);
       gjmp_addr(loop); gsym(done);

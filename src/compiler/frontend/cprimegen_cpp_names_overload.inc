@@ -136,7 +136,22 @@ static void note_current_namespace_scope(void)
   scope = &namespace_scopes[nb_namespace_scopes++];
   scope->name_tok = name;
   scope->depth = nb_namespace_stack;
+  scope->parent_tok = nb_namespace_stack > 1
+    ? make_namespace_tok_from_parts(namespace_stack, nb_namespace_stack - 1) : 0;
+  scope->is_inline = 0;
   memcpy(scope->parts, namespace_stack, sizeof(namespace_stack));
+}
+
+static int namespace_is_inline_child(int child, int parent)
+{
+  int i;
+  while (child != parent && child) {
+    for (i = 0; i < nb_namespace_scopes; ++i)
+      if (namespace_scopes[i].name_tok == child) break;
+    if (i == nb_namespace_scopes || !namespace_scopes[i].is_inline) return 0;
+    child = namespace_scopes[i].parent_tok;
+  }
+  return child == parent;
 }
 
 static int symbol_namespace_scope_tok(int symbol_tok)
@@ -203,10 +218,13 @@ static void enter_symbol_namespace(int symbol_tok)
 static int namespace_member_exists(int t)
 {
   int i;
+  Sym *identifier;
   for (i = 0; i < nb_namespace_scopes; ++i)
     if (namespace_scopes[i].name_tok == t)
       return 1;
-  return sym_find(t) || global_symbol_find(t) || struct_find(t)
+  identifier = sym_find(t);
+  if (!identifier) identifier = global_symbol_find(t);
+  return (identifier && !identifier->cpp_hidden_friend) || struct_find(t)
          || find_class_template_def(t) || find_function_template_def(t);
 }
 
@@ -214,6 +232,29 @@ static int find_namespace_tok_from_parts(const int *parts, int nb_parts)
 {
   int t = make_namespace_tok_from_parts(parts, nb_parts);
   int expanded[18], i, candidate;
+  if (nb_parts == 1 && namespace_member_exists(parts[0])) t = parts[0];
+  if (nb_inline_namespace_scopes && nb_parts) {
+    int parent = nb_parts > 1 ? make_namespace_tok_from_parts(parts, nb_parts - 1) : 0;
+    int found = namespace_member_exists(t) ? t : 0;
+    for (i = 0; i < nb_namespace_scopes; ++i) {
+        NamespaceScope *scope = &namespace_scopes[i];
+        if (scope->name_tok == parent || !namespace_is_inline_child(scope->name_tok, parent)) continue;
+        candidate = make_static_member_tok(scope->name_tok, parts[nb_parts - 1]);
+        if (namespace_member_exists(candidate)) {
+          if (found && found != candidate) {
+            Sym *a = global_symbol_find(found), *b = global_symbol_find(candidate);
+            int functions = (find_function_template_def(found)
+                || (a && (a->type.t & VT_BTYPE) == VT_FUNC))
+              && (find_function_template_def(candidate)
+                || (b && (b->type.t & VT_BTYPE) == VT_FUNC));
+            if (!functions && !(a && b && a->cpp_using_target
+                && a->cpp_using_target == b->cpp_using_target))
+              cprime_error("ambiguous inline namespace member '%s'", get_tok_str(parts[nb_parts - 1], NULL));
+          } else found = candidate;
+        }
+      }
+    if (found) return found;
+  }
   if (!unnamed_namespace_tok || namespace_member_exists(t) || nb_parts < 1)
     return t;
   /* An unnamed namespace supplies an implicit using-directive in its parent,
@@ -243,7 +284,8 @@ static int find_current_namespace_tok(int name_tok)
   for (depth = nb_namespace_stack; depth >= 0; --depth)
   {
     parts[depth] = name_tok;
-    t = depth ? find_namespace_tok_from_parts(parts, depth + 1) : name_tok;
+    t = depth || nb_inline_namespace_scopes
+      ? find_namespace_tok_from_parts(parts, depth + 1) : name_tok;
     if (namespace_member_exists(t))
       return t;
     if (!depth && unnamed_namespace_tok)
@@ -1579,6 +1621,28 @@ static void parse_typed_function_argument(Sym *param)
   expr_eq();
 }
 
+static TokenString *saved_list_direct_reference_argument(CType *parameter,
+                                                         TokenString *argument,
+                                                         CType *source)
+{
+  TokenString **elements, *element = NULL;
+  int count;
+  if (!is_reference_type(parameter)) return NULL;
+  count = split_saved_array_initializer(argument, &elements);
+  if (count == 1 && !saved_arg_is_braced(elements[0])) {
+    CType value;
+    infer_saved_arg_type(elements[0], source);
+    value = is_reference_type(source) ? *pointed_type(source) : *source;
+    value.t &= ~VT_RVALUE_REFERENCE;
+    if (is_compatible_unqualified_types(pointed_type(parameter), &value)) {
+      element = elements[0];
+      count = 0; /* Transfer the sole token string; free only its array. */
+    }
+  }
+  free_saved_array_elements(elements, count);
+  return element;
+}
+
 static int emit_saved_arg_for_param(TokenString *arg, Sym *param)
 {
   int saved_tok = tok;
@@ -1590,21 +1654,28 @@ static int emit_saved_arg_for_param(TokenString *arg, Sym *param)
                   || (pointed_type(&param->type)->t & VT_ARRAY)))))
   {
     CType temp_type;
+    CType source;
+    TokenString *direct = saved_list_direct_reference_argument(&param->type,
+                                                               arg, &source);
     TokenString macro;
     TokenString *saved_macro_stack = macro_stack;
     const int *saved_macro_ptr = macro_ptr;
 
     temp_type = is_reference_type(&param->type) ? *pointed_type(&param->type)
                                                : param->type;
-    macro = *arg;
+    macro = direct ? *direct : *arg;
     begin_macro(&macro, 0);
     next();
-    materialize_braced_temporary_mode(&temp_type, 1);
+    if (direct)
+      expr_eq();
+    else
+      materialize_braced_temporary_mode(&temp_type, 1);
     while (macro_stack && macro_stack != saved_macro_stack)
       end_macro();
     macro_ptr = saved_macro_ptr;
     tok = saved_tok;
     tokc = saved_tokc;
+    if (direct) tok_str_free(direct);
     return 1;
   }
 
@@ -1772,7 +1843,8 @@ static int cpp_pointer_to_bool_conversion(CType *parameter, CType *argument)
   if (is_reference_type(&source)) source = *pointed_type(&source);
   if ((target.t & VT_BTYPE) != VT_BOOL
       || ((source.t & VT_BTYPE) != VT_PTR
-          && (source.t & VT_BTYPE) != VT_FUNC)) return 0;
+          && (source.t & VT_BTYPE) != VT_FUNC
+          && !find_cpp_member_pointer_type(&source))) return 0;
   /* nullptr_t requires direct initialization to convert to bool. */
   if (argument->t & VT_NULLPTR_TYPE) return -1;
   if (reference && !(parameter->t & VT_RVALUE_REFERENCE)
@@ -2073,6 +2145,18 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
   }
   if (IS_ENUM(param_value_type.t) || IS_ENUM_VAL(param_value_type.t))
     return -1;
+  if (!is_reference_type(param_type)) {
+    CppMemberPointerType *target_member = find_cpp_member_pointer_type(&param_value_type);
+    CppMemberPointerType *source_member = find_cpp_member_pointer_type(&arg_value_type);
+    if (target_member && source_member
+        && is_compatible_unqualified_types(&target_member->member_type, &source_member->member_type)
+        && !((source_member->member_type.t & ~target_member->member_type.t)
+             & (VT_CONSTANT | VT_VOLATILE))) {
+      int offset;
+      if (target_member->owner_tok == source_member->owner_tok) return 2;
+      if (class_subobject_offset(target_member->owner_tok, source_member->owner_tok, &offset)) return 3;
+    }
+  }
   if ((IS_ENUM(arg_value_type.t) || IS_ENUM_VAL(arg_value_type.t))
       && btype_is_arithmetic_scalar(param_value_type.t & VT_BTYPE)) {
     if (is_reference_type(param_type)
@@ -2176,6 +2260,13 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
   int source_class = get_struct_type_name_tok(source);
   int best_rank = 0x7fffffff, best_const = 0, ambiguous = 0;
   if (!source_class) return NULL;
+  if (allow_explicit != 2) {
+    CType destination = is_reference_type(target) ? *pointed_type(target) : *target;
+    int destination_class = get_struct_type_name_tok(&destination);
+    if ((destination.t & VT_BTYPE) == VT_VOID
+        || (destination_class && (destination_class == source_class
+            || class_has_base(source_class, destination_class)))) return NULL;
+  }
   classes[0] = source_class;
   for (class_index = 0; class_index < class_count; ++class_index) {
     ClassBaseInfo *base;
@@ -2195,6 +2286,7 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
       }
       classes[class_count++] = base->base_tok;
     }
+  instantiate_cpp_conversion_templates(current_class, target);
   for (candidate = conversion_overloads[(unsigned)current_class & 4095];
        candidate; candidate = candidate->conversion_next) {
     Sym *function;
@@ -2207,6 +2299,8 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
         || ((source->t & VT_CONSTANT) && !candidate->is_const))
       continue;
     converted = candidate->func_type.ref->type;
+    if (allow_explicit == 2 && !is_compatible_types(&converted, target))
+      continue;
     if (is_reference_type(&converted)) {
       int rvalue = converted.t & VT_RVALUE_REFERENCE;
       converted = *pointed_type(&converted);
@@ -2226,14 +2320,19 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
     function = find_global_symbol(candidate->mangled_tok);
     if (!function) continue;
     if (rank < best_rank
-        || (rank == best_rank && best_const && !candidate->is_const)) {
+        || (rank == best_rank && best_const && !candidate->is_const)
+        || (rank == best_rank && candidate->is_const == best_const && best
+            && member_function_is_template(best->v)
+            && !member_function_is_template(function->v))) {
       best = function;
       best_rank = rank;
       best_const = candidate->is_const;
       if (method) *method = candidate->method_tok;
       ambiguous = 0;
     } else if (rank == best_rank && candidate->is_const == best_const
-               && function != best)
+               && function != best
+               && member_function_is_template(best->v)
+                    == member_function_is_template(function->v))
       ambiguous = 1;
   }
   }
@@ -2245,7 +2344,7 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
 static int template_deduced_inst_for_call(TemplateDef *definition,
                                          CType *arguments, int argument_count);
 
-static int cpp_compare_enum_promotion_overloads(Sym *left, Sym *right,
+static int cpp_compare_argument_conversion_overloads(Sym *left, Sym *right,
                                                  CType *arguments, int count, int skip_this)
 {
   Sym *l = left->type.ref->next, *r = right->type.ref->next;
@@ -2257,6 +2356,23 @@ static int cpp_compare_enum_promotion_overloads(Sym *left, Sym *right,
         != call_arg_match_rank(&r->type, &arguments[i]))
       return 0;
     current = cpp_compare_enum_promotion_targets(&l->type, &r->type, &arguments[i]);
+    if (arguments[i].t == VT_BRACED_LIST) {
+      CType left_target = is_reference_type(&l->type) ? *pointed_type(&l->type) : l->type;
+      CType right_target = is_reference_type(&r->type) ? *pointed_type(&r->type) : r->type;
+      current = type_is_std_initializer_list(&left_target)
+              - type_is_std_initializer_list(&right_target);
+    }
+    if (arguments[i].t == VT_BRACED_LIST
+        && is_reference_type(&l->type) && is_reference_type(&r->type)
+        && is_compatible_unqualified_types(pointed_type(&l->type),
+                                            pointed_type(&r->type))) {
+      /* Both viable list conversions initialize the same underlying type.
+         Preserve the final reference binding: a temporary prefers T&& to
+         const T&. Do not use this to order unrelated list-initialized types. */
+      int left_rvalue = (l->type.t & VT_RVALUE_REFERENCE) != 0;
+      int right_rvalue = (r->type.t & VT_RVALUE_REFERENCE) != 0;
+      current = left_rvalue - right_rvalue;
+    }
     if (current && preference && current != preference) return 0;
     if (current) preference = current;
   }
@@ -2268,6 +2384,16 @@ static int saved_list_argument_rank(CType *parameter, TokenString *argument)
   CType target = *parameter;
   int accepted;
   if (is_reference_type(&target)) {
+    CType source;
+    TokenString *direct = saved_list_direct_reference_argument(parameter,
+                                                               argument, &source);
+    if (direct) {
+      /* Bind a singleton naming an existing object directly, preserving its
+         value category instead of manufacturing a temporary. */
+      int rank = call_arg_match_rank_standard(parameter, &source);
+      tok_str_free(direct);
+      return rank;
+    }
     if (!(target.t & VT_RVALUE_REFERENCE)
         && !(pointed_type(&target)->t & VT_CONSTANT)) return -1;
     target = *pointed_type(&target);
@@ -2275,6 +2401,8 @@ static int saved_list_argument_rank(CType *parameter, TokenString *argument)
   target.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE);
   accepted = template_probe_type_ex(argument, 7, current_namespace_scope_tok(), 0, 0, &target);
   if (!accepted) return -1;
+  /* A viable initializer_list conversion precedes other list conversions. */
+  if (type_is_std_initializer_list(&target)) return 0;
   return (target.t & VT_BTYPE) == VT_STRUCT ? 4 : 1;
 }
 
@@ -2391,7 +2519,7 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
     if (!ok)
       continue;
     if (arg_rank == best_arg_rank && match) {
-      int preference = cpp_compare_enum_promotion_overloads(s, match, arg_types,
+      int preference = cpp_compare_argument_conversion_overloads(s, match, arg_types,
                                                             explicit_arg_count, 0);
       if (preference < 0) continue;
       if (preference > 0) {
@@ -2820,6 +2948,8 @@ static const char *cpp_operator_name_from_tok(int op)
   case TOK_UMOD: return "operator%";
   case '&': return "operator&";
   case '|': return "operator|";
+  case TOK_LAND: return "operator&&";
+  case TOK_LOR: return "operator||";
   case '^': return "operator^";
   case TOK_EQ: return "operator==";
   case TOK_NE: return "operator!=";
@@ -2868,6 +2998,15 @@ static int parse_cpp_operator_method_tok(void)
   if (tok != TOK_OPERATOR)
     cprime_error("operator");
   next();
+  if (tok >= TOK_UIDENT
+      && (!strcmp(get_tok_str(tok, NULL), "new")
+          || !strcmp(get_tok_str(tok, NULL), "delete"))) {
+    int allocation = !strcmp(get_tok_str(tok, NULL), "new"), array = 0;
+    next();
+    if (tok == '[') { next(); skip(']'); array = 1; }
+    return tok_alloc_const(allocation ? (array ? "operator new[]" : "operator new")
+                                     : (array ? "operator delete[]" : "operator delete"));
+  }
   if (tok == '[')
   {
     next();
@@ -2884,13 +3023,18 @@ static int parse_cpp_operator_method_tok(void)
   if (!name)
   {
     char opname[256];
-    int first = 1;
+    int first = 1, angle_depth = 0;
     if (tok == TOK_EOF || tok == '(')
       cprime_error("unsupported operator overload");
     pstrcpy(opname, sizeof(opname), "operator ");
     last_cpp_conversion_operator_type_tokens = tok_str_alloc();
     while (tok != TOK_EOF && tok != '(')
     {
+      if (forming_cpp_member_address && !angle_depth
+          && (tok == ';' || tok == ',' || tok == ')' || tok == '}' || tok == ']')) break;
+      if (tok == TOK_LT) ++angle_depth;
+      else if (tok == TOK_GT && angle_depth) --angle_depth;
+      else if (tok == TOK_SAR && angle_depth) angle_depth = angle_depth > 1 ? angle_depth - 2 : 0;
       if (!first)
         pstrcat(opname, sizeof(opname), " ");
       pstrcat(opname, sizeof(opname), get_tok_str(tok, &tokc));
@@ -3084,6 +3228,11 @@ static int try_call_cpp_binary_operator(int op)
   saved_operand_vtop = vtop;
   saved_lhs = vtop[-1];
   saved_rhs = *vtop;
+  if (!is_reference_type(&saved_rhs.type)
+      && ((!(saved_rhs.r & VT_LVAL) && !(saved_rhs.type.t & VT_ARRAY)
+           && (saved_rhs.type.t & VT_BTYPE) != VT_FUNC)
+          || (saved_rhs.r & VT_CXX_PRVALUE)))
+    saved_rhs.type.t |= VT_RVALUE_REFERENCE;
   instantiate_template_member_for_call(&saved_lhs.type, method_tok,
                                        &saved_rhs.type, 1);
   vtop = saved_operand_vtop;
@@ -3172,7 +3321,7 @@ static void cpp_operator_lookup_name(CppOperatorLookup *lookup, int name)
   lookup->names[lookup->name_count++] = name;
 }
 
-static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type)
+static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type, int complete)
 {
   int i, name = 0, namespace_tok;
   int bt = type->t & VT_BTYPE;
@@ -3186,14 +3335,18 @@ static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type)
   for (i = 0; i < lookup->visited_count; ++i)
     if (lookup->visited[i] == symbol) return;
   dynarray_add(&lookup->visited, &lookup->visited_count, symbol);
+  if (bt == VT_STRUCT && complete) {
+    materialize_incomplete_template_type(type);
+    symbol = type->ref;
+  }
   if ((type->t & VT_BTYPE) == VT_PTR) {
-    cpp_operator_associated_type(lookup, pointed_type(type));
+    cpp_operator_associated_type(lookup, pointed_type(type), complete);
     return;
   }
   if ((type->t & VT_BTYPE) == VT_FUNC) {
-    cpp_operator_associated_type(lookup, &symbol->type);
+    cpp_operator_associated_type(lookup, &symbol->type, 0);
     for (symbol = symbol->next; symbol; symbol = symbol->next)
-      cpp_operator_associated_type(lookup, &symbol->type);
+      cpp_operator_associated_type(lookup, &symbol->type, 0);
     return;
   }
   if (IS_ENUM(type->t) || IS_ENUM_VAL(type->t))
@@ -3203,6 +3356,24 @@ static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type)
   if (!name) name = cpp_unnamed_tag_typedef_tok(type);
   if (!name) return;
   namespace_tok = symbol_namespace_scope_tok(name);
+  if (nb_inline_namespace_scopes) {
+    int root = namespace_tok, changed;
+    do {
+      changed = 0;
+      for (i = 0; i < nb_namespace_scopes; ++i)
+        if (namespace_scopes[i].name_tok == root && namespace_scopes[i].is_inline) {
+          root = namespace_scopes[i].parent_tok;
+          changed = 1;
+          break;
+        }
+    } while (changed);
+    cpp_operator_lookup_name(lookup, root
+      ? make_static_member_tok(root, lookup->method_tok) : lookup->method_tok);
+    for (i = 0; i < nb_namespace_scopes; ++i)
+      if (namespace_is_inline_child(namespace_scopes[i].name_tok, root))
+        cpp_operator_lookup_name(lookup,
+          make_static_member_tok(namespace_scopes[i].name_tok, lookup->method_tok));
+  }
   cpp_operator_lookup_name(lookup, namespace_tok
     ? make_static_member_tok(namespace_tok, lookup->method_tok)
     : lookup->method_tok);
@@ -3213,7 +3384,7 @@ static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type)
       CType base_type;
       if (base->class_tok == name
           && make_class_type_from_tok(&base_type, base->base_tok))
-        cpp_operator_associated_type(lookup, &base_type);
+        cpp_operator_associated_type(lookup, &base_type, 0);
     }
     if (owner && owner->owner->is_class) {
       TemplateDef *definition = owner->owner;
@@ -3225,7 +3396,7 @@ static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type)
             CType argument_type;
             if (!(definition->value_param_mask & (1u << i))
                 && make_type_from_type_arg_tok(&argument_type, arguments->toks[i]))
-              cpp_operator_associated_type(lookup, &argument_type);
+              cpp_operator_associated_type(lookup, &argument_type, 0);
           }
           break;
         }
@@ -3243,14 +3414,31 @@ static Sym *cpp_resolve_associated_function(int method_tok, int ordinary_tok,
   memset(&lookup, 0, sizeof lookup);
   lookup.method_tok = method_tok;
   cpp_operator_lookup_name(&lookup, ordinary_tok);
-  for (i = 0; i < count; ++i) {
+  if (nb_inline_namespace_scopes && ordinary_tok) {
+    int parent = symbol_namespace_scope_tok(ordinary_tok);
+    const char *spelling = get_tok_str(ordinary_tok, NULL);
+    int member;
+    if (parent) spelling += strlen(get_tok_str(parent, NULL)) + 1;
+    member = tok_alloc(spelling, strlen(spelling))->tok;
+    for (i = 0; i < nb_namespace_scopes; ++i)
+      if (namespace_is_inline_child(namespace_scopes[i].name_tok, parent))
+        cpp_operator_lookup_name(&lookup,
+          make_static_member_tok(namespace_scopes[i].name_tok, member));
+  }
+  for (i = 0; operator_call >= 0 && i < count; ++i) {
     CType value = arguments[i];
     if (is_reference_type(&value)) value = *pointed_type(&value);
     if ((value.t & VT_BTYPE) == VT_STRUCT) has_class_operand = 1;
-    cpp_operator_associated_type(&lookup, &arguments[i]);
+    cpp_operator_associated_type(&lookup, &arguments[i], 1);
   }
   for (i = 0; i < lookup.name_count; ++i) {
+    Sym **saved_adl_classes = template_adl_classes;
+    int saved_adl_count = template_adl_class_count;
+    template_adl_classes = lookup.visited;
+    template_adl_class_count = operator_call >= 0 ? lookup.visited_count : 0;
     instantiate_function_templates_for_call(lookup.names[i], arguments, count);
+    template_adl_classes = saved_adl_classes;
+    template_adl_class_count = saved_adl_count;
     function = find_global_symbol(lookup.names[i]);
     if (function && !function->cpp_using_target
         && (function->type.t & VT_BTYPE) == VT_FUNC)
@@ -3259,7 +3447,11 @@ static Sym *cpp_resolve_associated_function(int method_tok, int ordinary_tok,
   for (name_index = 0; name_index < lookup.name_count; ++name_index)
   for (overload = free_func_candidates(lookup.names[name_index]); overload; overload = overload->name_next) {
     if (lookup.names[name_index] != overload->name_tok) continue;
-    if (operator_call && !has_class_operand) {
+    if (operator_call < 0) {
+      Sym *candidate = global_symbol_find(overload->mangled_tok);
+      if (candidate && candidate->cpp_hidden_friend) continue;
+    }
+    if (operator_call > 0 && !has_class_operand) {
       /* With enum operands and no class operand, a non-member operator must
          have a corresponding parameter of that enum type. Converting both
          operands to unrelated classes cannot displace a builtin operator. */
@@ -3533,8 +3725,16 @@ static int try_call_cpp_conversion_operator(CType *target, int allow_explicit)
   Sym *function, *signature;
   VirtualMethodInfo *virtual_method;
   int method = 0, owner;
+  if (allow_explicit != 2 && (target->t & VT_BTYPE) == VT_VOID) return 0;
   if (is_reference_type(&receiver)) receiver = *pointed_type(&receiver);
   if ((receiver.t & VT_BTYPE) != VT_STRUCT) return 0;
+  if (allow_explicit != 2) {
+    CType destination = is_reference_type(target) ? *pointed_type(target) : *target;
+    int destination_class = get_struct_type_name_tok(&destination);
+    int source_class = get_struct_type_name_tok(&receiver);
+    if (destination_class && (destination_class == source_class
+        || class_has_base(source_class, destination_class))) return 0;
+  }
   function = find_cpp_conversion_operator(&receiver, target, allow_explicit,
                                            &method, NULL);
   if (!function) return 0;
@@ -3568,6 +3768,7 @@ static int try_call_cpp_index_operator(void)
 
   if ((vtop[-1].type.t & VT_BTYPE) != VT_STRUCT)
     return 0;
+  materialize_incomplete_template_type(&vtop[-1].type);
   func_sym = resolve_member_func_by_arg_types(&vtop[-1].type, method_tok,
                                               &vtop->type, 1);
   if (!func_sym)
@@ -3650,6 +3851,14 @@ static int try_call_cpp_call_operator(void)
                               : "<anonymous>");
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("call operator target is not declared as function");
+  {
+    const CppMemberDeclInfo *declaration = lookup_cpp_member_decl(func_sym->v);
+    if (declaration && declaration->access_known && declaration->access
+        && active_member_class_tok != declaration->owner_tok
+        && !(declaration->access == 1 && active_member_class_tok
+             && class_has_base(active_member_class_tok, declaration->owner_tok)))
+      cprime_error("call operator is inaccessible in this context");
+  }
 
   vtop = saved_vtop;
   *vtop = saved_receiver;
@@ -3719,8 +3928,17 @@ static int try_call_cpp_assignment_operator(void)
      the appropriate copy/move member, or the implicit memberwise path. */
   if (!func_sym
       && !is_compatible_unqualified_types(&receiver_type, &vtop->type)
+      && try_call_cpp_conversion_operator(&receiver_type, 0)) {
+    maybe_indir_reference();
+    return try_call_cpp_assignment_operator();
+  }
+  if (!func_sym
+      && !is_compatible_unqualified_types(&receiver_type, &vtop->type)
       && try_materialize_constructor_conversion(&receiver_type))
     return try_call_cpp_assignment_operator();
+  if (!func_sym && receiver_type.ref
+      && receiver_type.ref->a.cpp_nontrivial_copy_assignment)
+    cprime_error("no matching user-declared copy assignment operator");
   if (!func_sym)
     return 0;
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
@@ -3758,13 +3976,14 @@ static int try_call_cpp_compound_assign_operator(int op)
   if (!method_tok)
     return 0;
   if ((vtop[-1].type.t & VT_BTYPE) != VT_STRUCT)
-    return 0;
+    return try_call_cpp_free_binary_operator(op);
   func_sym = resolve_member_func_by_arg_types(&vtop[-1].type, method_tok,
                                               &vtop->type, 1);
   if (!func_sym)
-    func_sym = resolve_member_func(&vtop[-1].type, method_tok);
+    func_sym = resolve_member_field_func_by_arg_types(&vtop[-1].type, method_tok,
+                                                      &vtop->type, 1);
   if (!func_sym)
-    return 0;
+    return try_call_cpp_free_binary_operator(op);
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("operator overload target is not declared as function");
   func_type = func_sym->type.ref;

@@ -323,6 +323,9 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
     // XXX: generate error if incorrect relocation
     gen_assign_cast(&dtype);
     bt = dtype.t &VT_BTYPE;
+    if (is_reference_type(type)
+        && (vtop->r & (VT_VALMASK | VT_LVAL | VT_NONCONST)) != VT_CONST)
+      cprime_error("reference initializer address is not constant");
 
     if ((vtop->r & VT_SYM)
         && bt != VT_PTR
@@ -968,12 +971,15 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
      )
   {
     int ncw_prev = nocode_wanted;
+    CType *saved_member_target = cpp_member_address_target;
+    cpp_member_address_target = find_cpp_member_pointer_type(type) ? type : NULL;
     if ((flags & DIF_SIZE_ONLY) && !p->sec)
       ++nocode_wanted;
     if (!(!p->sec && !(flags & DIF_SIZE_ONLY)
           && is_cpp_translation_unit() && (type->t & VT_BTYPE) == VT_STRUCT
           && parse_direct_class_initializer(p, type, c)))
-      parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
+      parse_init_elem(!p->sec || is_reference_type(type) ? EXPR_ANY : EXPR_CONST);
+    cpp_member_address_target = saved_member_target;
     if (!p->sec && is_cpp_translation_unit()
         && (type->t & VT_BTYPE) == VT_STRUCT
         && !is_compatible_unqualified_types(type, &vtop->type))
@@ -1056,6 +1062,9 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
       }
 
       decl_design_flex(p, s, len);
+      /* A constant-initialization probe can infer an incomplete array bound
+         in this same pass. Use the completed bound when checking/copying. */
+      n = s->c;
       if (!(flags & DIF_SIZE_ONLY))
       {
         int nb = n, ch;
@@ -1587,6 +1596,54 @@ static void declare_anonymous_union(CType *type, AttributeDef *ad, int scope)
   }
 }
 
+static void probe_static_aggregate_initializer(CType *original)
+{
+  CType type = *original;
+  Sym array, record;
+  Section section = {0};
+  init_params initialization = {0};
+  initialization.sec = &section;
+  if ((type.t & VT_ARRAY) && type.ref && type.ref->c < 0) {
+    array = *type.ref;
+    type.ref = &array;
+    initialization.flex_array_ref = &array;
+  }
+  else if ((type.t & VT_BTYPE) == VT_STRUCT && type.ref) {
+    Sym *field, *last = type.ref->next, **tail;
+    while (last && last->next) last = last->next;
+    if (last && (last->type.t & VT_ARRAY) && last->type.ref->c < 0) {
+      record = *type.ref;
+      type.ref = &record;
+      tail = &record.next;
+      for (field = original->ref->next; field; field = field->next) {
+        Sym *copy = sym_push(field->v | SYM_FIELD, &field->type, field->r, field->c);
+        copy->a = field->a;
+        *tail = copy;
+        tail = &copy->next;
+        if (field == last) {
+          array = *field->type.ref;
+          copy->type.ref = &array;
+          initialization.flex_array_ref = &array;
+        }
+      }
+      *tail = NULL;
+    }
+  }
+  decl_initializer(&initialization, &type, 0, DIF_FIRST);
+}
+
+static int type_has_mutable_subobject(CType *type)
+{
+  Sym *field;
+  if (type->t & VT_ARRAY)
+    return type->ref && type_has_mutable_subobject(&type->ref->type);
+  if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref) return 0;
+  for (field = type->ref->next; field; field = field->next)
+    if (!(field->type.t & (VT_TYPEDEF | VT_STATIC))
+        && (field->a.cpp_mutable_field || type_has_mutable_subobject(&field->type))) return 1;
+  return 0;
+}
+
 static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
                                    int has_init, int has_ctor_init,
                                    TokenString *copy_ctor_init, int v, int decl_scope, int direct_init)
@@ -1810,7 +1867,7 @@ err_size:
         tp = &tp->ref->type;
       if (!has_init && type_requires_class_construction(type))
         sec = bss_section;
-      else if (tp->t & VT_CONSTANT)
+      else if ((tp->t & VT_CONSTANT) && !type_has_mutable_subobject(type))
         sec = rodata_section;
       else if (has_init)
       {

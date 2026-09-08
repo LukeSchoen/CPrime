@@ -68,6 +68,7 @@
      DEF(TOK_OPERATOR, "operator")
      DEF(TOK_ENUM, "enum")
      DEF(TOK_SIZEOF, "sizeof")
+     DEF(TOK_TYPEID, "typeid")
      DEF(TOK_ATTRIBUTE1, "__attribute")
      DEF(TOK_ATTRIBUTE2, "__attribute__")
      DEF(TOK_ALIGNOF1, "__alignof")
@@ -75,10 +76,12 @@
      DEF(TOK_ALIGNOF3, "_Alignof")
      DEF(TOK_ALIGNOF4, "alignof")
      DEF(TOK_ALIGNAS, "_Alignas")
+     DEF(TOK_ALIGNAS2, "alignas")
      DEF(TOK_TYPEOF1, "typeof")
      DEF(TOK_TYPEOF2, "__typeof")
      DEF(TOK_TYPEOF3, "__typeof__")
      DEF(TOK_DECLTYPE, "decltype")
+     DEF(TOK_DECLTYPE2, "__decltype")
      DEF(TOK_LABEL, "__label__")
 
      DEF(TOK_DEFINE, "define")
@@ -178,6 +181,9 @@
      DEF(TOK_builtin_frame_address, "__builtin_frame_address")
      DEF(TOK_builtin_return_address, "__builtin_return_address")
      DEF(TOK_builtin_expect, "__builtin_expect")
+     DEF(TOK_builtin_FILE, "__builtin_FILE")
+     DEF(TOK_builtin_FUNCTION, "__builtin_FUNCTION")
+     DEF(TOK_builtin_LINE, "__builtin_LINE")
      DEF(TOK_builtin_unreachable, "__builtin_unreachable")
 
 #if defined CPRIME_TARGET_PE && defined CPRIME_TARGET_X86_64
@@ -208,6 +214,13 @@
      DEF_ATOMIC(atomic_xor_fetch)
      DEF_ATOMIC(atomic_and_fetch)
      DEF_ATOMIC(atomic_nand_fetch)
+     DEF(TOK___atomic_store_n, "__atomic_store_n")
+     DEF(TOK___atomic_load_n, "__atomic_load_n")
+     DEF(TOK___atomic_exchange_n, "__atomic_exchange_n")
+     DEF(TOK___atomic_compare_exchange_n, "__atomic_compare_exchange_n")
+     DEF(TOK_builtin_addressof, "__builtin_addressof")
+     DEF(TOK_builtin_launder, "__builtin_launder")
+     DEF(TOK_builtin_bit_cast, "__builtin_bit_cast")
 
      DEF(TOK_pack, "pack")
 #if !defined(CPRIME_TARGET_X86_64) && !defined(CPRIME_TARGET_ARM) && \

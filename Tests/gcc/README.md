@@ -1,82 +1,62 @@
-# GCC C++ regression assessment
+# GCC C++ assessment
 
-Upstream: https://github.com/gcc-mirror/gcc
-
-Pinned revision: `5f6257c26b814de1a14c71b2d3a49291765b6577` (2026-09-07).
-
-The runner fetches a sparse checkout at `build/gcc-upstream` containing `gcc/testsuite/g++.dg`,
-`g++.old-deja`, `c-c++-common`, and shared test support. Upstream source and
-copyright/license files remain unchanged in that checkout. The pin makes the
-download reproducible; it is not a rolling dependency.
-
-Run from the CPrime root:
+The serial adapter fetches unchanged upstream sources from
+https://github.com/gcc-mirror/gcc at revision
+`5f6257c26b814de1a14c71b2d3a49291765b6577` into `build/gcc-upstream`.
+It inventories `g++.dg`, `g++.old-deja`, and `c-c++-common`.
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/run.ps1 -Fetch
-powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/run.ps1 -Select g++.dg/init/ -Out build/gcc-init
-powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/run.ps1 -Probe -Timeout 2 -Out build/gcc-all
-powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/test_runner.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/test_provenance.ps1
+./Tests/gcc/run.ps1 -Fetch -Out build/gcc-baseline
+./Tests/gcc/run.ps1 -Select g++.dg/init/ -Out build/gcc-init
+./Tests/gcc/run.ps1 -Baseline build/gcc-baseline -Out build/gcc-current
+./Tests/gcc/compare.ps1 -Baseline build/gcc-baseline -Current build/gcc-current
 ```
 
-`-Select` accepts an array of relative path prefixes, including individual
-filenames (for example, `./Tests/gcc/run.ps1 -Select 'g++.dg/init/', 'g++.dg/cpp/'`
-inside PowerShell). `-Compiler` selects a compiler executable; `-Limit` bounds
-the number of selected files. All invocations are
-serial, with a freshly removed output artifact before each compilation.
-Timeouts apply separately to compilation and execution; timed-out processes
-are killed and waited for before continuing. Windows PowerShell 5.1 is sufficient;
-Python, Pester and embedded C# are not required.
+`-Select` accepts relative path prefixes or filenames; `-Limit` bounds selection.
+`-Compiler` selects CPC; `-RuntimeRoot` selects an explicit matching runtime.
+Use a fresh output directory for each run.
 
-Each run writes `inputs.json` with relative paths and SHA-256 hashes for selected
-sources and, when `-RuntimeRoot` is supplied, every file under its `include/`
-and `lib/` directories. `metadata.json` records the input manifest hash and the
-provenance helper hash alongside compiler and runner identities. Implicit runtime
-search is explicitly marked unresolved; these hashes do not establish a target
-or standard-version conformance matrix.
+## Result contract
 
-`test_runner.ps1` covers directive classification, argument quoting, output
-capture, timeout cleanup and Windows crash codes. The PowerShell port was
-compared with the previous runner on the first 40 `g++.dg/init/` cases, both
-normally and with `-Probe`: every per-case classification and process exit
-matched, including existing compiler/runtime failures and the probe timeout.
+This is a restricted assessment, not full GCC/DejaGnu or C++ conformance.
+Supported unconditional actions are preprocess, compile/assemble to an object,
+link, and run with exit zero. Supported options include optimization, debug info,
+and inline/builtin opt-outs. CPC's default C++ mode is used.
 
-This is a conservative CPC assessment adapter, **not a replacement for
-DejaGnu and not a claim that the whole GCC testsuite passes**. It inventories
-source files, including support sources; dedicated upstream `.exp` drivers
-can define more complex test groupings. It never evaluates upstream Tcl.
-The ordinary G++ driver includes only the root and `cpp/` portions of
-`c-c++-common`; other shared directories require specialized drivers and are
-classified accordingly.
+Target selectors, language-standard flags, diagnostic expectations, assembly/tree
+scans, extra sources, and special drivers are `UNSUPPORTED`, never passes.
+`-Probe` attempts unsupported sources and records acceptance/rejection without
+verifying their expected behavior. Empty and probe-only runs cannot pass the gate.
+Add adapter regression coverage before extending directive support. Preserve
+upstream sources and expectations.
 
-Supported unconditional actions: preprocess, compile/assemble to an object,
-link, and run with expected exit zero. In particular, `PASS_COMPILE` measures
-CPC object generation, not GCC's assembly output or exact diagnostics.
-Supported explicit options are currently optimization levels, debug info,
-and the inline/builtin opt-outs. CPC's default C++ mode is used; GCC's default
-pedantic checks and standard-version matrix are not reproduced.
+## Timing and artifacts
 
-Conditional target selectors, standard-selection flags, diagnostic checks,
-assembly/tree-dump scans, extra source files, and special drivers are reported
-as `UNSUPPORTED`. They are not counted as passes. `--probe` additionally tries
-those files as standalone C++ sources with the understood options, recording
-`PROBE_ACCEPTED` or `PROBE_REJECTED`. These observations do **not** establish
-the expected result. A compiler crash is never treated as a successful
-rejection, even for a test containing `dg-error`.
+Compilation and execution each have a five-second ceiling including startup;
+`-Timeout` may lower it. Crashes/timeouts fail. Timed-out processes are killed and
+waited for before continuing. By default the runner stops on timeout;
+`-ContinueAfterTimeout` completes a serial inventory with the same ceiling.
+Cleanup has separate bounded waits. Do not retry with longer budgets.
 
-Each output directory contains:
+| Output | Contents |
+| --- | --- |
+| `metadata.json`, `inputs.json` | Revision, settings, compiler/runner and source hashes; explicit runtime hashes |
+| `results.jsonl`, `summary.json` | Per-source commands, diagnostics, statuses, timings, and totals |
+| `progress.json` | Live deltas and phase timings; console updates every 15 seconds |
+| `slow-failures.json`, `execution.json` | Timeout repair items and unexecuted coverage |
 
-- `metadata.json`: upstream revision, compiler path/hash, settings and scope.
-- `results.jsonl`: every source, unsupported reasons, command, exit status,
-  timing, compiler output, and runtime result when applicable.
-- `summary.json`: aggregate statuses. Nonzero runner exit means an executed
-  checked case failed, or a compiler invocation crashed/timed out.
+Implicit runtime lookup is marked unresolved in provenance. Compare identical
+inputs and use `compare.ps1` to detect regressions and missing coverage.
 
-The current adapter deliberately leaves diagnostic expectations unchecked:
-a nonzero compiler exit is insufficient evidence that the intended error was
-diagnosed. Add directive support with adapter regression tests before changing
-that classification. Fix compiler failures in CPC; do not edit upstream tests
-or convert new failures to expected failures to improve the totals.
+For slow reproducers, use `triage-speed.ps1 -Source <file>` with optional
+`-BaselineCompiler <old-cpc.exe>`. This measures identical inputs serially under
+the same ceiling and writes `comparison.json` under `build/`. Minimize defects
+and add fast regression coverage. Deliberately slow workloads need an explicit,
+evidence-backed exclusion with lost coverage reported; preserve imported sources.
 
-GCC directive semantics:
-https://gcc.gnu.org/onlinedocs/gccint/Directives.html
+## Adapter checks
+
+Run `test_runner.ps1`, `test_compare.ps1`, `test_provenance.ps1`, and
+`test_progress.ps1` from this directory using PowerShell. These cover classification,
+quoting, capture, timeouts/crashes, comparison, hashes, and incremental reporting.
+See [the development loop](../DEVELOPMENT.md).

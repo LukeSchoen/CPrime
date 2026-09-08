@@ -107,6 +107,26 @@ static void canonicalize_cpp_member_pointer_declarator(CType *type)
   }
 }
 
+static int cpp_member_pointer_declarator_ahead(void)
+{
+  TokenString *replay;
+  int angle = 0, colons = 0, result = 0;
+  if (tok < TOK_UIDENT) return 0;
+  replay = tok_str_alloc();
+  while (tok != TOK_EOF) {
+    if (!angle && tok == '*') { result = colons == 2; break; }
+    if (!angle && tok < TOK_UIDENT && tok != ':' && tok != TOK_LT) break;
+    if (tok == TOK_LT) ++angle;
+    else if (tok == TOK_GT) --angle;
+    else if (tok == TOK_SAR) angle -= 2;
+    colons = tok == ':' ? colons + 1 : 0;
+    tok_str_add_tok(replay);
+    next();
+  }
+  restore_cpp_lifecycle_probe(replay);
+  return result;
+}
+
 static int try_parse_cpp_member_pointer_owner(void)
 {
   TokenString *replay, *owner;
@@ -190,6 +210,32 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
   {
     Sym *prototype;
     MemberFuncOverload *candidate;
+    if (cpp_member_address_target
+        && class_or_inst_has_member_template_name(class_tok, member_tok)) {
+      CppMemberPointerType *target = find_cpp_member_pointer_type(cpp_member_address_target);
+      int saved_explicit = explicit_member_template_arg_tok, count = 0;
+      CType arguments[CPC_MAX_CALL_ARGUMENTS];
+      if (tok == TOK_LT || tok == '<') {
+        TemplateArgList explicit_arguments;
+        parse_template_type_args(&explicit_arguments);
+        explicit_member_template_arg_tok = intern_explicit_member_arguments(&explicit_arguments);
+      }
+      if (target && (target->member_type.t & VT_BTYPE) == VT_FUNC) {
+        Sym *parameter;
+        for (parameter = target->member_type.ref->next; parameter; parameter = parameter->next) {
+          if (count == CPC_MAX_CALL_ARGUMENTS) cprime_error("too many member-pointer parameters");
+          arguments[count] = parameter->type;
+          if (is_reference_type(&arguments[count])) {
+            int category = arguments[count].t & (VT_REFERENCE | VT_RVALUE_REFERENCE);
+            arguments[count] = *pointed_type(&arguments[count]);
+            arguments[count].t |= category;
+          }
+          ++count;
+        }
+        instantiate_template_member_for_call(&owner_type, member_tok, arguments, count);
+      }
+      explicit_member_template_arg_tok = saved_explicit;
+    }
     for (candidate = member_func_candidates(class_tok, member_tok);
          candidate; candidate = candidate->bucket_next)
       if (candidate->struct_tok == class_tok && candidate->method_tok == member_tok)
@@ -197,6 +243,21 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
         Sym *selected = global_symbol_find(candidate->mangled_tok);
         if (!selected) selected = sym_find(candidate->mangled_tok);
         if (!selected) continue;
+        if (cpp_member_address_target) {
+          CppMemberPointerType *target = find_cpp_member_pointer_type(cpp_member_address_target);
+          CType signature = selected->type;
+          Sym prototype = *signature.ref;
+          if (target && (target->member_type.t & VT_BTYPE) == VT_FUNC) {
+            if (prototype.next) {
+              signature.t |= pointed_type(&prototype.next->type)->t & (VT_CONSTANT | VT_VOLATILE);
+              prototype.next = prototype.next->next;
+            }
+            signature.ref = &prototype;
+            if (target->member_type.ref->f.func_noexcept && !prototype.f.func_noexcept) continue;
+            prototype.f.func_noexcept = target->member_type.ref->f.func_noexcept;
+            if (!is_compatible_types(&signature, &target->member_type)) continue;
+          }
+        }
         if (function && function != selected)
           cprime_error("overloaded member address requires a target member-pointer type");
         function = selected;
@@ -244,7 +305,13 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
     function->a.addrtaken = 1;
     greloca(data_section, function, location, R_DATA_PTR, 0);
   }
+  /* Constant member addresses can be retained by template arguments beyond
+     the local declaration scope in which they were first formed. */
+  saved_local = local_stack;
+  local_stack = NULL;
   vpush_ref(&member_type, data_section, location, sizeof(words));
+  local_stack = saved_local;
+  vtop->sym->cpp_member_address_tok = function ? function->v : member_tok;
   vtop->r |= VT_LVAL;
   forming_cpp_member_address = 0;
   return 1;
@@ -301,6 +368,9 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
   if (!source)
   {
     size_t location;
+    if ((vtop->type.t & VT_BTYPE) == VT_STRUCT
+        && try_call_cpp_conversion_operator(type, explicit_cast != 0))
+      return convert_cpp_member_pointer(type, explicit_cast);
     if (!is_null_pointer(vtop))
       cast_error(&vtop->type, type);
     vpop();
@@ -315,7 +385,8 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
     vtop->type = *type;
     return 1;
   }
-  if (!is_compatible_types(&target->member_type, &source->member_type))
+  if (!is_compatible_unqualified_types(&target->member_type, &source->member_type)
+      || ((source->member_type.t & ~target->member_type.t) & (VT_CONSTANT | VT_VOLATILE)))
     cast_error(&vtop->type, type);
   if (!class_subobject_offset(target->owner_tok, source->owner_tok, &offset))
   {
@@ -324,6 +395,7 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
       cast_error(&vtop->type, type);
     offset = -offset;
   }
+  if (!offset) { vtop->type = *type; return 1; }
   source_slot = cpp_member_pointer_address_slot();
   result_slot = loc = (loc - 2 * PTR_SIZE) & -PTR_SIZE;
   word_type.t = VT_LLONG;
@@ -386,6 +458,7 @@ static void bind_cpp_member_pointer(int is_arrow)
   Sym *prototype, *receiver, *saved_local;
   int receiver_slot, member_slot, target_slot, skip_virtual;
   int object_cv;
+  if (is_arrow) try_cpp_pointer_conversion(0);
   if (!is_arrow)
   {
     if ((vtop->type.t & VT_BTYPE) != VT_STRUCT)

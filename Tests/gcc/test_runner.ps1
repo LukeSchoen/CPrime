@@ -64,6 +64,12 @@ if ($Mode -eq 'io') { [Console]::Out.Write(('x' * 100000)); [Console]::Error.Wri
         $result = Invoke-GccProcess ($prefix + @('echo', $value)) 5
         Assert-Equal $result.exit 0 'quoted process exit'
         Assert-Equal $result.output $value 'quoted argument roundtrip'
+        $parts = $result.setup_seconds + $result.startup_seconds + $result.wait_seconds
+        if ([Math]::Abs($parts - $result.seconds) -gt 0.000001 -or
+            $result.setup_seconds -lt 0 -or $result.startup_seconds -lt 0 -or
+            $result.wait_seconds -lt 0 -or $result.cleanup_seconds -lt 0) {
+            throw 'Process phase timings do not partition execution wall time'
+        }
     }
     $result = Invoke-GccProcess ($prefix + 'io') 5
     Assert-Equal $result.exit 7 'nonzero process exit'

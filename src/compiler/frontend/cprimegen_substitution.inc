@@ -15,11 +15,14 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     CppMemberDeclContext *member_declaration_context;
     LambdaExpression *lambda;
     CppConstructionDestination *construction;
+    CType *member_address_target;
     jmp_buf *previous;
     int token, depth, nocode, local_offset, temporary_count, namespace_tok;
     int declarator_depth;
+    int global_expression;
     int member_class, declaration_auto, declaration_typedef, declaration_decltype;
     int scope, deferred_members, binding_count, global_binding_count;
+    int *query_alignment;
     int unevaluated_depth, probe_depth, standard_conversion_only;
     SValue values[1];
   } *saved = cprime_malloc(sizeof(*saved)
@@ -39,6 +42,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   saved->global_bindings = NULL; saved->global_binding_count = 0;
   saved->scope = local_scope;
   saved->declarator_depth = cpp_member_declarator_depth;
+  saved->global_expression = global_expr;
   saved->deferred_members = defer_pending_member_funcs;
   saved->nocode = nocode_wanted; saved->local_offset = loc;
   saved->temporary_count = nb_temp_local_vars;
@@ -49,11 +53,14 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   saved->declaration_typedef = last_btype_was_typedef;
   saved->declaration_decltype = last_btype_was_decltype;
   saved->previous = cpp_substitution_jump;
+  saved->query_alignment = active_type_query_alignment;
+  active_type_query_alignment = NULL;
   saved->probe_depth = cpp_template_probe_depth++;
   saved->standard_conversion_only = cpp_standard_conversion_only;
   saved->unevaluated_depth = cpp_unevaluated_expression_depth;
   saved->lambda = lambda_probe;
   saved->construction = cpp_construction_destination;
+  saved->member_address_target = cpp_member_address_target;
   /* Modes 6/8 disambiguate expression type-ids and statement declarators in the current lexical
      context. Other probes use the template's declaration context. A caller's
      local typedef must not hide a name in that context. Substituted type
@@ -105,7 +112,13 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     ++nocode_wanted;
     begin_macro(&saved->replay, 0);
     next();
-    if (argument == 7)
+    if (argument == 9)
+    {
+      nocode_wanted = 1;
+      probe_static_aggregate_initializer(result);
+      success = tok == TOK_EOF;
+    }
+    else if (argument == 7)
     {
       cpp_construction_destination = NULL;
       materialize_braced_temporary_mode(result, 1);
@@ -209,6 +222,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     }
   }
   cpp_substitution_jump = saved->previous;
+  active_type_query_alignment = saved->query_alignment;
   cpp_template_probe_depth = saved->probe_depth;
   cpp_standard_conversion_only = saved->standard_conversion_only;
   cpp_unevaluated_expression_depth = saved->unevaluated_depth;
@@ -241,6 +255,8 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   local_stack = saved->locals;
   local_scope = saved->scope;
   cpp_member_declarator_depth = saved->declarator_depth;
+  cpp_member_address_target = saved->member_address_target;
+  global_expr = saved->global_expression;
   defer_pending_member_funcs = saved->deferred_members;
   memcpy(_vstack, saved->values, (saved->depth + 1) * sizeof(SValue));
   vtop = _vstack + saved->depth;

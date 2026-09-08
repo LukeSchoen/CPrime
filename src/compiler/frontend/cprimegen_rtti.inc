@@ -7,6 +7,86 @@ typedef struct CppRttiNode {
   int public_base;
 } CppRttiNode;
 
+typedef struct CppTypeInfoRecord {
+  int name_tok;
+  Sym *symbol;
+  struct CppTypeInfoRecord *next;
+} CppTypeInfoRecord;
+static CppTypeInfoRecord *cpp_type_info_records;
+
+static void free_cpp_type_info_records(void)
+{
+  while (cpp_type_info_records) {
+    CppTypeInfoRecord *record = cpp_type_info_records;
+    cpp_type_info_records = record->next;
+    cprime_free(record);
+  }
+}
+
+static int cpp_type_info_class(CType *type)
+{
+  int parts[2] = { tok_alloc_const("std"), tok_alloc_const("type_info") };
+  return make_class_type_from_tok(type, make_namespace_tok_from_parts(parts, 2));
+}
+
+static void cpp_type_info_name_ex(CString *name, CType *original, int strip_cv)
+{
+  CType type = *original;
+  if (is_reference_type(&type)) type = *pointed_type(&type);
+  type.t &= ~(VT_STORAGE | VT_RVALUE_REFERENCE);
+  if (strip_cv) type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  if (type.t & VT_BITFIELD) type.t &= ~VT_STRUCT_MASK;
+  if (type.t & VT_ARRAY) {
+    char bound[48];
+    snprintf(bound, sizeof(bound), "array%lld_", type.ref->c);
+    cstr_cat(name, bound, -1);
+    cpp_type_info_name_ex(name, pointed_type(&type), strip_cv);
+  } else if ((type.t & VT_BTYPE) == VT_PTR) {
+    if (type.t & VT_CONSTANT) cstr_cat(name, "const_", -1);
+    if (type.t & VT_VOLATILE) cstr_cat(name, "volatile_", -1);
+    cstr_cat(name, "ptr_", -1);
+    cpp_type_info_name_ex(name, pointed_type(&type), 0);
+  } else if (!append_type_mangle_string(name, &type))
+    cprime_error("unsupported typeid type");
+}
+
+static Sym *cpp_type_info_for_type(CType *type)
+{
+  CType info_type;
+  CString name;
+  CppTypeInfoRecord *record;
+  VirtualTableInfo *table;
+  Sym *name_symbol, *field;
+  int name_tok, size, alignment, field_offset;
+  if (!cpp_type_info_class(&info_type)) return NULL;
+  cstr_new(&name);
+  cpp_type_info_name_ex(&name, type, 1);
+  cstr_ccat(&name, 0);
+  name_tok = tok_alloc_const(name.data);
+  for (record = cpp_type_info_records; record; record = record->next)
+    if (record->name_tok == name_tok) { cstr_free(&name); return record->symbol; }
+  size = type_size(&info_type, &alignment);
+  if (size < 0) cprime_error("typeid requires a complete std::type_info");
+  record = cprime_mallocz(sizeof(*record));
+  record->name_tok = name_tok;
+  record->symbol = cpp_eh_data_symbol(NULL, size, alignment);
+  record->next = cpp_type_info_records;
+  cpp_type_info_records = record;
+  name_symbol = cpp_eh_data_symbol(name.data, name.size, 1);
+  cstr_free(&name);
+  field_offset = 0;
+  field = find_field(&info_type, tok_alloc_const("_M_name"), &field_offset);
+  if (!field) cprime_error("incompatible std::type_info layout");
+  cpp_eh_data_pointer(record->symbol, field_offset, name_symbol);
+  for (table = virtual_table_infos; table; table = table->next)
+    if (table->class_tok == get_struct_type_name_tok(&info_type)) {
+      int offset = virtual_vptr_offset(table->class_tok, table->root_tok);
+      table->referenced = 1;
+      cpp_eh_data_pointer(record->symbol, offset, table->sym);
+    }
+  return record->symbol;
+}
+
 static void cpp_rtti_collect(int class_tok, int offset, int parent, int access,
                              CppRttiNode **nodes, int *count)
 {
@@ -65,6 +145,11 @@ static Sym *cpp_rtti_table_descriptor(int class_tok, int root_tok)
   table.count = count;
   descriptor = cpp_eh_data_symbol(&table, sizeof table, PTR_SIZE);
   cpp_eh_data_pointer(descriptor, offsetof(CpcRttiTable, nodes), entries);
+  {
+    CType type;
+    if (make_class_type_from_tok(&type, class_tok))
+      cpp_eh_data_pointer(descriptor, offsetof(CpcRttiTable, type_info), cpp_type_info_for_type(&type));
+  }
   cprime_free(nodes);
   return descriptor;
 }
@@ -90,6 +175,79 @@ static int cpp_rtti_public_base_offset(int source, int target, int *offset)
   }
   cprime_free(nodes);
   return found && accessible;
+}
+
+static void cpp_typeid_expression(void)
+{
+  TokenString *operand = tok_str_alloc(), *saved_macro;
+  const int *saved_ptr;
+  CType type, info_type;
+  CValue saved_value;
+  VirtualTableInfo *table;
+  int depth = 0, type_operand, expression_flags = 0, saved_token, offset = -1, alignment;
+  if (!is_cpp_translation_unit()) cprime_error("typeid requires C++");
+  if (!cpp_type_info_class(&info_type)) cprime_error("include <typeinfo> before using typeid");
+  next(); skip('(');
+  while (tok != TOK_EOF && (tok != ')' || depth)) {
+    if (tok == '(') ++depth;
+    else if (tok == ')') --depth;
+    tok_str_add_tok(operand); next();
+  }
+  skip(')');
+  tok_str_add(operand, TOK_EOF);
+  saved_token = tok; saved_value = tokc;
+  saved_macro = macro_stack; saved_ptr = macro_ptr;
+  type_operand = template_probe_type(operand, 6, current_namespace_scope_tok(), &type);
+  if (!type_operand) {
+    begin_macro(operand, 0); next();
+    ++nocode_wanted; ++cpp_unevaluated_expression_depth;
+    gexpr();
+    type = vtop->type;
+    expression_flags = vtop->r;
+    vpop();
+    --cpp_unevaluated_expression_depth; --nocode_wanted;
+    if (tok != TOK_EOF) cprime_error("invalid typeid operand");
+    while (macro_stack && macro_stack != saved_macro) end_macro();
+    macro_ptr = saved_ptr; tok = saved_token; tokc = saved_value;
+  }
+  if (is_reference_type(&type)) type = *pointed_type(&type);
+  if ((type.t & VT_BTYPE) == VT_STRUCT && type_size(&type, &alignment) < 0)
+    cprime_error("typeid requires a complete class type");
+  info_type.t |= VT_CONSTANT;
+  if (NOEVAL_WANTED) {
+    tok_str_free(operand);
+    vset(&info_type, VT_CONST | VT_LVAL, 0);
+    return;
+  }
+  if (!type_operand && (expression_flags & VT_LVAL)
+      && !(expression_flags & VT_CXX_PRVALUE)
+      && (type.t & VT_BTYPE) == VT_STRUCT)
+    for (table = virtual_table_infos; table; table = table->next)
+      if (table->class_tok == get_struct_type_name_tok(&type)) {
+        offset = virtual_vptr_offset(table->class_tok, table->root_tok);
+        if (offset >= 0) break;
+      }
+  if (offset >= 0) {
+    Sym *helper = global_symbol_find(tok_alloc_const("__cpc_typeid_dynamic"));
+    if (!helper) cprime_error("typeid runtime helper is not declared");
+    vpushsym(&helper->type, helper);
+    begin_macro(operand, 0); next(); gexpr();
+    maybe_indir_reference();
+    mk_pointer(&vtop->type); gaddrof();
+    gfunc_param_typed(helper->type.ref, helper->type.ref->next);
+    vpushll(offset);
+    gfunc_param_typed(helper->type.ref, helper->type.ref->next->next);
+    gfunc_call(2);
+    while (macro_stack && macro_stack != saved_macro) end_macro();
+    macro_ptr = saved_ptr; tok = saved_token; tokc = saved_value;
+    type = info_type; mk_pointer(&type);
+    vset(&type, REG_IRET, 0); indir();
+  } else {
+    Sym *record = cpp_type_info_for_type(&type);
+    vpushsym(&info_type, record);
+    vtop->r |= VT_LVAL;
+  }
+  tok_str_free(operand);
 }
 
 static void cpp_dynamic_cast(CType *target)
@@ -129,6 +287,8 @@ static void cpp_dynamic_cast(CType *target)
     cprime_error("dynamic_cast requires class pointers or a void pointer target");
   if ((source_class.t & ~target_class.t) & (VT_CONSTANT | VT_VOLATILE))
     cprime_error("dynamic_cast cannot remove cv qualifiers");
+  materialize_incomplete_template_type(&source_class);
+  materialize_incomplete_template_type(&target_class);
   if (type_size(&source_class, &alignment) < 0
       || ((target_class.t & VT_BTYPE) != VT_VOID && type_size(&target_class, &alignment) < 0))
     cprime_error("dynamic_cast requires complete class types");

@@ -973,6 +973,17 @@ static void error1(int mode, const char *fmt, va_list ap)
   CString cs;
   int line = 0;
 
+  /* Opt-in snapshot, including errors swallowed by substitution recovery.
+     Do not advance the token stream or walk replay payloads here. */
+  if (s1->error_set_jmp_enabled && getenv("CPRIME_PARSER_STATE"))
+  {
+    fprintf(stderr, "[parser] token=%d spelling=%.80s parse_flags=0x%x tok_flags=0x%x replay=%d substitution=%d\n",
+            tok, (unsigned)(tok - TOK_IDENT) < (unsigned)(tok_ident - TOK_IDENT)
+                 ? table_ident[tok - TOK_IDENT]->str : "<punctuation-or-literal>",
+            parse_flags, tok_flags,
+            macro_ptr != NULL, cpp_substitution_jump != NULL);
+  }
+
   if (mode == ERROR_ERROR && cpp_substitution_jump)
   {
     longjmp(*cpp_substitution_jump, 1);

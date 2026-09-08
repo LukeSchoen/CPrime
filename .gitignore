@@ -41,3 +41,6 @@
 /third-party/tcc/win32/lib/*.o
 /third-party/tcc/win32/libtcc/
 /Tests/**/__pycache__/
+
+# Optional local Clang host compiler
+/third-party/clang/bin/clang.exe

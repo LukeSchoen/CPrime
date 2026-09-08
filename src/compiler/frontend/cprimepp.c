@@ -4280,6 +4280,40 @@ static void cprime_predefs(CPRIMEState *s1, CString *cs, int is_asm)
     putdef(cs, "__leading_underscore");
   cstr_printf(cs, "#define __SIZEOF_POINTER__ %d\n", PTR_SIZE);
   cstr_printf(cs, "#define __SIZEOF_LONG__ %d\n", LONG_SIZE);
+  cstr_printf(cs, "#define __BIGGEST_ALIGNMENT__ %d\n", MAX_ALIGN);
+#ifdef CPRIME_USING_DOUBLE_FOR_LDOUBLE
+  cstr_printf(cs, "#define __SIZEOF_LONG_DOUBLE__ 8\n");
+#else
+  cstr_printf(cs, "#define __SIZEOF_LONG_DOUBLE__ %d\n", LDOUBLE_SIZE);
+#endif
+  cstr_cat(cs,
+    "#define __SIZEOF_SHORT__ 2\n"
+    "#define __SIZEOF_FLOAT__ 4\n"
+    "#define __SIZEOF_DOUBLE__ 8\n"
+    "#define __CHAR_BIT__ 8\n"
+    "#define __SCHAR_MAX__ 127\n"
+    "#define __SHRT_MAX__ 32767\n"
+    "#define __ATOMIC_RELAXED 0\n"
+    "#define __ATOMIC_CONSUME 1\n"
+    "#define __ATOMIC_ACQUIRE 2\n"
+    "#define __ATOMIC_RELEASE 3\n"
+    "#define __ATOMIC_ACQ_REL 4\n"
+    "#define __ATOMIC_SEQ_CST 5\n"
+    "#define __FLT_RADIX__ 2\n"
+    "#define __FLT_MANT_DIG__ 24\n"
+    "#define __FLT_MIN__ 1.17549435082228750797e-38F\n"
+    "#define __FLT_MAX__ 3.40282346638528859812e+38F\n"
+    "#define __FLT_EPSILON__ 1.1920928955078125e-7F\n"
+    "#define __FLT_DENORM_MIN__ 1.40129846432481707092e-45F\n"
+    "#define __DBL_MANT_DIG__ 53\n"
+    "#define __DBL_MIN__ 2.22507385850720138309e-308\n"
+    "#define __DBL_MAX__ 1.79769313486231570815e+308\n"
+    "#define __DBL_EPSILON__ 2.22044604925031308085e-16\n"
+    "#define __DBL_DENORM_MIN__ 4.94065645841246544177e-324\n", -1);
+  cstr_printf(cs, "#define __PTRDIFF_MAX__ %s\n", PTR_SIZE == 8
+    ? "9223372036854775807LL" : "2147483647");
+  cstr_printf(cs, "#define __SIZE_MAX__ %s\n", PTR_SIZE == 8
+    ? "18446744073709551615ULL" : "4294967295U");
   if (!is_asm)
   {
     putdef(cs, "__STDC__");
@@ -4300,6 +4334,12 @@ static void cprime_predefs(CPRIMEState *s1, CString *cs, int is_asm)
              "#include <cprimedefs.h>\n" // Load At Runtime
 #endif
              , -1);
+    if (cprimepp_is_cpp_filename(file->filename)) cstr_cat(cs, "extern \"C\" {\n", -1);
+    cstr_cat(cs,
+      "int __builtin_printf(const char *, ...) __asm__(\"printf\");\n"
+      "void __builtin_exit(int) __asm__(\"exit\") __attribute__((noreturn));\n"
+      "void __builtin_trap(void) __asm__(\"abort\") __attribute__((noreturn));\n", -1);
+    if (cprimepp_is_cpp_filename(file->filename)) cstr_cat(cs, "}\n", -1);
   }
   cstr_printf(cs, "#define __BASE_FILE__ \"%s\"\n", file->filename);
 }

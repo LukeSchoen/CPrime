@@ -33,6 +33,7 @@ if not exist "%PACK_SCRIPT%" (
 )
 
 if not exist "%BUILD_DIR%" mkdir "%BUILD_DIR%"
+if /I not "%~1"=="--self" goto :clang_host
 pushd "%BUILD_DIR%" || (
   echo ERROR: Cannot enter "%BUILD_DIR%".
   exit /b 1
@@ -56,27 +57,39 @@ if not exist "%NEW_CPC%" (
   exit /b 1
 )
 
-rem The bootstrap above rebuilds the target runtime with CPrime. Optimize the
-rem compiler host itself so normal rebuilds retain its measured performance.
-if /I "%~1"=="--self" goto :pack_compiler
-if exist "%ROOT%\third-party\clang\bin\clang.exe" (
-  echo Building optimized CPrime compiler host.
-  powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\BuildProfile\build-cpc-clang.ps1" -OutDir "%BUILD_DIR%"
-  if errorlevel 1 (
-    echo ERROR: Optimized compiler build failed. Current cpc.exe was not replaced.
-    exit /b 1
-  )
-  move /y "%BUILD_DIR%\cpc-clang.exe" "%NEW_CPC%" >nul
-  if errorlevel 1 exit /b 1
-)
+goto :pack_compiler
+
+:clang_host
+set "CLANG_OPT=0"
+if /I "%~1"=="--optimised" set "CLANG_OPT=3"
+echo Building CPrime compiler host with Clang -O%CLANG_OPT% -g0.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\BuildProfile\build-cpc-clang.ps1" -OutDir "%BUILD_DIR%" -Optimization %CLANG_OPT%
+if errorlevel 1 exit /b 1
+move /y "%BUILD_DIR%\cpc-clang.exe" "%NEW_CPC%" >nul
+if errorlevel 1 exit /b 1
+rem Build only the target runtime with the new host; avoid a redundant self-build.
+pushd "%BUILD_DIR%" || exit /b 1
+call "%BUILD_SCRIPT%" -runtime-only
+set "RUNTIME_RESULT=%ERRORLEVEL%"
+popd
+if not "%RUNTIME_RESULT%"=="0" exit /b %RUNTIME_RESULT%
 
 :pack_compiler
+rem The native content check skips PowerShell and all preparation on a hit.
+if /I "%CPC_PACK_PROFILE%"=="full" if exist "%ROOT%\build\portable-cache\portable-payload.exe" (
+  "%ROOT%\build\portable-cache\portable-payload.exe" cached "%NEW_CPC%" "%ROOT%\build\portable-cache" "%ROOT%" "%RUNTIME_LIB%"
+  if errorlevel 0 if not errorlevel 1 goto :package_ready
+)
 powershell -NoProfile -ExecutionPolicy Bypass -File "%PACK_SCRIPT%" -ExePath "%NEW_CPC%" -RootPath "%ROOT%" -RuntimeLibPath "%RUNTIME_LIB%" -Profile "%CPC_PACK_PROFILE%"
 if errorlevel 1 (
   echo ERROR: Portable packaging failed.
   exit /b 1
 )
 
+:package_ready
+rem Validate the packaged candidate before replacing the working compiler.
+powershell -NoProfile -ExecutionPolicy Bypass -File "%ROOT%\Tests\check_regressions.ps1" -CompilerPath "%NEW_CPC%"
+if errorlevel 1 exit /b 1
 if exist "%BACKUP_CPC%" del /f /q "%BACKUP_CPC%"
 
 move /y "%OLD_CPC%" "%BACKUP_CPC%" >nul

@@ -441,7 +441,13 @@ typedef struct Sym {
     long long const_value;
     /* Symbolic constant substituted for an address template argument. */
     struct Sym *template_address_target;
+    int cpp_member_address_tok;
     int cpp_using_target;
+    unsigned char cpp_hidden_friend;
+    unsigned char string_literal;
+    int cpp_friend_owner;
+    /* Owned lookup index for the direct fields of a completed record. */
+    void *field_index;
     /* Linked non-global bindings, independent of retained symbol storage. */
     struct Sym *scope_prev, *scope_next;
     /* First typedef giving an unnamed tag its stable linkage identity. */
@@ -554,6 +560,7 @@ typedef struct AttributeDef {
     int asm_label;
     char attr_mode;
     char is_constexpr;
+    char is_global_declarator;
 } AttributeDef;
 
 typedef struct InlineFunc {

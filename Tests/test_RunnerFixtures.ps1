@@ -1,4 +1,4 @@
-param([string]$CompilerPath = '')
+param([string]$CompilerPath = '', [string]$RuntimeRoot = '')
 $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $buildRoot = [IO.Path]::GetFullPath((Join-Path $projectRoot 'build'))
@@ -57,9 +57,18 @@ int main() { return helper() != 42; }
     $runner = Join-Path $projectRoot 'Tests/run.ps1'
     $compilerArguments = @()
     if ($CompilerPath) { $compilerArguments = @('-CompilerPath', $CompilerPath) }
+    if ($RuntimeRoot) { $compilerArguments += @('-RuntimeRoot', $RuntimeRoot) }
     $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Suite $suite @compilerArguments -BuildManifestPath $manifestPath -UseSharedBinaries -SharedOutDir $shared 2>&1
     if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch 'Summary: 2 passed, 0 failed') { throw ($output -join "`n") }
     Write-Output 'PASS compile-only probes, source overrides, quoted paths and macros, >32KiB arguments, multiple inputs'
+    $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Suite $suite @compilerArguments -BuildManifestPath $manifestPath -Select test_probe.cpp 2>&1
+    if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch 'Summary: 1 passed, 0 failed') { throw ($output -join "`n") }
+    try {
+        $ErrorActionPreference = 'Continue' # Capture the expected child-script error in Windows PowerShell.
+        $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Suite $suite @compilerArguments -Select missing.cpp 2>&1
+    } finally { $ErrorActionPreference = 'Stop' }
+    if ($LASTEXITCODE -eq 0 -or ($output -join "`n") -notmatch 'Unknown test selection') { throw 'Unknown selection was not rejected' }
+    Write-Output 'PASS exact selection and unknown selection rejection'
     $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Suite $suite @compilerArguments 2>&1
     if ($LASTEXITCODE -eq 0 -or ($output -join "`n") -notmatch 'test setup failed: This test requires a build manifest') { throw ($output -join "`n") }
     Write-Output 'PASS missing manifest is a setup failure'

@@ -1,5 +1,34 @@
 /* A class-prvalue conditional constructs exactly one result object. Share
    its destination between branches, after the condition has been evaluated. */
+static int cpp_conditional_class_lvalue_type(SValue *first, SValue *second, CType *result)
+{
+  int first_class, second_class, offset;
+  if (!is_cpp_translation_unit() || !(first->r & second->r & VT_LVAL)
+      || ((first->r | second->r) & VT_CXX_PRVALUE)
+      || (first->type.t & VT_BTYPE) != VT_STRUCT
+      || (second->type.t & VT_BTYPE) != VT_STRUCT) return 0;
+  first_class = get_struct_type_name_tok(&first->type);
+  second_class = get_struct_type_name_tok(&second->type);
+  if (cpp_rtti_public_base_offset(first_class, second_class, &offset))
+    *result = second->type;
+  else if (cpp_rtti_public_base_offset(second_class, first_class, &offset))
+    *result = first->type;
+  else return 0;
+  result->t |= (first->type.t | second->type.t) & (VT_CONSTANT | VT_VOLATILE);
+  return 1;
+}
+
+static void cpp_conditional_adjust_class_lvalue(CType *target)
+{
+  if ((target->t & VT_BTYPE) == VT_STRUCT
+      && (vtop->type.t & VT_BTYPE) == VT_STRUCT
+      && !is_compatible_unqualified_types(target, &vtop->type)) {
+    CType pointer = *target;
+    mk_pointer(&vtop->type); gaddrof();
+    mk_pointer(&pointer); gen_assign_cast(&pointer); indir();
+  }
+}
+
 static int cpp_is_conditional_marker(int token)
 {
   return token >= TOK_UIDENT && token < SYM_FIRST_ANOM

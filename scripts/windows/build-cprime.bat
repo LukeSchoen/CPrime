@@ -7,6 +7,7 @@ setlocal
 
 set CC=gcc
 set HOST_OPT=
+set RUNTIME_ONLY=no
 for %%I in ("%~dp0..\..") do set "ROOT=%%~fI"
 if not exist "%ROOT%\build\compiler" mkdir "%ROOT%\build\compiler"
 cd /d "%ROOT%\build\compiler"
@@ -34,6 +35,7 @@ set CC=%~2
 if (%2)==(cl) set CC=@call :cl
 goto :a2
 :a1
+if (%1)==(-runtime-only) set RUNTIME_ONLY=yes&& goto :a3
 if (%1)==(-t) set T=%2&& goto :a2
 if (%1)==(-v) set VERSION=%~2&& goto :a2
 if (%1)==(-i) set CPRIMEDIR=%2&& goto :a2
@@ -52,6 +54,7 @@ echo   -b bindir            but install cpc.exe and libcprime.dll into bindir
 echo   -d                   create cprime-doc.html too (needs makeinfo)
 echo   -x                   build the cross compiler too
 echo   -clean               delete all previously produced files and directories
+echo   -runtime-only        build runtime using existing build/compiler/cpc.exe
 exit /B 1
 
 @rem ------------------------------------------------------
@@ -147,6 +150,14 @@ if %ERRORLEVEL%==1 set GITHASH=%GITHASH%*
 
 @rem %CC% -DC2STR ..\conftest.c -o c2str.exe
 @rem .\c2str.exe ../include/cprimedefs.h ../cprimedefs_.h
+
+if "%RUNTIME_ONLY%"=="yes" (
+if not exist cpc.exe (
+echo Error: runtime-only build requires build/compiler/cpc.exe.
+exit /B 1
+)
+goto :lib
+)
 
 for %%f in (*cpc.exe *cprime.dll) do @del %%f
 

@@ -1,109 +1,78 @@
-# Language test runner
+# Tests
 
-Run a suite with `powershell -NoProfile -ExecutionPolicy Bypass -File Tests/run.ps1 -Suite features/Classes`.
-The runner discovers `test_*.c` and `test_*.cpp` in the suite's `pass` and `fail` directories.
-Compiler arguments use response files, including when a compiler wrapper is selected,
-so large manifest settings and quoted paths are preserved without command-line limits.
-`Tests/test_RunnerFixtures.ps1` validates these settings and fixture setup failures.
-Each test compiles, links, and runs by default. A test's first 12 lines may contain
-`// EXPECT_NAME: value` metadata:
+Run commands from the repository root in PowerShell (Windows PowerShell 5.1
+is sufficient). Compilation is serial.
 
-- `EXPECT_EXIT`: required process exit status (default `0`).
-- `EXPECT_STDOUT`: exact required standard output, when specified.
-- `EXPECT_COMPILE_FAIL: 1`: compilation must reject an invalid program.
-- `EXPECT_COMPILE_ARGS`: additional compiler arguments separated by whitespace.
-- `EXPECT_COMPILE_ONLY: 1`: produce and verify an object file without linking or running.
-  Use this for translation-unit probes that do not need to link or run.
-- `EXPECT_SOURCES`: a JSON array of additional source paths relative to the test,
-  for example `["helper.cpp", "subdirectory/another helper.cpp"]`. The runner passes
-  each source as a separate input, links the executable, and runs its assertions.
-  Name helper files without the `test_` prefix so they are not independent tests.
-- `EXPECT_MANIFEST_SOURCE`: a source path relative to the build manifest's
-  `projectRoot`, or an absolute path, selecting the translation unit whose
-  preprocessing settings the test requires. The runner inherits its include
-  directories, definitions, undefinitions, and forced includes, including source
-  overrides. Optimization and warning policy belong to `EXPECT_COMPILE_ARGS`.
+```powershell
+./Tests/run.ps1 -Suite features/Templates -Select test_name.cpp
+./Tests/gates.ps1 -Subsystem members
+./Tests/run-all.ps1
+```
 
-Optional manifest fixtures can pass `-BuildManifestPath` or set
-`CPRIME_TEST_BUILD_MANIFEST` to a schema-version-2 manifest. Generate one with
-`scripts/windows/export-build-manifest.ps1 -ProjectRoot <root> -SolutionPath <solution>`.
-A missing manifest, missing selected source, or ambiguous source selection is
-a test setup failure, not a skipped test.
-The runner does not substitute library sources or add machine-specific include paths.
-Compile-only, multiple-source, and manifest-dependent tests always compile fresh;
-they do not reuse the optional shared executable cache.
-
-The Includes suite covers scalar and array `new` before a later `<cstdlib>`
-include, with an intervening function to exercise symbol reuse. The synthesized
-`malloc` declaration must retain its `void*` return type after the allocating
-function's scope ends. Both regressions also run the allocations and ordinary
-`malloc`/`free` calls. This guards against return-type corruption across function scopes.
-
-`Tests/check_ucrt_runtime.ps1` checks the default Windows UCRT target against
-a native Clang object. It passes file streams and allocations between compilers,
-checks formatted I/O, buffered file positions, locale/global accessors, startup
-arguments, exit callbacks, `setjmp`/`longjmp`, and generated-code shutdown with
-`-run`. The PE import check rejects accidental legacy MSVCRT composition.
-Use `-CompilerPath` and `-RuntimeRoot` together when testing an unpacked compiler;
-the runtime archive must have been rebuilt by the same target compiler.
-
-`Tests/test_NativeTls.ps1` links native COFF TLS objects directly and through
-`-r`. It checks ordered initialization/callback subsections, 64-byte TLS
-alignment, main/child thread isolation, native global constructors, dynamic TLS
-initialization/destruction, and exit/pretermination/termination ordering.
-The Destructors suite also checks interleaved class destructors and ordinary
-`atexit` callbacks; the same ordering is required for executable and `-run` use.
-
-`Tests/test_MsvcRecordReturn.ps1` compiles a native provider with MSVC and checks
-small C++ record returns in both directions, including access, bases, special
-members, nested records, and const results. It discovers the installed MSVC x64
-toolchain with `vswhere`; `-NativeCompilerPath` can select another installation.
-This gate uses MSVC itself because older Clang releases use a different POD
-classification for some defaulted and nested records.
-
-`Tests/check_ucrt_module_exit.ps1` checks executable and DLL ownership of
-termination callbacks, mixed native/CPC `_onexit` and `atexit` ordering,
-`quick_exit`, and `-run` callback lifetime. Its native thread-static fixture
-links the installed MSVC runtime guard implementation and checks thread-local
-storage on four worker threads. Pass `-NativeLibraryPath` if the MSVC x64
-library directory is outside the standard Visual Studio installation paths.
-
-`Tests/test_CoffWeakExternals.ps1` checks native weak aliases, deferred
-`/alternatename` directives, archive fallback selection, DLL import aliases,
-and `SECTION`/`SECREL` relocations, including relocatable output. Together with
-`Tests/test_CoffLabels.ps1`, it verifies archive order and native object metadata
-without changing the external project's source or library list.
-The label tests also query Windows' unwind lookup for native functions whose
-code and `.pdata$` contributions have different ordering and alignment. The
-final x64 exception directory must pack and sort runtime-function records by
-their relocated code addresses, including inputs combined with `-r`.
-
-## GCC C++ regressions
-
-`powershell -NoProfile -ExecutionPolicy Bypass -File Tests/gcc/run.ps1 -Fetch` downloads a pinned GCC testsuite checkout and
-runs the supported standalone checks serially. See [gcc/README.md](gcc/README.md)
-for selecting cases, collecting a full source survey, and the distinction
-between checked results and unverified GCC-specific expectations.
-
-The shared runner rejects abnormal compiler exits even for tests marked
-`EXPECT_COMPILE_FAIL`; crashing is never a successful diagnostic test.
-
-`powershell -NoProfile -ExecutionPolicy Bypass -File Tests/test_PortablePackaging.ps1`
-builds the native C helper and checks header normalization, BOM decoding and
-recursive processing, then copies the compiler
-to an isolated temporary directory and compiles/runs a Windows/C++ probe using
-only its embedded headers and runtime. Pass `-CompilerPath` to select a build.
+`tests.cmd` runs all discovered language suites plus assembly-output and
+multiple-source integration checks. `run-all.ps1 -List` lists language suites;
+`-Suite c_compat,features/Expressions` selects a subset. Failures are collected
+across suites and produce a nonzero exit. Standalone tools below run separately.
+Use `-CompilerPath` and, for unpackaged hosts, `-RuntimeRoot` with language runners.
+`run.cmd` forwards to `run.ps1`.
 
 ## Layout
 
-The test tools use PowerShell without Python or embedded C#. Run
-`Tests/check_fast_codegen.ps1` for code-generation and batch-state checks,
-`Tests/test_include_search.ps1` for include lookup, and
-`Tests/check_source_languages.ps1` to check the first-party language policy.
+| Path | Purpose |
+| --- | --- |
+| `c_compat/`, `features/`, `debug/`, `payload/pass/` | Discovered language suites |
+| `integration/multi_source/` | Multiple-source fixtures run by `test_MultiSource.cmd` |
+| `abi/`, `native_runtime/`, `runtime/`, `include/`, `payload/` | Native, runtime, header, and packaging fixtures |
+| `gcc/` | Pinned upstream assessment adapter and its tests |
+| `benchmarks/compile/`, `benchmarks/runtime/` | BuildProfile and codeProfile inputs |
+| `tools/` | Test support programs |
+| `check_*.ps1`, `test_*.ps1`, `test_*.cmd` | Standalone subsystem/integration checks |
 
-- Language suites, ABI fixtures, integration tests, and test runners live here.
-- benchmarks/compile and benchmarks/runtime contain the inputs used by
-  BuildProfile and codeProfile.
-- Third-party upstream tests remain with their vendored dependencies.
-- Generated compiler and test output belongs under build/ or the runner's
-  temporary directory, not beside source files.
+Generated files belong in `build/` or an isolated temporary directory. Keep
+helpers beside their owning tests; give helpers names without `test_`.
+
+## Test format
+
+Suites contain `pass/` and/or `fail/` directories with `test_*.c` and `test_*.cpp`.
+Each test compiles, links, and runs by default. Put metadata in its first 12 lines:
+
+| Metadata (`// NAME: value`) | Meaning |
+| --- | --- |
+| `EXPECT_EXIT` | Required exit status; default `0` |
+| `EXPECT_STDOUT` | Exact stdout when supplied |
+| `EXPECT_COMPILE_FAIL: 1` | Require a compiler diagnostic failure; crashes do not pass |
+| `EXPECT_COMPILE_ARGS` | Additional compiler arguments |
+| `EXPECT_COMPILE_ONLY: 1` | Verify object generation without linking/running |
+| `EXPECT_SOURCES` | JSON array of extra source paths relative to the test |
+| `EXPECT_MANIFEST_SOURCE` | Translation unit selected from a build manifest |
+
+`-BuildManifestPath` or `CPRIME_TEST_BUILD_MANIFEST` supplies a schema-version-2
+manifest. Selected units inherit include paths, defines, undefines, forced includes,
+and source overrides. Missing or ambiguous fixtures fail setup. Compiler arguments
+use response files. Compile-only, multiple-source, and manifest tests compile fresh.
+`-UseSharedBinaries` optionally reuses outputs from `test_batch.cmd`; use fresh
+compilation for verification of compiler changes.
+
+## Subsystem checks
+
+Run these with `powershell -NoProfile -ExecutionPolicy Bypass -File Tests/<script>`.
+Check each script's parameter block for compiler/runtime or native toolchain paths.
+
+| Area | Scripts |
+| --- | --- |
+| Build driver | `check_build_default.ps1`, `check_build_regression_gate.ps1`, `check_build_manifest.ps1`, `check_batch_build.ps1`, `check_incremental_build.ps1` |
+| Compiler/self-host | `check_regressions.ps1`, `check_clang_selfhost.ps1`, `check_fast_codegen.ps1`, `test_ParserDiagnostics.ps1` |
+| Runner/policy | `test_RunnerFixtures.ps1`, `test_SuiteRunner.ps1`, `check_source_languages.ps1` |
+| Headers/packaging | `test_include_search.ps1`, `test_PortablePackaging.ps1`, `check_pack_cache.ps1` |
+| Runtime | `check_ucrt_runtime.ps1`, `check_ucrt_module_exit.ps1`, `test_NativeTls.ps1`, `test_RunExceptions.ps1` |
+| Native ABI | `test_MsvcClassLayout.ps1`, `test_MsvcMemberLinkage.ps1`, `test_MsvcNullptr.ps1`, `test_MsvcRecordReturn.ps1`, `test_MsvcStackProbe.ps1` |
+| Linker | `test_CoffLabels.ps1`, `test_CoffWeakExternals.ps1`, `test_LinkerMap.ps1`, `test_PragmaLibraries.ps1`, `test_DynamicCastObjectLink.ps1`, `test_MemberPointerObjectLink.ps1` |
+
+Native checks require installed Clang/MSVC as specified by their parameters.
+Portable packaging checks use fresh extraction and verify SDK/runtime contents,
+C/header probes, DLL/COM calls, and stack-probe ABI. `-FullIncludes` expands header
+coverage; `-MaxBytes 1000000` enforces the portable size target. Use
+`-RuntimeLibPath` for a package built with another runtime archive.
+
+See the [development loop](DEVELOPMENT.md), [remaining work](../task.md), and
+[GCC assessment](gcc/README.md).

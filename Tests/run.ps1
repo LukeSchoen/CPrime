@@ -3,6 +3,7 @@ param(
     [Alias("TccPath")]
     [string]$CompilerPath = "",
     [string]$RuntimeRoot = '',
+    [string[]]$Select = @(),
     [ValidateRange(0.001, 5)][double]$Timeout = 5,
     [switch]$UseSharedBinaries,
     [string]$SharedOutDir = "",
@@ -271,6 +272,12 @@ if (Test-Path -LiteralPath $failDir) {
     $tests += Get-ChildItem -LiteralPath $failDir -Filter test_*.cpp | Sort-Object Name
 }
 
+if ($Select.Count) {
+    foreach ($name in $Select) {
+        if ($name -notin $tests.Name) { throw "Unknown test selection: $name" }
+    }
+    $tests = @($tests | Where-Object { $_.Name -in $Select })
+}
 if ($tests.Count -eq 0) {
     throw "No test files found under $testsRoot"
 }

@@ -63,7 +63,9 @@ function Invoke-GccProcess([string[]]$Command, [ValidateRange(0.001, 5)][double]
         '"' + [regex]::Replace([regex]::Replace($_, '(\\*)"', '$1$1\"'), '(\\+)$', '$1$1') + '"'
     }) -join ' ')
     try {
+        $setupSeconds = $timer.Elapsed.TotalSeconds
         [void]$process.Start()
+        $startedSeconds = $timer.Elapsed.TotalSeconds
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
         $remaining = [Math]::Max(0, [Math]::Ceiling(($Timeout - $timer.Elapsed.TotalSeconds) * 1000))
@@ -103,6 +105,8 @@ function Invoke-GccProcess([string[]]$Command, [ValidateRange(0.001, 5)][double]
         if ($stdout.IsCompleted) { $output += $stdout.Result }
         if ($stderr.IsCompleted) { $output += $stderr.Result }
         [ordered]@{ exit = $code; seconds = $executionSeconds; timeout_seconds = $Timeout;
+            setup_seconds = $setupSeconds; startup_seconds = $startedSeconds - $setupSeconds;
+            wait_seconds = $executionSeconds - $startedSeconds;
             timed_out = $timedOut; output_complete = $drained;
             cleanup_seconds = $timer.Elapsed.TotalSeconds - $executionSeconds; output = $output }
     } finally { $process.Dispose() }

@@ -90,6 +90,25 @@ static void cpp_ms_template_name(CppMsMangleContext *ctx, int source_tok,
     int64_t value;
     if (i < 32 && (value_mask & (1u << i))) {
       Sym *address = global_symbol_find(args->toks[i]);
+      if (address && address->cpp_member_address_tok) {
+        CppMemberPointerType *member = find_cpp_member_pointer_type(&address->type);
+        Sym *target = global_symbol_find(address->cpp_member_address_tok);
+        if ((member->member_type.t & VT_BTYPE) == VT_FUNC) {
+          int label = target->asm_label;
+          if (!label) label = cpp_ms_linkage_tok(target->v, &target->type);
+          cstr_cat(&name, "$1", 2);
+          cstr_cat(&name, get_tok_str(label, NULL), -1);
+        } else {
+          CType owner;
+          int offset = 0;
+          make_class_type_from_tok(&owner, member->owner_tok);
+          if (!find_field_try(&owner, address->cpp_member_address_tok, &offset))
+            cprime_error("member template argument has no field declaration");
+          cstr_cat(&name, "$0", 2);
+          cpp_ms_number(&nested, offset);
+        }
+        continue;
+      }
       if (address && (address->template_address_target
                       || (address->type.t & VT_BTYPE) == VT_FUNC)) {
         Sym *target = address->template_address_target ? address->template_address_target : address;
