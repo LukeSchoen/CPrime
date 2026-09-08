@@ -3,6 +3,7 @@ param(
     [string]$CompilerPath = '',
     [string]$RuntimeRoot = '',
     [switch]$UseSharedBinaries,
+    [switch]$IncludeChecks,
     [switch]$List
 )
 $ErrorActionPreference = 'Stop'
@@ -33,5 +34,9 @@ foreach ($name in $Suite) {
     if ($LASTEXITCODE -ne 0) { $failed += $name }
 }
 Write-Host ('Suite summary: {0} passed, {1} failed' -f ($Suite.Count - $failed.Count), $failed.Count)
+if ($IncludeChecks) {
+    & (Join-Path $PSScriptRoot 'run-checks.ps1') -Tier fast -CompilerPath $CompilerPath -RuntimeRoot $RuntimeRoot
+    if ($LASTEXITCODE -ne 0) { $failed += 'fast subsystem checks' }
+}
 if ($failed.Count) { Write-Host ('Failed suites: ' + ($failed -join ', ')); exit 1 }
 exit 0

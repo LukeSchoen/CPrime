@@ -6,6 +6,26 @@ for %%I in ("%SCRIPT_DIR%\..") do set "ROOT_DIR=%%~fI"
 set "COMPILER_PATH=%ROOT_DIR%\cpc.exe"
 set "YASM_PATH=%ROOT_DIR%\third-party\yasm\yasm.exe"
 
+set "RUNTIME_ARGS="
+
+:parse_args
+if "%~1"=="" goto args_done
+if /I "%~1"=="-RuntimeRoot" (
+  for %%I in ("%~2") do set RUNTIME_ARGS="-B%%~fI"
+  shift
+  shift
+  goto parse_args
+)
+if /I "%~1"=="-CompilerPath" (
+  set "COMPILER_PATH=%~2"
+  shift
+  shift
+  goto parse_args
+)
+shift
+goto parse_args
+
+:args_done
 if not exist "%COMPILER_PATH%" (
   echo Unable to find compiler: %COMPILER_PATH%
   exit /b 1
@@ -34,7 +54,7 @@ set "EXE=%WORK_DIR%\basic.exe"
   echo int main^(void^) { int x = add^(19, 23^); if ^(x == 42^) return x - 42; return 1; }
 ) > "%SRC%"
 
-"%COMPILER_PATH%" -S "%SRC%" -o "%ASM%" >"%WORK_DIR%\compile.out" 2>&1
+"%COMPILER_PATH%" %RUNTIME_ARGS% -S "%SRC%" -o "%ASM%" >"%WORK_DIR%\compile.out" 2>&1
 if errorlevel 1 (
   echo FAIL readable asm: compile failed
   type "%WORK_DIR%\compile.out"
@@ -77,7 +97,7 @@ if errorlevel 1 (
   goto fail
 )
 
-"%COMPILER_PATH%" "%OBJ%" -o "%EXE%" >"%WORK_DIR%\link.out" 2>&1
+"%COMPILER_PATH%" %RUNTIME_ARGS% "%OBJ%" -o "%EXE%" >"%WORK_DIR%\link.out" 2>&1
 if errorlevel 1 (
   echo FAIL readable asm: link failed
   type "%WORK_DIR%\link.out"

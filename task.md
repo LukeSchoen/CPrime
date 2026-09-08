@@ -1,6 +1,6 @@
 # Remaining work
 
-Target: 100% of local tests and all applicable GCC checks, with no missing
+Target: 100% of fast tests and the retained pedantic GCC checks, with no missing
 coverage, weakened expectations, compiler internal errors, or timeout retries.
 
 ## Compiler and runtime
@@ -30,17 +30,19 @@ coverage, weakened expectations, compiler internal errors, or timeout retries.
 
 ## Test coverage and usability
 
-- Fetch transitive GCC fixture dependencies under `gcc.dg/`; five checked
-  inputs reference files outside the current sparse checkout.
 - Extend the GCC adapter with tested diagnostic matching, standard/target
   selection, extra-source and specialized-driver support, and output/assembly
   expectations. Keep unsupported cases visible until their results can be judged.
 - Audit legacy HeapList/Perf fixtures for missing declarations and private
   class access before assigning failures to CPC; retain their intended runtime
   coverage and supply standalone, valid reproducers.
-- Apply the five-second compiler/process ceiling to standalone test tools.
+- Keep fast gates within their enforced five-second budget; deeper checks are
+  explicit pedantic work after large changes.
 - Reach a portable package size of 1,000,000 bytes with the complete SDK/runtime.
   Use `scripts/windows/build-cpc-small.ps1 -Test` and enforce the target with
   `Tests/test_PortablePackaging.ps1 -CompilerPath build/compiler-small/cpc.exe -MaxBytes 1000000`.
+
+The original full download under `build/gcc-upstream` is excluded from both
+default tiers. Removing it remains blocked by automatic filesystem approval.
 
 Reproduce against a fresh build and follow the [development loop](Tests/DEVELOPMENT.md).

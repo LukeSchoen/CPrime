@@ -1,6 +1,6 @@
 param([Parameter(Mandatory = $true)][string]$CompilerPath, [string]$RuntimeRoot = '')
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'gcc/assessment.ps1')
+. (Join-Path $PSScriptRoot 'pedantic/gcc/assessment.ps1')
 $work = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot ('../build/parser-fixtures-' + [guid]::NewGuid().ToString('N'))))
 [void][IO.Directory]::CreateDirectory($work)
 $source = Join-Path $work 'invalid.cpp'

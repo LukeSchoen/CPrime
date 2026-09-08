@@ -12,11 +12,14 @@ mkdir "%OUTDIR%" >nul 2>nul
   for /f "delims=" %%F in ('dir /b /s /a-d "%ROOT%\Tests\test_*.c" "%ROOT%\Tests\test_*.cpp" ^| sort') do (
     set "FILE=%%~fF"
     set "NORM=!FILE:\=/!"
+    echo !NORM! | findstr /I /C:"/pedantic/" /C:"/integration/" >nul
+    if errorlevel 1 (
     echo !NORM! | findstr /I /C:"/pass/" >nul
     if not errorlevel 1 (
       set "EXE=%OUTDIR%\%%~nF.exe"
       set "EXENORM=!EXE:\=/!"
       echo !NORM! -o !EXENORM!
+    )
     )
   )
 )

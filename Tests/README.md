@@ -1,78 +1,74 @@
 # Tests
 
-Run commands from the repository root in PowerShell (Windows PowerShell 5.1
-is sufficient). Compilation is serial.
+Use `tests.cmd` for normal development. It runs the local language suites and
+fast native ABI/runtime/linker, assembly, and multiple-source checks serially.
+Use exact tests and subsystem gates first:
 
 ```powershell
 ./Tests/run.ps1 -Suite features/Templates -Select test_name.cpp
 ./Tests/gates.ps1 -Subsystem members
-./Tests/run-all.ps1
+./Tests/run-all.ps1 -List
+./Tests/run-checks.ps1 -List
 ```
 
-`tests.cmd` runs all discovered language suites plus assembly-output and
-multiple-source integration checks. `run-all.ps1 -List` lists language suites;
-`-Suite c_compat,features/Expressions` selects a subset. Failures are collected
-across suites and produce a nonzero exit. Standalone tools below run separately.
-Use `-CompilerPath` and, for unpackaged hosts, `-RuntimeRoot` with language runners.
-`run.cmd` forwards to `run.ps1`.
+Pass `-CompilerPath` and optional `-RuntimeRoot` to select a matching compiler
+and runtime. Windows PowerShell may require `powershell -NoProfile
+-ExecutionPolicy Bypass -File <script>`.
+
+## Fast versus pedantic
+
+- **Fast:** individual language compile/run steps and complete standalone gates
+  have a five-second ceiling. `run-checks.ps1` records gate timings and logs in
+  `build/`, kills timed-out process trees, and continues to report other failures.
+- **Pedantic:** `tests_pedantic.cmd` explicitly runs the retained GCC failure
+  corpus, packaging/build/self-host checks, and performance workloads. Use it
+  only at the end of a large change that warrants deep verification. Do not run
+  it after routine edits or automatically before every merge.
+- `Tests/checks.json` assigns standalone gates and budgets. Pedantic gate totals
+  may take up to 120 seconds; local/GCC compiler and program invocations retain
+  five seconds. A fast gate exceeding its budget fails; investigate and move it
+  explicitly if its workload belongs in pedantic testing. Never silently skip it.
+
+Native ABI/runtime/linker and multiple-source checks are in the fast tier.
+`run-all.ps1` runs language suites alone; `-IncludeChecks` adds fast gates.
+`run-checks.ps1 -Select test_NativeTls` runs one fast gate.
+For a justified deep check, select `tests_pedantic.cmd -Group gcc|checks|performance`.
+No normal entry point discovers `Tests/pedantic/`.
 
 ## Layout
 
 | Path | Purpose |
 | --- | --- |
-| `c_compat/`, `features/`, `debug/`, `payload/pass/` | Discovered language suites |
-| `integration/multi_source/` | Multiple-source fixtures run by `test_MultiSource.cmd` |
-| `abi/`, `native_runtime/`, `runtime/`, `include/`, `payload/` | Native, runtime, header, and packaging fixtures |
-| `gcc/` | Pinned upstream assessment adapter and its tests |
-| `benchmarks/compile/`, `benchmarks/runtime/` | BuildProfile and codeProfile inputs |
-| `tools/` | Test support programs |
-| `check_*.ps1`, `test_*.ps1`, `test_*.cmd` | Standalone subsystem/integration checks |
+| `c_compat/`, `features/`, `debug/`, `payload/pass/` | Fast language suites |
+| `integration/multi_source/`, `abi/`, `native_runtime/`, `runtime/` | Integration/native fixtures |
+| `pedantic/gcc/` | Retained upstream failure corpus and assessment tools |
+| `pedantic/performance/`, `benchmarks/` | Stress and profiling workloads |
+| `tools/` | Shared test helpers |
+| `checks.json` | Fast/pedantic standalone gate catalog |
 
-Generated files belong in `build/` or an isolated temporary directory. Keep
-helpers beside their owning tests; give helpers names without `test_`.
+Generated output belongs under `build/` or an isolated temporary directory.
+Helpers live beside their tests and do not use the `test_` prefix.
 
 ## Test format
 
 Suites contain `pass/` and/or `fail/` directories with `test_*.c` and `test_*.cpp`.
-Each test compiles, links, and runs by default. Put metadata in its first 12 lines:
+Tests compile, link, and run unless metadata in their first 12 lines says otherwise:
 
 | Metadata (`// NAME: value`) | Meaning |
 | --- | --- |
 | `EXPECT_EXIT` | Required exit status; default `0` |
 | `EXPECT_STDOUT` | Exact stdout when supplied |
-| `EXPECT_COMPILE_FAIL: 1` | Require a compiler diagnostic failure; crashes do not pass |
+| `EXPECT_COMPILE_FAIL: 1` | Require diagnostic rejection; crashes never pass |
 | `EXPECT_COMPILE_ARGS` | Additional compiler arguments |
 | `EXPECT_COMPILE_ONLY: 1` | Verify object generation without linking/running |
 | `EXPECT_SOURCES` | JSON array of extra source paths relative to the test |
 | `EXPECT_MANIFEST_SOURCE` | Translation unit selected from a build manifest |
 
 `-BuildManifestPath` or `CPRIME_TEST_BUILD_MANIFEST` supplies a schema-version-2
-manifest. Selected units inherit include paths, defines, undefines, forced includes,
-and source overrides. Missing or ambiguous fixtures fail setup. Compiler arguments
-use response files. Compile-only, multiple-source, and manifest tests compile fresh.
-`-UseSharedBinaries` optionally reuses outputs from `test_batch.cmd`; use fresh
-compilation for verification of compiler changes.
-
-## Subsystem checks
-
-Run these with `powershell -NoProfile -ExecutionPolicy Bypass -File Tests/<script>`.
-Check each script's parameter block for compiler/runtime or native toolchain paths.
-
-| Area | Scripts |
-| --- | --- |
-| Build driver | `check_build_default.ps1`, `check_build_regression_gate.ps1`, `check_build_manifest.ps1`, `check_batch_build.ps1`, `check_incremental_build.ps1` |
-| Compiler/self-host | `check_regressions.ps1`, `check_clang_selfhost.ps1`, `check_fast_codegen.ps1`, `test_ParserDiagnostics.ps1` |
-| Runner/policy | `test_RunnerFixtures.ps1`, `test_SuiteRunner.ps1`, `check_source_languages.ps1` |
-| Headers/packaging | `test_include_search.ps1`, `test_PortablePackaging.ps1`, `check_pack_cache.ps1` |
-| Runtime | `check_ucrt_runtime.ps1`, `check_ucrt_module_exit.ps1`, `test_NativeTls.ps1`, `test_RunExceptions.ps1` |
-| Native ABI | `test_MsvcClassLayout.ps1`, `test_MsvcMemberLinkage.ps1`, `test_MsvcNullptr.ps1`, `test_MsvcRecordReturn.ps1`, `test_MsvcStackProbe.ps1` |
-| Linker | `test_CoffLabels.ps1`, `test_CoffWeakExternals.ps1`, `test_LinkerMap.ps1`, `test_PragmaLibraries.ps1`, `test_DynamicCastObjectLink.ps1`, `test_MemberPointerObjectLink.ps1` |
-
-Native checks require installed Clang/MSVC as specified by their parameters.
-Portable packaging checks use fresh extraction and verify SDK/runtime contents,
-C/header probes, DLL/COM calls, and stack-probe ABI. `-FullIncludes` expands header
-coverage; `-MaxBytes 1000000` enforces the portable size target. Use
-`-RuntimeLibPath` for a package built with another runtime archive.
+manifest with per-source preprocessing settings. Missing or ambiguous fixtures
+fail setup. Arguments use response files; multiple-source, manifest-dependent,
+and compile-only tests compile fresh. Use fresh compilation for validation;
+shared executable caching is an optional specialized workflow.
 
 See the [development loop](DEVELOPMENT.md), [remaining work](../task.md), and
-[GCC assessment](gcc/README.md).
+[retained GCC checks](pedantic/gcc/README.md).

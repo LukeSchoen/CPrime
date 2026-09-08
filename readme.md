@@ -37,5 +37,8 @@ See [test commands and layout](Tests/README.md) and the
 [development loop](Tests/DEVELOPMENT.md). Bug reports should include a standalone
 reproducer, the command, and expected versus actual behavior.
 
+`tests.cmd` is the fast development checkpoint. Use `tests_pedantic.cmd` only
+after a large change that warrants deeper GCC, packaging, or self-host testing.
+
 Implementation lives in `src/`, headers in `include/`, test and benchmark inputs
 in `Tests/`, and build scripts in `scripts/windows/`.

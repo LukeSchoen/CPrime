@@ -1,6 +1,6 @@
 param([Parameter(Mandatory = $true)][string]$CompilerPath, [string]$RuntimeRoot = '')
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'gcc/assessment.ps1')
+. (Join-Path $PSScriptRoot 'pedantic/gcc/assessment.ps1')
 $compiler = (Resolve-Path -LiteralPath $CompilerPath).Path
 $out = Join-Path (Split-Path $PSScriptRoot -Parent) ('build/linker-map-' + [guid]::NewGuid().ToString('N'))
 [void](New-Item -ItemType Directory -Path $out)
@@ -28,4 +28,3 @@ if ($null -eq $failure.exit -or $failure.exit -eq 0 -or $failure.output -notmatc
     throw 'An unwritable map must produce a normal compiler diagnostic'
 }
 Write-Output 'PASS linker map relocated symbols and write-error diagnostics'
-

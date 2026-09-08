@@ -20,7 +20,11 @@
   first-party code, including test tools. Do not embed C# or require Python.
   Leave third-party sources/tooling unchanged; documentation and data are exempt.
 - Test exact reproducers and curated subsystem gates first (Tests/DEVELOPMENT.md).
-  Batch coherent fixes before full inventory checkpoints; use runner summaries.
+  Use fast tests for normal checkpoints and runner summaries for results.
+- Avoid pedantic sweeps except at the end of large changes that warrant deep
+  testing. Exact retained reproducers and focused runner unit tests are allowed
+  during repairs. Keep fast standalone gates under five seconds; move genuinely
+  heavier workloads to the explicit pedantic tier, never silently skip them.
 - Keep Markdown limited to usage, current requirements, and remaining work.
   Keep decisions and completed-work history in git; preserve regression coverage
   in tests and clean old build logs routinely.

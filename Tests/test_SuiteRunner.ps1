@@ -4,7 +4,7 @@ $work = Join-Path $root ('build/suite-runner-' + [guid]::NewGuid().ToString('N')
 try {
     New-Item -ItemType Directory -Path $work | Out-Null
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'run-all.ps1') -Destination $work
-    foreach ($suite in @('c_compat', 'features/Good', 'features/Bad', 'abi/Excluded')) {
+    foreach ($suite in @('c_compat', 'features/Good', 'features/Bad', 'abi/Excluded', 'pedantic/Slow')) {
         $pass = Join-Path $work ($suite + '/pass')
         New-Item -ItemType Directory -Path $pass -Force | Out-Null
         Set-Content -LiteralPath (Join-Path $pass 'test_probe.cpp') -Value 'int main() { return 0; }'

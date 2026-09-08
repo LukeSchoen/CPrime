@@ -6,8 +6,16 @@ for %%I in ("%SCRIPT_DIR%\..") do set "ROOT_DIR=%%~fI"
 set "COMPILER_PATH=%ROOT_DIR%\cpc.exe"
 set "YASM_PATH=%ROOT_DIR%\third-party\yasm\yasm.exe"
 
+set "RUNTIME_ARGS="
+
 :parse_args
 if "%~1"=="" goto args_done
+if /I "%~1"=="-RuntimeRoot" (
+  for %%I in ("%~2") do set RUNTIME_ARGS="-B%%~fI"
+  shift
+  shift
+  goto parse_args
+)
 if /I "%~1"=="-CompilerPath" (
   set "COMPILER_PATH=%~2"
   shift
@@ -116,7 +124,7 @@ if not exist "%SRC%" (
   exit /b 1
 )
 
-"%COMPILER_PATH%" -Sbytes "%SRC%" -o "%ASM%" >"%WORK_DIR%\%CASE_NAME%-compile.out" 2>&1
+"%COMPILER_PATH%" %RUNTIME_ARGS% -Sbytes "%SRC%" -o "%ASM%" >"%WORK_DIR%\%CASE_NAME%-compile.out" 2>&1
 if errorlevel 1 (
   echo FAIL asm output %CASE_NAME%: compile failed
   type "%WORK_DIR%\%CASE_NAME%-compile.out"
@@ -142,7 +150,7 @@ if errorlevel 1 (
   exit /b 1
 )
 
-"%COMPILER_PATH%" -c "%ASM%" -o "%OBJ%" >"%WORK_DIR%\%CASE_NAME%-assemble.out" 2>&1
+"%COMPILER_PATH%" %RUNTIME_ARGS% -c "%ASM%" -o "%OBJ%" >"%WORK_DIR%\%CASE_NAME%-assemble.out" 2>&1
 if errorlevel 1 (
   echo FAIL asm output %CASE_NAME%: assembler rejected generated .s
   type "%WORK_DIR%\%CASE_NAME%-assemble.out"
@@ -155,14 +163,14 @@ if not exist "%OBJ%" (
   exit /b 1
 )
 
-"%COMPILER_PATH%" "%SRC%" -o "%DIRECT_EXE%" >"%WORK_DIR%\%CASE_NAME%-direct-link.out" 2>&1
+"%COMPILER_PATH%" %RUNTIME_ARGS% "%SRC%" -o "%DIRECT_EXE%" >"%WORK_DIR%\%CASE_NAME%-direct-link.out" 2>&1
 if errorlevel 1 (
   echo FAIL asm output %CASE_NAME%: direct executable build failed
   type "%WORK_DIR%\%CASE_NAME%-direct-link.out"
   exit /b 1
 )
 
-"%COMPILER_PATH%" "%OBJ%" -o "%INDIRECT_EXE%" >"%WORK_DIR%\%CASE_NAME%-indirect-link.out" 2>&1
+"%COMPILER_PATH%" %RUNTIME_ARGS% "%OBJ%" -o "%INDIRECT_EXE%" >"%WORK_DIR%\%CASE_NAME%-indirect-link.out" 2>&1
 if errorlevel 1 (
   echo FAIL asm output %CASE_NAME%: indirect executable build failed
   type "%WORK_DIR%\%CASE_NAME%-indirect-link.out"
@@ -186,7 +194,7 @@ if exist "%YASM_PATH%" (
     exit /b 1
   )
 
-  "%COMPILER_PATH%" "%YASM_OBJ%" -o "%YASM_EXE%" >"%WORK_DIR%\%CASE_NAME%-yasm-link.out" 2>&1
+  "%COMPILER_PATH%" %RUNTIME_ARGS% "%YASM_OBJ%" -o "%YASM_EXE%" >"%WORK_DIR%\%CASE_NAME%-yasm-link.out" 2>&1
   if errorlevel 1 (
     echo FAIL asm output %CASE_NAME%: yasm object link failed
     type "%WORK_DIR%\%CASE_NAME%-yasm-link.out"

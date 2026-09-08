@@ -6,7 +6,8 @@ $source = @('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh', '.hxx', '.s', '.as
 $data = @('.md', '.txt', '.expect', '.def', '.json', '.jsonl', '.csv', '.png', '.jpg', '.svg', '.mtl', '.exe', '.dll', '.a', '.lib')
 $violations = @()
 foreach ($file in ($files | Sort-Object -Unique)) {
-    if ($file.StartsWith('third-party/') -or $file.StartsWith('build/')) { continue }
+    if ($file.StartsWith('third-party/') -or $file.StartsWith('build/') -or
+        $file.StartsWith('Tests/pedantic/gcc/corpus/')) { continue }
     $path = Join-Path $root $file
     if (-not (Test-Path -LiteralPath $path -PathType Leaf)) { continue }
     $extension = [IO.Path]::GetExtension($file).ToLowerInvariant()

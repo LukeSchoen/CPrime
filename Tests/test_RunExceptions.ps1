@@ -5,8 +5,14 @@ param(
 $ErrorActionPreference = "Stop"
 $root = Split-Path -Parent $PSScriptRoot
 if (!$CompilerPath) { $CompilerPath = Join-Path $root "cpc.exe" }
-if (!$RuntimeRoot) { $RuntimeRoot = $root }
 $CompilerPath = (Resolve-Path -LiteralPath $CompilerPath).Path
+if (!$RuntimeRoot) {
+    $search = & $CompilerPath -print-search-dirs
+    if ($LASTEXITCODE -ne 0) { throw 'Cannot locate the compiler runtime' }
+    $install = @($search | Where-Object { $_ -match '^install:\s*' })
+    if ($install.Count -ne 1) { throw 'Specify -RuntimeRoot for this compiler' }
+    $RuntimeRoot = $install[0] -replace '^install:\s*', ''
+}
 $RuntimeRoot = (Resolve-Path -LiteralPath $RuntimeRoot).Path
 $work = Join-Path $root "build/run-exception-tests"
 New-Item -ItemType Directory -Path $work -Force | Out-Null
@@ -16,7 +22,7 @@ try {
     & $CompilerPath "-B$RuntimeRoot" -Iinclude/runtime -Ithird-party/win32-sdk/include -Ithird-party/win32-sdk/include/winapi -run $fixture
     if ($LASTEXITCODE -ne 0) { throw "Exception -run test failed: $LASTEXITCODE" }
     $hostExe = Join-Path $work "image-lifetime.exe"
-    & $CompilerPath "-B$root" -Iinclude/runtime -Iinclude/cprime -Ithird-party/win32-sdk/include -Ithird-party/win32-sdk/include/winapi -Isrc/compiler/frontend -Isrc/compiler/middleend -Isrc/compiler/backend/x64 -DCPRIME_TARGET_PE -DCPRIME_TARGET_X86_64 Tests/runtime/test_exception_image_lifetime.c src/compiler/middleend/libcprime.c -o $hostExe
+    & $CompilerPath "-B$RuntimeRoot" -Iinclude/runtime -Iinclude/cprime -Ithird-party/win32-sdk/include -Ithird-party/win32-sdk/include/winapi -Isrc/compiler/frontend -Isrc/compiler/middleend -Isrc/compiler/backend/x64 -DCPRIME_TARGET_PE -DCPRIME_TARGET_X86_64 Tests/runtime/test_exception_image_lifetime.c src/compiler/middleend/libcprime.c -o $hostExe
     if ($LASTEXITCODE -ne 0) { throw "Exception embedding fixture compile failed: $LASTEXITCODE" }
     & $hostExe $RuntimeRoot
     if ($LASTEXITCODE -ne 0) { throw "Repeated exception image deletion failed: $LASTEXITCODE" }

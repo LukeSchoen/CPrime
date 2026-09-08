@@ -4,7 +4,7 @@ param(
     [string[]]$CompilerArguments = @(), [string]$Out = ''
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'gcc/assessment.ps1')
+. (Join-Path $PSScriptRoot 'pedantic/gcc/assessment.ps1')
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if (-not $CompilerPath) { $CompilerPath = Join-Path $root 'cpc.exe' }
 if (-not $Out) { $Out = Join-Path $root ('build/diagnose-' + [guid]::NewGuid().ToString('N')) }

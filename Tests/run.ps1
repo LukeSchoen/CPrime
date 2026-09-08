@@ -12,7 +12,7 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-. (Join-Path $PSScriptRoot 'gcc/assessment.ps1')
+. (Join-Path $PSScriptRoot 'pedantic/gcc/assessment.ps1')
 if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
     $global:PSNativeCommandUseErrorActionPreference = $false
 }
