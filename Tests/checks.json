@@ -1,5 +1,21 @@
 [
     {
+        "name": "check_native_project",
+        "path": "check_native_project.ps1",
+        "tier": "fast",
+        "seconds": 5,
+        "compiler": true,
+        "runtime": false
+    },
+    {
+        "name": "test_IncrementalCache",
+        "path": "test_IncrementalCache.ps1",
+        "tier": "fast",
+        "seconds": 5,
+        "compiler": true,
+        "runtime": false
+    },
+    {
         "name":  "check_ucrt_runtime",
         "path":  "check_ucrt_runtime.ps1",
         "tier":  "fast",
@@ -178,16 +194,16 @@
     {
         "name":  "check_incremental_build",
         "path":  "check_incremental_build.ps1",
-        "tier":  "pedantic",
-        "seconds":  120,
+        "tier":  "fast",
+        "seconds":  5,
         "compiler":  true,
         "runtime":  false
     },
     {
         "name":  "check_batch_build",
         "path":  "check_batch_build.ps1",
-        "tier":  "pedantic",
-        "seconds":  120,
+        "tier":  "fast",
+        "seconds":  5,
         "compiler":  true,
         "runtime":  false
     }

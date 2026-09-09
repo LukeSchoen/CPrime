@@ -1,8 +1,8 @@
+[CmdletBinding()]
 param(
     [string[]]$Suite = @(),
     [string]$CompilerPath = '',
     [string]$RuntimeRoot = '',
-    [switch]$UseSharedBinaries,
     [switch]$IncludeChecks,
     [switch]$List
 )
@@ -30,7 +30,7 @@ if ($List) { $Suite; exit 0 }
 $failed = @()
 foreach ($name in $Suite) {
     & (Join-Path $PSScriptRoot 'run.ps1') `
-        -Suite $name -CompilerPath $CompilerPath -RuntimeRoot $RuntimeRoot -UseSharedBinaries:$UseSharedBinaries
+        -Suite $name -CompilerPath $CompilerPath -RuntimeRoot $RuntimeRoot
     if ($LASTEXITCODE -ne 0) { $failed += $name }
 }
 Write-Host ('Suite summary: {0} passed, {1} failed' -f ($Suite.Count - $failed.Count), $failed.Count)

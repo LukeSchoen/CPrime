@@ -1,7 +1,8 @@
 # Tests
 
-Use `tests.cmd` for normal development. It runs the local language suites and
-fast native ABI/runtime/linker, assembly, and multiple-source checks serially.
+Use `Tests/run-all.ps1` for normal CPC-only language testing, plus selected
+CPC-only native gates. `tests.cmd` adds all fast native checks, including ABI
+gates that invoke Clang; agents need explicit authorization before running those.
 Use exact tests and subsystem gates first:
 
 ```powershell
@@ -11,8 +12,10 @@ Use exact tests and subsystem gates first:
 ./Tests/run-checks.ps1 -List
 ```
 
-Pass `-CompilerPath` and optional `-RuntimeRoot` to select a matching compiler
-and runtime. Windows PowerShell may require `powershell -NoProfile
+Use root `cpc.exe`. Compiler-path overrides are for build-internal validation;
+do not maintain alternate working compiler copies. Other compilers, including
+reference comparisons and host rebuilds, require explicit user authorization.
+Windows PowerShell may require `powershell -NoProfile
 -ExecutionPolicy Bypass -File <script>`.
 
 ## Fast versus pedantic
@@ -30,6 +33,7 @@ and runtime. Windows PowerShell may require `powershell -NoProfile
   explicitly if its workload belongs in pedantic testing. Never silently skip it.
 
 Native ABI/runtime/linker and multiple-source checks are in the fast tier.
+Speed classification does not authorize another compiler.
 `run-all.ps1` runs language suites alone; `-IncludeChecks` adds fast gates.
 `run-checks.ps1 -Select test_NativeTls` runs one fast gate.
 For a justified deep check, select `tests_pedantic.cmd -Group gcc|checks|performance`.
@@ -48,6 +52,10 @@ No normal entry point discovers `Tests/pedantic/`.
 
 Generated output belongs under `build/` or an isolated temporary directory.
 Helpers live beside their tests and do not use the `test_` prefix.
+Keep all tests and required fixtures self-contained in CPrime, minimal and
+deterministic. Reuse helpers and preserve distinct coverage when removing
+duplicates. Keep regression reports concise and reproducible as described in the
+[development loop](DEVELOPMENT.md); generated reports belong in `build/`.
 
 ## Test format
 
@@ -66,9 +74,7 @@ Tests compile, link, and run unless metadata in their first 12 lines says otherw
 
 `-BuildManifestPath` or `CPRIME_TEST_BUILD_MANIFEST` supplies a schema-version-2
 manifest with per-source preprocessing settings. Missing or ambiguous fixtures
-fail setup. Arguments use response files; multiple-source, manifest-dependent,
-and compile-only tests compile fresh. Use fresh compilation for validation;
-shared executable caching is an optional specialized workflow.
+fail setup. All tests compile fresh, with arguments passed through response files.
 
 See the [development loop](DEVELOPMENT.md), [remaining work](../task.md), and
 [retained GCC checks](pedantic/gcc/README.md).

@@ -1,3 +1,3 @@
 @echo off
-call "%~dp0Build.cmd" --self %*
+call "%~dp0Build.cmd" %*
 exit /b %ERRORLEVEL%

@@ -351,6 +351,19 @@ static void cpp_eh_finish_local_initialization(Sym *symbol)
     if (eh->initializing[i] == symbol) {
       memmove(eh->initializing + i, eh->initializing + i + 1,
           (--eh->initializing_count - i) * sizeof(*eh->initializing));
+      if (cur_scope) {
+        Sym **link = &cur_scope->cl.s;
+        while (*link && (*link)->cleanup_sym != symbol) link = &(*link)->next;
+        if (*link) {
+          Sym *cleanup = *link;
+          *link = cleanup->next;
+          cleanup->next = cur_scope->cl.s;
+          cur_scope->cl.s = cleanup;
+          /* Construction completed after its argument temporaries. Future
+             exception states must destroy this object before those arguments;
+             earlier states retain their immutable pre-construction chains. */
+        }
+      }
       return;
     }
 }
@@ -388,11 +401,14 @@ static int cpp_eh_cleanup_index(Sym *symbol)
   for (i = 0; i < eh->initializing_count; ++i)
     if (eh->initializing[i] == symbol->cleanup_sym)
       return cpp_eh_cleanup_index(symbol->next);
-  bucket = ((uintptr_t)symbol >> 4) & 1023;
-  for (i = eh->node_buckets[bucket]; i; i = eh->nodes[i - 1].hash_next)
-    if (eh->nodes[i - 1].symbol == symbol) return i - 1;
   parent = cpp_eh_cleanup_index(symbol->next);
   if (!symbol->cleanup_func || !symbol->cleanup_sym) return parent;
+  /* Intern the complete chain, retaining unchanged tails across construction
+     reordering. Catch cleanup stops refer to these same immutable nodes. */
+  bucket = (((uintptr_t)symbol >> 4) ^ (unsigned)(parent + 1)) & 1023;
+  for (i = eh->node_buckets[bucket]; i; i = eh->nodes[i - 1].hash_next)
+    if (eh->nodes[i - 1].symbol == symbol
+        && eh->nodes[i - 1].data.parent == parent) return i - 1;
   i = eh->node_count++;
   if (eh->node_count > eh->node_capacity) {
     eh->node_capacity = eh->node_capacity ? eh->node_capacity * 2 : 32;

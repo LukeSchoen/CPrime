@@ -1,5 +1,41 @@
 /* A class-prvalue conditional constructs exactly one result object. Share
    its destination between branches, after the condition has been evaluated. */
+static void cpp_conditional_scalar_candidate(CType *receiver, int owner,
+                                             CType *result, int *count)
+{
+  MemberFuncOverload *candidate;
+  ClassBaseInfo *base;
+  for (candidate = conversion_overloads[(unsigned)owner & 4095]; candidate;
+       candidate = candidate->conversion_next) {
+    CType value;
+    if (candidate->struct_tok != owner || !candidate->func_type.ref) continue;
+    value = candidate->func_type.ref->type;
+    if (is_reference_type(&value)) value = *pointed_type(&value);
+    value.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE);
+    if (!btype_is_arithmetic_scalar(value.t & VT_BTYPE)
+        || !find_cpp_conversion_operator(receiver, &value, 0, NULL, NULL)) continue;
+    if (!*count) { *result = value; *count = 1; }
+    else if (!is_compatible_unqualified_types(result, &value)) *count = 2;
+  }
+  for (base = class_base_candidates(owner); base; base = base->bucket_next)
+    if (base->class_tok == owner)
+      cpp_conditional_scalar_candidate(receiver, base->base_tok, result, count);
+}
+
+static int cpp_conditional_scalar_type(SValue *first, SValue *second, CType *result)
+{
+  SValue left = *first, right = *second;
+  int left_count = 0, right_count = 0;
+  if (!is_cpp_translation_unit() || (left.type.t & VT_BTYPE) != VT_STRUCT
+      || (right.type.t & VT_BTYPE) != VT_STRUCT) return 0;
+  cpp_conditional_scalar_candidate(&first->type, get_struct_type_name_tok(&first->type),
+                                    &left.type, &left_count);
+  cpp_conditional_scalar_candidate(&second->type, get_struct_type_name_tok(&second->type),
+                                    &right.type, &right_count);
+  if (left_count != 1 || right_count != 1) return 0;
+  return combine_types(result, &left, &right, '?');
+}
+
 static int cpp_conditional_class_lvalue_type(SValue *first, SValue *second, CType *result)
 {
   int first_class, second_class, offset;

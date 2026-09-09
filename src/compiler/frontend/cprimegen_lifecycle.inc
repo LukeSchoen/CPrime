@@ -2425,6 +2425,7 @@ static int class_has_single_arg_constructor_for(CType *class_type,
   CType arg_value_type, decayed_arg_type;
   Sym *class_sym, *field, *arg, *param_type;
   int class_tok, result = 0, arg_key_tok = 0, arg_key_btype;
+  int tried_templates = 0;
   MemberFuncOverload *o;
   int i;
   static int ctor_match_depth;
@@ -2473,8 +2474,10 @@ static int class_has_single_arg_constructor_for(CType *class_type,
   cpp_standard_conversion_only++;
 
   materialize_incomplete_template_type(class_type);
-  instantiate_template_member_for_call(class_type, TOK_CONSTRUCTOR1, arg_type, 1);
-
+  /* This is an existence query, not overload selection. An already viable
+     declaration proves conversion is possible without probing every template
+     constructor. Actual construction still resolves the complete overload set. */
+check_constructors:
   for (o = member_func_candidates(class_tok, TOK_CONSTRUCTOR1);
        o; o = o->bucket_next)
   {
@@ -2550,12 +2553,18 @@ static int class_has_single_arg_constructor_for(CType *class_type,
     }
   }
 done:
+  if (!result && !tried_templates) {
+    tried_templates = 1;
+    instantiate_template_member_for_call(class_type, TOK_CONSTRUCTOR1, arg_type, 1);
+    goto check_constructors;
+  }
   cpp_standard_conversion_only--;
   ctor_match_depth--;
   return result;
 }
 
-static int try_materialize_constructor_conversion_mode(CType *type, int allow_explicit)
+static int try_materialize_constructor_conversion_into(CType *type, int allow_explicit,
+                                                       int storage, int address)
 {
   SValue source, destination;
   Sym *ctor_func, *ctor_type, *sa;
@@ -2616,10 +2625,11 @@ static int try_materialize_constructor_conversion_mode(CType *type, int allow_ex
   vpushv(&source);
 
   size = type_size(type, &align);
-  addr = get_temp_local_var(size, align, &r2);
-  vset(type, VT_LOCAL | VT_LVAL, addr);
+  r2 = VT_CONST;
+  addr = storage ? address : get_temp_local_var(size, align, &r2);
+  vset(type, storage ? storage : VT_LOCAL | VT_LVAL, addr);
   vtop->r2 = r2;
-  call_lifecycle_constructor_members(type, VT_LOCAL | VT_LVAL, addr);
+  call_lifecycle_constructor_members(type, storage ? storage : VT_LOCAL | VT_LVAL, addr);
   mk_pointer(&vtop->type);
   gaddrof();
 
@@ -2656,10 +2666,15 @@ static int try_materialize_constructor_conversion_mode(CType *type, int allow_ex
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 
-  vset(type, VT_LOCAL | VT_LVAL, addr);
+  vset(type, storage ? storage : VT_LOCAL | VT_LVAL, addr);
   vtop->r2 = r2;
-  cpp_register_class_temporary(vtop);
+  if (!storage) cpp_register_class_temporary(vtop);
   return 1;
+}
+
+static int try_materialize_constructor_conversion_mode(CType *type, int allow_explicit)
+{
+  return try_materialize_constructor_conversion_into(type, allow_explicit, 0, 0);
 }
 
 static int try_materialize_constructor_conversion(CType *type)
@@ -2933,20 +2948,55 @@ static int member_function_matches_explicit_arguments(int function_tok,
 /* A previously emitted specialization is a candidate only when this call
    deduces its template arguments. Conversions cannot select an old instance
    of the same template with different deductions. */
-static int member_function_matches_deduction(int function_tok, CType *arguments, int count)
+typedef struct MemberCallDeduction {
+  TemplateMemberDef *definition;
+  int class_tok, key;
+} MemberCallDeduction;
+
+typedef struct MemberCallDeductions {
+  MemberCallDeduction *entries;
+  int count, capacity;
+} MemberCallDeductions;
+
+static int member_function_matches_deduction(int function_tok, CType *arguments, int count,
+    MemberCallDeductions *deductions)
 {
   MemberFunctionScope *scope;
   static int active;
   if (active || explicit_member_template_arg_tok || !arguments) return 1;
   for (scope = member_function_scopes[(unsigned)function_tok & (MEMBER_SCOPE_BUCKETS - 1)];
        scope; scope = scope->next) {
-    int key;
+    int key, i;
     if (scope->function_tok != function_tok) continue;
     if (!scope->is_function_template || !scope->template_definition) return 1;
-    active = 1;
-    key = deduce_member_template_argument_key(scope->template_definition,
-                                             scope->class_tok, arguments, count);
-    active = 0;
+    /* Older specializations share one deduction for this call. Replaying
+       constraints for every emitted sibling makes repeated calls grow with
+       the number of earlier argument types. Keep this cache local to the
+       overload resolution, so later calls still perform their own lookup. */
+    for (i = 0; i < deductions->count; ++i)
+      if (deductions->entries[i].definition == scope->template_definition
+          && deductions->entries[i].class_tok == scope->class_tok)
+        break;
+    if (i < deductions->count)
+      key = deductions->entries[i].key;
+    else {
+      active = 1;
+      key = deduce_member_template_argument_key(scope->template_definition,
+                                               scope->class_tok, arguments, count);
+      active = 0;
+      if (deductions->count == deductions->capacity) {
+        MemberCallDeduction *grown = cprime_malloc(
+          2 * deductions->capacity * sizeof(*grown));
+        memcpy(grown, deductions->entries, deductions->count * sizeof(*grown));
+        if (deductions->capacity > 16) cprime_free(deductions->entries);
+        deductions->entries = grown;
+        deductions->capacity *= 2;
+      }
+      deductions->entries[i].definition = scope->template_definition;
+      deductions->entries[i].class_tok = scope->class_tok;
+      deductions->entries[i].key = key;
+      ++deductions->count;
+    }
     return key <= 0 || member_function_matches_explicit_arguments(function_tok, key);
   }
   return 1;
@@ -2967,6 +3017,8 @@ static Sym *resolve_member_func_by_arg_types_filtered(CType *type, int method_to
   int ambiguous_match = 0, ambiguous_const_match = 0;
   int has_exact_copy_ctor = 0;
   int needs_template_copy_body = 0;
+  MemberCallDeduction local_deductions[16];
+  MemberCallDeductions deductions = { local_deductions, 0, 16 };
 
   struct_tok = get_struct_type_name_tok(type);
   if (!struct_tok)
@@ -3039,7 +3091,8 @@ static Sym *resolve_member_func_by_arg_types_filtered(CType *type, int method_to
     if (!member_function_matches_explicit_arguments(o->mangled_tok,
                                                      explicit_member_template_arg_tok))
       goto next_overload;
-    if (!member_function_matches_deduction(o->mangled_tok, arg_types, explicit_arg_count))
+    if (!member_function_matches_deduction(o->mangled_tok, arg_types, explicit_arg_count,
+                                           &deductions))
       goto next_overload;
     if (!member_overload_receiver_ok(o, receiver_const, type))
     {
@@ -3139,6 +3192,7 @@ static Sym *resolve_member_func_by_arg_types_filtered(CType *type, int method_to
 next_overload:
     o = next_o;
   }
+  if (deductions.entries != local_deductions) cprime_free(deductions.entries);
   if ((receiver_const || !match) ? ambiguous_const_match : ambiguous_match)
     cprime_error("ambiguous overloaded member function '%s'", get_tok_str(method_tok, NULL));
   match = member_overload_pick_match(match, const_match, receiver_const);
@@ -4741,13 +4795,16 @@ static void append_counted_class_initialization(TokenString *body, CType *type,
       else tok_str_add(body, initializer->str[i]);
     }
     tok_str_add(body, ')');
-    tok_str_add(body, ';');
     if (counter_tok)
     {
+      /* The element exists before its argument temporaries are destroyed.
+         Count it inside the same full-expression so unwinding includes it
+         when one of those destructors throws. */
+      tok_str_add(body, ',');
       tok_str_add(body, TOK_INC);
       tok_str_add(body, counter_tok);
-      tok_str_add(body, ';');
     }
+    tok_str_add(body, ';');
   }
 }
 
@@ -4945,9 +5002,15 @@ static void inject_omitted_constructor_member_initializers(
 
   initialized = tok_str_alloc();
   prefix_end = body_open + 1;
+  /* Function-try-block lowering puts the initialization sequence inside
+     its protected block. Inspect and extend that sequence there. */
+  if (prefix_end + 1 < pm->str->len
+      && pm->str->str[prefix_end] == TOK_TRY
+      && pm->str->str[prefix_end + 1] == '{')
+    prefix_end += 2;
   for (;;)
   {
-    int field_tok = 0, statement_end;
+    int field_tok = 0, statement_end, parens = 0, brackets = 0, braces = 0;
     int placement_start = prefix_end;
     if (placement_start + 2 < pm->str->len
         && pm->str->str[placement_start] == ':'
@@ -4997,22 +5060,45 @@ static void inject_omitted_constructor_member_initializers(
          walking so later explicit/default initializers are not reinserted
          ahead of the cleanup activation for that subobject. */
     }
+    else if (prefix_end < pm->str->len
+             && pm->str->str[prefix_end] == TOK_FOR)
+    {
+      /* Default initialization of a class array is a generated loop. Its
+         header and body belong to the prefix, ahead of later members. */
+    }
     else
       break;
 
     statement_end = prefix_end;
     while (statement_end < pm->str->len
-           && pm->str->str[statement_end] != ';'
            && pm->str->str[statement_end] != TOK_EOF)
     {
       if (TOK_HAS_VALUE(pm->str->str[statement_end]))
         statement_end += 1 + tok_str_value_extra_words(
           pm->str->str, pm->str->len, statement_end);
       else
+      {
+        int t = pm->str->str[statement_end];
+        if (t == ';' && !parens && !brackets && !braces)
+          break;
+        if (t == '(') ++parens;
+        else if (t == ')') --parens;
+        else if (t == '[') ++brackets;
+        else if (t == ']') --brackets;
+        else if (t == '{') ++braces;
+        else if (t == '}')
+        {
+          --braces;
+          if (!braces && !parens && !brackets
+              && pm->str->str[prefix_end] == TOK_FOR)
+            break;
+        }
         ++statement_end;
+      }
     }
     if (statement_end >= pm->str->len
-        || pm->str->str[statement_end] != ';')
+        || (pm->str->str[statement_end] != ';'
+            && pm->str->str[statement_end] != '}'))
       break;
     if (field_tok)
       tok_str_add(initialized, field_tok);

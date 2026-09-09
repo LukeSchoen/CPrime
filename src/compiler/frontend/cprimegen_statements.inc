@@ -6,6 +6,7 @@ static void try_call_scope_cleanup(Sym *stop)
     Sym *fs = cls->cleanup_func;
     Sym *vs = cls->cleanup_sym;
     int temporary_skip;
+    SValue *saved_top = vtop;
     if (!fs || !vs || cls->a.cleanup_exception_only)
       continue;
     temporary_skip = cpp_temp_guard_cleanup(cls);
@@ -27,7 +28,7 @@ static void try_call_scope_cleanup(Sym *stop)
     gaddrof();
     gfunc_call(1);
     drop_leaked_call_target(fs);
-    if (vtop >= vstack && (vtop->type.t & VT_BTYPE) == VT_VOID)
+    if (vtop > saved_top && (vtop->type.t & VT_BTYPE) == VT_VOID)
       vpop();
     gsym(temporary_skip);
   }
@@ -159,7 +160,7 @@ static void prev_scope(struct scope *o, int is_expr)
     o->stack_min = loc;
   if (o->prev && o->stack_min < o->prev->stack_min)
     o->prev->stack_min = o->stack_min;
-  loc = o->stack_loc;
+  if (!is_expr) loc = o->stack_loc;
   /* Stack slots below this point can be reused by the next sibling scope.
      Cached spills carry allocator indices as well as offsets, so retire the
      scope's cache as a unit before later locals occupy the same storage. */
@@ -698,6 +699,7 @@ static void gexpr_decl(int for_condition)
     Sym *s = sym_find(v);
     vset(&s->type, s->r, (s->r &VT_SYM) ? 0 : s->c);
     vtop->sym = s;
+    maybe_indir_reference();
   }
   else
   {
@@ -780,7 +782,7 @@ again:
   {
     int end_chain = 0;
 if_chain:
-    new_scope_s(&o);
+    new_scope(&o);
     skip('(');
     gexpr_decl(0);
     cpp_temp_end_condition(temporary_mark);
@@ -798,7 +800,7 @@ if_chain:
       if (tok == TOK_IF && local_stack == o.lstk
           && nb_using_namespace_toks == o.using_namespace_count)
       {
-        prev_scope_s(&o);
+        prev_scope(&o, 0);
         next();
         if (debug_modes)
           cprime_tcov_check_line(cprime_state, 0), cprime_tcov_block_begin(cprime_state);
@@ -809,7 +811,7 @@ if_chain:
     else
       gsym(a);
     gsym(end_chain);
-    prev_scope_s(&o);
+    prev_scope(&o, 0);
 
   }
   else if (t == TOK_WHILE)
@@ -832,6 +834,7 @@ if_chain:
   }
   else if (t == '{')
   {
+    if (flags & STMT_COMPOUND) flags &= ~STMT_EXPR;
     if (debug_modes)
       cprime_debug_stabn(cprime_state, 0xc0, ind - func_ind);
     new_scope(&o);
@@ -854,12 +857,16 @@ if_chain:
 
     while (tok != '}')
     {
+      if (flags & STMT_EXPR) { vpop(); push_void_value(); }
       decl(VT_LOCAL);
       if (tok != '}')
         block(flags | STMT_COMPOUND);
     }
 
     prev_scope(&o, flags &STMT_EXPR);
+    if ((flags & STMT_EXPR) && is_cpp_translation_unit()
+        && (vtop->type.t & VT_BTYPE) == VT_STRUCT)
+      cpp_register_class_temporary(vtop);
     if (debug_modes)
       cprime_debug_stabn(cprime_state, 0xe0, ind - func_ind);
     if (local_scope)
@@ -980,7 +987,10 @@ if_chain:
             mk_pointer(&vtop->type);
             gaddrof();
           }
-          gen_assign_cast(&ret_ptr);
+          /* A reference result denotes an object; its ABI adjustment is
+             unconditional, unlike a nullable pointer result. */
+          if (!adjust_derived_address_to_base(&ret_ptr, 0))
+            gen_assign_cast(&ret_ptr);
           ref_ret_type = ret_ptr;
           e = 1;
         }
@@ -1382,8 +1392,18 @@ expr:
           gexpr();
           vpop();
         }
-        cpp_temp_end(temporary_mark);
         skip(';');
+        if ((flags & STMT_EXPR) && tok == '}' && is_cpp_translation_unit()
+            && (vtop->type.t & VT_BTYPE) == VT_STRUCT) {
+          if (!(vtop->r & VT_CXX_PRVALUE)) {
+            CType result = vtop->type;
+            result.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE);
+            if (!try_materialize_constructor_conversion_mode(&result, 1))
+              cprime_error("statement expression result cannot be copied");
+          }
+          cpp_adopt_class_temporary(vtop);
+        }
+        cpp_temp_end(temporary_mark);
       }
     }
   }

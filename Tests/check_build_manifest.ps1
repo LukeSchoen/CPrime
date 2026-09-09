@@ -1,11 +1,11 @@
 param(
     [string]$ExporterPath = (Join-Path $PSScriptRoot '../scripts/windows/export-build-manifest.ps1'),
-    [ValidateSet('Prime', 'Clang')][string]$Toolchain = 'Prime',
+    [ValidateSet('Prime')][string]$Toolchain = 'Prime',
     [string]$CompilerPath = (Join-Path $PSScriptRoot '..\cpc.exe'),
     [string]$NativeCompilerPath = ''
 )
 $ErrorActionPreference = 'Stop'
-$driver = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\build_project.ps1'))
+$driver = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\build\build_project.exe'))
 $CompilerPath = [IO.Path]::GetFullPath($CompilerPath)
 $fixtureJobs = if ($Toolchain -eq 'Prime') { 1 } else { 2 }
 if (-not $NativeCompilerPath) {
@@ -13,7 +13,7 @@ if (-not $NativeCompilerPath) {
         else { Join-Path $PSScriptRoot '../third-party/clang/bin/clang.exe' }
 }
 if (-not (Test-Path -LiteralPath $NativeCompilerPath -PathType Leaf)) { throw 'Pass -NativeCompilerPath for the Clang compiler used to create native COFF inputs.' }
-$temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+$temporaryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../build')).TrimEnd('\') + '\'
 $fixture = Join-Path $temporaryRoot ('CPrime manifest ' + [guid]::NewGuid().ToString('N'))
 if (-not $fixture.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Fixture must be under the temporary directory' }
 try {
@@ -23,7 +23,7 @@ try {
         $savedErrorAction = $ErrorActionPreference
         try {
             $ErrorActionPreference = 'Continue'
-            & powershell -NoProfile -ExecutionPolicy Bypass -File $driver -Jobs 2 *> $parallelLog
+            & $driver -Jobs 2 *> $parallelLog
             $parallelExit = $LASTEXITCODE
         } finally { $ErrorActionPreference = $savedErrorAction }
         if ($parallelExit -eq 0 -or
@@ -215,7 +215,7 @@ const int *native_other_address(void) { return &native_shared_value; }
     $savedErrorAction = $ErrorActionPreference
     try {
         $ErrorActionPreference = 'Continue'
-        & powershell -NoProfile -ExecutionPolicy Bypass -File $driver -CompilerPath $CompilerPath -Toolchain $Toolchain `
+        & $driver -CompilerPath $CompilerPath -Toolchain $Toolchain `
             -ProjectRoot $fixture -OutDir (Join-Path $fixture 'missing-toolset') -Jobs $fixtureJobs *> $selectionLog
         $selectionExit = $LASTEXITCODE
     } finally { $ErrorActionPreference = $savedErrorAction }
@@ -226,13 +226,13 @@ const int *native_other_address(void) { return &native_shared_value; }
     & $ExporterPath -ProjectRoot $fixture -SolutionPath (Join-Path $fixture 'fixture.sln')
     foreach ($unity in @($false, $true)) {
         $output = Join-Path $fixture $(if ($unity) { 'unity' } else { 'separate' })
-        $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-CompilerPath', $CompilerPath,
+        $arguments = @('-CompilerPath', $CompilerPath,
             '-Toolchain', $Toolchain, '-OutDir', $output)
         if ($Toolchain -ne 'Prime') { $arguments += '-Jobs', [string]$fixtureJobs }
         if ($unity) { $arguments += '-Unity' }
         Push-Location $fixture
         try {
-            & powershell @arguments
+            & $driver @arguments
             if ($LASTEXITCODE -ne 0) { throw "Manifest build failed (Unity=$unity)" }
         } finally { Pop-Location }
         $executable = Join-Path $fixture 'custom output\Selected App.exe'
@@ -251,28 +251,28 @@ const int *native_other_address(void) { return &native_shared_value; }
             }
         }
         if ($Toolchain -eq 'Prime') {
-            $checker = Join-Path (Split-Path $driver -Parent) 'build/check_project_build.exe'
+            $checker = Join-Path (Split-Path $driver -Parent) 'check_project_build.exe'
             $snapshot = Join-Path $output $(if ($unity) { 'check-unity.bin' } else { 'check-separate.bin' })
             & $checker $snapshot
             if ($LASTEXITCODE) { throw 'Fresh manifest snapshot was not accepted by the native checker' }
-            & powershell @arguments -ProjectRoot $fixture
+            & $driver @arguments -ProjectRoot $fixture
             if ($LASTEXITCODE) { throw 'Incremental manifest rebuild failed' }
             $metrics = Get-Content -Raw (Join-Path $output 'build_metrics.json') | ConvertFrom-Json
-            if ($metrics.CompiledUnits -or $metrics.Processes.Count) { throw 'Unchanged manifest build ran tools' }
+            if ($metrics.CompiledUnits -or @($metrics.Processes | Where-Object Kind -ne 'driver').Count) { throw 'Unchanged manifest build ran tools' }
             Add-Content -LiteralPath (Join-Path $fixture 'helper.cpp') -Value '// incremental source edit'
-            & powershell @arguments -ProjectRoot $fixture
+            & $driver @arguments -ProjectRoot $fixture
             if ($LASTEXITCODE) { throw 'Selective source rebuild failed' }
             $metrics = Get-Content -Raw (Join-Path $output 'build_metrics.json') | ConvertFrom-Json
             if ($metrics.CompiledUnits -ne 1) { throw 'Source edit rebuilt more than its translation unit/unity group' }
             Add-Content -LiteralPath (Join-Path $fixture 'first.rc') -Value '// incremental resource edit'
-            & powershell @arguments -ProjectRoot $fixture
+            & $driver @arguments -ProjectRoot $fixture
             if ($LASTEXITCODE) { throw 'Resource incremental rebuild failed' }
             $metrics = Get-Content -Raw (Join-Path $output 'build_metrics.json') | ConvertFrom-Json
             if ($metrics.CompiledUnits -or -not @($metrics.Processes | Where-Object Kind -eq 'resource').Count) { throw 'Resource edit did not rebuild resources independently' }
             Add-Content -LiteralPath (Join-Path $fixture 'asset.payload') -Value 'changed binary resource'
             & $checker $snapshot | Out-Null
             if ($LASTEXITCODE -eq 0) { throw 'Native checker missed a resource asset change' }
-            & powershell @arguments -ProjectRoot $fixture
+            & $driver @arguments -ProjectRoot $fixture
             if ($LASTEXITCODE) { throw 'Resource asset incremental rebuild failed' }
             $metrics = Get-Content -Raw (Join-Path $output 'build_metrics.json') | ConvertFrom-Json
             if ($metrics.CompiledUnits -or -not @($metrics.Processes | Where-Object Kind -eq 'resource').Count) { throw 'External resource payload dependency was missed' }
@@ -284,11 +284,11 @@ const int *native_other_address(void) { return &native_shared_value; }
     # explicitly relax it without changing the project settings.
     Add-Content -LiteralPath (Join-Path $fixture 'empty.c') -Value '#warning manifest_fixture_warning'
     $warningOutput = Join-Path $fixture 'warnings'
-    $warningArgs = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $driver, '-CompilerPath', $CompilerPath,
+    $warningArgs = @('-CompilerPath', $CompilerPath,
         '-Toolchain', $Toolchain, '-ProjectRoot', $fixture, '-OutDir', $warningOutput, '-Jobs', [string]$fixtureJobs, '-SkipLink')
-    & powershell @warningArgs
+    & $driver @warningArgs
     if ($LASTEXITCODE -eq 0) { throw 'The manifest warning-as-error policy was ignored' }
-    & powershell @warningArgs -AllowWarnings
+    & $driver @warningArgs -AllowWarnings
     if ($LASTEXITCODE -ne 0) { throw 'The explicit warning-policy override was ignored' }
     # A manifest generated before effective per-source overrides were added
     # must still combine its project flags and per-source additions.
@@ -302,7 +302,7 @@ const int *native_other_address(void) { return &native_shared_value; }
     }
     $legacyPath = Join-Path $fixture 'legacy.json'
     $legacyManifest | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath $legacyPath
-    & powershell -NoProfile -ExecutionPolicy Bypass -File $driver -CompilerPath $CompilerPath -Toolchain $Toolchain -ProjectRoot $fixture -ManifestPath $legacyPath -OutDir (Join-Path $fixture 'legacy')
+    & $driver -CompilerPath $CompilerPath -Toolchain $Toolchain -ProjectRoot $fixture -ManifestPath $legacyPath -OutDir (Join-Path $fixture 'legacy')
     if ($LASTEXITCODE -ne 0) { throw 'Legacy manifest build failed' }
     & (Join-Path $fixture 'build\Legacy.exe')
     if ($LASTEXITCODE -ne 0) { throw 'Legacy manifest executable failed' }

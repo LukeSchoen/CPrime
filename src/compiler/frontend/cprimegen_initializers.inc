@@ -516,8 +516,21 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
     if ((dtype.t & VT_BTYPE) == VT_STRUCT
         && !is_compatible_unqualified_types(&dtype, &vtop->type))
     {
-      if (!try_materialize_constructor_conversion(&dtype))
-        gen_assign_cast(&dtype);
+      int storage = VT_LOCAL | VT_LVAL, address = c;
+      if (p->indirect_base) {
+        init_push_lvalue(p, &dtype, c);
+        mk_pointer(&vtop->type); gaddrof();
+        loc = (loc - PTR_SIZE) & -PTR_SIZE;
+        address = loc;
+        vset(&char_pointer_type, VT_LOCAL | VT_LVAL, address);
+        vswap(); vstore(); vpop();
+        storage = VT_LLOCAL | VT_LVAL;
+      }
+      if (try_materialize_constructor_conversion_into(&dtype, 0, storage, address)) {
+        vpop();
+        return;
+      }
+      gen_assign_cast(&dtype);
     }
     if ((dtype.t & VT_BTYPE) == VT_STRUCT
         && struct_needs_memberwise_copy(&dtype))
@@ -1398,7 +1411,7 @@ do_init_list:
   }
   else if ((type->t & VT_BTYPE) == VT_STRUCT)
   {
-    if (initialize_class_constructor_list(p, type, c, flags)) return;
+    if (initialize_class_constructor_list(p, type, c, flags)) goto initialized_object;
     no_oblock = 1;
     if ((flags & DIF_FIRST) || tok == '{')
     {
@@ -1477,6 +1490,7 @@ do_init_list:
         init_putv(p, type, c);
     }
   }
+initialized_object:
   if (p->track_partial_cleanups && !(flags & DIF_SIZE_ONLY)
       && (type->t & VT_BTYPE) == VT_STRUCT && !nocode_wanted)
   {
@@ -1963,12 +1977,25 @@ err_size:
   }
   else if (has_init)
   {
+    Sym *initial_cleanup = cur_scope ? cur_scope->cl.s : NULL;
+    int initial_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
     p.sec = sec;
+    p.track_partial_cleanups = is_cpp_translation_unit() && !sec
+                               && (r & VT_VALMASK) == VT_LOCAL
+                               && (type->t & VT_BTYPE) == VT_STRUCT && type->ref
+                               && !type->ref->a.cpp_user_constructor
+                               && !type_is_std_initializer_list(type);
     p.capture_integral_constexpr = is_cpp_translation_unit() && sym
                                    && (type->t & VT_CONSTANT)
                                    && is_integer_btype(type->t & VT_BTYPE)
                                    && !(type->t & (VT_ARRAY | VT_VLA));
     decl_initializer(&p, type, addr, DIF_FIRST);
+    if (p.track_partial_cleanups) {
+      /* The declaration already owns the complete-object cleanup. Partial
+         subobject actions describe only the initializer's exception states. */
+      cur_scope->cl.s = initial_cleanup;
+      cur_scope->cl.n = initial_cleanup_depth;
+    }
     if (p.capture_integral_constexpr && p.integral_constexpr_valid)
     {
       uint64_t raw = (uint64_t)p.integral_constexpr_value;

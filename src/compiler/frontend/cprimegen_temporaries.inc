@@ -218,6 +218,7 @@ static void cpp_temp_end(int mark)
   for (i = cpp_temporary_count - 1; i >= mark; --i) {
     CppTemporary *temporary = &cpp_temporaries[i];
     Sym *object, *destructor, *cleanup;
+    SValue *saved_top = vtop;
     int skip;
     if (!temporary->active || temporary->extended) continue;
     if (!temporary->destructor) {
@@ -234,7 +235,9 @@ static void cpp_temp_end(int mark)
         && (vtop->type.t & VT_BTYPE) != VT_STRUCT)
       gv(RC_TYPE(vtop->type.t));
     skip = cpp_temp_guard_cleanup(cleanup);
-    cpp_eh_set_cleanup_state(cleanup->next);
+    /* The activation flag already excludes the destructor being entered.
+       Keep later-completed local objects in the exception cleanup chain. */
+    cpp_eh_set_cleanup_state(cur_scope->cl.s);
     save_lvalues();
     vpushsym(&destructor->type, destructor);
     vset(&object->type, object->r, object->c);
@@ -242,7 +245,7 @@ static void cpp_temp_end(int mark)
     gaddrof();
     gfunc_call(1);
     drop_leaked_call_target(destructor);
-    if (vtop >= vstack && (vtop->type.t & VT_BTYPE) == VT_VOID) vpop();
+    if (vtop > saved_top && (vtop->type.t & VT_BTYPE) == VT_VOID) vpop();
     gsym(skip);
     cpp_eh_restore_cleanup_state();
     temporary = &cpp_temporaries[i];

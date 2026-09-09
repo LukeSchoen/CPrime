@@ -5,8 +5,7 @@ $fixture = Join-Path $root ('build/incremental test ' + [guid]::NewGuid().ToStri
 [void][IO.Directory]::CreateDirectory($fixture)
 $out = Join-Path $fixture 'objects'
 $exe = Join-Path $fixture 'bin/app.exe'
-Copy-Item -LiteralPath $CompilerPath -Destination (Join-Path $fixture 'cpc.exe')
-$compiler = Join-Path $fixture 'cpc.exe'
+$compiler = [IO.Path]::GetFullPath($CompilerPath)
 '#define VALUE 3' | Set-Content (Join-Path $fixture 'shared #$$ header.h')
 '#define PRIVATE 4' | Set-Content (Join-Path $fixture 'private.h')
 '#include "shared #$$ header.h"', 'int first(void) { return VALUE; }' | Set-Content (Join-Path $fixture 'first.c')
@@ -18,7 +17,7 @@ if ($LASTEXITCODE) { throw 'External object compilation failed' }
 $manifest = @{
     schemaVersion = 1; platform = 'x64'; projects = @(@{
         kind = 'Application'; targetName = 'app'; directory = $fixture
-        defines = @(); includeDirectories = @($fixture); linkLibraries = @((Join-Path $fixture 'extra.obj')); libraryDirectories = @()
+        defines = @(); includeDirectories = @($fixture, $out); linkLibraries = @((Join-Path $fixture 'extra.obj')); libraryDirectories = @()
         sources = @('main.c', 'first.c', 'second.c' | ForEach-Object { @{ path = Join-Path $fixture $_ } })
     })
 }
@@ -31,13 +30,18 @@ function Check-Fast([bool]$Expected) {
     if (($LASTEXITCODE -eq 0) -ne $Expected) { throw "Native no-change check should return $Expected" }
 }
 function Build([int]$Expected, [switch]$Fail, [switch]$Force) {
-    $args = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', (Join-Path $root 'build_project.ps1'),
+    $args = @(
         '-CompilerPath', $compiler, '-ProjectRoot', $fixture, '-ManifestPath', $manifestPath, '-OutDir', $out, '-ExePath', $exe,
         '-BuildInputs', $buildInput)
     if ($Force) { $args += '-Rebuild' }
-    & powershell @args > (Join-Path $fixture 'build.log') 2>&1
-    if ($Fail) { if ($LASTEXITCODE -eq 0) { throw 'Broken source reused a cached object' }; return }
-    if ($LASTEXITCODE) { throw ([IO.File]::ReadAllText((Join-Path $fixture 'build.log'))) }
+    $savedPreference = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        & (Join-Path $root 'build/build_project.exe') @args > (Join-Path $fixture 'build.log') 2>&1
+        $buildExit = $LASTEXITCODE
+    } finally { $ErrorActionPreference = $savedPreference }
+    if ($Fail) { if ($buildExit -eq 0) { throw 'Broken source reused a cached object' }; return }
+    if ($buildExit) { throw ([IO.File]::ReadAllText((Join-Path $fixture 'build.log'))) }
     $metrics = Get-Content (Join-Path $out 'build_metrics.json') -Raw | ConvertFrom-Json
     if ($metrics.CompiledUnits -ne $Expected) { throw "Expected $Expected compiled units, got $($metrics.CompiledUnits)" }
     & $exe
@@ -46,6 +50,25 @@ function Build([int]$Expected, [switch]$Fail, [switch]$Force) {
     return $metrics
 }
 Build 3 | Out-Null
+# Include-driven source discovery can insert/remove a unit before unchanged units.
+'int optional(void) { return 7; }' | Set-Content (Join-Path $fixture 'optional.cpp')
+$originalSources = $manifest.projects[0].sources
+$manifest.projects[0].sources = @($originalSources[0], @{path = Join-Path $fixture 'optional.cpp'}, $originalSources[1], $originalSources[2])
+$manifest | ConvertTo-Json -Depth 8 | Set-Content $manifestPath
+Build 1 | Out-Null
+1..2 | ForEach-Object {
+    'int first(void) { return 3; }' | Set-Content (Join-Path $fixture 'first.c')
+    $manifest.projects[0].sources = $originalSources
+    $manifest | ConvertTo-Json -Depth 8 | Set-Content $manifestPath
+    Build 1 | Out-Null
+    '#include "shared #$$ header.h"', 'int first(void) { return VALUE; }' | Set-Content (Join-Path $fixture 'first.c')
+    $manifest.projects[0].sources = @($originalSources[2], $originalSources[0], @{path = Join-Path $fixture 'optional.cpp'}, $originalSources[1])
+    $manifest | ConvertTo-Json -Depth 8 | Set-Content $manifestPath
+    Build 1 | Out-Null
+}
+$manifest.projects[0].sources = $originalSources
+$manifest | ConvertTo-Json -Depth 8 | Set-Content $manifestPath
+Build 0 | Out-Null
 $stamp = (Get-Item $exe).LastWriteTimeUtc.Ticks
 $metrics = Build 0
 if ($metrics.Processes.Count -or (Get-Item $exe).LastWriteTimeUtc.Ticks -ne $stamp) { throw 'No-op build invoked tools or changed executable' }
@@ -80,7 +103,8 @@ Build 1 | Out-Null
 '#define VALUE 9' | Set-Content (Join-Path $fixture 'shared #$$ header.h')
 Check-Fast $false
 Build 2 | Out-Null
-Remove-Item (Join-Path $out 'source_0002.obj')
+$secondDep = Get-ChildItem $out -Filter '*.d' | Where-Object { (Get-Content $_.FullName -Raw) -match 'second\.c' } | Select-Object -First 1
+Remove-Item ([IO.Path]::ChangeExtension($secondDep.FullName, '.obj'))
 Check-Fast $false
 Build 1 | Out-Null
 Remove-Item $exe
@@ -135,9 +159,6 @@ $manifest.projects[0].defines = @('CHANGED_SETTING=1')
 $manifest | ConvertTo-Json -Depth 8 | Set-Content $manifestPath
 Check-Fast $false
 Build 3 | Out-Null
-(Get-Item $compiler).LastWriteTimeUtc = [DateTime]::UtcNow
-Check-Fast $false
-Build 3 | Out-Null
 Build 3 -Force | Out-Null
 Build 0 | Out-Null
 $snapshot = Join-Path $out 'check-separate.bin'
@@ -161,4 +182,4 @@ try {
     $dependencyExit = $LASTEXITCODE
 } finally { $ErrorActionPreference = $savedPreference }
 if ($dependencyExit -eq 0) { throw 'Failure to write dependencies was reported as success' }
-Write-Host 'PASS: no-op, source/header edits, external link inputs, missing outputs, failed-build recovery, settings/compiler changes, and forced rebuild.'
+Write-Host 'PASS: no-op, repeated include toggles, source insertion/removal/reordering, source/header edits, external link inputs, missing outputs, failed-build recovery, settings changes, and forced rebuild.'

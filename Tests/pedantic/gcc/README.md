@@ -1,6 +1,6 @@
 # Pedantic GCC checks
 
-Default input: `corpus.json` selects the retained GCC failure cases under
+Input: `corpus.json` selects the retained GCC failure cases under
 `corpus/`. Supporting includes are hashed separately and never discovered as
 independent tests. Sources and licenses are retained unchanged from revision
 `5f6257c26b814de1a14c71b2d3a49291765b6577` of https://github.com/gcc-mirror/gcc.
@@ -25,23 +25,6 @@ repair denominator; it is not full GCC or C++ conformance. Cases remain active
 when they fail. The runner verifies source/dependency hashes before execution.
 `summary.json`, `progress.json`, `metadata.json`, `inputs.json`, and
 `results.jsonl` record results and provenance under the output directory.
-
-## Optional full download
-
-Full inventory requires explicit `-FullInventory`; network restoration also
-requires `-Fetch`. Neither is used by normal or pedantic default runs:
-
-```powershell
-./Tests/pedantic/gcc/run.ps1 -FullInventory -Fetch -Out build/gcc-full
-```
-
-Full mode uses `build/gcc-upstream`. Unsupported target/standard flags,
-diagnostics, scans, specialized drivers, and extra-source expectations stay
-unverified. `-Probe` observations never count as verified passes.
-
-`import-failures.ps1 -Results <full-run> -UpstreamPath <checkout>` creates a new
-retained corpus only when none exists, including transitive quoted fixtures.
-Review inventory changes explicitly; preserve the upstream license notices.
 
 Focused adapter tests: `test_runner.ps1`, `test_compare.ps1`,
 `test_progress.ps1`, `test_provenance.ps1`, and `test_corpus.ps1`.

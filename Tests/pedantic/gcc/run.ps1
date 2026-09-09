@@ -1,13 +1,11 @@
+[CmdletBinding()]
 param(
-    [switch]$Fetch,
-    [switch]$FullInventory,
     [switch]$List,
     [Alias('CompilerPath')][string]$Compiler = '',
     [string]$RuntimeRoot = '',
     [string[]]$Select = @(),
     [string]$Baseline = '',
     [ValidateRange(1, 60)][int]$ProgressSeconds = 15,
-    [switch]$Probe,
     [ValidateRange(0.001, 5)][double]$Timeout = 5,
     [switch]$ContinueAfterTimeout,
     [ValidateRange(0, 2147483647)][int]$Limit = 0,
@@ -23,57 +21,25 @@ $progress = New-GccProgress $Baseline
 $lastProgress = 0.0
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 $revision = '5f6257c26b814de1a14c71b2d3a49291765b6577'
-$upstream = Join-Path $root 'build/gcc-upstream'
-$trees = @('g++.dg', 'g++.old-deja', 'c-c++-common')
 function Invoke-Git([string[]]$Arguments) {
     $output = & git @Arguments
     if ($LASTEXITCODE -ne 0) { throw "git failed: $($Arguments -join ' ')" }
     $output
 }
-if ($Fetch -and -not $FullInventory) { throw '-Fetch requires explicit -FullInventory; the default is the retained failure corpus' }
-if ($Fetch) {
-    if (-not (Test-Path -LiteralPath $upstream)) {
-        Invoke-Git @('clone', '--depth=1', '--filter=blob:none', '--no-checkout', 'https://github.com/gcc-mirror/gcc.git', $upstream)
-    }
-    Invoke-Git (@('-C', $upstream, 'sparse-checkout', 'set') + @($trees | ForEach-Object { 'gcc/testsuite/' + $_ }) + @('gcc/testsuite/lib', 'gcc/testsuite/gcc.dg'))
-    Invoke-Git @('-C', $upstream, 'fetch', '--depth=1', 'origin', $revision)
-    Invoke-Git @('-C', $upstream, 'checkout', '--detach', $revision)
-}
-if ($FullInventory) {
-    if ((Invoke-Git @('-C', $upstream, 'rev-parse', 'HEAD')) -cne $revision) { throw 'Upstream revision differs from pin; run -FullInventory -Fetch' }
-    if (Invoke-Git @('-C', $upstream, 'status', '--porcelain')) { throw 'Upstream checkout is modified; refusing an ambiguous baseline' }
-} else {
-    $corpus = Read-GccCorpus $PSScriptRoot
-    if ($corpus.revision -cne $revision) { throw 'Corpus revision differs from runner pin' }
-}
+$corpus = Read-GccCorpus $PSScriptRoot
+if ($corpus.revision -cne $revision) { throw 'Corpus revision differs from runner pin' }
 if (-not $Compiler) { $Compiler = Join-Path $root 'cpc.exe' }
 $Compiler = (Resolve-Path -LiteralPath $Compiler).Path
 if ($RuntimeRoot) { $RuntimeRoot = (Resolve-Path -LiteralPath $RuntimeRoot).Path }
 if (-not $Out) { $Out = Join-Path $root ('build/pedantic-gcc-' + [guid]::NewGuid().ToString('N')) }
 $Out = [IO.Path]::GetFullPath($Out)
 [void][IO.Directory]::CreateDirectory($Out)
-$testRoot = if ($FullInventory) { Join-Path $upstream 'gcc/testsuite' } else { Join-Path $PSScriptRoot 'corpus' }
+$testRoot = Join-Path $PSScriptRoot 'corpus'
 function Get-Relative([string]$Path) { $Path.Substring($testRoot.Length + 1).Replace('\', '/') }
-$exactFiles = @()
-foreach ($selection in $Select) {
-    $candidate = [IO.Path]::GetFullPath((Join-Path $testRoot $selection))
-    if ($candidate.StartsWith($testRoot + '\', [StringComparison]::OrdinalIgnoreCase) -and
-        (Test-Path -LiteralPath $candidate -PathType Leaf) -and
-        [IO.Path]::GetExtension($candidate) -cin @('.C', '.cc', '.cpp', '.c')) { $exactFiles += $candidate }
-}
-[string[]]$files = if (-not $FullInventory) {
-    @($corpus.cases | Where-Object {
-        $relative = $_.path
-        -not $Select.Count -or @($Select | Where-Object { $relative.StartsWith($_, [StringComparison]::Ordinal) }).Count
-    } | ForEach-Object { Join-Path $testRoot $_.path })
-} elseif ($Select.Count -and $exactFiles.Count -eq $Select.Count) {
-    @($exactFiles | Select-Object -Unique)
-} else { @(foreach ($tree in $trees) {
-    Get-ChildItem -LiteralPath (Join-Path $testRoot $tree) -Recurse -File | Where-Object { $_.Extension -cin @('.C', '.cc', '.cpp', '.c') } | ForEach-Object {
-        $relative = Get-Relative $_.FullName
-        if (-not $Select.Count -or @($Select | Where-Object { $relative.StartsWith($_, [StringComparison]::Ordinal) }).Count) { $_.FullName }
-    }
-}) }
+[string[]]$files = @($corpus.cases | Where-Object {
+    $relative = $_.path
+    -not $Select.Count -or @($Select | Where-Object { $relative.StartsWith($_, [StringComparison]::Ordinal) }).Count
+} | ForEach-Object { Join-Path $testRoot $_.path })
 [Array]::Sort($files, [StringComparer]::Ordinal)
 foreach ($selection in $Select) {
     if (-not @($files | Where-Object { (Get-Relative $_).StartsWith($selection, [StringComparison]::Ordinal) }).Count) {
@@ -86,9 +52,9 @@ if ($List) { $files | ForEach-Object { Get-Relative $_ }; exit 0 }
 $counts = @{}
 $slowFailures = New-Object 'Collections.Generic.List[object]'
 $utf8 = New-Object Text.UTF8Encoding($false)
-$metadata = [ordered]@{ revision = $revision; compiler = $Compiler; compiler_sha256 = (Get-FileHash -LiteralPath $Compiler -Algorithm SHA256).Hash.ToLowerInvariant(); selected = $files.Count; serial = $true; probe = [bool]$Probe; note = 'CPC default language mode; no claim of GCC diagnostic or standard-mode conformance' }
+$metadata = [ordered]@{ revision = $revision; compiler = $Compiler; compiler_sha256 = (Get-FileHash -LiteralPath $Compiler -Algorithm SHA256).Hash.ToLowerInvariant(); selected = $files.Count; serial = $true; probe = $false; note = 'CPC default language mode; no claim of GCC diagnostic or standard-mode conformance' }
 $metadata.timeout_seconds = $Timeout
-$metadata.scope = if ($FullInventory) { 'full upstream inventory' } else { 'retained checked failure corpus' }
+$metadata.scope = 'retained checked failure corpus'
 $metadata.timeout_scope = 'each compiler or test process, including startup; cleanup recorded separately'
 $metadata.continue_after_timeout = [bool]$ContinueAfterTimeout
 $metadata.concurrency = 1
@@ -99,10 +65,8 @@ $metadata.language = 'c++'
 $metadata.language_standard = 'compiler default; standard-version matrix not implemented'
 $metadata.runtime_identity_status = if ($RuntimeRoot) { 'explicit runtime tree hashed' } else { 'implicit compiler search; unresolved' }
 $inputs = [ordered]@{ sources = @(Get-GccInputIdentity $testRoot $files); runtime = @() }
-if (-not $FullInventory) {
-    $inputs.support = @(Get-GccInputIdentity $testRoot @($corpus.support | ForEach-Object { Join-Path $testRoot $_.path }))
-    $metadata.corpus_sha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'corpus.json')).Hash
-}
+$inputs.support = @(Get-GccInputIdentity $testRoot @($corpus.support | ForEach-Object { Join-Path $testRoot $_.path }))
+$metadata.corpus_sha256 = (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot 'corpus.json')).Hash
 if ($RuntimeRoot) {
     $runtimeFiles = @(foreach ($directory in @('include', 'lib')) {
         Get-ChildItem -LiteralPath (Join-Path $RuntimeRoot $directory) -Recurse -File | ForEach-Object { $_.FullName }
@@ -124,31 +88,21 @@ try {
         $assessment = Get-GccAssessment ([IO.File]::ReadAllText($path))
         $relative = Get-Relative $path
         $reasons = @($assessment.Reasons)
-        $parent = [IO.Path]::GetDirectoryName($path)
-        if ($relative.StartsWith('c-c++-common/') -and (Get-Relative $parent) -cnotin @('c-c++-common', 'c-c++-common/cpp')) {
-            $reasons += 'shared source requires its specialized GCC driver'
-        }
-        while ($parent -ne $testRoot) {
-            if ([IO.Path]::GetFileName($parent) -cnotin @('g++.dg', 'g++.old-deja') -and @(Get-ChildItem -LiteralPath $parent -Filter '*.exp' -File).Count) {
-                $reasons += 'special upstream driver: ' + (Get-Relative $parent)
-            }
-            $parent = [IO.Path]::GetDirectoryName($parent)
-        }
         $action = $assessment.Action
         $row = [ordered]@{ path = $relative; action = $action; reasons = @($reasons); expects_error = $assessment.Negative }
-        if ($reasons.Count -and -not $Probe) { $row.status = 'UNSUPPORTED' }
+        if ($reasons.Count) { $row.status = 'UNSUPPORTED' }
         else {
             # Keep each case's output independent. Windows scanners can retain
             # a just-exited executable briefly; reusing one path couples the
             # next unrelated case to that transient lock.
-            $extension = if ($action -in @('run', 'link') -and -not $reasons.Count) { '.exe' } else { '.o' }
+            $extension = if ($action -in @('run', 'link')) { '.exe' } else { '.o' }
             $artifact = Join-Path $Out ('case-{0:D5}{1}' -f $index, $extension)
             if (Test-Path -LiteralPath $artifact) { Remove-Item -LiteralPath $artifact }
             $runtimeOptions = @()
             if ($RuntimeRoot) { $runtimeOptions = @('-B' + $RuntimeRoot) }
             $command = @($Compiler) + $runtimeOptions + @('-x', 'c++') + $assessment.Options + @($path, '-o', $artifact)
-            if ($action -eq 'preprocess' -and -not $reasons.Count) { $command += '-E' }
-            elseif ($action -notin @('run', 'link') -or $reasons.Count) { $command += '-c' }
+            if ($action -eq 'preprocess') { $command += '-E' }
+            elseif ($action -notin @('run', 'link')) { $command += '-c' }
             $row.command = @($command)
             $row.compile = Invoke-GccProcess $command $Timeout
             $row.status = Get-GccCompileStatus $row.compile ([bool]$reasons.Count) $action $artifact
@@ -194,5 +148,5 @@ foreach ($status in $counts.Keys) {
 }
 Write-Host ("Checked score: {0}/{1}; {2}; output: {3}" -f $passCount, $checkedCount, $metadata.scope, $Out)
 $gateExit = Get-GccGateExitCode $counts
-if ($gateExit -ne 0) { Write-Warning 'Validation failed or no verified checks passed; probes and unsupported entries are not passes.' }
+if ($gateExit -ne 0) { Write-Warning 'Validation failed or no verified checks passed; unsupported entries are not passes.' }
 exit $gateExit

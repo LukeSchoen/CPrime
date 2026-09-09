@@ -23,6 +23,9 @@ static void print_stack(HANDLE process, DWORD thread_id) {
     pc = context.Rip; fp = context.Rbp;
     printf("pc=0x%llx sp=0x%llx fp=0x%llx\n", pc,
            (unsigned long long)context.Rsp, fp);
+    printf("rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx r8=%llx r9=%llx\n",
+           context.Rax, context.Rbx, context.Rcx, context.Rdx,
+           context.Rsi, context.Rdi, context.R8, context.R9);
     /* CPC emits frame-pointer chains. This tool is deliberately scoped to
        those compiler builds, not arbitrary native optimized executables. */
     for (i = 0; i < 24 && pc; ++i) {
@@ -31,7 +34,7 @@ static void print_stack(HANDLE process, DWORD thread_id) {
         int j, best = -1;
         for (j = 0; j < symbol_count; ++j)
             if (symbols[j].address <= pc && (best < 0 || symbols[j].address > symbols[best].address)) best = j;
-        if (best >= 0 && pc <= symbol_limit) printf("%02u %s + 0x%llx\n", i, symbols[best].name, pc - symbols[best].address);
+        if (best >= 0 && pc <= symbol_limit) printf("%02u 0x%llx %s + 0x%llx\n", i, pc, symbols[best].name, pc - symbols[best].address);
         else printf("%02u 0x%llx\n", i, pc);
         if (!fp || !ReadProcessMemory(process, (void *)fp, pair, sizeof(pair), &read)
             || read != sizeof(pair) || pair[0] <= fp) break;
@@ -70,9 +73,13 @@ int main(int argc, char **argv) {
     STARTUPINFOA startup;
     PROCESS_INFORMATION process;
     DEBUG_EVENT event;
-    DWORD start;
+    DWORD start, timeout = 5000;
     int result = 1, finished = 0;
-    if (argc != 3) { fprintf(stderr, "usage: trace_compile \"compiler arguments\" compiler.map\n"); return 2; }
+    if (argc < 3 || argc > 4) { fprintf(stderr, "usage: trace_compile \"program arguments\" program.map [timeout-ms]\n"); return 2; }
+    if (argc == 4) {
+        timeout = strtoul(argv[3], NULL, 10);
+        if (!timeout || timeout > 60000) return 2;
+    }
     {
         FILE *map = fopen(argv[2], "r");
         MapSymbol symbol;
@@ -98,7 +105,7 @@ int main(int argc, char **argv) {
         fprintf(stderr, "CreateProcess failed: %lu\n", GetLastError()); return 2;
     }
     start = GetTickCount();
-    while ((DWORD)(GetTickCount() - start) < 5000) {
+    while ((DWORD)(GetTickCount() - start) < timeout) {
         DWORD action = DBG_CONTINUE;
         if (!WaitForDebugEvent(&event, 50)) continue;
         if (event.dwDebugEventCode == CREATE_PROCESS_DEBUG_EVENT && event.u.CreateProcessInfo.hFile)
@@ -110,6 +117,11 @@ int main(int argc, char **argv) {
             if (!event.u.Exception.dwFirstChance || code == EXCEPTION_STACK_OVERFLOW
                 || code == EXCEPTION_ACCESS_VIOLATION) {
                 printf("Compiler exception 0x%08lx\n", code);
+                if (code == EXCEPTION_ACCESS_VIOLATION
+                    && event.u.Exception.ExceptionRecord.NumberParameters >= 2)
+                    printf("access=%llu address=0x%llx\n",
+                           (unsigned long long)event.u.Exception.ExceptionRecord.ExceptionInformation[0],
+                           (unsigned long long)event.u.Exception.ExceptionRecord.ExceptionInformation[1]);
                 print_stack(process.hProcess, event.dwThreadId);
                 TerminateProcess(process.hProcess, 1);
                 ContinueDebugEvent(event.dwProcessId, event.dwThreadId, DBG_CONTINUE);
@@ -125,7 +137,7 @@ int main(int argc, char **argv) {
         if (finished) break;
     }
     if (!finished) {
-        if ((DWORD)(GetTickCount() - start) >= 5000
+        if ((DWORD)(GetTickCount() - start) >= timeout
             && SuspendThread(process.hThread) != (DWORD)-1) {
             print_stack(process.hProcess, process.dwThreadId);
             ResumeThread(process.hThread);

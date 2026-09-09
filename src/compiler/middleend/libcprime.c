@@ -977,15 +977,24 @@ static void error1(int mode, const char *fmt, va_list ap)
      Do not advance the token stream or walk replay payloads here. */
   if (s1->error_set_jmp_enabled && getenv("CPRIME_PARSER_STATE"))
   {
-    fprintf(stderr, "[parser] token=%d spelling=%.80s parse_flags=0x%x tok_flags=0x%x replay=%d substitution=%d\n",
+    fprintf(stderr, "[parser] token=%d spelling=%.80s parse_flags=0x%x tok_flags=0x%x replay=%d substitution=%d function=%.120s\n",
             tok, (unsigned)(tok - TOK_IDENT) < (unsigned)(tok_ident - TOK_IDENT)
                  ? table_ident[tok - TOK_IDENT]->str : "<punctuation-or-literal>",
             parse_flags, tok_flags,
-            macro_ptr != NULL, cpp_substitution_jump != NULL);
+            macro_ptr != NULL, cpp_substitution_jump != NULL,
+            funcname ? funcname : "");
   }
 
   if (mode == ERROR_ERROR && cpp_substitution_jump)
   {
+    if (getenv("CPRIME_PARSER_STATE")) {
+      va_list diagnostic;
+      va_copy(diagnostic, ap);
+      fprintf(stderr, "[substitution] ");
+      vfprintf(stderr, fmt, diagnostic);
+      fprintf(stderr, "\n");
+      va_end(diagnostic);
+    }
     longjmp(*cpp_substitution_jump, 1);
   }
   cprime_exit_state(s1);

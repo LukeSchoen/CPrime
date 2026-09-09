@@ -1,3 +1,4 @@
+[CmdletBinding()]
 param(
     [string]$Suite = "c_compat",
     [Alias("TccPath")]
@@ -5,14 +6,11 @@ param(
     [string]$RuntimeRoot = '',
     [string[]]$Select = @(),
     [ValidateRange(0.001, 5)][double]$Timeout = 5,
-    [switch]$UseSharedBinaries,
-    [string]$SharedOutDir = "",
-    [switch]$RequireSharedHits,
     [string]$BuildManifestPath = $env:CPRIME_TEST_BUILD_MANIFEST
 )
 
 $ErrorActionPreference = "Stop"
-. (Join-Path $PSScriptRoot 'pedantic/gcc/assessment.ps1')
+. (Join-Path $PSScriptRoot 'tools/process.ps1')
 if (Get-Variable -Name PSNativeCommandUseErrorActionPreference -Scope Global -ErrorAction SilentlyContinue) {
     $global:PSNativeCommandUseErrorActionPreference = $false
 }
@@ -217,7 +215,7 @@ function Invoke-Compiler {
             $command = @((Join-Path $PSHOME 'powershell.exe'), '-NoProfile', '-EncodedCommand',
                 [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($script)))
         }
-        $processResult = Invoke-GccProcess $command $Timeout
+        $processResult = Invoke-TestProcess $command $Timeout
         $output = $processResult.output
         $exitCode = $processResult.exit
     } finally {
@@ -230,21 +228,6 @@ function Invoke-Compiler {
         OutputComplete = $processResult.output_complete
         Output = (Normalize-LineEndings (($output | Out-String))).Trim()
     }
-}
-
-function Resolve-SharedOutDir {
-    param([string]$ExplicitPath)
-
-    if ($ExplicitPath) {
-        $resolvedExplicit = Resolve-Path -LiteralPath $ExplicitPath -ErrorAction SilentlyContinue
-        if ($resolvedExplicit) { return $resolvedExplicit.Path }
-        return $null
-    }
-
-    $default = Join-Path $rootDir "build\tests\batch"
-    $resolvedDefault = Resolve-Path -LiteralPath $default -ErrorAction SilentlyContinue
-    if ($resolvedDefault) { return $resolvedDefault.Path }
-    return $null
 }
 
 $compiler = Resolve-CompilerPath -ExplicitPath $CompilerPath
@@ -284,13 +267,6 @@ if ($tests.Count -eq 0) {
 
 $passed = 0
 $failed = 0
-$sharedHits = 0
-$sharedMisses = 0
-$resolvedSharedOutDir = $null
-if ($UseSharedBinaries) {
-    $resolvedSharedOutDir = Resolve-SharedOutDir -ExplicitPath $SharedOutDir
-}
-
 Write-Host "Using compiler: $compiler"
 Write-Host "Running suite: $Suite"
 Write-Host ""
@@ -319,7 +295,6 @@ foreach ($test in $tests) {
         continue
     }
     if ($compileOnly) { $compileArgs += '-c' }
-    $supportsShared = $UseSharedBinaries -and -not $expectCompileFail -and -not $compileOnly -and -not $meta.EXPECT_MANIFEST_SOURCE -and $sourcePaths.Count -eq 1 -and $compileArgs.Count -eq 0 -and $resolvedSharedOutDir
 
     $extension = if ($compileOnly) { '.obj' } else { '.exe' }
     $exeName = [System.IO.Path]::GetFileNameWithoutExtension($test.Name) + $extension
@@ -329,30 +304,13 @@ foreach ($test in $tests) {
         Remove-Item -Force -LiteralPath $outExe
     }
 
-    $compileOutput = ""
-    $compileExit = 0
-    $exeToRun = $outExe
-    $sharedExe = $null
-
-    if ($supportsShared) {
-        $sharedExe = Join-Path $resolvedSharedOutDir $exeName
-        if (Test-Path -LiteralPath $sharedExe) {
-            $sharedHits++
-            $exeToRun = $sharedExe
-        } else {
-            $sharedMisses++
-        }
-    }
-
-    if (-not $supportsShared -or -not $sharedExe -or -not (Test-Path -LiteralPath $sharedExe)) {
-        $compile = Invoke-Compiler -CompilerPath $compiler -SourcePaths $sourcePaths -OutputPath $outExe -CompilerArgs $compileArgs
-        $compileOutput = $compile.Output
-        $compileExit = $compile.ExitCode
-        if (-not $compile.OutputComplete) {
-            Write-Output "FAIL $($test.Name): compiler output capture did not complete"
-            ++$failed
-            continue
-        }
+    $compile = Invoke-Compiler -CompilerPath $compiler -SourcePaths $sourcePaths -OutputPath $outExe -CompilerArgs $compileArgs
+    $compileOutput = $compile.Output
+    $compileExit = $compile.ExitCode
+    if (-not $compile.OutputComplete) {
+        Write-Output "FAIL $($test.Name): compiler output capture did not complete"
+        ++$failed
+        continue
     }
 
     $ok = $true
@@ -373,11 +331,11 @@ foreach ($test in $tests) {
         if ($compileExit -ne 0) {
             $ok = $false
             $reason = "compile failed (exit $compileExit): $compileOutput"
-        } elseif (-not (Test-Path -LiteralPath $exeToRun)) {
+        } elseif (-not (Test-Path -LiteralPath $outExe)) {
             $ok = $false
             $reason = "compile succeeded but output $extension missing"
         } elseif (-not $compileOnly) {
-            $runResult = Invoke-GccProcess @($exeToRun) $Timeout
+            $runResult = Invoke-TestProcess @($outExe) $Timeout
             $runExit = $runResult.exit
             $normStdout = (Normalize-LineEndings $runResult.output).TrimEnd("`n")
 
@@ -408,16 +366,7 @@ foreach ($test in $tests) {
 
 Write-Host ""
 Write-Host ("Summary: {0} passed, {1} failed" -f $passed, $failed)
-if ($UseSharedBinaries) {
-    Write-Host ("Shared binaries: {0} hits, {1} misses" -f $sharedHits, $sharedMisses)
-}
-
 if ($failed -gt 0) {
-    exit 1
-}
-
-if ($UseSharedBinaries -and $RequireSharedHits -and $sharedHits -eq 0) {
-    Write-Host "Shared mode failed: no shared binary hits were used."
     exit 1
 }
 

@@ -6,10 +6,9 @@ $fixtureRoot = Join-Path $buildRoot ('runner-validation-' + [guid]::NewGuid().To
 $suite = '../build/' + (Split-Path -Leaf $fixtureRoot)
 $pass = Join-Path $fixtureRoot 'pass'
 $includes = Join-Path $fixtureRoot 'include with spaces'
-$shared = Join-Path $fixtureRoot 'shared'
 $savedManifest = $env:CPRIME_TEST_BUILD_MANIFEST
 try {
-    New-Item -ItemType Directory -Path $pass, $includes, $shared | Out-Null
+    New-Item -ItemType Directory -Path $pass, $includes | Out-Null
     Set-Content -Encoding ASCII -LiteralPath (Join-Path $fixtureRoot 'context.cpp') -Value '// selected translation unit'
     Set-Content -Encoding ASCII -LiteralPath (Join-Path $includes 'context.hpp') -Value '#define HEADER_VALUE 1'
     Set-Content -Encoding ASCII -LiteralPath (Join-Path $fixtureRoot 'forced.hpp') -Value '#define FORCED_VALUE 1'
@@ -58,7 +57,7 @@ int main() { return helper() != 42; }
     $compilerArguments = @()
     if ($CompilerPath) { $compilerArguments = @('-CompilerPath', $CompilerPath) }
     if ($RuntimeRoot) { $compilerArguments += @('-RuntimeRoot', $RuntimeRoot) }
-    $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Suite $suite @compilerArguments -BuildManifestPath $manifestPath -UseSharedBinaries -SharedOutDir $shared 2>&1
+    $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Suite $suite @compilerArguments -BuildManifestPath $manifestPath 2>&1
     if ($LASTEXITCODE -ne 0 -or ($output -join "`n") -notmatch 'Summary: 2 passed, 0 failed') { throw ($output -join "`n") }
     Write-Output 'PASS compile-only probes, source overrides, quoted paths and macros, >32KiB arguments, multiple inputs'
     $output = & powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Suite $suite @compilerArguments -BuildManifestPath $manifestPath -Select test_probe.cpp 2>&1

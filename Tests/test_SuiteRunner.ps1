@@ -10,8 +10,8 @@ try {
         Set-Content -LiteralPath (Join-Path $pass 'test_probe.cpp') -Value 'int main() { return 0; }'
     }
     @'
-param($Suite, $CompilerPath, $RuntimeRoot, [switch]$UseSharedBinaries)
-Add-Content -LiteralPath (Join-Path $PSScriptRoot 'calls.txt') -Value "$Suite|$CompilerPath|$RuntimeRoot|$UseSharedBinaries"
+param($Suite, $CompilerPath, $RuntimeRoot)
+Add-Content -LiteralPath (Join-Path $PSScriptRoot 'calls.txt') -Value "$Suite|$CompilerPath|$RuntimeRoot"
 if ($Suite -eq 'features/Bad') { exit 7 }
 exit 0
 '@ | Set-Content -LiteralPath (Join-Path $work 'run.ps1')
@@ -20,10 +20,10 @@ exit 0
     if ($LASTEXITCODE -ne 0 -or ($listed -join ',') -ne 'c_compat,features/Bad,features/Good') {
         throw 'Suite discovery included fixtures or missed a language suite'
     }
-    $output = & powershell -NoProfile -File $runner -CompilerPath 'compiler with spaces' -RuntimeRoot 'runtime with spaces' -UseSharedBinaries
+    $output = & powershell -NoProfile -File $runner -CompilerPath 'compiler with spaces' -RuntimeRoot 'runtime with spaces'
     if ($LASTEXITCODE -ne 1 -or "$output" -notmatch '2 passed, 1 failed') { throw 'Suite failure was not reported' }
     $calls = @(Get-Content -LiteralPath (Join-Path $work 'calls.txt'))
-    if ($calls.Count -ne 3 -or $calls[-1] -ne 'features/Good|compiler with spaces|runtime with spaces|True') {
+    if ($calls.Count -ne 3 -or $calls[-1] -ne 'features/Good|compiler with spaces|runtime with spaces') {
         throw 'Runner did not continue after failure or forward settings'
     }
     $output = & powershell -NoProfile -File $runner -Suite c_compat

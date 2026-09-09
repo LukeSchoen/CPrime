@@ -106,7 +106,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   {
     AttributeDef attributes;
     enter_namespace_scope(namespace_tok);
-    active_member_class_tok = argument >= 6 ? saved->member_class : 0;
+    active_member_class_tok = argument >= 6 ? saved->member_class : owner_tok;
     cpp_member_decl_context = argument >= 6 ? saved->member_declaration_context : NULL;
     lambda_probe = NULL;
     ++nocode_wanted;

@@ -5,6 +5,14 @@
 static Section *last_text_section; // To Handle .Previous Asm Directive
 static int asmgoto_n;
 
+/* GAS quotes symbol names containing punctuation, including C++ linkage names.
+   Convert strings only where the grammar expects a symbol. */
+static void asm_symbol_token(void)
+{
+  if (tok == TOK_STR)
+    tok = tok_alloc_const(tokc.str.data);
+}
+
 static int asm_get_prefix_name(CPRIMEState *s1, const char *prefix, unsigned int n)
 {
   char buf[64];
@@ -112,6 +120,7 @@ static void asm_expr_unary(CPRIMEState *s1, ExprValue *pe)
   uint64_t n;
   const char *p;
 
+  asm_symbol_token();
   switch (tok)
   {
   case TOK_PPNUM:
@@ -743,6 +752,7 @@ asm_data:
   break;
   case TOK_ASMDIR_set:
     next();
+    asm_symbol_token();
     tok1 = tok;
     next();
     /* Also accept '.set stuff', but don't do anything with this.
@@ -759,6 +769,7 @@ asm_data:
     {
       Sym *sym;
       next();
+      asm_symbol_token();
       if (tok < TOK_IDENT)
         expect("identifier");
       sym = get_asm_sym(tok, NULL);
@@ -862,6 +873,7 @@ asm_data:
     Sym *sym;
 
     next();
+    asm_symbol_token();
     if (tok < TOK_IDENT)
       expect("identifier");
     sym = asm_label_find(tok);
@@ -882,6 +894,7 @@ asm_data:
     int st_type;
 
     next();
+    asm_symbol_token();
     if (tok < TOK_IDENT)
       expect("identifier");
     sym = get_asm_sym(tok, NULL);
@@ -1124,6 +1137,7 @@ static int cprime_assemble_internal(CPRIMEState *s1, int do_preprocess, int glob
     cprime_debug_line(s1);
     parse_flags |= PARSE_FLAG_LINEFEED; // XXX: suppress that hack
 redo:
+    asm_symbol_token();
     if (tok == '#')
     {
       // Horrible Gas Comment

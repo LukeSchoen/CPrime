@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('Prime', 'Clang')][string]$Toolchain = 'Prime',
+    [ValidateSet('Clang')][string]$Toolchain = 'Clang',
     [Alias('CpcPath')][string]$CompilerPath = '',
     [string]$ProjectRoot = (Get-Location).Path,
     [string]$ManifestPath = '',
@@ -43,7 +43,7 @@ if (-not $ExePath) {
 }
 $ExePath = [IO.Path]::GetFullPath($ExePath)
 New-Item -ItemType Directory -Force -Path $OutDir, (Split-Path $ExePath -Parent) | Out-Null
-. (Join-Path $PSScriptRoot 'scripts/windows/incremental-build.ps1')
+. (Join-Path $PSScriptRoot 'scripts/windows/incremental-build-Clang.ps1')
 
 function Quote-Native([string]$Argument) {
     # CommandLineToArgvW quoting, including spaces, embedded quotes, and a
@@ -321,10 +321,12 @@ foreach ($project in $manifest.projects) {
 if (-not $jobsToRun.Count) { throw 'The manifest contains no compile sources.' }
 $jobsToRun | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutDir 'compile_inputs.json') -Encoding UTF8
 $allJobs = @($jobsToRun)
+$prepareSeconds = $buildTimer.Elapsed.TotalSeconds
 $jobsToRun = @($allJobs | Where-Object {
     $_.Key = Get-BuildKey $CompilerPath (@($_.Flags) + @($_.Source, $_.Object)) $_.Directory
     -not (Test-BuildState $_.Object $_.Key)
 })
+$cacheSeconds = $buildTimer.Elapsed.TotalSeconds - $prepareSeconds
 foreach ($job in $jobsToRun) {
     [IO.File]::Delete("$($job.Object).state.json")
     [IO.File]::Delete($job.Object)
@@ -645,6 +647,11 @@ try {
 }
 Write-Host "Executable: $ExePath"
 Ensure-FastBuildChecker
+# Reserve the report before certifying directory times. The output directory
+# can also be an include directory; creating the report later dirties it.
+$metricsPath = Join-Path $OutDir 'build_metrics.json'
+if (-not [IO.File]::Exists($metricsPath)) { [IO.File]::WriteAllText($metricsPath, '{}') }
+Save-FastBuildSnapshot
 Write-Host ('Build elapsed: {0:n3}s; {1}/{2} translation units compiled; unity={3}' -f $buildTimer.Elapsed.TotalSeconds, $jobsToRun.Count, $allJobs.Count, [bool]$Unity)
 
 $compilerWork = [double](($script:toolMeasurements | Where-Object Kind -eq 'compiler' | Measure-Object Seconds -Sum).Sum)
@@ -655,9 +662,9 @@ $metrics = [ordered]@{
     SkippedUnits = $allJobs.Count - $jobsToRun.Count; Unity = [bool]$Unity
     BuildSeconds = $buildTimer.Elapsed.TotalSeconds; CompilerSeconds = $compilerWork
     ResourceSeconds = $resourceWork
+    PrepareSeconds = $prepareSeconds; CacheSeconds = $cacheSeconds
     DriverSeconds = if ($Jobs -eq 1) { $buildTimer.Elapsed.TotalSeconds - $compilerWork - $resourceWork } else { $null }
     Processes = @($script:toolMeasurements)
 }
-$metrics | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $OutDir 'build_metrics.json') -Encoding UTF8
+$metrics | ConvertTo-Json -Depth 5 | Set-Content -LiteralPath $metricsPath -Encoding UTF8
 Write-Host ('Compiler process time: {0:n3}s; resource tools: {1:n3}s' -f $compilerWork, $resourceWork)
-Save-FastBuildSnapshot

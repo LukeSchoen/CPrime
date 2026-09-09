@@ -294,7 +294,13 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
   }
   mk_cpp_member_pointer(&member_type, class_tok);
   if (NODATA_WANTED) {
-    vset(&member_type, VT_CONST | VT_LVAL, 0);
+    /* The expression is a constant prvalue. There is no backing object in a
+       no-output probe, so an lvalue placeholder would incorrectly reject
+       constant initialization of aggregates containing member addresses. */
+    vset(&member_type, VT_CONST, 0);
+    vtop->sym = sym_push2(&global_stack, anon_sym++, member_type.t, 0);
+    vtop->sym->type = member_type;
+    vtop->sym->cpp_member_address_tok = function ? function->v : member_tok;
     forming_cpp_member_address = 0;
     return 1;
   }

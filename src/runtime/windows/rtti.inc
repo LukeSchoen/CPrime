@@ -1,5 +1,28 @@
 #include "cprime_rtti.h"
 
+void *__cpc_virtual_base_cast(void *object, long long vptr_offset,
+                              const char *source, const char *target)
+{
+    const void *const *vtable;
+    const CpcRttiTable *table;
+    char *complete;
+    unsigned i, j;
+    if (!object) return NULL;
+    vtable = *(const void *const **)((char *)object + vptr_offset);
+    table = (const CpcRttiTable *)vtable[-2];
+    complete = (char *)object + vptr_offset + table->offset_to_top;
+    for (i = 0; i < table->count; ++i)
+        if (table->nodes[i].offset == (char *)object - complete
+            && !strcmp(table->nodes[i].name, source))
+            for (j = i + 1; j < table->count; ++j) {
+                int parent = table->nodes[j].parent;
+                while (parent > (int)i) parent = table->nodes[parent].parent;
+                if (parent == (int)i && !strcmp(table->nodes[j].name, target))
+                    return complete + table->nodes[j].offset;
+            }
+    return NULL;
+}
+
 static int cpc_rtti_public_path(const CpcRttiTable *table, int from, int to)
 {
     while (from != to && from >= 0) {

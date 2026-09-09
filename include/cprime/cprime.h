@@ -399,7 +399,7 @@ struct FuncAttr {
     func_cpp_explicit : 1,
     func_cpp_member : 1,
     func_ref_qualifier : 2,
-    func_unresolved_template : 1,
+    func_unresolved_overload : 1,
     xxxx        : 2;
 };
 

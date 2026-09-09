@@ -3428,8 +3428,26 @@ static void asm_output_section_directive(FILE *fp, Section *sec)
     fprintf(fp, ".balign %d\n", sec->sh_addralign);
 }
 
+static const char *asm_output_symbol_name(CString *quoted, const char *name)
+{
+  const unsigned char *p = (const unsigned char *)name;
+  if (isalpha(*p) || *p == '_' || *p == '.') {
+    for (++p; isalnum(*p) || *p == '_' || *p == '.' || *p == '$'; ++p) {}
+    if (!*p) return name;
+  }
+  quoted->size = 0;
+  cstr_ccat(quoted, '"');
+  for (p = (const unsigned char *)name; *p; ++p) {
+    if (*p == '"' || *p == '\\') cstr_ccat(quoted, '\\');
+    cstr_ccat(quoted, *p);
+  }
+  cstr_ccat(quoted, '"');
+  cstr_ccat(quoted, 0);
+  return quoted->data;
+}
+
 static int asm_output_symbols_at(FILE *fp, Section *sec, unsigned long offset,
-                                 const char *strtab)
+                                 const char *strtab, CString *quoted)
 {
   CPRIMEState *s1 = sec->s1;
   ObjW(Sym) *sym;
@@ -3441,7 +3459,7 @@ static int asm_output_symbols_at(FILE *fp, Section *sec, unsigned long offset,
   {
     if (sym->st_shndx != sec->sh_num || sym->st_value != offset || !sym->st_name)
       continue;
-    name = strtab + sym->st_name;
+    name = asm_output_symbol_name(quoted, strtab + sym->st_name);
     type = Obj64_ST_TYPE(sym->st_info);
     if (Obj64_ST_BIND(sym->st_info) == STB_GLOBAL)
       fprintf(fp, ".globl %s\n", name);
@@ -3491,7 +3509,7 @@ static addr_t asm_pe_imagebase(CPRIMEState *s1)
 #endif
 
 static int asm_output_reloc(CPRIMEState *s1, FILE *fp, Section *sec, ObjW_Rel *rel,
-                            const char *strtab, int *size)
+                            const char *strtab, int *size, CString *quoted)
 {
   ObjW(Sym) *sym;
   const char *name, *reloc_name;
@@ -3505,7 +3523,7 @@ static int asm_output_reloc(CPRIMEState *s1, FILE *fp, Section *sec, ObjW_Rel *r
   sym = &((ObjW(Sym) *)symtab_section->data)[sym_index];
   if (!sym->st_name)
     return cprime_error_noabort("cannot emit anonymous relocation in assembly output");
-  name = strtab + sym->st_name;
+  name = asm_output_symbol_name(quoted, strtab + sym->st_name);
   addend = rel->r_addend;
 
   switch (type)
@@ -3636,6 +3654,7 @@ static void asm_output_byte(FILE *fp, unsigned char value, int *at_line_start,
 
 static int cprime_output_asm(CPRIMEState *s1, const char *filename)
 {
+  CString quoted = {0};
   FILE *fp;
   Section *sec;
   unsigned long i;
@@ -3698,7 +3717,7 @@ static int cprime_output_asm(CPRIMEState *s1, const char *filename)
           at_line_start = 1;
         }
       }
-      if (asm_output_symbols_at(fp, sec, i, strtab))
+      if (asm_output_symbols_at(fp, sec, i, strtab, &quoted))
         at_line_start = 1;
 
       rel_at_i = asm_find_reloc_at(sec, i);
@@ -3709,7 +3728,7 @@ static int cprime_output_asm(CPRIMEState *s1, const char *filename)
           fprintf(fp, "\n");
           at_line_start = 1;
         }
-        ret = asm_output_reloc(s1, fp, sec, rel_at_i, strtab, &reloc_size);
+        ret = asm_output_reloc(s1, fp, sec, rel_at_i, strtab, &reloc_size, &quoted);
         if (ret)
           goto done;
         i += reloc_size - 1;
@@ -3733,10 +3752,11 @@ static int cprime_output_asm(CPRIMEState *s1, const char *filename)
     }
     if (!at_line_start)
       fprintf(fp, "\n");
-    asm_output_symbols_at(fp, sec, sec->data_offset, strtab);
+    asm_output_symbols_at(fp, sec, sec->data_offset, strtab, &quoted);
   }
 
 done:
+  cstr_free(&quoted);
   fclose(fp);
   return ret;
 }

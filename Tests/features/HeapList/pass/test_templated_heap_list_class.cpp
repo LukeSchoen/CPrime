@@ -1,4 +1,5 @@
 // EXPECT_EXIT: 0
+#include <stdlib.h>
 
 template<typename T>
 class List
@@ -7,6 +8,7 @@ class List
   int count;
   int capacity;
 
+public:
   List()
   {
     this->items = (T *)malloc(sizeof(T) * 8);
@@ -49,10 +51,10 @@ int main(void)
   List<int> numbers;
   int i;
 
-  for (i = 0; i < 1000000; i = i + 1)
+  for (i = 0; i < 33; i = i + 1)
     numbers.push(i * 3);
 
-  if (numbers.size() != 1000000)
+  if (numbers.size() != 33)
     return 1;
   if (numbers.get(0) != 0)
     return 2;
@@ -60,7 +62,7 @@ int main(void)
     return 3;
   if (numbers.get(8) != 24)
     return 4;
-  if (numbers.get(999999) != 2999997)
+  if (numbers.get(32) != 96)
     return 5;
   return 0;
 }

@@ -1,8 +1,8 @@
 param([string]$CompilerPath = (Join-Path $PSScriptRoot '..\cpc.exe'))
 $ErrorActionPreference = 'Stop'
 $CompilerPath = [IO.Path]::GetFullPath($CompilerPath)
-$driver = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\build_project.ps1'))
-$temporaryRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+$driver = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\build\build_project.exe'))
+$temporaryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../build')).TrimEnd('\') + '\'
 $fixture = Join-Path $temporaryRoot ('CPrime batch ' + [guid]::NewGuid().ToString('N'))
 try {
     [void][IO.Directory]::CreateDirectory($fixture)
@@ -41,15 +41,17 @@ int main(void) {
         $outDir = Join-Path $fixture $mode
         [void][IO.Directory]::CreateDirectory($outDir)
         $exe = Join-Path $outDir 'app.exe'
-        [IO.File]::WriteAllText($exe, 'stale executable')
-        [IO.File]::WriteAllText((Join-Path $outDir 'source_0000.obj'), 'stale object')
+        & $driver -CompilerPath $CompilerPath -ProjectRoot $fixture -ManifestPath $manifestPath -OutDir $outDir -ExePath $exe *> (Join-Path $fixture 'warm.log')
+        if ($LASTEXITCODE) { throw 'Could not prepare stale build outputs' }
         $savedMode = $env:CPRIME_BATCH_TEST_MODE
+        $savedPreference = $ErrorActionPreference
         try {
+            $ErrorActionPreference = 'Continue'
             $env:CPRIME_BATCH_TEST_MODE = $mode
-            $log = & powershell -NoProfile -ExecutionPolicy Bypass -File $driver -CompilerPath $fakeCompiler `
-                -ProjectRoot $fixture -ManifestPath $manifestPath -OutDir $outDir -ExePath $exe -CompileTimeoutSeconds 1
+            $log = & $driver -CompilerPath $fakeCompiler `
+                -ProjectRoot $fixture -ManifestPath $manifestPath -OutDir $outDir -ExePath $exe -CompileTimeoutSeconds 1 2>&1
             $code = $LASTEXITCODE
-        } finally { $env:CPRIME_BATCH_TEST_MODE = $savedMode }
+        } finally { $env:CPRIME_BATCH_TEST_MODE = $savedMode; $ErrorActionPreference = $savedPreference }
         if ($code -eq 0 -or [IO.File]::Exists($exe)) { throw "$mode was incorrectly accepted" }
         if (($log -join "`n") -notmatch 'Executable: NOT PRODUCED') { throw "$mode did not report build failure" }
         if ($mode -eq 'timeout' -and ($log -join "`n") -notmatch 'timed out') { throw 'Timeout was not enforced' }

@@ -101,6 +101,22 @@ void __cpc_eh_terminate(void)
     abort();
 }
 
+/* Exception-driven termination enters an implicit handler. In particular,
+   current_exception and a rethrow must name the exception that violated the
+   noexcept boundary, rather than an enclosing, previously caught exception. */
+static void cpc_eh_terminate_exception(CpcEhException *exception)
+{
+    CpcEhCatchContext context = {0};
+    CpcEhThread *thread = cpc_eh_thread();
+    context.exception = exception;
+    context.adjusted = exception->object;
+    context.previous = thread->caught;
+    /* Expose the active exception without claiming that dispatch reached a
+       source handler: the in-flight exception count remains observable. */
+    thread->caught = &context;
+    __cpc_eh_terminate();
+}
+
 CpcEhTerminateHandler __cpc_eh_set_terminate(CpcEhTerminateHandler handler)
 {
     return (CpcEhTerminateHandler)InterlockedExchangePointer(
@@ -247,11 +263,11 @@ static int cpc_eh_has_handler(CpcEhException *exception)
                 void *adjusted, *pointer_value;
                 if (!cpc_eh_valid_function(function)) __cpc_eh_terminate();
                 if (thread->cleanup_boundary && frame >= thread->cleanup_boundary)
-                    __cpc_eh_terminate();
+                    cpc_eh_terminate_exception(exception);
                 if (cpc_eh_select(function, (uintptr_t)image,
                                   (unsigned)(pc - image - 1), exception, &adjusted, &pointer_value))
                     return 1;
-                if (function->flags & CPC_EH_FUNCTION_NOEXCEPT) __cpc_eh_terminate();
+                if (function->flags & CPC_EH_FUNCTION_NOEXCEPT) cpc_eh_terminate_exception(exception);
             }
         } else {
             context.Rip = *(DWORD64 *)context.Rsp;
@@ -265,7 +281,7 @@ static void cpc_eh_raise(CpcEhException *exception)
 {
     ULONG_PTR arguments[2];
     ++cpc_eh_thread()->uncaught;
-    if (!cpc_eh_has_handler(exception)) __cpc_eh_terminate();
+    if (!cpc_eh_has_handler(exception)) cpc_eh_terminate_exception(exception);
     arguments[0] = CPC_EH_MAGIC;
     arguments[1] = (ULONG_PTR)exception;
     RaiseException(CPC_EXCEPTION_CODE, EXCEPTION_NONCONTINUABLE, 2, arguments);
@@ -458,7 +474,7 @@ int __cpc_eh_frame_handler(void *record_ptr, void *frame, void *context_ptr, voi
         const CpcEhCatch *selected;
         void *adjusted, *pointer_value;
         if (thread->cleanup_boundary && (uintptr_t)frame >= thread->cleanup_boundary)
-            __cpc_eh_terminate();
+            cpc_eh_terminate_exception(exception);
         selected = cpc_eh_select(function, image, pc, exception, &adjusted, &pointer_value);
         if (selected) {
             CpcEhCatchContext *caught = (CpcEhCatchContext *)((char *)frame + selected->context_offset);
@@ -469,7 +485,7 @@ int __cpc_eh_frame_handler(void *record_ptr, void *frame, void *context_ptr, voi
                         context, dispatch->HistoryTable);
             __cpc_eh_terminate();
         }
-        if (function->flags & CPC_EH_FUNCTION_NOEXCEPT) __cpc_eh_terminate();
+        if (function->flags & CPC_EH_FUNCTION_NOEXCEPT) cpc_eh_terminate_exception(exception);
     }
     return ExceptionContinueSearch;
 }

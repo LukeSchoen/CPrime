@@ -4,12 +4,17 @@ $script:includeDirectoryStamps = @{}
 $script:directoryTimes = @{}
 $script:buildStates = @{}
 $script:fastInputs = @{}
+# Cache records are plain data. Avoid building a PowerShell object/property for
+# every repeated header and include directory in every translation unit.
+Add-Type -AssemblyName System.Web.Extensions
+$script:stateJson = [Web.Script.Serialization.JavaScriptSerializer]::new()
+$script:stateJson.MaxJsonLength = [int]::MaxValue
 $script:buildEnvironment = @('INCLUDE', 'LIB', 'LIBRARY_PATH', 'CPATH', 'C_INCLUDE_PATH', 'CPLUS_INCLUDE_PATH',
     'VCToolsInstallDir', 'VCToolsVersion', 'WindowsSdkDir', 'WindowsSDKVersion', 'PATH')
 $script:cacheContext = (@($CompilerPath, (Get-Item -LiteralPath $CompilerPath).LastWriteTimeUtc.Ticks,
     (Get-Item -LiteralPath $CompilerPath).Length,
     (Get-FileHash -LiteralPath $PSCommandPath).Hash,
-    (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot '../../build_project.ps1')).Hash) +
+    (Get-FileHash -LiteralPath (Join-Path $PSScriptRoot '../../build_project_Clang.ps1')).Hash) +
     @($script:buildEnvironment | ForEach-Object { $_ + '=' + [Environment]::GetEnvironmentVariable($_) })) -join "`n"
 $script:fastCheckSource = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../src/tools/check_project_build.c'))
 $script:fastChecker = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../build/check_project_build.exe'))
@@ -55,22 +60,26 @@ function Get-IncludeDirectoryStamp([string]$Path) {
 function Test-BuildState([string]$Output, [string]$Key) {
     if ($Rebuild -or $Toolchain -ne 'Prime' -or -not [IO.File]::Exists("$Output.state.json")) { return $false }
     try {
-        $state = [IO.File]::ReadAllText("$Output.state.json") | ConvertFrom-Json
+        $state = $script:stateJson.DeserializeObject([IO.File]::ReadAllText("$Output.state.json"))
         if ($state.Key -ne $Key -or $state.Output -ne (Get-InputStamp $Output)) { return $false }
         foreach ($input in $state.Inputs) {
-            if ($input.Stamp -eq 'missing' -or $input.Stamp -ne (Get-InputStamp $input.Path)) { return $false }
+            $path = [string]$input.Path
+            if (-not $script:fileStamps.ContainsKey($path)) { $null = Get-InputStamp $path }
+            if ($input.Stamp -eq 'missing' -or $input.Stamp -ne $script:fileStamps[$path]) { return $false }
         }
         foreach ($directory in $state.Directories) {
             # Reuse the saved header-name list while the directory is unchanged.
             # A changed directory still needs a name scan: unrelated output
             # writes must not force recompilation, but new headers must.
-            if (-not $script:includeDirectoryStamps.ContainsKey($directory.Path) -and
-                $null -ne $directory.Time -and
-                [IO.Directory]::GetLastWriteTimeUtc($directory.Path).ToFileTimeUtc() -eq $directory.Time) {
-                $script:directoryTimes[$directory.Path] = [long]$directory.Time
-                $script:includeDirectoryStamps[$directory.Path] = $directory.Stamp
+            $path = [string]$directory.Path
+            if (-not $script:includeDirectoryStamps.ContainsKey($path)) {
+                if ($null -ne $directory.Time -and
+                    [IO.Directory]::GetLastWriteTimeUtc($path).ToFileTimeUtc() -eq $directory.Time) {
+                    $script:directoryTimes[$path] = [long]$directory.Time
+                    $script:includeDirectoryStamps[$path] = $directory.Stamp
+                } else { $null = Get-IncludeDirectoryStamp $path }
             }
-            if ($directory.Stamp -cne (Get-IncludeDirectoryStamp $directory.Path)) { return $false }
+            if ($directory.Stamp -cne $script:includeDirectoryStamps[$path]) { return $false }
         }
         $script:buildStates[$Output] = $state
         return $true
@@ -196,8 +205,8 @@ function Save-FastBuildSnapshot {
         $files[[IO.Path]::GetFullPath($path)] = Get-InputStamp $path
     }
     foreach ($path in @($ManifestPath, $CompilerPath, $script:fastCheckSource, $script:fastChecker,
-        (Join-Path $PSScriptRoot 'incremental-build.ps1'),
-        (Join-Path $PSScriptRoot '../../build_project.ps1'))) {
+        (Join-Path $PSScriptRoot 'incremental-build-Clang.ps1'),
+        (Join-Path $PSScriptRoot '../../build_project_Clang.ps1'))) {
         $files[[IO.Path]::GetFullPath($path)] = Get-InputStamp $path
     }
     # Outputs/logs can change a watched directory's timestamp without changing

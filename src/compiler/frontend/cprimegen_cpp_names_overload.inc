@@ -430,7 +430,12 @@ static int append_type_mangle_string(CString *name, CType *type)
     pt = *pointed_type(type);
     if (!append_type_mangle_string(name, &pt))
       return 0;
-    if (type->t & VT_RVALUE_REFERENCE)
+    if (type->t & VT_ARRAY) {
+      /* Array references with different bounds are different template
+         arguments. Their spelling must remain stable across deductions. */
+      snprintf(part, sizeof(part), "_array%lld", (long long)type->ref->c);
+      cstr_cat(name, part, -1);
+    } else if (type->t & VT_RVALUE_REFERENCE)
       cstr_cat(name, "_rref", -1);
     else
       cstr_cat(name, (type->t & VT_REFERENCE) ? "_ref" : "_ptr", -1);
@@ -897,8 +902,10 @@ static int is_mangled_free_func_tok(int tok)
   FreeFuncOverload *o;
   for (o = free_mangled_buckets[(unsigned)tok & (MEMBER_CANDIDATE_BUCKETS - 1)];
        o; o = o->mangled_next)
-    if (o->mangled_tok == tok && o->name_tok != tok)
-      return 1;
+    if (o->mangled_tok == tok && o->name_tok != tok) {
+      Sym *binding = find_global_symbol(o->name_tok);
+      if (!binding || !binding->cpp_using_target) return 1;
+    }
   return 0;
 }
 
@@ -907,6 +914,18 @@ static int has_free_func_overload(int name_tok)
   FreeFuncOverload *o;
   for (o = free_func_candidates(name_tok); o; o = o->name_next)
     if (o->name_tok == name_tok) return 1;
+  return 0;
+}
+
+static int has_unresolved_free_func_overloads(int name_tok)
+{
+  FreeFuncOverload *overload;
+  int first = 0;
+  for (overload = free_func_candidates(name_tok); overload; overload = overload->name_next)
+    if (overload->name_tok == name_tok) {
+      if (first && first != overload->mangled_tok) return 1;
+      first = overload->mangled_tok;
+    }
   return 0;
 }
 
@@ -1144,7 +1163,7 @@ static void cpp_prepare_free_function_linkage(int name_tok, CType *func_type,
                                              AttributeDef *ad)
 {
   Sym *prior = find_global_symbol(name_tok);
-  FreeFuncOverload *overload;
+  FreeFuncOverload *overload, *by_name, *by_symbol;
   int source_name = name_tok;
   struct FuncAttr *attr = &func_type->ref->f;
 
@@ -1161,9 +1180,35 @@ static void cpp_prepare_free_function_linkage(int name_tok, CType *func_type,
       && !same_func_param_signature(&prior->type, func_type))
     cprime_error("conflicting C function declaration for '%s'",
                  get_tok_str(name_tok, NULL));
-  for (overload = free_func_overloads; overload; overload = overload->next) {
-    if (overload->mangled_tok == name_tok)
+  /* Merge the two relevant indexes in registration order. A using declaration
+     can map a symbol back to another source name partway through the walk;
+     preserve that transition without visiting unrelated declarations. */
+  by_name = free_func_candidates(source_name);
+  by_symbol = free_mangled_buckets[(unsigned)name_tok & (MEMBER_CANDIDATE_BUCKETS - 1)];
+  for (;;) {
+    while (by_name && by_name->name_tok != source_name)
+      by_name = by_name->name_next;
+    while (by_symbol && by_symbol->mangled_tok != name_tok)
+      by_symbol = by_symbol->mangled_next;
+    if (!by_name && !by_symbol) break;
+    overload = !by_symbol || (by_name
+                 && by_name->registration_order > by_symbol->registration_order)
+                 ? by_name : by_symbol;
+    if (by_name == overload) by_name = by_name->name_next;
+    if (by_symbol == overload) by_symbol = by_symbol->mangled_next;
+    if (profile_scans_enabled) ++profile_linkage_scans;
+    {
+      Sym *binding = find_global_symbol(overload->name_tok);
+      /* Imports add lookup candidates without changing the declaration's
+         owning namespace or its object-file identity. */
+      if (binding && binding->cpp_using_target) continue;
+    }
+    if (overload->mangled_tok == name_tok && source_name != overload->name_tok) {
       source_name = overload->name_tok;
+      by_name = free_func_candidates(source_name);
+      while (by_name && by_name->registration_order >= overload->registration_order)
+        by_name = by_name->name_next;
+    }
     if (overload->name_tok == source_name
         && same_func_param_signature(&overload->func_type, func_type)) {
       Sym *candidate = find_global_symbol(overload->mangled_tok);
@@ -1779,6 +1824,7 @@ static int class_value_is_derived_from(CType *derived, CType *base)
 }
 
 static int call_arg_exact_param_type(CType *param_type, CType *arg_type);
+static int cpp_enum_promotion_rank(CType *target, CType *source);
 
 static int call_arg_reference_qualification(CType *parameter, CType *argument)
 {
@@ -1860,8 +1906,8 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
     CType *source = arg_type;
     if ((source->t & VT_BTYPE) == VT_PTR) source = pointed_type(source);
     if ((source->t & VT_BTYPE) == VT_FUNC && source->ref
-        && source->ref->f.func_unresolved_template)
-      return resolve_function_template_address(source, param_type) != NULL;
+        && source->ref->f.func_unresolved_overload)
+      return resolve_function_address(source, param_type) != NULL;
   }
   CType decayed_arg, arg_value_type;
   CType param_value_type;
@@ -1914,6 +1960,12 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
      a different enum) does not implicitly convert to an enum parameter. */
   if (IS_ENUM(param_value_type.t) || IS_ENUM_VAL(param_value_type.t))
     return 0;
+  if ((IS_ENUM(arg_value_type.t) || IS_ENUM_VAL(arg_value_type.t))
+      && btype_is_arithmetic_scalar(param_value_type.t & VT_BTYPE))
+    return (!is_reference_type(param_type)
+            || (param_type->t & VT_RVALUE_REFERENCE)
+            || (param_value_type.t & VT_CONSTANT))
+           && cpp_enum_promotion_rank(&param_value_type, &arg_value_type) >= 0;
   if (is_reference_type(param_type))
   {
     if ((param_type->t & VT_RVALUE_REFERENCE)
@@ -2078,8 +2130,8 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
     CType *source = arg_type;
     if ((source->t & VT_BTYPE) == VT_PTR) source = pointed_type(source);
     if ((source->t & VT_BTYPE) == VT_FUNC && source->ref
-        && source->ref->f.func_unresolved_template)
-      return resolve_function_template_address(source, param_type) ? 0 : -1;
+        && source->ref->f.func_unresolved_overload)
+      return resolve_function_address(source, param_type) ? 0 : -1;
   }
   CType arg_value_type;
   CType param_value_type;
@@ -2362,16 +2414,23 @@ static int cpp_compare_argument_conversion_overloads(Sym *left, Sym *right,
       current = type_is_std_initializer_list(&left_target)
               - type_is_std_initializer_list(&right_target);
     }
-    if (arguments[i].t == VT_BRACED_LIST
-        && is_reference_type(&l->type) && is_reference_type(&r->type)
+    if (is_reference_type(&l->type) && is_reference_type(&r->type)
         && is_compatible_unqualified_types(pointed_type(&l->type),
                                             pointed_type(&r->type))) {
-      /* Both viable list conversions initialize the same underlying type.
-         Preserve the final reference binding: a temporary prefers T&& to
-         const T&. Do not use this to order unrelated list-initialized types. */
+      CType source = arguments[i];
+      int temporary = source.t == VT_BRACED_LIST
+                      || (source.t & VT_RVALUE_REFERENCE);
       int left_rvalue = (l->type.t & VT_RVALUE_REFERENCE) != 0;
       int right_rvalue = (r->type.t & VT_RVALUE_REFERENCE) != 0;
-      current = left_rvalue - right_rvalue;
+      source.t &= ~VT_RVALUE_REFERENCE;
+      if (is_reference_type(&source)) source = *pointed_type(&source);
+      /* A conversion to an unrelated reference target also creates a
+         temporary, even when the original expression is an lvalue enum.
+         Equal conversions to the same target prefer its rvalue reference. */
+      if (!temporary && !is_compatible_unqualified_types(&source, pointed_type(&l->type))
+          && !class_value_is_derived_from(&source, pointed_type(&l->type)))
+        temporary = 1;
+      if (temporary) current = left_rvalue - right_rvalue;
     }
     if (current && preference && current != preference) return 0;
     if (current) preference = current;
@@ -2496,6 +2555,22 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
         }
         ok = 0;
         break;
+      }
+      /* A conversion between a class and a non-class consumes a user
+         conversion (rank >= 8). Once a cheaper complete candidate exists,
+         probing its constructors or conversion templates cannot improve it.
+         Braced arguments have their own list-initialization ranking. */
+      if (best_arg_rank - arg_rank < 8
+          && arg_types[i].t != VT_BRACED_LIST
+          && !(saved_arguments && saved_arg_is_braced(saved_arguments[i]))) {
+        CType parameter = arg->type, actual = arg_types[i];
+        if (is_reference_type(&parameter)) parameter = *pointed_type(&parameter);
+        if (is_reference_type(&actual)) actual = *pointed_type(&actual);
+        if (((parameter.t & VT_BTYPE) == VT_STRUCT)
+            != ((actual.t & VT_BTYPE) == VT_STRUCT)) {
+          ok = 0;
+          break;
+        }
       }
       rank = saved_arguments && saved_arg_is_braced(saved_arguments[i])
            ? saved_list_argument_rank(&arg->type, saved_arguments[i])
@@ -3511,11 +3586,13 @@ static int try_call_cpp_free_binary_operator(int op)
   if (!sa || !sa->next || sa->next->next)
     cprime_error("operator overload must have exactly two parameters");
 
-  save_lvalues();
+  /* Bind reference arguments before preserving values across the call;
+     spilling a scalar lvalue first would bind the reference to a copy. */
   gfunc_param_typed_with_conversions(func_type, sa->next);
   vswap();
   gfunc_param_typed_with_conversions(func_type, sa);
   vswap();
+  save_lvalues();
   vpushsym(&func_sym->type, func_sym);
   vrott(3);
   finish_cpp_member_func_call(func_type, 2);
@@ -3812,6 +3889,7 @@ static int try_call_cpp_call_operator(void)
 
   if ((vtop->type.t & VT_BTYPE) != VT_STRUCT)
     return 0;
+  materialize_incomplete_template_type(&vtop->type);
   receiver_tok = get_struct_type_name_tok(&vtop->type);
   if (!type_has_member_func_name(&vtop->type, method_tok)
       && (!receiver_tok

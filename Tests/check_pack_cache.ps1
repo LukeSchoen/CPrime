@@ -105,7 +105,13 @@ try {
     $batchRuntime = Join-Path $fixture 'build/compiler/lib'
     New-Item -ItemType Directory -Path (Split-Path $batchRuntime -Parent) -Force | Out-Null
     Copy-Item -LiteralPath $runtime -Destination $batchRuntime -Recurse
-    Copy-Item -LiteralPath (Join-Path $root 'BuildClang.cmd') -Destination $fixture
+    Copy-Item -LiteralPath (Join-Path $root 'Build.cmd') -Destination $fixture
+    Copy-Item -LiteralPath (Join-Path $root 'scripts/windows/publish-cpc.cmd') -Destination (Join-Path $fixture 'scripts/windows')
+    New-Item -ItemType Directory -Path (Join-Path $fixture 'Tests') -Force | Out-Null
+    @'
+param($CompilerPath)
+exit 0
+'@ | Set-Content -LiteralPath (Join-Path $fixture 'Tests/check_regressions.ps1') -Encoding ASCII
     Copy-Item -LiteralPath $compiler -Destination (Join-Path $fixture 'cpc.exe')
     @'
 @echo off
@@ -113,7 +119,7 @@ copy /y "%~dp0..\..\cpc.exe" "%~dp0..\..\build\compiler\cpc.exe" >nul
 exit /b %ERRORLEVEL%
 '@ | Set-Content -LiteralPath (Join-Path $fixture 'scripts/windows/build-cprime.bat') -Encoding ASCII
     & $script -ExePath $target -RootPath $fixture -RuntimeLibPath $batchRuntime -Profile full -PrepareOnly
-    $batchOutput = & (Join-Path $fixture 'BuildClang.cmd') --self
+    $batchOutput = & (Join-Path $fixture 'Build.cmd')
     if ($LASTEXITCODE -or -not ($batchOutput -contains 'Portable payload: cached')) {
         throw "Batch build did not use the native package path: $batchOutput"
     }

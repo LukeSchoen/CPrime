@@ -4,7 +4,7 @@ param(
     [string[]]$CompilerArguments = @(), [string]$Out = ''
 )
 $ErrorActionPreference = 'Stop'
-. (Join-Path $PSScriptRoot 'pedantic/gcc/assessment.ps1')
+. (Join-Path $PSScriptRoot 'tools/process.ps1')
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 if (-not $CompilerPath) { $CompilerPath = Join-Path $root 'cpc.exe' }
 if (-not $Out) { $Out = Join-Path $root ('build/diagnose-' + [guid]::NewGuid().ToString('N')) }
@@ -16,10 +16,10 @@ $command += (Resolve-Path -LiteralPath $Source).Path
 $oldState = $env:CPRIME_PARSER_STATE
 try {
     $env:CPRIME_PARSER_STATE = '1'
-    $preprocess = Invoke-GccProcess ($command + '-E') 5
+    $preprocess = Invoke-TestProcess ($command + '-E') 5
     [IO.File]::WriteAllText((Join-Path $Out 'preprocessed.txt'), $preprocess.output)
     $compileCommand = $command + @('-c', '-o', (Join-Path ([IO.Path]::GetFullPath($Out)) 'repro.o'))
-    $compile = Invoke-GccProcess $compileCommand 5
+    $compile = Invoke-TestProcess $compileCommand 5
     [IO.File]::WriteAllText((Join-Path $Out 'diagnostic.json'), (@{
         command=$compileCommand; compile=$compile; preprocess=$preprocess;
         compiler_sha256=(Get-FileHash -LiteralPath $command[0]).Hash;

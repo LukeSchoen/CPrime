@@ -12,5 +12,10 @@ int main() {
         catch (int value) { if (value != target) return 2; }
         if (live || built != target - 1 || destroyed != built) return 3;
     }
-    return 0;
+    fail_at = 0; live = built = destroyed = 0;
+    {
+        Group groups[2] = { { {1, 2}, 3 }, { {4, 5}, 6 } };
+        if (live != 6 || built != 6 || destroyed) return 4;
+    }
+    return live || destroyed != 6;
 }

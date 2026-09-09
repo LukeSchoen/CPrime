@@ -14,6 +14,15 @@ typedef struct CppTypeInfoRecord {
 } CppTypeInfoRecord;
 static CppTypeInfoRecord *cpp_type_info_records;
 
+static int cpp_class_is_polymorphic(int class_tok)
+{
+  VirtualMethodInfo *method;
+  for (method = virtual_method_infos; method; method = method->next)
+    if (method->class_tok == class_tok || class_has_base(class_tok, method->class_tok))
+      return 1;
+  return 0;
+}
+
 static void free_cpp_type_info_records(void)
 {
   while (cpp_type_info_records) {
@@ -87,7 +96,7 @@ static Sym *cpp_type_info_for_type(CType *type)
   return record->symbol;
 }
 
-static void cpp_rtti_collect(int class_tok, int offset, int parent, int access,
+static void cpp_rtti_collect_from(int complete, int class_tok, int offset, int parent, int access,
                              CppRttiNode **nodes, int *count)
 {
   ClassBaseInfo *base;
@@ -98,9 +107,21 @@ static void cpp_rtti_collect(int class_tok, int offset, int parent, int access,
   (*nodes)[index].parent = parent;
   (*nodes)[index].public_base = access == 0;
   for (base = class_base_candidates(class_tok); base; base = base->bucket_next)
-    if (base->class_tok == class_tok && base->field)
-      cpp_rtti_collect(base->base_tok, offset + base->field->c, index,
-                        base->access, nodes, count);
+    if (base->class_tok == class_tok && base->field) {
+      int base_offset = offset + base->field->c;
+      /* Repeated inheritance paths describe one virtual base address in
+         the complete object, including its nonvirtual base subobjects. */
+      if (base->is_virtual)
+        class_subobject_offset(complete, base->base_tok, &base_offset);
+      cpp_rtti_collect_from(complete, base->base_tok, base_offset, index,
+                            base->access, nodes, count);
+    }
+}
+
+static void cpp_rtti_collect(int class_tok, int offset, int parent, int access,
+                              CppRttiNode **nodes, int *count)
+{
+  cpp_rtti_collect_from(class_tok, class_tok, offset, parent, access, nodes, count);
 }
 
 static Sym *cpp_rtti_type_name(CType *original)
@@ -177,6 +198,27 @@ static int cpp_rtti_public_base_offset(int source, int target, int *offset)
   return found && accessible;
 }
 
+static void cpp_virtual_base_cast(CType *target)
+{
+  CType source_type = *pointed_type(&vtop->type);
+  int source = get_struct_type_name_tok(&source_type);
+  int root = class_primary_virtual_root(source);
+  int offset = virtual_vptr_offset(source, root);
+  SValue operand;
+  Sym *source_name, *target_name;
+  if (NODATA_WANTED || is_null_pointer(vtop)) { vtop->type = *target; return; }
+  if (offset < 0) cprime_error("virtual base conversion requires runtime base metadata");
+  source_name = cpp_rtti_type_name(&source_type);
+  target_name = cpp_rtti_type_name(pointed_type(target));
+  operand = *vtop--;
+  cpp_eh_push_helper("__cpc_virtual_base_cast");
+  vpushv(&operand); vpushll(offset);
+  vpushsym(&char_pointer_type, source_name);
+  vpushsym(&char_pointer_type, target_name);
+  gfunc_call(4);
+  vset(target, REG_IRET, 0);
+}
+
 static void cpp_typeid_expression(void)
 {
   TokenString *operand = tok_str_alloc(), *saved_macro;
@@ -221,7 +263,8 @@ static void cpp_typeid_expression(void)
   }
   if (!type_operand && (expression_flags & VT_LVAL)
       && !(expression_flags & VT_CXX_PRVALUE)
-      && (type.t & VT_BTYPE) == VT_STRUCT)
+      && (type.t & VT_BTYPE) == VT_STRUCT
+      && cpp_class_is_polymorphic(get_struct_type_name_tok(&type)))
     for (table = virtual_table_infos; table; table = table->next)
       if (table->class_tok == get_struct_type_name_tok(&type)) {
         offset = virtual_vptr_offset(table->class_tok, table->root_tok);
@@ -267,14 +310,24 @@ static void cpp_dynamic_cast(CType *target)
       cprime_error("dynamic_cast reference requires class types");
     source_tok = get_struct_type_name_tok(&source_class);
     target_tok = get_struct_type_name_tok(&target_class);
-    if (!cpp_rtti_public_base_offset(source_tok, target_tok, &offset))
-      cprime_error("runtime-checked reference dynamic_cast is not yet supported");
     if ((source_class.t & ~target_class.t) & (VT_CONSTANT | VT_VOLATILE))
       cprime_error("dynamic_cast cannot remove cv qualifiers");
     test_lvalue();
     mk_pointer(&vtop->type); gaddrof();
-    gen_cast(target);
-    maybe_indir_call_result();
+    {
+      CType pointer = target_class;
+      int checked = !cpp_rtti_public_base_offset(source_tok, target_tok, &offset);
+      mk_pointer(&pointer);
+      cpp_dynamic_cast(&pointer);
+      if (checked && !NODATA_WANTED) {
+        operand = *vtop--;
+        cpp_eh_push_helper("__cpc_dynamic_cast_reference");
+        vpushv(&operand);
+        gfunc_call(1);
+        vset(&pointer, REG_IRET, 0);
+      }
+      indir();
+    }
     vtop->r &= ~VT_CXX_PRVALUE;
     return;
   }
@@ -301,6 +354,8 @@ static void cpp_dynamic_cast(CType *target)
     return;
   }
   offset = -1;
+  if (!cpp_class_is_polymorphic(source_tok))
+    cprime_error("dynamic_cast source type is not polymorphic");
   for (vt = virtual_table_infos; vt; vt = vt->next)
     if (vt->class_tok == source_tok) {
       offset = virtual_vptr_offset(source_tok, vt->root_tok);

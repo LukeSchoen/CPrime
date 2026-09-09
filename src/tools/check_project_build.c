@@ -1,4 +1,4 @@
-/* Validate the complete build before skipping the PowerShell driver. A missing
+/* Validate the complete build before skipping the native project driver. A missing
    final executable alone can be relinked; all other changes use the driver. */
 #include <windows.h>
 #include <stdio.h>
