@@ -29,6 +29,12 @@ static int is_current_class_qualified_nested_tok(int name_tok)
 
 /* A member definition keeps the lexical scopes of its owning class, even
    when replayed after all enclosing class definitions have finished. */
+static int make_class_lexical_type_tok(int class_tok, int name_tok)
+{
+  return make_static_member_tok(make_static_member_tok(class_tok,
+      tok_alloc_const("__cpc_lexical_types")), name_tok);
+}
+
 static int find_class_scope_type_tok(int class_tok, int name_tok)
 {
   while (class_tok)
@@ -55,10 +61,27 @@ static int find_class_scope_type_tok(int class_tok, int name_tok)
           if (inherited != name_tok) return inherited;
         }
     }
+    nested_tok = make_class_lexical_type_tok(class_tok, name_tok);
+    alias = global_symbol_find(nested_tok);
+    if (alias && (alias->type.t & VT_TYPEDEF))
+      return nested_tok;
     record = lookup_cpp_record_decl(class_tok);
     class_tok = record ? record->lexical_owner_tok : 0;
   }
   return name_tok;
+}
+
+/* Locals declared inside a member body hide class names; locals outside a
+   local class are searched only after that class and its enclosing classes. */
+static int cpp_local_precedes_class(Sym *local)
+{
+  Sym *entry;
+  if (!local || !local->sym_scope) return 0;
+  if (!cpp_member_decl_context) return 1;
+  for (entry = local_stack;
+       entry && entry != cpp_member_decl_context->local_boundary; entry = entry->prev)
+    if (entry == local) return 1;
+  return 0;
 }
 
 static int find_current_class_nested_type_tok(int name_tok)
@@ -68,7 +91,7 @@ static int find_current_class_nested_type_tok(int name_tok)
     return name_tok;
   {
     Sym *local = sym_find(name_tok);
-    if (local && local->sym_scope)
+    if (cpp_local_precedes_class(local))
       return name_tok;
   }
   found = find_class_scope_type_tok(active_member_class_tok, name_tok);
@@ -267,7 +290,7 @@ static int find_namespace_tok_from_parts(const int *parts, int nb_parts)
   return namespace_member_exists(candidate) ? candidate : t;
 }
 
-static int find_current_namespace_tok(int name_tok)
+static int find_current_namespace_tok_ex(int name_tok, int ignore_locals)
 {
   int t, i, depth, parts[17];
   Sym *local;
@@ -275,9 +298,10 @@ static int find_current_namespace_tok(int name_tok)
   if (name_tok < TOK_UIDENT)
     return name_tok;
   local = sym_find(name_tok);
-  if (local && local->cpp_using_target)
-    return local->cpp_using_target;
-  if (local && local->sym_scope)
+  if (local && local->cpp_using_target && (!ignore_locals || !local->sym_scope))
+    return (local->type.t & VT_BTYPE) == VT_FUNC && free_func_candidates(name_tok)
+             ? name_tok : local->cpp_using_target;
+  if (local && local->sym_scope && !ignore_locals)
     return name_tok;
   for (i = 0; i < nb_namespace_stack; ++i)
     parts[i] = namespace_stack[i];
@@ -304,6 +328,11 @@ static int find_current_namespace_tok(int name_tok)
       return t;
   }
   return name_tok;
+}
+
+static int find_current_namespace_tok(int name_tok)
+{
+  return find_current_namespace_tok_ex(name_tok, 0);
 }
 
 static int find_namespace_qualifier_tok(int name_tok)
@@ -1296,8 +1325,10 @@ static int default_arg_is_empty_braces(TokenString *str)
 static void emit_default_arg(Sym *func_type, Sym *arg)
 {
   int entry_tok = tok;
+  int saved_default_owner = active_member_class_tok;
   CValue entry_tokc = tokc;
   TokenString macro;
+  TokenString *qualified_default = NULL;
   TokenString *value_init = NULL;
   TokenString *saved_macro_stack = macro_stack;
   const int *saved_macro_ptr = macro_ptr;
@@ -1306,6 +1337,7 @@ static void emit_default_arg(Sym *func_type, Sym *arg)
   {
     cprime_error("too few arguments to function");
   }
+  active_member_class_tok = arg->default_arg_class;
   if (default_arg_is_empty_braces(arg->default_arg))
   {
     CType value_type = arg->type;
@@ -1338,18 +1370,38 @@ static void emit_default_arg(Sym *func_type, Sym *arg)
     tok = saved_tok;
     tokc = saved_tokc;
     gfunc_param_typed(func_type, arg);
+    active_member_class_tok = saved_default_owner;
     return;
   }
   macro = *arg->default_arg;
+  if (arg->default_arg_class) {
+    int at;
+    int saved_namespace = current_namespace_scope_tok();
+    int saved_class_depth = nb_defining_class_stack;
+    if (saved_class_depth >= sizeof(defining_class_stack) / sizeof(defining_class_stack[0]))
+      cprime_error("too many nested default argument class scopes");
+    defining_class_stack[nb_defining_class_stack++] = arg->default_arg_class;
+    enter_namespace_scope(symbol_namespace_scope_tok(arg->default_arg_class));
+    qualified_default = tok_str_alloc();
+    for (at = 0; at < arg->default_arg->len; ++at)
+      tok_str_add_record(qualified_default, arg->default_arg->str,
+                        arg->default_arg->len, &at);
+    qualify_saved_default_arg_current_class(&qualified_default, 1);
+    nb_defining_class_stack = saved_class_depth;
+    enter_namespace_scope(saved_namespace);
+    macro = *qualified_default;
+  }
   begin_macro(&macro, 0);
   next();
   expr_eq();
   while (macro_stack && macro_stack != saved_macro_stack)
     end_macro();
+  if (qualified_default) tok_str_free(qualified_default);
   macro_ptr = saved_macro_ptr;
   tok = entry_tok;
   tokc = entry_tokc;
   gfunc_param_typed_with_conversions(func_type, arg);
+  active_member_class_tok = saved_default_owner;
 }
 
 static void drop_leaked_call_target(Sym *func_sym)
@@ -2011,9 +2063,7 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
         && !(arg_pointed->t & (VT_CONSTANT | VT_VOLATILE)
              & ~(param_pointed->t & (VT_CONSTANT | VT_VOLATILE))))
       return 1;
-    if (is_compatible_unqualified_types(param_pointed, arg_pointed)
-        && !(arg_pointed->t & (VT_CONSTANT | VT_VOLATILE)
-             & ~(param_pointed->t & (VT_CONSTANT | VT_VOLATILE))))
+    if (cpp_pointer_qualification_conversion(param_type, &arg_value_type) > 0)
       return 1;
     if (class_value_is_derived_from(arg_pointed, param_pointed)
         && !(arg_pointed->t & (VT_CONSTANT | VT_VOLATILE)
@@ -2272,8 +2322,7 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
     /* Array decay and pointed-to qualification are exact conversion
        sequences. They beat object-to-void and derived-to-base pointer
        conversions, even when adding const prevents a literal type match. */
-    if (is_compatible_unqualified_types(pointed_type(param_type),
-                                        pointed_type(&arg_value_type)))
+    if (cpp_pointer_qualification_conversion(param_type, &arg_value_type) > 0)
       return 2;
     return 3;
   }
@@ -2351,6 +2400,24 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
         || ((source->t & VT_CONSTANT) && !candidate->is_const))
       continue;
     converted = candidate->func_type.ref->type;
+    {
+      int owner_index, hidden = 0;
+      /* A more-derived declaration of the same conversion-type-id hides
+         the base conversion, even if that declaration is not viable here. */
+      for (owner_index = 0; owner_index < class_count && !hidden; ++owner_index) {
+        MemberFuncOverload *declaration;
+        int owner = classes[owner_index];
+        if (owner == current_class || !class_has_base(owner, current_class)) continue;
+        for (declaration = conversion_overloads[(unsigned)owner & 4095];
+             declaration; declaration = declaration->conversion_next)
+          if (declaration->struct_tok == owner && declaration->func_type.ref
+              && is_compatible_types(&declaration->func_type.ref->type, &converted)) {
+            hidden = 1;
+            break;
+          }
+      }
+      if (hidden) continue;
+    }
     if (allow_explicit == 2 && !is_compatible_types(&converted, target))
       continue;
     if (is_reference_type(&converted)) {
@@ -2404,10 +2471,37 @@ static int cpp_compare_argument_conversion_overloads(Sym *left, Sym *right,
   if (skip_this) { if (l) l = l->next; if (r) r = r->next; }
   for (i = 0; i < count && l && r; ++i, l = l->next, r = r->next) {
     int current;
+    CType source_value = arguments[i];
+    if (is_reference_type(&source_value)) source_value = *pointed_type(&source_value);
     if (call_arg_match_rank(&l->type, &arguments[i])
         != call_arg_match_rank(&r->type, &arguments[i]))
       return 0;
     current = cpp_compare_enum_promotion_targets(&l->type, &r->type, &arguments[i]);
+    if (!is_reference_type(&l->type) && !is_reference_type(&r->type)) {
+      CppMemberPointerType *left_member = find_cpp_member_pointer_type(&l->type);
+      CppMemberPointerType *right_member = find_cpp_member_pointer_type(&r->type);
+      CppMemberPointerType *source_member = find_cpp_member_pointer_type(&source_value);
+      if (left_member && right_member && source_member
+          && left_member->owner_tok != right_member->owner_tok
+          && is_compatible_types(&left_member->member_type, &right_member->member_type)) {
+        /* Base-to-derived member pointer conversions prefer the nearer
+           owner in the inheritance chain. Unrelated owners stay tied. */
+        if (class_has_base(right_member->owner_tok, left_member->owner_tok)) current = 1;
+        else if (class_has_base(left_member->owner_tok, right_member->owner_tok)) current = -1;
+      }
+    }
+    if (!is_reference_type(&l->type) && !is_reference_type(&r->type)
+        && (source_value.t & VT_BTYPE) == VT_PTR
+        && (l->type.t & VT_BTYPE) == VT_PTR
+        && (r->type.t & VT_BTYPE) == VT_PTR) {
+      int left_from_right = cpp_pointer_qualification_conversion(&l->type, &r->type);
+      int right_from_left = cpp_pointer_qualification_conversion(&r->type, &l->type);
+      /* Equal pointer conversions prefer a proper subset of pointed-to
+         qualifiers. Const and volatile alone are incomparable; null
+         pointer conversions do not form a qualification subsequence. */
+      if (right_from_left > 0 && left_from_right < 0) current = 1;
+      else if (left_from_right > 0 && right_from_left < 0) current = -1;
+    }
     if (arguments[i].t == VT_BRACED_LIST) {
       CType left_target = is_reference_type(&l->type) ? *pointed_type(&l->type) : l->type;
       CType right_target = is_reference_type(&r->type) ? *pointed_type(&r->type) : r->type;
@@ -2514,7 +2608,7 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
       continue;
     {
       TemplateInstOwner *owner = find_template_inst_owner_entry(o->mangled_tok);
-      candidate_is_template = owner != NULL;
+      candidate_is_template = owner != NULL || member_function_is_template(o->mangled_tok);
       if (owner) {
         int family;
         /* Resolve each template family once for this overload set. Previously
@@ -2632,6 +2726,11 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
     }
     /* One function can be registered under its declaration name and an
        instantiated interface alias. It is still a single candidate. */
+    if (match && match != s && best_is_template && candidate_is_template) {
+      int order = compare_member_function_template_order_for_call(s->v, match->v, explicit_arg_count);
+      if (order < 0) continue;
+      if (order > 0) matches = 0;
+    }
     if (match == s)
       continue;
     match = s;
@@ -3522,9 +3621,15 @@ static Sym *cpp_resolve_associated_function(int method_tok, int ordinary_tok,
   for (name_index = 0; name_index < lookup.name_count; ++name_index)
   for (overload = free_func_candidates(lookup.names[name_index]); overload; overload = overload->name_next) {
     if (lookup.names[name_index] != overload->name_tok) continue;
-    if (operator_call < 0) {
+    {
       Sym *candidate = global_symbol_find(overload->mangled_tok);
-      if (candidate && candidate->cpp_hidden_friend) continue;
+      if (candidate && candidate->cpp_hidden_friend) {
+        int associated = 0;
+        for (i = 0; operator_call >= 0 && i < lookup.visited_count; ++i)
+          if ((lookup.visited[i]->v & ~SYM_STRUCT) == candidate->cpp_friend_owner)
+            associated = 1;
+        if (!associated) continue;
+      }
     }
     if (operator_call > 0 && !has_class_operand) {
       /* With enum operands and no class operand, a non-member operator must
@@ -3663,6 +3768,7 @@ static int try_call_cpp_unary_operator(int op)
   save_lvalues();
   vpushsym(&func_sym->type, func_sym);
   vswap();
+  gfunc_param_typed(func_type, sa);
   finish_cpp_member_func_call(func_type, 1);
   return 1;
 }
@@ -3718,7 +3824,7 @@ static int try_cpp_builtin_increment_conversion(int operation)
 }
 
 static void cpp_pointer_conversion_candidate(CType *receiver, int owner,
-                                             Sym **best, CType *target, int deleting)
+                                             Sym **best, CType *target, int mode)
 {
   MemberFuncOverload *candidate;
   ClassBaseInfo *base;
@@ -3730,29 +3836,35 @@ static void cpp_pointer_conversion_candidate(CType *receiver, int owner,
       continue;
     converted = candidate->func_type.ref->type;
     value = is_reference_type(&converted) ? *pointed_type(&converted) : converted;
-    if ((value.t & VT_BTYPE) != VT_PTR
-        || (deleting && (pointed_type(&value)->t & VT_BTYPE) == VT_FUNC))
-      continue;
+    if (mode == 2) {
+      if ((value.t & VT_BTYPE) != VT_FUNC
+          && !((value.t & VT_BTYPE) == VT_PTR
+               && (pointed_type(&value)->t & VT_BTYPE) == VT_FUNC)) continue;
+    }
+    else if ((value.t & VT_BTYPE) != VT_PTR
+        || (mode == 1 && (pointed_type(&value)->t & VT_BTYPE) == VT_FUNC)) continue;
     function = find_cpp_conversion_operator(receiver, &converted, 0, NULL, NULL);
     if (!function) continue;
     if (*best && *best != function)
-      cprime_error("ambiguous pointer conversion for %s", deleting ? "delete" : "dereference");
+      cprime_error("ambiguous pointer conversion for %s",
+                   mode == 2 ? "call" : mode == 1 ? "delete" : "dereference");
     *best = function;
     *target = converted;
   }
   for (base = class_base_candidates(owner); base; base = base->bucket_next)
     if (base->class_tok == owner)
-      cpp_pointer_conversion_candidate(receiver, base->base_tok, best, target, deleting);
+      cpp_pointer_conversion_candidate(receiver, base->base_tok, best, target, mode);
 }
 
-static void try_cpp_pointer_conversion(int deleting)
+/* mode: dereference (0), deletion (1), or a callable conversion (2). */
+static void try_cpp_pointer_conversion(int mode)
 {
   CType receiver = vtop->type, target;
   Sym *best = NULL;
   if (is_reference_type(&receiver)) receiver = *pointed_type(&receiver);
   if ((receiver.t & VT_BTYPE) != VT_STRUCT) return;
   cpp_pointer_conversion_candidate(&receiver, get_struct_type_name_tok(&receiver),
-                                   &best, &target, deleting);
+                                   &best, &target, mode);
   if (best) {
     try_call_cpp_conversion_operator(&target, 0);
     maybe_indir_reference();

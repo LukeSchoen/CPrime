@@ -1345,7 +1345,7 @@ static void parse_asm_operands(ASMOperand *operands, int *nb_operands_ptr,
   int nb_operands;
   char* astr;
 
-  if (tok != ':')
+  if (tok != ':' && tok != ')')
   {
     nb_operands = *nb_operands_ptr;
     for (;;)
@@ -1442,7 +1442,7 @@ ST_FUNC void asm_instr(void)
           next();
           for (;;)
           {
-            if (tok == ':')
+            if (tok == ':' || tok == ')')
               break;
             if (tok != TOK_STR)
               expect("string constant");
@@ -1556,15 +1556,90 @@ ST_FUNC void asm_instr(void)
 
 }
 
+static void asm_skip_global_operand(void)
+{
+  int parens, brackets, braces;
+  if (tok == '[')
+  {
+    next();
+    if (tok < TOK_IDENT)
+      expect("identifier");
+    next();
+    skip(']');
+  }
+  parse_mult_str("string constant");
+  skip('(');
+  parens = 1;
+  brackets = 0;
+  braces = 0;
+  while (parens || brackets || braces)
+  {
+    if (tok == TOK_EOF)
+      cprime_error("unterminated asm operand");
+    if (tok == '(') ++parens;
+    else if (tok == ')') --parens;
+    else if (tok == '[') ++brackets;
+    else if (tok == ']') --brackets;
+    else if (tok == '{') ++braces;
+    else if (tok == '}') --braces;
+    next();
+  }
+}
+
+static void asm_skip_global_operand_list(void)
+{
+  while (tok != ':' && tok != ')')
+  {
+    asm_skip_global_operand();
+    if (tok == ',')
+      next();
+    else
+      break;
+  }
+}
+
 ST_FUNC void asm_global_instr(void)
 {
   CString *astr;
+  CString asm_buffer;
   int saved_nocode_wanted = nocode_wanted;
 
   // Global asm blocks are always emitted.
   nocode_wanted = 0;
   next();
   astr = parse_asm_str();
+  cstr_new_s(&asm_buffer);
+  cstr_cat(&asm_buffer, astr->data, astr->size);
+  if (tok == ':')
+  {
+    next();
+    if (tok != ':' && tok != ')')
+      asm_skip_global_operand_list();
+    if (tok == ':')
+    {
+      next();
+      if (tok != ')')
+      {
+        asm_skip_global_operand_list();
+        if (tok == ':')
+        {
+          next();
+          while (tok != ':' && tok != ')')
+          {
+            if (tok != TOK_STR)
+              expect("string constant");
+            next();
+            if (tok == ',')
+              next();
+            else
+              break;
+          }
+          if (tok == ':')
+            next();
+        }
+      }
+    }
+  }
   skip(')');
   /* NOTE: we do not eat the ';' so that we can restore the current
      token after the assembler parsing */
@@ -1572,15 +1647,16 @@ ST_FUNC void asm_global_instr(void)
     expect("';'");
 
 #ifdef ASM_DEBUG
-  printf("asm_global: \"%s\"\n", (char *)astr->data);
+  printf("asm_global: \"%s\"\n", (char *)asm_buffer.data);
 #endif
   cur_text_section = text_section;
   ind = cur_text_section->data_offset;
 
   // Assemble The String With Cpc Internal Assembler
-  cprime_assemble_inline(cprime_state, astr->data, astr->size - 1, 1);
+  cprime_assemble_inline(cprime_state, asm_buffer.data, asm_buffer.size - 1, 1);
 
   cur_text_section->data_offset = ind;
+  cstr_free_s(&asm_buffer);
 
   // restore the current C token
   next();

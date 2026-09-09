@@ -16,6 +16,7 @@ typedef struct CpcRttiTable {
     unsigned reserved;
     const CpcRttiNode *nodes;
     const void *type_info;
+    unsigned long long object_size;
 } CpcRttiTable;
 
 #endif

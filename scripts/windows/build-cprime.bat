@@ -296,13 +296,15 @@ if errorlevel 1 exit /B 1
 if errorlevel 1 exit /B 1
 %CC% -I%ROOT%\include\runtime -m%T% -c %ROOT%\src\runtime\windows\rtti.cpp
 if errorlevel 1 exit /B 1
+%CC% -I%ROOT%\include\runtime -m%T% -c %ROOT%\src\runtime\windows\new_delete.cpp
+if errorlevel 1 exit /B 1
 %CC% -m%T% -c %ROOT%\src\runtime\windows\winintrin.S
 if errorlevel 1 exit /B 1
 %CC% -m%T% -c %ROOT%\src\runtime\windows\atomic.S
 if errorlevel 1 exit /B 1
 %CC% -m%T% -DCPRIME_BOOTSTRAP_CHKSTK -c %ROOT%\src\runtime\windows\chkstk.S
 if errorlevel 1 exit /B 1
-%SELF_CPRIME_EXE% -B%ROOT% -ar rcs %ROOT%\lib\libcprime1.a libcprime1.o crt1.o crt1w.o wincrt1.o wincrt1w.o dllcrt1.o dllmain.o stdatomic.o atomic.o builtin.o wincompat.o regex.o cutils.o libunicode.o libregexp.o ucrt_stdio.o ucrt_exit.o ucrt_onexit.o exception.o rtti.o winintrin.o chkstk.o
+%SELF_CPRIME_EXE% -B%ROOT% -ar rcs %ROOT%\lib\libcprime1.a libcprime1.o crt1.o crt1w.o wincrt1.o wincrt1w.o dllcrt1.o dllmain.o stdatomic.o atomic.o builtin.o wincompat.o regex.o cutils.o libunicode.o libregexp.o ucrt_stdio.o ucrt_exit.o ucrt_onexit.o exception.o rtti.o new_delete.o winintrin.o chkstk.o
 exit /B %ERRORLEVEL%
 
 :make_lib
@@ -346,13 +348,15 @@ if errorlevel 1 exit /B 1
 if errorlevel 1 exit /B 1
 .\cpc -B. %INC_FLAGS% -I%ROOT%\include\runtime -m%1 -c %ROOT%\src\runtime\windows\rtti.cpp
 if errorlevel 1 exit /B 1
+.\cpc -B. %INC_FLAGS% -I%ROOT%\include\runtime -m%1 -c %ROOT%\src\runtime\windows\new_delete.cpp
+if errorlevel 1 exit /B 1
 .\cpc -B. %INC_FLAGS% -m%1 -c %ROOT%\src\runtime\windows\winintrin.S
 if errorlevel 1 exit /B 1
 .\cpc -B. %INC_FLAGS% -m%1 -c %ROOT%\src\runtime\windows\atomic.S
 if errorlevel 1 exit /B 1
 .\cpc -B. %INC_FLAGS% -m%1 -c %ROOT%\src\runtime\windows\chkstk.S
 if errorlevel 1 exit /B 1
-.\cpc -ar rcs lib/%2libcprime1.a libcprime1.o crt1.o crt1w.o wincrt1.o wincrt1w.o dllcrt1.o dllmain.o stdatomic.o atomic.o builtin.o wincompat.o regex.o cutils.o libunicode.o libregexp.o ucrt_stdio.o ucrt_exit.o ucrt_onexit.o exception.o rtti.o winintrin.o chkstk.o
+.\cpc -ar rcs lib/%2libcprime1.a libcprime1.o crt1.o crt1w.o wincrt1.o wincrt1w.o dllcrt1.o dllmain.o stdatomic.o atomic.o builtin.o wincompat.o regex.o cutils.o libunicode.o libregexp.o ucrt_stdio.o ucrt_exit.o ucrt_onexit.o exception.o rtti.o new_delete.o winintrin.o chkstk.o
 if errorlevel 1 exit /B 1
 .\cpc -B. %INC_FLAGS% -m%1 -c %ROOT%\src\runtime\generic\bcheck.c -o lib/%2bcheck.o -bt -I%ROOT%
 if errorlevel 1 exit /B 1

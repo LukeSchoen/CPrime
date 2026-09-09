@@ -21,6 +21,14 @@ static void decl_design_delrels(Section *sec, int c, int size)
 
 static void decl_design_flex(init_params *p, Sym *ref, int index)
 {
+  if (!p->flex_array_ref && p->flex_union_fields && ref->c < 0) {
+    Sym *field;
+    for (field = p->flex_union_fields; field; field = field->next)
+      if ((field->type.t & VT_ARRAY) && field->type.ref == ref) {
+        p->flex_array_ref = ref;
+        break;
+      }
+  }
   if (ref == p->flex_array_ref)
   {
     if (index >= ref->c)
@@ -805,6 +813,33 @@ static int parse_direct_class_initializer(init_params *p, CType *type,
   return 1;
 }
 
+static void restore_initializer_cleanups(Sym *stop, int depth)
+{
+  Sym *cleanup, **temporaries = NULL;
+  int count = 0, i, j;
+  for (cleanup = cur_scope->cl.s; cleanup && cleanup != stop; cleanup = cleanup->next)
+    if (cleanup->a.cleanup_temporary && cleanup->cleanup_func)
+      dynarray_add(&temporaries, &count, cleanup);
+  cur_scope->cl.s = stop;
+  cur_scope->cl.n = depth;
+  for (i = count - 1; i >= 0; --i)
+  {
+    Sym *old = temporaries[i];
+    Sym *copy = sym_push2(&all_cleanups, SYM_FIELD | ++cur_scope->cl.n, 0, 0);
+    copy->cleanup_sym = old->cleanup_sym;
+    copy->cleanup_func = old->cleanup_func;
+    copy->a = old->a;
+    copy->const_value = old->const_value;
+    copy->next = cur_scope->cl.s;
+    cur_scope->cl.s = copy;
+    /* Keep earlier unwind/goto chains intact while the new complete-object
+       chain retains the full-expression's still-live argument temporaries. */
+    for (j = 0; j < cpp_temporary_count; ++j)
+      if (cpp_temporaries[j].cleanup == old) cpp_temporaries[j].cleanup = copy;
+  }
+  cprime_free(temporaries);
+}
+
 static void emit_placement_aggregate_initializer(CType *type, TokenString *placement,
                                                  TokenString *initializer)
 {
@@ -833,8 +868,7 @@ static void emit_placement_aggregate_initializer(CType *type, TokenString *place
   decl_initializer(&p, type, 0, DIF_FIRST);
   while (macro_stack && macro_stack != parent) end_macro();
   macro_ptr = parent_ptr;
-  cur_scope->cl.s = old_cleanup;
-  cur_scope->cl.n = old_cleanup_depth;
+  restore_initializer_cleanups(old_cleanup, old_cleanup_depth);
   tok = saved_tok; tokc = saved_tokc;
 }
 
@@ -1169,6 +1203,20 @@ do_init_list:
         skip(',');
       }
     }
+    if ((type->t & VT_BTYPE) == VT_STRUCT && !IS_UNION(type->t)
+        && !p->sec && !(flags & DIF_SIZE_ONLY) && is_cpp_translation_unit()) {
+      for (; f; f = f->next) {
+        TokenString *initializer;
+        if ((f->type.t & VT_BTYPE) != VT_STRUCT && !(f->type.t & VT_ARRAY)
+            && !f->default_arg) continue;
+        initializer = tok_str_alloc();
+        if (f->default_arg) tok_str_append_without_eof(initializer, f->default_arg);
+        else { tok_str_add(initializer, '{'); tok_str_add(initializer, '}'); }
+        tok_str_add(initializer, tok); tok_str_add(initializer, 0);
+        begin_macro(initializer, 1); next();
+        decl_initializer(p, &f->type, c + f->c, DIF_FIRST | DIF_CLEAR);
+      }
+    }
     if ((type->t & VT_ARRAY) && !p->sec && !(flags & DIF_SIZE_ONLY)
         && is_cpp_translation_unit()
         && ((t1->t & VT_BTYPE) == VT_STRUCT || (t1->t & VT_ARRAY)))
@@ -1177,12 +1225,14 @@ do_init_list:
          constructors. Zeroing the backing bytes does not start those lifetimes. */
       for (i = indexsym.c; i < n; ++i)
       {
+        int temporary_mark = cpp_temp_mark();
         TokenString *empty = tok_str_alloc();
         tok_str_add(empty, '{'); tok_str_add(empty, '}');
         tok_str_add(empty, tok);
         tok_str_add(empty, 0);
         begin_macro(empty, 1); next();
         decl_initializer(p, t1, c + i * size1, DIF_FIRST | DIF_CLEAR);
+        cpp_temp_end(temporary_mark);
       }
     }
     if (!no_oblock)
@@ -1501,8 +1551,7 @@ initialized_object:
       /* Replace completed subobject cleanups with the complete object's
          destructor. While later fields initialize, an exception unwinds only
          those subobjects whose initialization has already succeeded. */
-      cur_scope->cl.s = old_cleanup;
-      cur_scope->cl.n = old_cleanup_depth;
+      restore_initializer_cleanups(old_cleanup, old_cleanup_depth);
       loc = (loc - PTR_SIZE) & -PTR_SIZE;
       pointer_slot = loc;
       init_push_lvalue(p, type, c);
@@ -1548,16 +1597,15 @@ static void emit_automatic_class_array_initialization(Sym *symbol,
     sym_push(counter_tok, &count_type, VT_LOCAL | VT_LVAL,
                context + offsetof(CpcEhArray, count));
   }
-  tok_str_add(body, '{');
   tok_str_add(path, symbol->v);
   append_counted_class_initialization(body, &symbol->type, path, initializer,
-                                       counter_tok);
-  tok_str_add(body, '}');
+                                       counter_tok, 1);
   tok_str_add(body, TOK_EOF);
   tok_str_free(path);
   parent = macro_stack; parent_ptr = macro_ptr;
   begin_macro(body, 1);
-  next(); block(STMT_COMPOUND);
+  next();
+  while (tok != TOK_EOF) block(STMT_COMPOUND);
   while (macro_stack && macro_stack != parent) end_macro();
   macro_ptr = parent_ptr;
   tok = saved_tok; tokc = saved_tokc;
@@ -1723,8 +1771,8 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
       && materialize_incomplete_template_type(type))
     size = type_size(type, &align);
 
-  /* exactly one flexible array may be initialized, either the
-     toplevel array or the last member of the toplevel struct */
+  /* One flexible array can be initialized: the top-level array, the last
+     struct member, or the selected member of a top-level union. */
 
   if (size < 0)
   {
@@ -1745,7 +1793,15 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
   else if (has_init && (type->t & VT_BTYPE) == VT_STRUCT)
   {
     Sym *field = type->ref->next;
-    if (field)
+    if (IS_UNION(type->t)) {
+      for (; field; field = field->next)
+        if ((field->type.t & VT_ARRAY) && field->type.ref->c < 0) {
+          p.flex_union_fields = type->ref->next;
+          size = -1;
+          break;
+        }
+    }
+    else if (field)
     {
       while (field->next)
         field = field->next;
@@ -1794,7 +1850,12 @@ err_size:
 
     /* If there's a flex member and it was used in the initializer
        adjust size.  */
-    if (flexible_array && flexible_array->type.ref->c > 0)
+    if (p.flex_union_fields && p.flex_array_ref) {
+      int extent, element_align;
+      extent = p.flex_array_ref->c * type_size(&p.flex_array_ref->type, &element_align);
+      if (extent > size) size = extent;
+    }
+    else if (flexible_array && flexible_array->type.ref->c > 0)
       size += flexible_array->type.ref->c
               * pointed_size(&flexible_array->type);
   }
@@ -1846,20 +1907,28 @@ err_size:
       sym = sym_push(v, type, r, addr);
       if (!NODATA_WANTED)
         cpp_eh_mark_local_initializing(sym);
-      if (!ad->cleanup_func)
-        ad->cleanup_func = resolve_autodtor_func(type);
-      if (ad->cleanup_func)
       {
+        Sym *destructor = resolve_autodtor_func(type);
+        if (destructor) {
+          Sym *cls = sym_push2(&all_cleanups,
+                               SYM_FIELD | ++cur_scope->cl.n, 0, 0);
+          cls->cleanup_sym = sym;
+          cls->cleanup_func = destructor;
+          cls->next = cur_scope->cl.s;
+          cur_scope->cl.s = cls;
+        }
+        else if ((type->t & VT_BTYPE) == VT_STRUCT)
+          register_struct_cleanups(type, sym);
+      }
+      /* Explicit cleanup is additional to C++ destruction. Register it last
+         so it runs first on both ordinary scope exit and exception unwinding. */
+      if (ad->cleanup_func) {
         Sym *cls = sym_push2(&all_cleanups,
                              SYM_FIELD | ++cur_scope->cl.n, 0, 0);
         cls->cleanup_sym = sym;
         cls->cleanup_func = ad->cleanup_func;
         cls->next = cur_scope->cl.s;
         cur_scope->cl.s = cls;
-      }
-      else if ((type->t & VT_BTYPE) == VT_STRUCT)
-      {
-        register_struct_cleanups(type, sym);
       }
 
       sym->a = ad->a;
@@ -1989,12 +2058,21 @@ err_size:
                                    && (type->t & VT_CONSTANT)
                                    && is_integer_btype(type->t & VT_BTYPE)
                                    && !(type->t & (VT_ARRAY | VT_VLA));
+    if (sec && !is_reference_type(type)) ++static_initializer_constant_fold;
     decl_initializer(&p, type, addr, DIF_FIRST);
+    if (sec && !is_reference_type(type)) --static_initializer_constant_fold;
+    if (is_cpp_translation_unit() && sym && sec && sec->data
+        && (type->t & VT_CONSTANT) && !(type->t & (VT_ARRAY | VT_VLA | VT_VOLATILE))
+        && is_float(type->t) && size > 0 && size <= sizeof(CValue))
+    {
+      memset(&sym->const_float_value, 0, sizeof(CValue));
+      memcpy(&sym->const_float_value, sec->data + addr, size);
+      sym->a.static_float_constant = 1;
+    }
     if (p.track_partial_cleanups) {
       /* The declaration already owns the complete-object cleanup. Partial
          subobject actions describe only the initializer's exception states. */
-      cur_scope->cl.s = initial_cleanup;
-      cur_scope->cl.n = initial_cleanup_depth;
+      restore_initializer_cleanups(initial_cleanup, initial_cleanup_depth);
     }
     if (p.capture_integral_constexpr && p.integral_constexpr_valid)
     {
@@ -2035,6 +2113,8 @@ err_size:
     // For Possible Subsequent Similar Declarations
     if (flexible_array)
       flexible_array->type.ref->c = -1;
+    if (p.flex_union_fields && p.flex_array_ref)
+      p.flex_array_ref->c = -1;
   }
 
   if (initialize_declared_constant) {

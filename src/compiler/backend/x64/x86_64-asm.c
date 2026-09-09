@@ -1334,6 +1334,7 @@ static inline int constraint_priority(const char *str)
     case 'I':
     case 'e':
     case 'i':
+    case 'n':
     case 'm':
     case 'g':
       pr = 4;
@@ -1570,6 +1571,10 @@ reg_found:
       if (!((op->vt->r & (VT_VALMASK | VT_LVAL)) == VT_CONST))
         goto try_next;
       break;
+    case 'n':
+      if (!is_integer_btype(op->vt->type.t & VT_BTYPE))
+        goto try_next;
+      /* Numeric immediates cannot contain relocatable symbol addresses. */
     case 'I':
     case 'N':
     case 'M':

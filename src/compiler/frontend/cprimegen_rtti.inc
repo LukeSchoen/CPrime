@@ -1,12 +1,5 @@
 #include "../../../include/runtime/cprime_rtti.h"
 
-typedef struct CppRttiNode {
-  int class_tok;
-  int offset;
-  int parent;
-  int public_base;
-} CppRttiNode;
-
 typedef struct CppTypeInfoRecord {
   int name_tok;
   Sym *symbol;
@@ -89,7 +82,7 @@ static Sym *cpp_type_info_for_type(CType *type)
   cpp_eh_data_pointer(record->symbol, field_offset, name_symbol);
   for (table = virtual_table_infos; table; table = table->next)
     if (table->class_tok == get_struct_type_name_tok(&info_type)) {
-      int offset = virtual_vptr_offset(table->class_tok, table->root_tok);
+      int offset = table->vptr_offset;
       table->referenced = 1;
       cpp_eh_data_pointer(record->symbol, offset, table->sym);
     }
@@ -138,7 +131,7 @@ static Sym *cpp_rtti_type_name(CType *original)
   return symbol;
 }
 
-static Sym *cpp_rtti_table_descriptor(int class_tok, int root_tok)
+static Sym *cpp_rtti_table_descriptor(int class_tok, int vptr_offset)
 {
   CppRttiNode *nodes = NULL;
   CpcRttiTable table;
@@ -162,8 +155,14 @@ static Sym *cpp_rtti_table_descriptor(int class_tok, int root_tok)
     cpp_eh_data_pointer(entries, i * sizeof node + offsetof(CpcRttiNode, name), name);
   }
   memset(&table, 0, sizeof table);
-  table.offset_to_top = -virtual_vptr_offset(class_tok, root_tok);
+  table.offset_to_top = -vptr_offset;
   table.count = count;
+  {
+    CType type;
+    int alignment;
+    if (make_class_type_from_tok(&type, class_tok))
+      table.object_size = type_size(&type, &alignment);
+  }
   descriptor = cpp_eh_data_symbol(&table, sizeof table, PTR_SIZE);
   cpp_eh_data_pointer(descriptor, offsetof(CpcRttiTable, nodes), entries);
   {

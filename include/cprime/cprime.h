@@ -336,6 +336,8 @@ typedef union CValue {
 typedef struct SValue {
     CType type;
     int bound_member_receiver;
+    int bound_member_name;
+    int bound_member_qualified;
     unsigned short r;
     unsigned short r2;
     union {
@@ -369,6 +371,7 @@ struct SymAttr {
     cleanup_temporary : 1,
     virtual_destructor : 1,
     integral_constexpr : 1,
+    static_float_constant : 1,
     scoped_enum : 1,
     local_tag_alias : 1,
     cpp_field_access : 2,
@@ -377,7 +380,8 @@ struct SymAttr {
     cpp_nontrivial_copy_assignment : 1,
     cpp_mutable_field : 1,
     cpp_trivial_construction : 1,
-    cpp_trivial_destruction : 1;
+    cpp_trivial_destruction : 1,
+    cpp_lexical_constant : 1;
 };
 
 struct FuncAttr {
@@ -438,9 +442,14 @@ typedef struct Sym {
         struct Sym *cleanup_label;
     };
     struct TokenString *default_arg;
-    long long const_value;
+    int default_arg_class;
+    union {
+        long long const_value;
+        CValue const_float_value;
+    };
     /* Symbolic constant substituted for an address template argument. */
     struct Sym *template_address_target;
+    int template_address_arguments;
     int cpp_member_address_tok;
     int cpp_using_target;
     unsigned char cpp_hidden_friend;
@@ -558,6 +567,7 @@ typedef struct AttributeDef {
     Sym *cleanup_func;
     int alias_target;
     int asm_label;
+    int static_member_owner;
     char attr_mode;
     char is_constexpr;
     char is_global_declarator;
@@ -1059,6 +1069,8 @@ struct filespec {
 #define TOK_LINENUM 0xcf
 /* Internal operator used only in lowered constructor member initializers. */
 #define TOK_INIT_MEMBER 0xd0
+/* A lowered explicit array clause shares its declaration's full-expression. */
+#define TOK_INIT_CLAUSE 0xd1
 
 #define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_LINENUM)
 

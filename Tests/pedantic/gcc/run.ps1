@@ -4,6 +4,7 @@ param(
     [Alias('CompilerPath')][string]$Compiler = '',
     [string]$RuntimeRoot = '',
     [string[]]$Select = @(),
+    [ValidateSet('fast', 'pedantic', 'all')][string]$Tier = 'fast',
     [string]$Baseline = '',
     [ValidateRange(1, 60)][int]$ProgressSeconds = 15,
     [ValidateRange(0.001, 5)][double]$Timeout = 5,
@@ -27,6 +28,8 @@ function Invoke-Git([string[]]$Arguments) {
     $output
 }
 $corpus = Read-GccCorpus $PSScriptRoot
+$pedantic = Read-TestPedanticPaths (Join-Path $PSScriptRoot '../..')
+if ($Select.Count -and -not $PSBoundParameters.ContainsKey('Tier')) { $Tier = 'all' }
 if ($corpus.revision -cne $revision) { throw 'Corpus revision differs from runner pin' }
 if (-not $Compiler) { $Compiler = Join-Path $root 'cpc.exe' }
 $Compiler = (Resolve-Path -LiteralPath $Compiler).Path
@@ -38,7 +41,8 @@ $testRoot = Join-Path $PSScriptRoot 'corpus'
 function Get-Relative([string]$Path) { $Path.Substring($testRoot.Length + 1).Replace('\', '/') }
 [string[]]$files = @($corpus.cases | Where-Object {
     $relative = $_.path
-    -not $Select.Count -or @($Select | Where-Object { $relative.StartsWith($_, [StringComparison]::Ordinal) }).Count
+    ($Tier -eq 'all' -or $pedantic.ContainsKey('pedantic/gcc/corpus/' + $relative) -eq ($Tier -eq 'pedantic')) -and
+    (-not $Select.Count -or @($Select | Where-Object { $relative.StartsWith($_, [StringComparison]::Ordinal) }).Count)
 } | ForEach-Object { Join-Path $testRoot $_.path })
 [Array]::Sort($files, [StringComparer]::Ordinal)
 foreach ($selection in $Select) {
@@ -54,6 +58,9 @@ $slowFailures = New-Object 'Collections.Generic.List[object]'
 $utf8 = New-Object Text.UTF8Encoding($false)
 $metadata = [ordered]@{ revision = $revision; compiler = $Compiler; compiler_sha256 = (Get-FileHash -LiteralPath $Compiler -Algorithm SHA256).Hash.ToLowerInvariant(); selected = $files.Count; serial = $true; probe = $false; note = 'CPC default language mode; no claim of GCC diagnostic or standard-mode conformance' }
 $metadata.timeout_seconds = $Timeout
+$metadata.tier = $Tier
+$tierManifest = Join-Path $root 'Tests/tiers.json'
+if (Test-Path -LiteralPath $tierManifest) { $metadata.tiers_sha256 = (Get-FileHash -LiteralPath $tierManifest).Hash }
 $metadata.scope = 'retained checked failure corpus'
 $metadata.timeout_scope = 'each compiler or test process, including startup; cleanup recorded separately'
 $metadata.continue_after_timeout = [bool]$ContinueAfterTimeout

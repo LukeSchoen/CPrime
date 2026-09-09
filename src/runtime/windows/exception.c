@@ -7,6 +7,12 @@
 #include "cprime_exception.h"
 #include "rtti.inc"
 
+void __cpc_eh_deallocate_sized(void *context)
+{
+    CpcEhDeallocation *allocation = (CpcEhDeallocation *)context;
+    allocation->function(allocation->data, allocation->size);
+}
+
 void __cpc_eh_destroy_array(void *context)
 {
     CpcEhArray *array = (CpcEhArray *)context;

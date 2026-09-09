@@ -1,4 +1,5 @@
 #include "../../../include/runtime/cprime_exception.h"
+#include "../../../include/runtime/cprime_rtti.h"
 
 typedef struct CppEhNode {
   Sym *symbol;
@@ -169,31 +170,22 @@ static void cpp_eh_replay_operand(TokenString *expression)
 typedef struct CppEhBaseEntry {
   int class_tok;
   int offset;
-  int paths;
-  int public_path;
 } CppEhBaseEntry;
 
-static void cpp_eh_collect_bases(int class_tok, int offset, int public_path,
+static void cpp_eh_collect_bases(int class_tok,
                                 CppEhBaseEntry **entries, int *count)
 {
   ClassBaseInfo *base;
   for (base = class_base_candidates(class_tok); base; base = base->bucket_next) {
-    int i, accessible;
-    CppEhBaseEntry *entry;
+    int i;
     if (base->class_tok != class_tok || !base->field) continue;
-    accessible = public_path && base->access == 0;
     for (i = 0; i < *count; ++i)
       if ((*entries)[i].class_tok == base->base_tok) break;
-    if (i == *count) {
-      *entries = cprime_realloc(*entries, (++*count) * sizeof(**entries));
-      memset(*entries + i, 0, sizeof(**entries));
-      (*entries)[i].class_tok = base->base_tok;
-    }
-    entry = *entries + i;
-    ++entry->paths;
-    entry->public_path |= accessible;
-    entry->offset = offset + base->field->c;
-    cpp_eh_collect_bases(base->base_tok, entry->offset, accessible, entries, count);
+    if (i != *count) continue;
+    *entries = cprime_realloc(*entries, (++*count) * sizeof(**entries));
+    memset(*entries + i, 0, sizeof(**entries));
+    (*entries)[i].class_tok = base->base_tok;
+    cpp_eh_collect_bases(base->base_tok, entries, count);
   }
 }
 
@@ -260,29 +252,59 @@ static void cpp_eh_register_subobject_cleanup(CType *type, Sym *this_symbol,
 /* Subobjects outlive a destructor's body locals. Putting their ordinary
    cleanups in the outer body scope gives returns and exceptional exits the
    same reverse construction order as normal fallthrough. */
+static void cpp_eh_register_function_parameters(Sym *parameter)
+{
+  Sym *destructor, *object, *cleanup;
+  if (!parameter) return;
+  /* Argument copies are constructed from right to left by the call backend.
+     Register in that order so normal and exceptional cleanup reverse it. */
+  cpp_eh_register_function_parameters(parameter->next);
+  if ((parameter->type.t & VT_BTYPE) != VT_STRUCT) return;
+  destructor = resolve_autodtor_func(&parameter->type);
+  object = sym_find(parameter->v);
+  if (!destructor || !object) return;
+  cleanup = sym_push2(&all_cleanups, SYM_FIELD | ++cur_scope->cl.n, 0, 0);
+  cleanup->cleanup_sym = object; cleanup->cleanup_func = destructor;
+  cleanup->next = cur_scope->cl.s; cur_scope->cl.s = cleanup;
+}
+
 static void cpp_eh_enter_function_body(void)
 {
   Sym *function = cpp_eh_function.function;
-  Sym *this_symbol, *field, *parameter;
+  Sym *this_symbol, *field;
   CType *type;
   if (!cpp_eh_function.enabled || local_scope != 1 || !function) return;
-  for (parameter = function->type.ref->next; parameter; parameter = parameter->next) {
-    Sym *destructor, *object, *cleanup;
-    if ((parameter->type.t & VT_BTYPE) != VT_STRUCT) continue;
-    destructor = resolve_autodtor_func(&parameter->type);
-    object = sym_find(parameter->v);
-    if (!destructor || !object) continue;
-    cleanup = sym_push2(&all_cleanups, SYM_FIELD | ++cur_scope->cl.n, 0, 0);
-    cleanup->cleanup_sym = object; cleanup->cleanup_func = destructor;
-    cleanup->next = cur_scope->cl.s; cur_scope->cl.s = cleanup;
-  }
+  cpp_eh_register_function_parameters(function->type.ref->next);
   if (!function->type.ref->f.func_cxx_destructor) return;
   this_symbol = sym_find(function->type.ref->next->v);
   if (!this_symbol) cprime_error("destructor requires its implicit object parameter");
   type = pointed_type(&this_symbol->type);
   if (IS_UNION(type->t)) return;
-  for (field = type->ref->next; field; field = field->next)
-    cpp_eh_register_subobject_cleanup(&field->type, this_symbol, field->c);
+  {
+    SValue pointer;
+    /* Each destructor starts a new dynamic-type phase. Its body and member
+       cleanups must dispatch through this class, including implicit dtors. */
+    vset(&this_symbol->type, this_symbol->r, this_symbol->c);
+    vtop->sym = this_symbol;
+    pointer = *vtop--;
+    initialize_virtual_tables_for_pointer(type, &pointer, 0);
+  }
+  {
+    int pass, owner = get_struct_type_name_tok(type);
+    /* Cleanups run in reverse registration order: members, nonvirtual bases,
+       then virtual bases, independently of their physical layout order. */
+    for (pass = 0; pass < 2; ++pass)
+      for (field = type->ref->next; field; field = field->next)
+      {
+        ClassBaseInfo *base;
+        int virtual_base = 0;
+        for (base = class_base_candidates(owner); base; base = base->bucket_next)
+          if (base->class_tok == owner && base->field == field)
+            virtual_base = base->is_virtual;
+        if (virtual_base == (pass == 0))
+          cpp_eh_register_subobject_cleanup(&field->type, this_symbol, field->c);
+      }
+  }
 }
 
 static void cpp_eh_constructed_member(void)
@@ -500,10 +522,15 @@ static Sym *cpp_eh_type_descriptor(CType *original)
       : ((type.t & VT_BTYPE) == VT_NULLPTR) ? CPC_EH_NULLPTR : CPC_EH_SCALAR;
   if (descriptor.kind == CPC_EH_POINTER) pointee = cpp_eh_type_descriptor(pointed_type(&type));
   if (descriptor.kind == CPC_EH_CLASS) {
-    cpp_eh_collect_bases(get_struct_type_name_tok(&type), 0, 1, &bases, &base_count);
+    int source_class = get_struct_type_name_tok(&type);
+    cpp_eh_collect_bases(source_class, &bases, &base_count);
     for (i = 0; i < base_count; ++i) {
       CType base_type;
-      if (bases[i].paths != 1 || !bases[i].public_path) continue;
+      /* Multiple public/private paths may designate one virtual subobject.
+         Share RTTI's identity and accessibility check instead of counting
+         paths as if every path denoted a distinct base object. */
+      if (!cpp_rtti_public_base_offset(source_class, bases[i].class_tok,
+                                      &bases[i].offset)) continue;
       if (!make_class_type_from_tok(&base_type, bases[i].class_tok)) continue;
       base_types = cprime_realloc(base_types, (descriptor.base_count + 1) * sizeof(*base_types));
       base_types[descriptor.base_count] = cpp_eh_type_descriptor(&base_type);
@@ -652,10 +679,79 @@ static Sym *cpp_eh_register_local_cleanup(Sym *object, const char *helper)
   return cleanup;
 }
 
+static Sym *cpp_implicit_deallocation_function(int name)
+{
+  CType function_type = {VT_FUNC, NULL};
+  AttributeDef attributes;
+  Sym *prototype, *argument, *function;
+  int symbol;
+  memset(&attributes, 0, sizeof(attributes));
+  prototype = sym_push2(&global_stack, SYM_FIELD, VT_VOID, 0);
+  prototype->f.func_call = FUNC_CDECL;
+  prototype->f.func_type = FUNC_NEW;
+  prototype->f.func_noexcept = 1;
+  prototype->f.func_language_linkage = 2;
+  argument = sym_push2(&global_stack, SYM_FIELD, VT_PTR, 0);
+  argument->type.ref = sym_push2(&global_stack, SYM_FIELD, VT_VOID, -1);
+  prototype->next = argument;
+  function_type.ref = prototype;
+  attributes.f = prototype->f;
+  symbol = prepare_free_func_declarator(name, &function_type, &attributes);
+  function = external_global_sym(symbol, &function_type);
+  function->asm_label = attributes.asm_label;
+  return function;
+}
+
+static int cpp_is_sized_deallocation(Sym *function)
+{
+  CType size_type = {VT_SIZE_T, NULL};
+  Sym *parameter;
+  if (!function || !function->type.ref
+      || function->type.ref->f.func_type == FUNC_ELLIPSIS) return 0;
+  parameter = function->type.ref->next;
+  if (!parameter || !parameter->next) return 0;
+  parameter = parameter->next;
+  return !parameter->next && is_compatible_unqualified_types(&parameter->type, &size_type);
+}
+
+static Sym *cpp_find_deallocation(CType *type, int array_delete, int *sized,
+                                   int *has_member)
+{
+  int owner = 0;
+  int name = tok_alloc_const(array_delete ? "operator delete[]" : "operator delete");
+  CType arguments[2] = {{VT_VOID, NULL}, {VT_LLONG | VT_UNSIGNED, NULL}};
+  Sym *member = (type->t & VT_BTYPE) == VT_STRUCT
+    ? find_static_member_try(type, name, &owner) : NULL;
+  Sym *function;
+  mk_pointer(&arguments[0]);
+  *sized = 0;
+  *has_member = member != NULL;
+  if (member) name = make_static_member_tok(owner, name);
+  if (!member && (!array_delete || resolve_autodtor_func(type))) {
+    int alignment;
+    /* Global sized deallocation is preferred for a complete object. Arrays
+       need a non-trivial destructor so their allocation retains a cookie. */
+    if (type_size(type, &alignment) >= 0) {
+      function = resolve_free_func_by_arg_types(name, arguments, 2, 0);
+      if (cpp_is_sized_deallocation(function)) { *sized = 1; return function; }
+    }
+  }
+  function = resolve_free_func_by_arg_types(name, arguments, 1, 0);
+  if (!function && member) {
+    function = resolve_free_func_by_arg_types(name, arguments, 2, 0);
+    if (cpp_is_sized_deallocation(function)) *sized = 1;
+    else function = NULL;
+  }
+  return function;
+}
+
 static int cpp_array_cookie_size(CType *type, Sym *destructor)
 {
-  int alignment;
-  if (!destructor) return 0;
+  int alignment, sized, member;
+  if (!destructor) {
+    cpp_find_deallocation(type, 1, &sized, &member);
+    if (!sized) return 0;
+  }
   type_size(type, &alignment);
   return alignment > PTR_SIZE ? alignment : PTR_SIZE;
 }
@@ -842,16 +938,33 @@ static void cpp_delete_pointer(int array_delete)
   VirtualMethodInfo *virtual_destructor = NULL;
   int pointer_slot, allocation_slot, skip_null, class_name, cleanup_depth;
   int free_name = tok_alloc_const("free");
+  int sized_delete, has_member, size_slot = 0, cookie;
+  CType size_type = {VT_LLONG | VT_UNSIGNED, NULL};
   /* Preserve the GNU pointer-to-array delete extension. Such a pointer
      denotes array allocation even when the expression omits []. */
   if (object_type.t & VT_ARRAY) array_delete = 1;
   if (array_delete)
     while (object_type.t & VT_ARRAY) object_type = *pointed_type(&object_type);
+  {
+    free_function = cpp_find_deallocation(&object_type, array_delete,
+                                          &sized_delete, &has_member);
+    if (has_member && !free_function)
+      cprime_error("no matching class deallocation function");
+    if (has_member && free_function) {
+      const CppMemberDeclInfo *info = lookup_cpp_member_decl(free_function->v);
+      if (info && info->access_known && info->access
+          && active_member_class_tok != info->owner_tok
+          && !(info->access == 1 && active_member_class_tok
+               && class_has_base(active_member_class_tok, info->owner_tok)))
+        cprime_error("class deallocation function is inaccessible");
+    }
+  }
   destructor = resolve_autodtor_func(&object_type);
+  cookie = array_delete ? cpp_array_cookie_size(&object_type, destructor) : 0;
   if (!array_delete && destructor && class_has_virtual_destructor(&object_type))
     virtual_destructor = find_virtual_method_for_symbol(
         get_struct_type_name_tok(&object_type), destructor->v);
-  free_function = global_symbol_find(free_name);
+  if (!free_function) free_function = global_symbol_find(free_name);
   if (!free_function || IS_ASM_SYM(free_function))
     free_function = external_global_sym(free_name, &func_old_type);
   loc = (loc - PTR_SIZE) & -PTR_SIZE;
@@ -861,12 +974,25 @@ static void cpp_delete_pointer(int array_delete)
   vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
   skip_null = gvtst(1, 0);
   allocation_slot = pointer_slot;
-  if (array_delete && destructor) {
+  if (cookie) {
     loc = (loc - PTR_SIZE) & -PTR_SIZE;
     allocation_slot = loc;
     vset(&char_pointer_type, VT_LOCAL | VT_LVAL, allocation_slot);
     vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
-    vpushi(cpp_array_cookie_size(&object_type, destructor)); gen_op('-');
+    vpushi(cookie); gen_op('-');
+    vstore(); vpop();
+  }
+  if (sized_delete) {
+    int alignment, size = type_size(&object_type, &alignment);
+    loc = (loc - 8) & -8; size_slot = loc;
+    vset(&size_type, VT_LOCAL | VT_LVAL, size_slot);
+    if (array_delete) {
+      vset(&char_pointer_type, VT_LOCAL | VT_LVAL, pointer_slot);
+      vpushi(PTR_SIZE); gen_op('-');
+      vtop->type = size_type; vtop->r |= VT_LVAL;
+      vpushi(size); gen_op('*');
+      vpushi(cookie); gen_op('+');
+    } else vpushi(size);
     vstore(); vpop();
   }
   if (virtual_destructor) {
@@ -892,6 +1018,20 @@ static void cpp_delete_pointer(int array_delete)
     vtop->type.t = VT_PTRDIFF_T; vtop->type.ref = NULL;
     vtop->r |= VT_LVAL;
     gen_op('+'); vstore(); vpop();
+    if (sized_delete) {
+      /* Read before the destructor replaces the vptr with a base-class
+         table: deallocation uses the complete object's dynamic size. */
+      vset(&size_type, VT_LOCAL | VT_LVAL, size_slot);
+      vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+      vtop->type = char_pointer_type; gv(RC_INT);
+      if (field_offset) { vpushi(field_offset); gen_op('+'); }
+      vtop->r |= VT_LVAL; gv(RC_INT);
+      vpushi(2 * PTR_SIZE); gen_op('-');
+      vtop->r |= VT_LVAL; gv(RC_INT);
+      vpushi(offsetof(CpcRttiTable, object_size)); gen_op('+');
+      vtop->type = size_type; vtop->r |= VT_LVAL;
+      vstore(); vpop();
+    }
   }
   if (destructor) {
     /* Deallocation remains required when an explicitly throwing destructor
@@ -901,6 +1041,27 @@ static void cpp_delete_pointer(int array_delete)
     object->type = cpp_eh_void_type; object->r = VT_LLOCAL | VT_LVAL;
     cleanup_depth = cur_scope->cl.n;
     cleanup = cpp_eh_register_local_cleanup(object, "free");
+    cleanup->cleanup_func = free_function;
+    if (sized_delete) {
+      int context;
+      loc = (loc - sizeof(CpcEhDeallocation)) & -PTR_SIZE;
+      context = loc;
+      vset(&char_pointer_type, VT_LOCAL | VT_LVAL,
+           context + offsetof(CpcEhDeallocation, data));
+      vset(&char_pointer_type, VT_LOCAL | VT_LVAL, allocation_slot);
+      vstore(); vpop();
+      vset(&size_type, VT_LOCAL | VT_LVAL,
+           context + offsetof(CpcEhDeallocation, size));
+      vset(&size_type, VT_LOCAL | VT_LVAL, size_slot);
+      vstore(); vpop();
+      vset(&char_pointer_type, VT_LOCAL | VT_LVAL,
+           context + offsetof(CpcEhDeallocation, function));
+      vpushsym(&free_function->type, free_function);
+      vtop->type = char_pointer_type;
+      vstore(); vpop();
+      object->c = context; object->r = VT_LOCAL | VT_LVAL;
+      cleanup->cleanup_func = external_helper_sym(tok_alloc_const("__cpc_eh_deallocate_sized"));
+    }
     cleanup->a.cleanup_exception_only = 1;
     if (array_delete) {
       CType count_type = { VT_LLONG | VT_UNSIGNED, NULL };
@@ -950,7 +1111,11 @@ static void cpp_delete_pointer(int array_delete)
   vset(&char_pointer_type, VT_LOCAL | VT_LVAL, allocation_slot);
   gfunc_param_typed(free_function->type.ref,
       free_function->type.ref ? free_function->type.ref->next : NULL);
-  gfunc_call(1);
+  if (sized_delete) {
+    vset(&size_type, VT_LOCAL | VT_LVAL, size_slot);
+    gfunc_param_typed(free_function->type.ref, free_function->type.ref->next->next);
+  }
+  gfunc_call(sized_delete ? 2 : 1);
   gsym(skip_null);
   vset(&cpp_eh_void_type, VT_CONST, 0);
 }

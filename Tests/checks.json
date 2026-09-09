@@ -42,7 +42,7 @@
     {
         "name":  "test_RunExceptions",
         "path":  "test_RunExceptions.ps1",
-        "tier":  "fast",
+        "tier":  "pedantic",
         "seconds":  5,
         "compiler":  true,
         "runtime":  true
@@ -82,7 +82,7 @@
     {
         "name":  "test_DynamicCastObjectLink",
         "path":  "test_DynamicCastObjectLink.ps1",
-        "tier":  "fast",
+        "tier":  "pedantic",
         "seconds":  5,
         "compiler":  true,
         "runtime":  true
@@ -90,7 +90,7 @@
     {
         "name":  "test_MemberPointerObjectLink",
         "path":  "test_MemberPointerObjectLink.ps1",
-        "tier":  "fast",
+        "tier":  "pedantic",
         "seconds":  5,
         "compiler":  true,
         "runtime":  true
@@ -154,7 +154,7 @@
     {
         "name":  "test_ReadableAsmOutput",
         "path":  "test_ReadableAsmOutput.cmd",
-        "tier":  "fast",
+        "tier":  "pedantic",
         "seconds":  5,
         "compiler":  true,
         "runtime":  true

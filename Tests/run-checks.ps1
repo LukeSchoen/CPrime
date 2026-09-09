@@ -1,5 +1,5 @@
 param(
-    [ValidateSet('fast', 'pedantic')][string]$Tier = 'fast',
+    [ValidateSet('fast', 'pedantic', 'all')][string]$Tier = 'fast',
     [string[]]$Select = @(),
     [string]$CompilerPath = '',
     [string]$RuntimeRoot = '',
@@ -10,7 +10,7 @@ $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'tools/process.ps1')
 $root = Split-Path -Parent $PSScriptRoot
 $catalog = Get-Content (Join-Path $PSScriptRoot 'checks.json') -Raw | ConvertFrom-Json
-$checks = @($catalog | Where-Object tier -eq $Tier)
+$checks = @($catalog | Where-Object { $Tier -eq 'all' -or $_.tier -eq $Tier -or ($Select.Count -and -not $PSBoundParameters.ContainsKey('Tier')) })
 foreach ($name in $Select) {
     if ($name -notin $checks.name) { throw "Unknown $Tier check: $name" }
 }
@@ -24,7 +24,7 @@ if (-not $Out) { $Out = Join-Path $root ('build/checks-' + $Tier + '-' + [guid]:
 New-Item -ItemType Directory -Force $Out | Out-Null
 $results = @()
 foreach ($check in $checks) {
-    if ($Tier -eq 'fast' -and $check.seconds -gt 5) { throw 'Fast gate budget exceeds five seconds' }
+    if ($check.tier -eq 'fast' -and $check.seconds -gt 5) { throw 'Fast gate budget exceeds five seconds' }
     $script = Join-Path $PSScriptRoot $check.path
     $command = @((Join-Path $PSHOME 'powershell.exe'), '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File')
     if ([IO.Path]::GetExtension($script) -eq '.cmd') {

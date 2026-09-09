@@ -788,12 +788,16 @@ static int handle_bs(uint8_t **p)
 
 /* skip the stray and handle the \\n case. Output an error if
    incorrect char after the stray */
+static int ucn_identifier_prefix(uint8_t **pointer);
 static int handle_stray(uint8_t **p)
 {
   int c;
   file->buf_ptr = *p - 1;
-  c = handle_stray_noerror(!(parse_flags &PARSE_FLAG_ACCEPT_STRAYS));
+  c = handle_stray_noerror(0);
   *p = file->buf_ptr;
+  if (c == '\\' && !(parse_flags & PARSE_FLAG_ACCEPT_STRAYS)
+      && !ucn_identifier_prefix(p))
+    cprime_error("stray '\\' in program");
   return c;
 }
 
@@ -803,6 +807,19 @@ static int handle_stray(uint8_t **p)
     c = *++p;\
     if (c == '\\')\
         c = handle_stray(&p); \
+}
+
+/* Look past a literal backslash in the logical character stream. A splice
+   can separate it from the UCN prefix; put the slash back immediately before
+   that prefix, using the input buffer's existing pushback space if necessary. */
+static int ucn_identifier_prefix(uint8_t **pointer)
+{
+  uint8_t *p = *pointer;
+  int c;
+  PEEKC(c, p);
+  *--p = '\\';
+  *pointer = p;
+  return c == 'u' || c == 'U';
 }
 
 static int skip_spaces(void)
@@ -1029,7 +1046,8 @@ redo_start:
         next_nomacro();
         p = file->buf_ptr;
         if (a == 0 &&
-            (tok == TOK_ELSE || tok == TOK_ELIF || tok == TOK_ENDIF))
+            (tok == TOK_ELSE || tok == TOK_ELIF || tok == TOK_ELIFDEF
+             || tok == TOK_ELIFNDEF || tok == TOK_ENDIF))
           goto the_end;
         if (tok == TOK_IF || tok == TOK_IFDEF || tok == TOK_IFNDEF)
           a++;
@@ -1772,10 +1790,52 @@ static int cprime_has_attribute(int attribute)
   case TOK_CONSTRUCTOR1: case TOK_CONSTRUCTOR2:
   case TOK_DESTRUCTOR1: case TOK_DESTRUCTOR2:
   case TOK_NORETURN1: case TOK_NORETURN2:
+  case TOK_UNUSED1: case TOK_UNUSED2:
+  case TOK_NOINLINE: case TOK_NOINLINE2:
     return 1;
   default:
     return 0;
   }
+}
+
+static int cprime_has_builtin(int builtin)
+{
+  const char *name = get_tok_str(builtin, NULL);
+  /* These tokens have compiler expression handlers. Macro-backed varargs
+     operations are also available during preprocessing-only queries. */
+  if ((builtin >= TOK_builtin_types_compatible_p && builtin <= TOK_builtin_unreachable)
+      || (builtin >= TOK___atomic_store && builtin <= TOK___atomic_compare_exchange_n)
+      || builtin == TOK_builtin_addressof || builtin == TOK_builtin_launder
+      || builtin == TOK_builtin_bit_cast)
+    return 1;
+  if (!strcmp(name, "__builtin_va_start") || !strcmp(name, "__builtin_va_arg")
+      || !strcmp(name, "__builtin_va_end") || !strcmp(name, "__builtin_va_copy"))
+    return 1;
+  return !strncmp(name, "__builtin_", 10) && define_find(builtin) != NULL;
+}
+
+/* Leave the closing parenthesis for the caller's normal token advance. */
+static int cprime_capability_query(int builtin_query)
+{
+  int name, supported_scope = 1;
+  next();
+  if (tok != '(') expect("'('");
+  next();
+  if (tok < TOK_IDENT) expect("capability name");
+  name = tok;
+  next();
+  if (!builtin_query && tok == ':') {
+    const char *scope = get_tok_str(name, NULL);
+    supported_scope = !strcmp(scope, "gnu") || !strcmp(scope, "__gnu__");
+    next();
+    if (tok != ':') expect("'::'");
+    next();
+    if (tok < TOK_IDENT) expect("attribute name");
+    name = tok;
+    next();
+  }
+  if (tok != ')') expect("')'");
+  return supported_scope && (builtin_query ? cprime_has_builtin(name) : cprime_has_attribute(name));
 }
 
 // Eval An Expression For #If/#Elif
@@ -1815,7 +1875,7 @@ static int expr_preprocess(CPRIMEState *s1)
       if (define_find(tok)
           || tok == TOK___HAS_INCLUDE
           || tok == TOK___HAS_INCLUDE_NEXT
-          || tok == TOK___HAS_ATTRIBUTE)
+          || tok == TOK___HAS_ATTRIBUTE || tok == TOK___HAS_BUILTIN)
         c = 1;
       if (t == '(')
       {
@@ -1825,15 +1885,9 @@ static int expr_preprocess(CPRIMEState *s1)
       }
       goto c_number;
     }
-    else if (tok == TOK___HAS_ATTRIBUTE)
+    else if (tok == TOK___HAS_ATTRIBUTE || tok == TOK___HAS_BUILTIN)
     {
-      next();
-      if (tok != '(') expect("'('");
-      next();
-      if (tok < TOK_IDENT) expect("attribute name");
-      c = cprime_has_attribute(tok);
-      next();
-      if (tok != ')') expect("')'");
+      c = cprime_capability_query(tok == TOK___HAS_BUILTIN);
       goto c_number;
     }
     else if (tok == TOK___HAS_INCLUDE ||
@@ -2201,7 +2255,7 @@ ST_FUNC void cprimepp_putfile(const char *filename)
 ST_FUNC void preprocess(int is_bof)
 {
   CPRIMEState *s1 = cprime_state;
-  int c, n, saved_parse_flags;
+  int c, n, saved_parse_flags, elif_directive;
   char buf[1024], *q;
   Sym *s;
 
@@ -2215,6 +2269,7 @@ ST_FUNC void preprocess(int is_bof)
 
   next_nomacro();
 redo:
+  elif_directive = 0;
   switch (tok)
   {
   case TOK_DEFINE:
@@ -2248,8 +2303,9 @@ redo:
 do_ifdef:
     next_nomacro();
     if (tok < TOK_IDENT)
-      cprime_error("invalid argument for '#if%sdef'", c ? "n" : "");
-    if (is_bof)
+      cprime_error("invalid argument for '#%s%sdef'", elif_directive ? "elif" : "if",
+                   c ? "n" : "");
+    if (is_bof && !elif_directive)
     {
       if (c)
       {
@@ -2262,9 +2318,13 @@ do_ifdef:
     if (define_find(tok)
         || tok == TOK___HAS_INCLUDE
         || tok == TOK___HAS_INCLUDE_NEXT
-          || tok == TOK___HAS_ATTRIBUTE)
+          || tok == TOK___HAS_ATTRIBUTE || tok == TOK___HAS_BUILTIN)
       c ^= 1;
     next_nomacro();
+    if (elif_directive) {
+      s1->ifdef_stack_ptr[-1] = c;
+      goto test_else;
+    }
 do_if:
     if (s1->ifdef_stack_ptr >= s1->ifdef_stack + IFDEF_STACK_SIZE)
       cprime_error("memory full (ifdef)");
@@ -2279,6 +2339,9 @@ do_if:
     c = (s1->ifdef_stack_ptr[-1] ^= 3);
     goto test_else;
   case TOK_ELIF:
+  case TOK_ELIFDEF:
+  case TOK_ELIFNDEF:
+    elif_directive = tok;
     if (s1->ifdef_stack_ptr == s1->ifdef_stack)
       cprime_error("#elif without matching #if");
     c = s1->ifdef_stack_ptr[-1];
@@ -2292,6 +2355,10 @@ do_if:
     }
     else
     {
+      if (elif_directive != TOK_ELIF) {
+        c = elif_directive == TOK_ELIFNDEF;
+        goto do_ifdef;
+      }
       c = expr_preprocess(s1);
       s1->ifdef_stack_ptr[-1] = c;
     }
@@ -3110,8 +3177,14 @@ maybe_space:
   case '\\':
     // first look if it is in fact an end of buffer
     c = handle_stray(&p);
-    if (c == '\\')
+    if (c == '\\') {
+      if (ucn_identifier_prefix(&p)) {
+        p1 = p;
+        len = 0;
+        goto parse_ident_slow;
+      }
       goto parse_simple;
+    }
     if (c == CH_EOF)
     {
       CPRIMEState *s1 = cprime_state;
@@ -3254,12 +3327,32 @@ token_found: ;
     else
     {
       // Slower Case
+parse_ident_slow:
       cstr_reset(&tokcstr);
-      cstr_cat(&tokcstr, (char *) p1, len);
+      if (len) cstr_cat(&tokcstr, (char *) p1, len);
       p--;
       PEEKC(c, p);
-      while (isidnum_table[c - CH_EOF] & (IS_ID | IS_NUM))
+      while ((isidnum_table[c - CH_EOF] & (IS_ID | IS_NUM))
+             || (c == '\\' && ucn_identifier_prefix(&p)))
       {
+        if (c == '\\') {
+          int digits;
+          /* Keep UCN spelling in preprocessing identifiers. Stringification
+             must distinguish the original hex case and escape width. */
+          cstr_ccat(&tokcstr, c);
+          PEEKC(c, p);
+          digits = c == 'u' ? 4 : 8;
+          cstr_ccat(&tokcstr, c);
+          while (digits--) {
+            PEEKC(c, p);
+            if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+                  || (c >= 'A' && c <= 'F')))
+              expect("more hex digits in universal-character-name");
+            cstr_ccat(&tokcstr, c);
+          }
+          PEEKC(c, p);
+          continue;
+        }
         cstr_ccat(&tokcstr, c);
         PEEKC(c, p);
       }

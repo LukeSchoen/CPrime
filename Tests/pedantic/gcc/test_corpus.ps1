@@ -1,9 +1,16 @@
 $ErrorActionPreference = 'Stop'
 . (Join-Path $PSScriptRoot 'corpus.ps1')
 $manifest = Read-GccCorpus $PSScriptRoot
-$listed = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run.ps1') -List)
+$listed = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run.ps1') -Tier all -List)
 if ($LASTEXITCODE -ne 0 -or $listed.Count -ne $manifest.cases.Count) { throw 'Retained case inventory changed' }
 foreach ($entry in $manifest.support) { if ($entry.path -in $listed) { throw 'Support file became an independent test' } }
+$fast = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run.ps1') -Tier fast -List)
+if ($LASTEXITCODE -ne 0) { throw 'Fast corpus discovery failed' }
+$deep = @(& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot 'run.ps1') -Tier pedantic -List)
+if ($LASTEXITCODE -ne 0) { throw 'Pedantic corpus discovery failed' }
+if ($fast.Count + $deep.Count -ne $listed.Count -or @($fast | Where-Object { $_ -in $deep }).Count) {
+    throw 'Corpus tier partition lost or duplicated coverage'
+}
 $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../..'))
 $work = Join-Path $root ('build/corpus-check-' + [guid]::NewGuid().ToString('N'))
 try {

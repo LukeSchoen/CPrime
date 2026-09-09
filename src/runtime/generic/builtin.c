@@ -1,3 +1,17 @@
+#include "../../../include/runtime/cprime_bit_query.h"
+#include "../../../include/runtime/cprime_overflow_query.h"
+
+int __cpc_overflow_query(unsigned long long left, unsigned long long right,
+                          int flags, int width, int operation)
+{
+    return cpc_overflow_query(left, right, flags, width, operation);
+}
+
+int __cpc_bit_query(unsigned long long value, int width, int operation, int zero)
+{
+    return cpc_bit_query(value, width, operation, zero);
+}
+
 /* uses alias to allow building with gcc/clang */
 #ifdef __TINYC__
 #define	BUILTIN(x)	__builtin_##x

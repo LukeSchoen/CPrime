@@ -1,0 +1,2 @@
+// EXPECT_COMPILE_FAIL: 1
+int \u00x1;

@@ -693,7 +693,7 @@ static void gexpr_decl(int for_condition)
     restore_cpp_lifecycle_probe(replay);
     if (expression) { gexpr(); return; }
   }
-  int v = decl(VT_JMP);
+  int v = decl_context(VT_JMP, 1);
   if (v > 1 && (tok != ';' || for_condition))
   {
     Sym *s = sym_find(v);
@@ -740,7 +740,15 @@ again:
   if (debug_modes)
     cprime_tcov_check_line (cprime_state, 0), cprime_tcov_block_begin (cprime_state);
 
-  if (t >= TOK_UIDENT && !strcmp(get_tok_str(t, NULL), "using")
+  if (t == TOK_INIT_CLAUSE)
+  {
+    gexpr();
+    vpop();
+    skip(';');
+    /* The containing declaration closes explicit initializer temporaries.
+       Omitted array elements still use ordinary statement boundaries. */
+  }
+  else if (t >= TOK_UIDENT && !strcmp(get_tok_str(t, NULL), "using")
       && tok == TOK_NAMESPACE)
   {
     unget_tok(tok);
@@ -1192,12 +1200,12 @@ if_chain:
 
     sw = cprime_mallocz(sizeof *sw);
     sw->bsym = &a;
-    sw->scope = cur_scope;
+    sw->scope = &o;
     sw->prev = cur_switch;
     sw->nocode_wanted = nocode_wanted;
     cur_switch = sw;
 
-    new_scope_s(&o);
+    new_scope(&o);
     skip('(');
     gexpr_decl(0);
     cpp_temp_end(temporary_mark);
@@ -1213,7 +1221,6 @@ if_chain:
     a = gjmp(a); // Add Implicit Break
     // Case Lookup
     gsym(b);
-    prev_scope_s(&o);
     if (sw->nocode_wanted)
       goto skip_switch;
     case_sort(sw);
@@ -1229,6 +1236,7 @@ if_chain:
 skip_switch:
     // Break Label
     gsym(a);
+    prev_scope(&o, 0);
     end_switch();
 
   }

@@ -5,6 +5,7 @@ param(
     [string]$CompilerPath = "",
     [string]$RuntimeRoot = '',
     [string[]]$Select = @(),
+    [ValidateSet('fast', 'pedantic', 'all')][string]$Tier = 'fast',
     [ValidateRange(0.001, 5)][double]$Timeout = 5,
     [string]$BuildManifestPath = $env:CPRIME_TEST_BUILD_MANIFEST
 )
@@ -255,14 +256,24 @@ if (Test-Path -LiteralPath $failDir) {
     $tests += Get-ChildItem -LiteralPath $failDir -Filter test_*.cpp | Sort-Object Name
 }
 
+if (-not $tests.Count) { throw "No test files found under $testsRoot" }
 if ($Select.Count) {
     foreach ($name in $Select) {
         if ($name -notin $tests.Name) { throw "Unknown test selection: $name" }
     }
     $tests = @($tests | Where-Object { $_.Name -in $Select })
 }
+if ($Tier -ne 'all' -and (-not $Select.Count -or $PSBoundParameters.ContainsKey('Tier'))) {
+    $pedantic = Read-TestPedanticPaths $scriptDir
+    $tests = @($tests | Where-Object {
+        $relative = ($Suite.TrimEnd('/') + '/' + $_.Directory.Name + '/' + $_.Name)
+        $pedantic.ContainsKey($relative) -eq ($Tier -eq 'pedantic')
+    })
+}
 if ($tests.Count -eq 0) {
-    throw "No test files found under $testsRoot"
+    if ($Select.Count) { throw "No selected $Tier tests under $testsRoot" }
+    Write-Host "No $Tier tests under $Suite"
+    exit 0
 }
 
 $passed = 0

@@ -4,6 +4,8 @@ $work = Join-Path $root ('build/suite-runner-' + [guid]::NewGuid().ToString('N')
 try {
     New-Item -ItemType Directory -Path $work | Out-Null
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'run-all.ps1') -Destination $work
+    New-Item -ItemType Directory -Path (Join-Path $work 'tools') | Out-Null
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'tools/process.ps1') -Destination (Join-Path $work 'tools/process.ps1')
     foreach ($suite in @('c_compat', 'features/Good', 'features/Bad', 'abi/Excluded', 'pedantic/Slow')) {
         $pass = Join-Path $work ($suite + '/pass')
         New-Item -ItemType Directory -Path $pass -Force | Out-Null
@@ -33,6 +35,13 @@ exit 0
     $output = & powershell -NoProfile -File $runner -Suite missing 2>&1
     $ErrorActionPreference = $savedPreference
     if ($LASTEXITCODE -eq 0) { throw 'Unknown suite passed' }
+    @{schema=1;pedantic=@('features/Good/pass/test_probe.cpp')} | ConvertTo-Json | Set-Content (Join-Path $work 'tiers.json')
+    $listed = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $runner -List)
+    if (($listed -join ',') -ne 'c_compat,features/Bad') { throw 'Passing suite remained in fast discovery' }
+    $listed = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Tier pedantic -List)
+    if (($listed -join ',') -ne 'features/Good') { throw 'Pedantic suite was lost' }
+    $listed = @(& powershell -NoProfile -ExecutionPolicy Bypass -File $runner -Tier all -List)
+    if ($listed.Count -ne 3) { throw 'All-tier discovery lost coverage' }
     Write-Host 'PASS suite discovery, fixture exclusion, selection, settings, and failure propagation'
 } finally {
     $resolved = [IO.Path]::GetFullPath($work)

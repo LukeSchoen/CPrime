@@ -215,7 +215,7 @@ static TemplateMemberDef *member_order_definition(int function_tok)
   return NULL;
 }
 
-static int compare_member_function_template_order(int first_tok, int second_tok)
+static int compare_member_function_template_order_for_call(int first_tok, int second_tok, int arguments)
 {
   TemplateMemberDef *first = member_order_definition(first_tok);
   TemplateMemberDef *second = member_order_definition(second_tok);
@@ -223,10 +223,20 @@ static int compare_member_function_template_order(int first_tok, int second_tok)
   int result = 0;
   if (!first || !second || first == second) return 0;
   a = cprime_mallocz(sizeof(*a)); b = cprime_mallocz(sizeof(*b));
-  if (member_order_pattern(first, a) && member_order_pattern(second, b))
+  if (member_order_pattern(first, a) && member_order_pattern(second, b)) {
+    if (arguments >= 0) {
+      if (a->parameters > arguments) a->parameters = arguments;
+      if (b->parameters > arguments) b->parameters = arguments;
+    }
     result = member_order_deduces(b, a) - member_order_deduces(a, b);
+  }
   cprime_free(a); cprime_free(b);
   return result;
+}
+
+static int compare_member_function_template_order(int first_tok, int second_tok)
+{
+  return compare_member_function_template_order_for_call(first_tok, second_tok, -1);
 }
 
 static int compare_free_function_template_order(TemplateDef *first, TemplateDef *second)

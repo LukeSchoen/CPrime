@@ -1,3 +1,19 @@
+function Read-TestPedanticPaths([string]$TestsRoot) {
+    $paths = @{}
+    $manifest = Join-Path $TestsRoot 'tiers.json'
+    if (Test-Path -LiteralPath $manifest) {
+        $tiers = Get-Content -LiteralPath $manifest -Raw | ConvertFrom-Json
+        if ($tiers.schema -ne 1) { throw 'Unknown test tier schema' }
+        foreach ($path in $tiers.pedantic) {
+            if (-not $path -or $path -match '(^|/)\.\.(/|$)|\\|^/|:' -or $paths.ContainsKey($path)) {
+                throw "Invalid or duplicate tier path: $path"
+            }
+            $paths[$path] = $true
+        }
+    }
+    return $paths
+}
+
 function Invoke-TestProcess([string[]]$Command, [ValidateRange(0.001, 300)][double]$Timeout) {
     $timer = [Diagnostics.Stopwatch]::StartNew()
     $process = New-Object Diagnostics.Process

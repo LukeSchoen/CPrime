@@ -60,6 +60,9 @@ static int explicit_lifecycle_declarator(void)
   int angle = 0, parenthesis = 0, previous = 0, qualifier = 0;
   int name = 0, destructor = 0, result = 0;
   while (tok != TOK_EOF && tok != ';' && tok != '{') {
+    /* An operator-id is not an injected constructor name. Its punctuation
+       can otherwise leave the preceding class name as the last identifier. */
+    if (!angle && !parenthesis && tok == TOK_OPERATOR) break;
     if (!angle && !parenthesis && tok == '(') {
       if (qualifier && name == qualifier) result = destructor ? 2 : 1;
       break;
@@ -148,6 +151,17 @@ static void parse_explicit_function_specialization(int instantiation)
       cprime_error("lifecycle specialization requires its class name");
     name = lifecycle == 1 ? TOK_CONSTRUCTOR1 : TOK_DESTRUCTOR1;
   }
+  if (owner && instantiation && tok == ';' && !explicit_args.nb) {
+    Sym *member = global_symbol_find(make_static_member_tok(owner, name));
+    if (!member || (member->type.t & VT_BTYPE) == VT_FUNC
+        || !is_compatible_types(&result, &member->type))
+      cprime_error("explicit instantiation requires matching static data member type");
+    next();
+    if (instantiation == 1) put_extern_sym(member, NULL, 0, 0);
+    tok_str_free(parameters);
+    tok_str_free(definition);
+    return;
+  }
   if (owner && tok != '(' && !instantiation && !explicit_args.nb) {
     int braces = 0, parentheses = 0, brackets = 0;
     Sym *member = global_symbol_find(make_static_member_tok(owner, name));
@@ -207,6 +221,12 @@ static void parse_explicit_function_specialization(int instantiation)
   if (owner) {
     TemplateMemberDef *member;
     TemplateInstOwner *record = find_template_inst_owner_entry(owner);
+    int template_owner = record != NULL, enclosing = owner;
+    while (!template_owner && enclosing) {
+      const CppRecordDeclInfo *scope = lookup_cpp_record_decl(enclosing);
+      enclosing = scope ? scope->owner_tok : 0;
+      if (enclosing && find_template_inst_owner_entry(enclosing)) template_owner = 1;
+    }
     int lookup = record ? record->owner->name_tok : owner;
     int class_argument = first_template_arg_tok_from_inst_type(&(CType){VT_STRUCT, struct_find(owner)});
     int old_count = nb_template_member_call_arg_types;
@@ -245,7 +265,7 @@ static void parse_explicit_function_specialization(int instantiation)
     explicit_member_template_arg_tok = old_explicit;
     nb_template_member_call_arg_types = old_count;
     memcpy(template_member_call_arg_types, old_actual, sizeof(old_actual));
-    if (!function_tok && !explicit_args.nb && (instantiation || record)) {
+    if (!function_tok && !explicit_args.nb && (instantiation || template_owner)) {
       MemberFuncOverload *ordinary;
       for (ordinary = member_func_overloads; ordinary; ordinary = ordinary->next) {
         const CppMemberDeclInfo *info;
@@ -257,6 +277,19 @@ static void parse_explicit_function_specialization(int instantiation)
         if (function_tok && function_tok != ordinary->mangled_tok)
           cprime_error("ambiguous explicit member instantiation");
         function_tok = ordinary->mangled_tok;
+      }
+      if (!cv) {
+        int static_name = make_static_member_tok(owner, name);
+        FreeFuncOverload *ordinary_static;
+        for (ordinary_static = free_func_candidates(static_name); ordinary_static;
+             ordinary_static = ordinary_static->name_next) {
+          if (ordinary_static->name_tok != static_name
+              || !same_func_param_signature(&ordinary_static->func_type, &function)
+              || !compare_types(&ordinary_static->func_type.ref->type, &result, 1)) continue;
+          if (function_tok && function_tok != ordinary_static->mangled_tok)
+            cprime_error("ambiguous explicit static member instantiation");
+          function_tok = ordinary_static->mangled_tok;
+        }
       }
       if (function_tok && instantiation == 1) {
         CType receiver = { VT_STRUCT, struct_find(owner) };

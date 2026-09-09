@@ -10,13 +10,19 @@ failure does not authorize switching compilers. Keep CPC as the default host.
    sibling application repository or its libraries.
 2. Rebuild serially with `Build.cmd`, then run the exact case with
    `Tests/run.ps1 -Suite <suite> -Select <test>` using root `cpc.exe`.
-3. Run the relevant `Tests/gates.ps1 -Subsystem
-   members|replay|lookup|substitution|overloads` gate and affected local suite.
-4. Run `Tests/run-all.ps1` for the fast language checkpoint and selected CPC-only
+3. Run the relevant exact regressions, including established passing cases where
+   they exercise the changed behavior. Explicit `-Select` crosses tiers unless
+   an explicit `-Tier` restricts it.
+4. Run `Tests/run-all.ps1` for the active unresolved verification and selected CPC-only
    native/integration gates. `tests.cmd` and `-IncludeChecks` also invoke external
    compilers in ABI gates and require explicit authorization for those invocations.
+   After each verification, regenerate the retained-failure triage with
+   `Tests/triage_retained_failures.ps1` (it defaults to the newest
+   `build/pedantic-gcc-*/results.jsonl`). Read the cluster summary and exact
+   paths from `build/compiler-bug-triage.txt`/`.json`; keep full diagnostics in
+   the result file rather than reproducing inventories in notes or chat.
 5. **Only at the end of a large change that needs deeper verification**, run
-   the relevant `tests_pedantic.cmd -Group gcc|checks|performance` group or the
+   the relevant `tests_pedantic.cmd -Group language|gcc|checks|performance` group or the
    complete pedantic entry point. Avoid pedantic sweeps during routine fixes.
 
 Keep compilation and builds serial. Language compiler/program invocations and
@@ -26,8 +32,18 @@ never retry with relaxed budgets or silently disable slow checks.
 
 When fixing a retained GCC failure, use an exact selection:
 `Tests/pedantic/gcc/run.ps1 -Select g++.dg/template/access27.C -Out build/<run>`.
-Promote its key behavior into a small fast regression. Bulk GCC sweeps remain
-pedantic; their score covers the retained corpus, not the deleted full inventory.
+Preserve its key behavior in a small regression. The default fast tier contains
+the unresolved retained GCC cases, including runtime crashes and wrong results,
+plus new language regressions. Previously verified passing language and GCC cases
+are assigned to pedantic through `Tests/tiers.json`; files stay in place to
+preserve includes and provenance. After validating a repair, add its passing paths
+to that manifest. Native gates use the tier assignments in `Tests/checks.json`.
+
+`Tests/run-all.ps1 -Tier pedantic` checks established passing language and GCC
+cases; `-Tier all` runs both partitions. `-List` shows the selected suites, and
+`Tests/pedantic/gcc/run.ps1 -Tier fast|pedantic|all -List` shows exact GCC paths.
+Scores cover the selected retained cases, not full GCC conformance. Moving a
+passing case to pedantic does not remove its coverage or change its expectations.
 
 Keep every test minimal and deterministic, including pedantic tests. Cover one
 distinct behavior with the smallest useful input; reuse helpers and consolidate
@@ -54,6 +70,10 @@ startup time. Keep tool implementation in `src/`, test-specific sources in
 
 - `Tests/diagnose.ps1 -Source <repro.cpp>` captures commands, preprocessing,
   hashes, and diagnostics. `CPRIME_PARSER_STATE=1` enables detailed parser state.
+- `Tests/triage_retained_failures.ps1 -ResultsPath <results.jsonl>` groups the
+  retained failures by source area and first diagnostic. It writes compact
+  cluster reports to `build/compiler-bug-triage.{txt,json}` and never prints
+  the full inventory to the console.
 - `Tests/check_regressions.ps1` is the compiler publication gate.
 - `Tests/run-checks.ps1 -Select <name>` runs a fast native/integration gate.
 - Runner changes: `Tests/test_RunnerFixtures.ps1`, `test_SuiteRunner.ps1`, and
@@ -71,6 +91,12 @@ Measure identical inputs serially. Keep compiler time separate from driver
 startup, reporting, and packaging time. Place logs and measurements in `build/`;
 `scripts/windows/clean-dev-logs.ps1 -Days 7 -WhatIf` previews old-log cleanup.
 Keep [task.md](../task.md) limited to remaining work; git retains history.
+
+When instrumenting compiler source temporarily, redirect stderr to a file in
+`build/` (for example `cpc.exe ... 2> build/parser-probe.log`) and remove the
+instrumentation before publishing. Keep the compiler identity, result path,
+and the concise triage summary as the durable session state; leave full
+per-case diagnostics in the `results.jsonl` generated under `build/`.
 
 For Windows CPU sampling, `Build.cmd` writes `build/compiler/cpc.map` for the
 published root compiler. Compile `src/tools/profile_process.c` with root CPC

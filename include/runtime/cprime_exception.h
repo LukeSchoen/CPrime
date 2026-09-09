@@ -91,6 +91,14 @@ typedef struct CpcEhArray {
     CpcEhDestructor destructor;
 } CpcEhArray;
 
+typedef struct CpcEhDeallocation {
+    void *data;
+    unsigned long long size;
+    void (*function)(void *, unsigned long long);
+} CpcEhDeallocation;
+
+void __cpc_eh_deallocate_sized(void *context);
+
 void __cpc_eh_destroy_array(void *context);
 void __cpc_eh_shutdown(void);
 
