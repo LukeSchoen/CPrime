@@ -3,21 +3,27 @@
 Target: 100% of fast tests and the retained pedantic GCC checks, with no missing
 coverage, weakened expectations, compiler internal errors, or timeout retries.
 
-Current retained state: 442 unresolved retained GCC rows (414 FAIL_COMPILE,
+Current retained state: 426 unresolved retained GCC rows (398 FAIL_COMPILE,
 17 FAIL_RUN, 11 FAIL_RUN_CRASH) on compiler SHA256
-f58bedf85383d1940f6e4cf921cd57694299815b29897c03c8e50de02018951b. The exact
+87fc1fb6bd540d822a51c37111288011f4d2566680d20cff12d0e1998d800ff7. The exact
 result file, compiler identity, and per-case diagnostics are under the newest
 `build/pedantic-gcc-*/` directory; the compact cluster report is
 `build/compiler-bug-triage.txt` (with machine-readable paths in
 `build/compiler-bug-triage.json`).
 
-This work is fully automated. Do not stop after individual repairs, do not ask
-for approval, and do not report back merely to show progress: regenerate the
+This work is time-boxed to 30 minutes total; solve as much as possible within
+that time and then stop, do not keep looping past the budget. Work without
+stopping after individual repairs or asking for approval: regenerate the
 triage with `Tests/triage_retained_failures.ps1`, choose a cluster that shares
 one first diagnostic in one source area, fix it, verify it, promote verified
 passes to pedantic in `Tests/tiers.json`, then continue immediately with the
-next cluster. Keep working for as long as useful progress is possible, up to
-ten hours or more if needed, and only stop on a hard external blocker.
+next cluster until the 30-minute budget is spent. At the 30-minute mark, stop
+regardless of remaining clusters and report what was completed, what remains,
+and any blocker encountered. If before the budget is spent you become convinced
+that all fast tests and retained pedantic checks are passing, create an empty
+`done.x` file in the repository root and stop; `worker.cmd` watches for that
+marker and will not start another cycle.
+
 Full inventories stay in the generated result/triage files under `build/`; do
 not paste them into task notes or chat. Verified passes are assigned to
 pedantic in `Tests/tiers.json`; `Tests/run-all.ps1` then focuses on the

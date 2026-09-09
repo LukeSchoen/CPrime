@@ -1003,7 +1003,7 @@ static int find_template_member_class_in_str(TokenString *str, int type_param_to
         && ((str->str[i + 3] >= TOK_UIDENT
              && str->str[i + 4] == '(')
             || (str->str[i + 3] == TOK_OPERATOR
-                && i + 5 < n && str->str[i + 5] == '(')))
+                && template_qualified_declarator_follows(str, i + 3))))
     {
       int class_tok = find_current_namespace_tok(str->str[i]);
       /* A member function template of a non-template class has no
@@ -5272,6 +5272,9 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
         int parent_tok = tok;
         CValue parent_tokc = tokc;
         is_conversion_operator = 1;
+        /* The class qualifier was consumed while the method name was being
+           identified; the conversion target is the only return type. */
+        ret_str->len = 0;
         begin_macro(&conversion_replay, 3);
         next();
         while (tok != TOK_EOF) {

@@ -77,9 +77,9 @@ static Sym *cpp_type_info_for_type(CType *type)
   name_symbol = cpp_eh_data_symbol(name.data, name.size, 1);
   cstr_free(&name);
   field_offset = 0;
-  field = find_field(&info_type, tok_alloc_const("_M_name"), &field_offset);
-  if (!field) cprime_error("incompatible std::type_info layout");
-  cpp_eh_data_pointer(record->symbol, field_offset, name_symbol);
+  field = find_field_try(&info_type, tok_alloc_const("_M_name"), &field_offset);
+  if (field)
+    cpp_eh_data_pointer(record->symbol, field_offset, name_symbol);
   for (table = virtual_table_infos; table; table = table->next)
     if (table->class_tok == get_struct_type_name_tok(&info_type)) {
       int offset = table->vptr_offset;

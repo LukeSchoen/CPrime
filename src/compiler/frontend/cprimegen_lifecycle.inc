@@ -2146,6 +2146,19 @@ static int try_parse_cpp_placement_new_after_name(int global_scope)
     memset(&ad, 0, sizeof(ad));
     if (!parse_btype(&type, &ad, 0))
       cprime_error("placement new requires a type before '%s'", get_tok_str(tok, &tokc));
+    while (tok == '*')
+    {
+      mk_pointer(&type);
+      next();
+      while (tok == TOK_CONST1 || tok == TOK_CONST2 || tok == TOK_CONST3
+             || tok == TOK_VOLATILE1 || tok == TOK_VOLATILE2
+             || tok == TOK_VOLATILE3)
+      {
+        type.t |= (tok == TOK_CONST1 || tok == TOK_CONST2 || tok == TOK_CONST3)
+                    ? VT_CONSTANT : VT_VOLATILE;
+        next();
+      }
+    }
     allocation_types[0].t = VT_SIZE_T;
     allocation_types[0].ref = NULL;
     infer_saved_arg_types(allocation_args, allocation_types + 1, allocation_count);

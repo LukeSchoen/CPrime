@@ -2410,13 +2410,30 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
         if (owner == current_class || !class_has_base(owner, current_class)) continue;
         for (declaration = conversion_overloads[(unsigned)owner & 4095];
              declaration; declaration = declaration->conversion_next)
-          if (declaration->struct_tok == owner && declaration->func_type.ref
+          if (!declaration->is_using_declaration
+              && declaration->struct_tok == owner && declaration->func_type.ref
               && is_compatible_types(&declaration->func_type.ref->type, &converted)) {
             hidden = 1;
             break;
           }
       }
       if (hidden) continue;
+    }
+    if (candidate->is_using_declaration)
+    {
+      /* A derived class's own conversion of the same target type hides the
+         function made visible by a using declaration.  Do not let the
+         imported duplicate compete with that member. */
+      MemberFuncOverload *peer;
+      for (peer = conversion_overloads[(unsigned)current_class & 4095];
+           peer; peer = peer->conversion_next)
+        if (peer != candidate && !peer->is_using_declaration
+            && peer->struct_tok == current_class
+            && peer->is_const == candidate->is_const
+            && peer->func_type.ref
+            && is_compatible_types(&peer->func_type.ref->type, &converted))
+          break;
+      if (peer) continue;
     }
     if (allow_explicit == 2 && !is_compatible_types(&converted, target))
       continue;
@@ -3193,6 +3210,18 @@ static int parse_cpp_operator_method_tok(void)
     skip(')');
     return tok_alloc_const("operator()");
   }
+  if (tok == TOK_ARROW)
+  {
+    next();
+    if (tok == '*')
+    {
+      next();
+      return tok_alloc_const("operator->*");
+    }
+    unget_tok(tok);
+    tok = TOK_ARROW;
+    return tok_alloc_const("operator->");
+  }
   name = cpp_operator_name_from_tok(tok);
   if (!name)
   {
@@ -3205,7 +3234,9 @@ static int parse_cpp_operator_method_tok(void)
     while (tok != TOK_EOF && tok != '(')
     {
       if (forming_cpp_member_address && !angle_depth
-          && (tok == ';' || tok == ',' || tok == ')' || tok == '}' || tok == ']')) break;
+          && (tok == ',' || tok == ')' || tok == '}' || tok == ']')) break;
+      if (tok == ';' || tok == '{')
+        break;
       if (tok == TOK_LT) ++angle_depth;
       else if (tok == TOK_GT && angle_depth) --angle_depth;
       else if (tok == TOK_SAR && angle_depth) angle_depth = angle_depth > 1 ? angle_depth - 2 : 0;
@@ -3571,6 +3602,13 @@ static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type,
             if (!(definition->value_param_mask & (1u << i))
                 && make_type_from_type_arg_tok(&argument_type, arguments->toks[i]))
               cpp_operator_associated_type(lookup, &argument_type, 0);
+            else {
+              TemplateDef *argument_template = find_template_def(arguments->toks[i]);
+              if (argument_template && argument_template->namespace_tok)
+                cpp_operator_lookup_name(lookup,
+                  make_static_member_tok(argument_template->namespace_tok,
+                                         lookup->method_tok));
+            }
           }
           break;
         }

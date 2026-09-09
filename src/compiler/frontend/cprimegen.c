@@ -10367,11 +10367,143 @@ static Sym *declare_cpp_class_alias(CType *owner, int name_tok,
   return alias;
 }
 
+/* Qualified member lookup in a base class also sees members that the base
+   inherits from its own bases.  Import them under the derived class when
+   the named base itself does not declare the member, which keeps inherited
+   overloads usable through a using declaration. */
+static void import_cpp_using_member_funcs(int owner, int name, int derived_tok,
+                                          int *found)
+{
+  MemberFuncOverload *member;
+  int direct_found = 0;
+
+  for (member = member_func_candidates(owner, name); member;
+       member = member->bucket_next)
+  {
+    MemberFuncOverload *imported;
+    const CppMemberDeclInfo *info;
+    if (member->struct_tok != owner || member->method_tok != name)
+      continue;
+    info = lookup_cpp_member_decl(member->mangled_tok);
+    if (info && info->access == 2)
+      cprime_error("using declaration names a private member");
+    imported = cprime_malloc(sizeof(*imported));
+    *imported = *member;
+    imported->struct_tok = derived_tok;
+    imported->conversion_indexed = 0;
+    imported->is_using_declaration = 1;
+    imported->next = member_func_overloads;
+    member_func_overloads = imported;
+    index_member_func_overload(imported);
+    index_conversion_overload(imported);
+    direct_found = 1;
+    if (found) *found = 1;
+  }
+  if (!direct_found)
+  {
+    ClassBaseInfo *base;
+    for (base = class_base_candidates(owner); base; base = base->bucket_next)
+      if (base->class_tok == owner)
+        import_cpp_using_member_funcs(base->base_tok, name, derived_tok,
+                                      found);
+  }
+}
+
+/* A using declaration can also name a member function template.  Replay its
+   definition under the derived class so member-template calls deduce and
+   instantiate from the imported declaration, while qualified lookup through
+   the named base still reaches definitions inherited from its own bases. */
+static void import_cpp_using_member_templates(int owner, int name,
+                                              int derived_tok, int *found)
+{
+  TemplateMemberDef *member;
+  int direct_found = 0;
+
+  for (member = template_member_candidates(owner, name); member;
+       member = member->bucket_next)
+  {
+    TokenString *copy;
+    if (member->class_tok != owner
+        || template_member_def_method_tok(member) != name)
+      continue;
+    if (member->member_access_known && member->member_access == 2)
+      cprime_error("using declaration names a private member");
+    copy = tok_str_alloc();
+    tok_str_append_without_eof(copy, member->def_str);
+    tok_str_add(copy, TOK_EOF);
+    add_template_member_def(derived_tok, 0,
+                            member->stripped_member_type_param_toks,
+                            member->nb_stripped_member_type_params,
+                            member->stripped_member_value_param_toks,
+                            member->nb_stripped_member_value_params,
+                            member->stripped_member_param_toks,
+                            member->nb_stripped_member_params,
+                            member->stripped_member_value_mask, copy);
+    direct_found = 1;
+    if (found) *found = 1;
+  }
+  if (!direct_found)
+  {
+    ClassBaseInfo *base;
+    for (base = class_base_candidates(owner); base; base = base->bucket_next)
+      if (base->class_tok == owner)
+        import_cpp_using_member_templates(base->base_tok, name, derived_tok,
+                                          found);
+  }
+}
+
+/* A using declaration that names a conversion function is identified by its
+   target type rather than by a textual operator token, which can retain a
+   template parameter's bound spelling during replay.  Import every conversion
+   of the named base whose target type matches, including cv-qualified member
+   overloads, so calls through the derived class reach the base conversions. */
+static void import_cpp_using_conversions(int owner, CType *target,
+                                         int derived_tok, int *found)
+{
+  MemberFuncOverload *conversion;
+  int direct_found = 0;
+
+  for (conversion = conversion_overloads[(unsigned)owner & 4095];
+       conversion; conversion = conversion->conversion_next)
+  {
+    MemberFuncOverload *imported;
+    const CppMemberDeclInfo *info;
+    if (conversion->struct_tok != owner || !conversion->func_type.ref
+        || !conversion->func_type.ref->f.func_cpp_conversion
+        || !compare_types(&conversion->func_type.ref->type, target, 1))
+      continue;
+    info = lookup_cpp_member_decl(conversion->mangled_tok);
+    if (info && info->access == 2)
+      cprime_error("using declaration names a private member");
+    imported = cprime_malloc(sizeof(*imported));
+    *imported = *conversion;
+    imported->struct_tok = derived_tok;
+    imported->conversion_indexed = 0;
+    imported->is_using_declaration = 1;
+    imported->next = member_func_overloads;
+    member_func_overloads = imported;
+    index_member_func_overload(imported);
+    index_conversion_overload(imported);
+    direct_found = 1;
+    if (found) *found = 1;
+  }
+  if (!direct_found)
+  {
+    ClassBaseInfo *base;
+    for (base = class_base_candidates(owner); base; base = base->bucket_next)
+      if (base->class_tok == owner)
+        import_cpp_using_conversions(base->base_tok, target, derived_tok,
+                                     found);
+  }
+}
+
 static void parse_cpp_class_using_member(CType *derived, int first_name)
 {
   int owner = find_current_namespace_tok(first_name), name = 0, found = 0;
   CType base_type;
-  MemberFuncOverload *member;
+  CType conversion_target;
+  TokenString *conversion_tokens = NULL;
+  int is_conversion = 0;
   Sym *field, *alias;
   int offset = 0;
   if (tok != TOK_LT && tok != '<'
@@ -10391,10 +10523,13 @@ static void parse_cpp_class_using_member(CType *derived, int first_name)
     skip(':'); skip(':');
     if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "typename")) next();
     if (tok == TOK_OPERATOR) {
-      TokenString *conversion;
       name = parse_cpp_operator_method_tok();
-      conversion = take_cpp_conversion_operator_type_tokens();
-      if (conversion) tok_str_free(conversion);
+      conversion_tokens = take_cpp_conversion_operator_type_tokens();
+      is_conversion = conversion_tokens != NULL;
+      if (is_conversion
+          && !make_type_from_saved_type_tokens(&conversion_target,
+                                               conversion_tokens))
+        cprime_error("unsupported conversion operator type");
     } else {
       if (tok < TOK_UIDENT) expect("base member name");
       name = tok;
@@ -10414,23 +10549,14 @@ static void parse_cpp_class_using_member(CType *derived, int first_name)
   owner = get_struct_type_name_tok(&base_type);
   if (!class_has_base(get_struct_type_name_tok(derived), owner))
     cprime_error("using declaration names a non-base class");
-  for (member = member_func_candidates(owner, name); member; member = member->bucket_next) {
-    MemberFuncOverload *imported;
-    const CppMemberDeclInfo *info;
-    if (member->struct_tok != owner || member->method_tok != name) continue;
-    info = lookup_cpp_member_decl(member->mangled_tok);
-    if (info && info->access == 2) cprime_error("using declaration names a private member");
-    imported = cprime_malloc(sizeof(*imported));
-    *imported = *member;
-    imported->struct_tok = get_struct_type_name_tok(derived);
-    imported->conversion_indexed = 0;
-    imported->is_using_declaration = 1;
-    imported->next = member_func_overloads;
-    member_func_overloads = imported;
-    index_member_func_overload(imported);
-    index_conversion_overload(imported);
-    found = 1;
+  if (is_conversion) {
+    import_cpp_using_conversions(owner, &conversion_target,
+                                 get_struct_type_name_tok(derived), &found);
   }
+  import_cpp_using_member_funcs(owner, name, get_struct_type_name_tok(derived),
+                                &found);
+  import_cpp_using_member_templates(owner, name,
+                                    get_struct_type_name_tok(derived), &found);
   alias = global_symbol_find(class_alias_storage_tok(owner, name));
   if (!alias) alias = global_symbol_find(make_static_member_tok(owner, name));
   if (!alias) alias = find_inherited_class_alias(owner, name);
@@ -10463,12 +10589,29 @@ static void parse_cpp_class_using_member(CType *derived, int first_name)
       found = 1;
     }
   }
+  if (!found) {
+    TemplateDef *nested_td = find_class_template_def(
+                               make_static_member_tok(owner, name));
+    if (nested_td && nested_td->is_class) {
+      int binding_tok = make_static_member_tok(get_struct_type_name_tok(derived),
+                                               name);
+      Sym *binding = global_symbol_find(binding_tok);
+      if (!binding) {
+        CType marker = { VT_VOID | VT_TYPEDEF, NULL };
+        binding = global_identifier_push(binding_tok, marker.t, 0);
+        binding->type = marker;
+      }
+      binding->cpp_using_target = template_def_lookup_tok(nested_td);
+      found = 1;
+    }
+  }
   field = find_field_try(&base_type, name, &offset);
   if (field) {
     if (field->a.cpp_field_access == 2) cprime_error("using declaration names a private member");
     found = 1;
   }
   if (!found) cprime_error("no base member '%s' for using declaration", get_tok_str(name, NULL));
+  if (conversion_tokens) tok_str_free(conversion_tokens);
   skip(';');
 }
 
