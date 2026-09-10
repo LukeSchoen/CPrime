@@ -31,6 +31,165 @@ static int cpp_type_info_class(CType *type)
   return make_class_type_from_tok(type, make_namespace_tok_from_parts(parts, 2));
 }
 
+static void cpp_type_info_append_length_name(CString *name, int tok)
+{
+  char prefix[32];
+  const char *spelling = get_tok_str(tok, NULL);
+  int index;
+  if (!spelling) spelling = "";
+  index = tok - TOK_IDENT;
+  if (index >= 0 && index < class_source_name_capacity
+      && class_source_name_toks[index])
+    spelling = get_tok_str(class_source_name_toks[index], NULL);
+  snprintf(prefix, sizeof(prefix), "%u", (unsigned)strlen(spelling));
+  cstr_cat(name, prefix, -1);
+  cstr_cat(name, spelling, -1);
+}
+
+static int cpp_type_info_append_function_parameter(CString *name, CType *type)
+{
+  int bt = type->t & VT_BTYPE;
+  if (type->t & VT_CONSTANT) cstr_cat(name, "K", -1);
+  if (type->t & VT_VOLATILE) cstr_cat(name, "V", -1);
+  if (type->t & VT_REFERENCE) {
+    cstr_cat(name, "R", -1);
+    return cpp_type_info_append_function_parameter(name, pointed_type(type));
+  }
+  if (type->t & VT_RVALUE_REFERENCE) {
+    cstr_cat(name, "O", -1);
+    return cpp_type_info_append_function_parameter(name, pointed_type(type));
+  }
+  if (bt == VT_PTR) {
+    cstr_cat(name, "P", -1);
+    return cpp_type_info_append_function_parameter(name, pointed_type(type));
+  }
+  if (bt == VT_STRUCT) {
+    int class_tok = get_struct_type_name_tok(type);
+    if (!class_tok) return 0;
+    cpp_type_info_append_length_name(name, class_tok);
+    return 1;
+  }
+  switch (bt) {
+  case VT_VOID: cstr_cat(name, "v", -1); return 1;
+  case VT_BOOL: cstr_cat(name, "b", -1); return 1;
+  case VT_BYTE:
+    cstr_cat(name, (type->t & VT_UNSIGNED) ? "h" : "c", -1);
+    return 1;
+  case VT_SHORT:
+    cstr_cat(name, (type->t & VT_UNSIGNED) ? "t" : "s", -1);
+    return 1;
+  case VT_INT:
+    if (type->t & VT_LONG) {
+      cstr_cat(name, (type->t & VT_UNSIGNED) ? "m" : "l", -1);
+      return 1;
+    }
+    cstr_cat(name, (type->t & VT_UNSIGNED) ? "j" : "i", -1);
+    return 1;
+  case VT_LLONG:
+    cstr_cat(name, (type->t & VT_UNSIGNED) ? "y" : "x", -1);
+    return 1;
+  case VT_FLOAT: cstr_cat(name, "f", -1); return 1;
+  case VT_DOUBLE: cstr_cat(name, "d", -1); return 1;
+  case VT_LDOUBLE: cstr_cat(name, "e", -1); return 1;
+  default: return 0;
+  }
+}
+
+static int cpp_type_info_append_function_name(CString *name, int function_tok)
+{
+  Sym *function = global_symbol_find(function_tok);
+  Sym *parameter;
+  char length[32];
+  const char *spelling;
+  if (!function) function = sym_find(function_tok);
+  spelling = cpp_source_function_name();
+  if (!spelling || !*spelling) spelling = get_tok_str(function_tok, NULL);
+  if (!spelling) return 0;
+  snprintf(length, sizeof(length), "%u", (unsigned)strlen(spelling));
+  cstr_cat(name, length, -1);
+  cstr_cat(name, spelling, -1);
+  parameter = function && function->type.ref ? function->type.ref->next : NULL;
+  if (!parameter) {
+    cstr_cat(name, "v", -1);
+    return 1;
+  }
+  for (; parameter; parameter = parameter->next)
+    if (!cpp_type_info_append_function_parameter(name, &parameter->type))
+      return 0;
+  return 1;
+}
+
+static int cpp_type_info_name_itanium(CString *name, CType *type, int strip_cv)
+{
+  CType plain;
+  int bt;
+  int function_owner;
+  int class_tok;
+  char bound[48];
+  if (is_reference_type(type))
+    type = pointed_type(type);
+  plain = *type;
+  if (strip_cv)
+    plain.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  type = &plain;
+  bt = type->t & VT_BTYPE;
+  if (type->t & VT_CONSTANT) cstr_cat(name, "K", -1);
+  if (type->t & VT_VOLATILE) cstr_cat(name, "V", -1);
+  if (type->t & VT_ARRAY) {
+    cstr_cat(name, "A", -1);
+    if (type->ref && type->ref->c > 0) {
+      snprintf(bound, sizeof(bound), "%lld", (long long)type->ref->c);
+      cstr_cat(name, bound, -1);
+    }
+    cstr_cat(name, "_", -1);
+    return cpp_type_info_name_itanium(name, pointed_type(type), strip_cv);
+  }
+  if (bt == VT_PTR) {
+    cstr_cat(name, "P", -1);
+    return cpp_type_info_name_itanium(name, pointed_type(type), 0);
+  }
+  if (bt == VT_FUNC)
+    return 0;
+  if (bt == VT_STRUCT) {
+    class_tok = get_struct_type_name_tok(type);
+    if (!class_tok) class_tok = cpp_unnamed_tag_typedef_tok(type);
+    if (!class_tok) return 0;
+    function_owner = local_type_function_owner(class_tok);
+    if (function_owner && function_owner != class_tok) {
+      cstr_cat(name, "Z", -1);
+      if (!cpp_type_info_append_function_name(name, function_owner))
+        return 0;
+      cstr_cat(name, "E", -1);
+    }
+    cpp_type_info_append_length_name(name, class_tok);
+    return 1;
+  }
+  switch (bt) {
+  case VT_VOID: cstr_cat(name, "v", -1); return 1;
+  case VT_BOOL: cstr_cat(name, "b", -1); return 1;
+  case VT_BYTE:
+    cstr_cat(name, (type->t & VT_UNSIGNED) ? "h" : "c", -1);
+    return 1;
+  case VT_SHORT:
+    cstr_cat(name, (type->t & VT_UNSIGNED) ? "t" : "s", -1);
+    return 1;
+  case VT_INT:
+    if (type->t & VT_LONG) {
+      cstr_cat(name, (type->t & VT_UNSIGNED) ? "m" : "l", -1);
+      return 1;
+    }
+    cstr_cat(name, (type->t & VT_UNSIGNED) ? "j" : "i", -1);
+    return 1;
+  case VT_LLONG:
+    cstr_cat(name, (type->t & VT_UNSIGNED) ? "y" : "x", -1);
+    return 1;
+  case VT_FLOAT: cstr_cat(name, "f", -1); return 1;
+  case VT_DOUBLE: cstr_cat(name, "d", -1); return 1;
+  case VT_LDOUBLE: cstr_cat(name, "e", -1); return 1;
+  default: return 0;
+  }
+}
+
 static void cpp_type_info_name_ex(CString *name, CType *original, int strip_cv)
 {
   CType type = *original;
@@ -38,17 +197,7 @@ static void cpp_type_info_name_ex(CString *name, CType *original, int strip_cv)
   type.t &= ~(VT_STORAGE | VT_RVALUE_REFERENCE);
   if (strip_cv) type.t &= ~(VT_CONSTANT | VT_VOLATILE);
   if (type.t & VT_BITFIELD) type.t &= ~VT_STRUCT_MASK;
-  if (type.t & VT_ARRAY) {
-    char bound[48];
-    snprintf(bound, sizeof(bound), "array%lld_", type.ref->c);
-    cstr_cat(name, bound, -1);
-    cpp_type_info_name_ex(name, pointed_type(&type), strip_cv);
-  } else if ((type.t & VT_BTYPE) == VT_PTR) {
-    if (type.t & VT_CONSTANT) cstr_cat(name, "const_", -1);
-    if (type.t & VT_VOLATILE) cstr_cat(name, "volatile_", -1);
-    cstr_cat(name, "ptr_", -1);
-    cpp_type_info_name_ex(name, pointed_type(&type), 0);
-  } else if (!append_type_mangle_string(name, &type))
+  if (!cpp_type_info_name_itanium(name, &type, strip_cv))
     cprime_error("unsupported typeid type");
 }
 
@@ -295,8 +444,8 @@ static void cpp_typeid_expression(void)
 static void cpp_dynamic_cast(CType *target)
 {
   CType source, target_class, source_class;
-  int source_tok, target_tok, offset, alignment, reference = is_reference_type(target);
-  VirtualTableInfo *vt;
+  int source_tok, target_tok, offset, root, alignment;
+  int reference = is_reference_type(target);
   Sym *source_name, *target_name;
   SValue operand;
   maybe_indir_reference();
@@ -352,14 +501,10 @@ static void cpp_dynamic_cast(CType *target)
     gen_cast(target);
     return;
   }
-  offset = -1;
   if (!cpp_class_is_polymorphic(source_tok))
     cprime_error("dynamic_cast source type is not polymorphic");
-  for (vt = virtual_table_infos; vt; vt = vt->next)
-    if (vt->class_tok == source_tok) {
-      offset = virtual_vptr_offset(source_tok, vt->root_tok);
-      if (offset >= 0) break;
-    }
+  root = class_primary_virtual_root(source_tok);
+  offset = root ? virtual_vptr_offset(source_tok, root) : -1;
   if (offset < 0) cprime_error("dynamic_cast source type is not polymorphic");
   if (NODATA_WANTED) {
     vpop(); vset(target, VT_CONST, 0);

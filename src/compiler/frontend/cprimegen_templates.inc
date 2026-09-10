@@ -10643,7 +10643,25 @@ static int parse_one_template_type_arg(void)
       int nested_tok = find_current_class_nested_type_tok(tok);
       if (nested_tok != tok)
       {
+        TemplateDef *nested_template = find_class_template_def(nested_tok);
         next();
+        /* A nested class template of the enclosing class spelled
+           unqualified in a template argument (X<int> inside Y) keeps its
+           argument list and instantiates here. */
+        if (nested_template && nested_template->is_class
+            && (tok == TOK_LT || tok == '<'))
+        {
+          int nested_mangled_tok;
+          TemplateArgList nested_args;
+          parse_template_type_args(&nested_args);
+          nested_mangled_tok = instantiate_template_argument_type(nested_template,
+                                                                  &nested_args);
+          compile_pending_template_specs();
+          if (!struct_find(nested_mangled_tok))
+            cprime_error("template class instantiation failed for '%s'",
+                         get_tok_str(nested_template->name_tok, NULL));
+          return finish_template_type_argument(nested_mangled_tok, qualifiers);
+        }
         return finish_template_type_argument(nested_tok, qualifiers);
       }
     }
@@ -10766,6 +10784,29 @@ static int parse_one_template_type_arg(void)
       }
       type_tok = global_scope ? template_global_type_spelling(name_tok) : name_tok;
       next();
+      /* A function template-id is an ordinary non-type argument naming the
+         specialization (default_initializer<int> for a
+         void init_function(const OBJECT&) parameter).  Instantiate it here so
+         the argument list is consumed instead of stopping at '<'. */
+      if (tok == TOK_LT || tok == '<')
+      {
+        TemplateDef *function_template = find_function_template_def(type_tok);
+        if (!function_template)
+          function_template = find_function_template_def(name_tok);
+        if (function_template && !function_template->is_class
+            && !function_template->is_alias)
+        {
+          TemplateArgList function_arguments;
+          int instantiated_tok;
+          parse_template_type_args(&function_arguments);
+          instantiated_tok = instantiate_template_if_needed(function_template,
+                                                            &function_arguments);
+          compile_pending_template_specs();
+          if (sym_find(instantiated_tok) || global_symbol_find(instantiated_tok)
+              || struct_find(instantiated_tok))
+            return finish_template_type_argument(instantiated_tok, qualifiers);
+        }
+      }
       if (tok == ':')
       {
         CType qualified_owner;
@@ -11509,6 +11550,153 @@ static int deduce_partial_type_argument(TemplateDef *candidate,
                  ? VT_CONSTANT : VT_VOLATILE;
     next();
   }
+  /* A member-pointer pattern names the member type and its class separately:
+     `T K::*` deduces T from the member and K from the owner, and
+     `R (K::*)(T1) [cv]` does the same for a member function pointer. The
+     compiler stores these as two-word member-pointer records, so the pattern
+     is read textually while the argument's record supplies the types. */
+  if (parameter_index >= 0 && macro_ptr
+      && !(candidate->value_param_mask & (1u << parameter_index)))
+  {
+    const int *peek = macro_ptr;
+    CValue peek_value;
+    int form = 0, q;
+    if (tok >= TOK_UIDENT)
+    {
+      int first = 0, second = 0, third = 0;
+      TOK_GET(&first, &peek, &peek_value);
+      while (first == TOK_LINENUM) TOK_GET(&first, &peek, &peek_value);
+      TOK_GET(&second, &peek, &peek_value);
+      while (second == TOK_LINENUM) TOK_GET(&second, &peek, &peek_value);
+      TOK_GET(&third, &peek, &peek_value);
+      while (third == TOK_LINENUM) TOK_GET(&third, &peek, &peek_value);
+      if (first == ':' && second == ':' && third == '*') form = 1;
+    }
+    else if (tok == '(')
+    {
+      int look[5];
+      for (q = 0; q < 5; ++q) {
+        TOK_GET(&look[q], &peek, &peek_value);
+        while (look[q] == TOK_LINENUM) TOK_GET(&look[q], &peek, &peek_value);
+      }
+      if (look[0] >= TOK_UIDENT && look[1] == ':' && look[2] == ':'
+          && look[3] == '*' && look[4] == ')') form = 2;
+    }
+    if (form)
+    {
+      CType actual_type, owner_type;
+      CppMemberPointerType *member;
+      int owner_token, owner_index, owner_binding, member_binding = 0;
+      if (prefix_cv || count
+          || !make_type_from_type_arg_tok(&actual_type, actual_tok))
+        return 0;
+      member = find_cpp_member_pointer_type(&actual_type);
+      if (!member) return 0;
+      if (form == 1)
+      {
+        owner_token = tok;
+        member_binding = template_exact_ctype_typedef_tok(&member->member_type);
+        if (!member_binding)
+          member_binding = template_exact_type_tok_from_ctype(&member->member_type);
+        if (!member_binding) return 0;
+        if (bindings->toks[parameter_index]
+            && !template_type_arg_toks_match(bindings->toks[parameter_index],
+                                             member_binding))
+          return 0;
+        bindings->toks[parameter_index] = member_binding;
+        next(); next(); next(); next();
+      }
+      else
+      {
+        CType signature;
+        Sym *parameter;
+        int member_type_tok, trailing_cv = 0;
+        if ((member->member_type.t & VT_BTYPE) != VT_FUNC) return 0;
+        member_type_tok = template_exact_ctype_typedef_tok(&member->member_type);
+        if (!member_type_tok
+            || !make_type_from_type_arg_tok(&signature, member_type_tok)
+            || (signature.t & VT_BTYPE) != VT_FUNC || !signature.ref)
+          return 0;
+        parameter = signature.ref->next;
+        next();
+        owner_token = tok;
+        next();
+        if (tok != ':') return 0;
+        next();
+        if (tok != ':') return 0;
+        next();
+        if (tok != '*') return 0;
+        next();
+        if (tok != ')') return 0;
+        next();
+        if (tok != '(') return 0;
+        next();
+        while (tok != ')' && tok != TOK_EOF)
+        {
+          int pack = template_param_index(candidate, tok);
+          if (pack >= 0 && pack == candidate->variadic_param_index)
+          {
+            next();
+            if (tok != TOK_DOTS) return 0;
+            next();
+            bindings->nb = pack;
+            while (parameter)
+            {
+              if (bindings->nb == CPC_MAX_TEMPLATE_ARGUMENTS) return 0;
+              bindings->toks[bindings->nb++] =
+                template_exact_ctype_typedef_tok(&parameter->type);
+              parameter = parameter->next;
+            }
+            break;
+          }
+          if (!parameter) return 0;
+          if (!deduce_partial_type_argument(candidate, bindings,
+                 template_exact_ctype_typedef_tok(&parameter->type))) return 0;
+          parameter = parameter->next;
+          if (tok != ',') break;
+          next();
+        }
+        if (tok != ')' || parameter) return 0;
+        next();
+        while (tok == TOK_CONST1 || tok == TOK_CONST2 || tok == TOK_CONST3
+               || tok == TOK_VOLATILE1 || tok == TOK_VOLATILE2
+               || tok == TOK_VOLATILE3)
+        {
+          trailing_cv |=
+            (tok == TOK_CONST1 || tok == TOK_CONST2 || tok == TOK_CONST3)
+            ? VT_CONSTANT : VT_VOLATILE;
+          next();
+        }
+        if ((signature.t & (VT_CONSTANT | VT_VOLATILE)) != trailing_cv)
+          return 0;
+        actual_tok = template_exact_ctype_typedef_tok(&signature.ref->type);
+        if (!actual_tok) return 0;
+      }
+      if (!make_class_type_from_tok(&owner_type, member->owner_tok)) return 0;
+      owner_index = template_param_index(candidate, owner_token);
+      if (owner_index >= 0)
+      {
+        owner_binding = template_type_tok_from_ctype(&owner_type);
+        if (!owner_binding)
+          owner_binding = template_exact_ctype_typedef_tok(&owner_type);
+        if (!owner_binding) return 0;
+        if (bindings->toks[owner_index]
+            && !template_type_arg_toks_match(bindings->toks[owner_index],
+                                             owner_binding))
+          return 0;
+        bindings->toks[owner_index] = owner_binding;
+      }
+      else
+      {
+        int owner_name_tok = get_struct_type_name_tok(&owner_type);
+        if (!owner_name_tok
+            || strcmp(get_tok_str(owner_name_tok, NULL),
+                      get_tok_str(owner_token, NULL)))
+          return 0;
+      }
+      if (form == 1) return 1;
+    }
+  }
   while (tok == '*' || tok == '&' || tok == TOK_LAND)
   {
     int qualifier = 0;
@@ -11848,7 +12036,7 @@ static TemplateDef *matching_partial_class_template(TemplateDef *primary,
         else if (is_param)
         {
           if (!deduce_partial_type_argument(candidate, bindings,
-                                              args->toks[nb]))
+                                            args->toks[nb]))
           {
             matched = 0;
             break;
@@ -11864,7 +12052,35 @@ static TemplateDef *matching_partial_class_template(TemplateDef *primary,
             is_param = 1;
           }
           else
-          t = template_substituted_pattern_argument(candidate, bindings);
+          {
+            int pattern_tok = t;
+            t = template_substituted_pattern_argument(candidate, bindings);
+            if (!t || !template_type_arg_toks_match(t, args->toks[nb]))
+            {
+              /* A pattern argument that names a member of the enclosing class
+                 (`B<C, const U*>` inside `template<class T> struct A`) is
+                 dependent on that class, so the pattern keeps the member's
+                 unqualified spelling while the argument carries the
+                 instantiated owner token (`A__int_C`). Accept the argument
+                 when it is a member of the very class that owns this partial
+                 specialization and names the same member. */
+              const CppRecordDeclInfo *argument_record =
+                pattern_tok >= TOK_UIDENT
+                  ? lookup_cpp_record_decl(args->toks[nb]) : NULL;
+              const CppRecordDeclInfo *candidate_record =
+                lookup_cpp_record_decl(candidate->name_tok);
+              const char *member = get_tok_str(pattern_tok, NULL);
+              const char *actual = get_tok_str(args->toks[nb], NULL);
+              size_t member_length = strlen(member), actual_length = strlen(actual);
+              if (argument_record && candidate_record
+                  && argument_record->owner_tok
+                  && argument_record->owner_tok == candidate_record->owner_tok
+                  && actual_length > member_length
+                  && actual[actual_length - member_length - 1] == '_'
+                  && !strcmp(actual + actual_length - member_length, member))
+                t = args->toks[nb];
+            }
+          }
           if (!is_param && !t) matched = 0;
         }
         if (!is_param && !template_type_arg_toks_match(t, args->toks[nb]))
@@ -13491,8 +13707,10 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
     valid = template_probe_type(interface, 2, td->namespace_tok, NULL);
     tok_str_free(interface);
     if (!valid)
+    {
       cprime_error("invalid function template interface '%s'",
                    get_tok_str(td->name_tok, NULL));
+    }
     if (!materialize_function_body) return mangled_tok;
   }
   queue_pending_template_spec_in_namespace(spec,
@@ -14232,6 +14450,7 @@ static int deduce_direct_template_type(TokenString *definition, int start,
 {
   CType deduced = *argument;
   int i, pointers = 0, reference = 0, qualifiers = 0, forwarding;
+  int member_type_deduced = 0;
   int argument_is_lvalue = !(deduced.t & VT_RVALUE_REFERENCE);
   if (deduced.t == VT_BRACED_LIST)
     return 0;
@@ -14244,16 +14463,27 @@ static int deduce_direct_template_type(TokenString *definition, int start,
   }
   /* In T C::*, T denotes the member type rather than the compiler's
      internal two-word member-pointer representation. */
-  for (i = parameter + 1; i + 3 < end; ++i) {
-    if (definition->str[i] >= TOK_UIDENT
-        && definition->str[i + 1] == ':' && definition->str[i + 2] == ':'
-        && definition->str[i + 3] == '*') {
-      CppMemberPointerType *member = find_cpp_member_pointer_type(&deduced);
-      if (!member) return 0;
-      deduced = member->member_type;
-      break;
-    }
-  }
+   for (i = parameter + 1; i + 3 < end; ++i) {
+     if (definition->str[i] >= TOK_UIDENT
+         && definition->str[i + 1] == ':' && definition->str[i + 2] == ':'
+         && definition->str[i + 3] == '*') {
+       CppMemberPointerType *member = find_cpp_member_pointer_type(&deduced);
+       int returns_member_function_value = 0;
+       if (!member) return 0;
+       /* `R (C::*name)(...)` spells the deduced parameter as the member
+          function's *result* type, not the stored function type. The
+          parenthesized member-pointer group immediately after the parameter
+          tells the two spellings apart: `T C::*` keeps the member type. */
+       if ((member->member_type.t & VT_BTYPE) == VT_FUNC
+           && member->member_type.ref
+           && definition->str[parameter + 1] == '(' && i == parameter + 2)
+         returns_member_function_value = 1;
+       deduced = returns_member_function_value
+                   ? member->member_type.ref->type : member->member_type;
+       member_type_deduced = 1;
+       break;
+     }
+   }
   for (i = start; i < end; ++i)
   {
     int t = definition->str[i];
@@ -14273,13 +14503,19 @@ static int deduce_direct_template_type(TokenString *definition, int start,
   deduced.t &= ~VT_RVALUE_REFERENCE;
   if (!pointers && !reference)
   {
-    if ((deduced.t & VT_BTYPE) == VT_FUNC)
-      mk_pointer(&deduced);
-    else {
-      deduced.t &= ~VT_ARRAY;
-      if (IS_BT_ARRAY(deduced.t)) deduced.t &= ~VT_STRUCT_MASK;
+    /* A member type deduced through `T C::*` keeps its own type, including
+       its cv-qualifiers: only a by-value parameter decays a function or
+       array type to a pointer and drops top-level cv. */
+    if (!member_type_deduced)
+    {
+      if ((deduced.t & VT_BTYPE) == VT_FUNC)
+        mk_pointer(&deduced);
+      else {
+        deduced.t &= ~VT_ARRAY;
+        if (IS_BT_ARRAY(deduced.t)) deduced.t &= ~VT_STRUCT_MASK;
+      }
+      deduced.t &= ~(VT_CONSTANT | VT_VOLATILE);
     }
-    deduced.t &= ~(VT_CONSTANT | VT_VOLATILE);
   }
   forwarding = reference == TOK_LAND && !pointers && !qualifiers;
   while (pointers--)
@@ -14488,12 +14724,33 @@ static int infer_template_args_from_call_pattern(TemplateDef *td,
               continue;
             if (param_idx >= 0 && param_depth > 0
                 && !(td->value_param_mask & (1u << param_idx))) {
-              CType actual = arg_types[arg_index];
-              int opening = -1, cursor, nesting = 0, segment, position = 0;
-              Sym *parameter;
-              if (is_reference_type(&actual)) actual = *pointed_type(&actual);
-              if ((actual.t & VT_BTYPE) == VT_PTR) actual = *pointed_type(&actual);
-              if ((actual.t & VT_BTYPE) == VT_FUNC && actual.ref) {
+             CType actual = arg_types[arg_index];
+             int opening = -1, cursor, nesting = 0, segment, position = 0;
+             Sym *parameter;
+             CppMemberPointerType *member = NULL;
+             if (is_reference_type(&actual)) actual = *pointed_type(&actual);
+             if ((actual.t & VT_BTYPE) == VT_PTR) actual = *pointed_type(&actual);
+             /* `R (C::*name)(...)` names the member's class inside the
+                parenthesized member-pointer group, so the owner parameter is
+                read from the argument's record while the member function's
+                parameter list supplies any further deduced parameters. */
+             member = find_cpp_member_pointer_type(&actual);
+             if (member && (member->member_type.t & VT_BTYPE) == VT_FUNC) {
+               if (j + 3 < end && td->def_str->str[j + 1] == ':'
+                   && td->def_str->str[j + 2] == ':' && td->def_str->str[j + 3] == '*') {
+                 CType owner_type;
+                 if (!make_class_type_from_tok(&owner_type, member->owner_tok)) return 0;
+                 type_tok = template_type_tok_from_ctype(&owner_type);
+                 if (!type_tok) return 0;
+                 if (args->toks[param_idx]
+                     && !template_type_arg_toks_match(args->toks[param_idx], type_tok))
+                   return 0;
+                 args->toks[param_idx] = type_tok;
+                 continue;
+               }
+               actual = member->member_type;
+             }
+             if ((actual.t & VT_BTYPE) == VT_FUNC && actual.ref) {
                 for (cursor = param_start; cursor < j; ++cursor) {
                   int token = td->def_str->str[cursor];
                   if (token == '(' && !nesting) opening = cursor;

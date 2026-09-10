@@ -1014,12 +1014,24 @@ if_chain:
               arg_type = *pointed_type(&arg_type);
               mk_pointer(&arg_type);
             }
+            /* As for call arguments, an integer constant zero is a null
+               pointer constant and can select a converting constructor
+               taking a pointer. Keep the marker on the live value while the
+               constructor is selected and constructed. */
+            if (is_null_pointer(vtop)
+                && (vtop->type.t & VT_BTYPE) != VT_PTR)
+            {
+              arg_type.t |= VT_NULLPTR_TYPE;
+              vtop->type.t |= VT_NULLPTR_TYPE;
+            }
             if (resolve_member_func_by_arg_types(&func_vt, TOK_CONSTRUCTOR1,
                                                  &arg_type, 1))
               converting_ctor = 1;
             else if (class_has_single_arg_constructor_for(&func_vt,
-                                                          &vtop->type))
+                                                          &arg_type))
               converting_ctor = 1;
+            else
+              vtop->type.t &= ~VT_NULLPTR_TYPE;
           }
           if (!converting_ctor)
           {

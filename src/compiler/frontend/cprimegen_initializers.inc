@@ -38,6 +38,13 @@ static void decl_design_flex(init_params *p, Sym *ref, int index)
     cprime_error("flexible array has zero size in this context");
 }
 
+static void skip_empty_array_fields(Sym **field)
+{
+  while (*field && ((*field)->type.t & VT_ARRAY)
+         && (*field)->type.ref && (*field)->type.ref->c == 0)
+    *field = (*field)->next;
+}
+
 /* t is the array or struct type. c is the array or struct
    address. cur_field is the pointer to the current
    field, for arrays the 'c' member contains the current start
@@ -918,7 +925,7 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
       int rank = 0;
       if (candidate->struct_tok != class_tok
           || candidate->method_tok != TOK_CONSTRUCTOR1
-          || count < candidate->min_arg_count || count > candidate->explicit_arg_count)
+          || !member_overload_accepts_argument_count(candidate, count))
         continue;
       function = find_global_symbol(candidate->mangled_tok);
       if (!function || !function->type.ref) continue;
@@ -1193,7 +1200,10 @@ do_init_list:
           if (s->type.t == VT_UNION)
             f = NULL;
           else
+          {
             f = f->next;
+            skip_empty_array_fields(&f);
+          }
           if (no_oblock && f == NULL)
             break;
         }
@@ -1470,6 +1480,7 @@ do_init_list:
     }
     s = type->ref;
     f = s->next;
+    skip_empty_array_fields(&f);
     n = s->c;
     size1 = 1;
     goto do_init_list;
@@ -1620,26 +1631,23 @@ static void emit_automatic_class_array_initialization(Sym *symbol,
    is done to handle string constants. */
 /* An anonymous union declares one object and exposes each member at that
    object's address in the enclosing scope. */
-static void declare_anonymous_union(CType *type, AttributeDef *ad, int scope)
+static void declare_anonymous_aggregate_members(CType *type, AttributeDef *ad,
+                                                int scope, int address,
+                                                int allocation_size,
+                                                int static_storage)
 {
   Sym *field;
-  MemberFuncOverload *method;
-  int size, align, address, static_storage = scope == VT_CONST || (type->t & VT_STATIC);
-  for (method = member_func_overloads; method; method = method->next)
-    if (method->struct_tok == (type->ref->v & ~SYM_STRUCT))
-      cprime_error("anonymous union cannot declare member functions");
-  if (scope == VT_CONST && !(type->t & VT_STATIC)
-      && !symbol_has_internal_namespace_linkage(make_current_namespace_tok(tok_alloc_const("__anonymous_union"))))
-    cprime_error("namespace-scope anonymous union must be static");
-  size = type_size(type, &align);
-  if (ad->a.aligned && (1 << (ad->a.aligned - 1)) > align) align = 1 << (ad->a.aligned - 1);
-  if (static_storage) address = section_add(bss_section, size, align);
-  else { loc = (loc - size) & -align; address = loc; }
   for (field = type->ref->next; field; field = field->next) {
     CType member_type = field->type;
     int name = field->v & ~SYM_FIELD;
     Sym *binding, *previous;
-    if (name >= SYM_FIRST_ANOM) continue;
+    if (name >= SYM_FIRST_ANOM) {
+      if ((member_type.t & VT_BTYPE) == VT_STRUCT && member_type.ref)
+        declare_anonymous_aggregate_members(&member_type, ad, scope,
+                                            address + field->c,
+                                            allocation_size, static_storage);
+      continue;
+    }
     if (field->a.cpp_field_access) cprime_error("anonymous union members must be public");
     if (type_requires_class_construction(&member_type) || type_requires_class_destruction(&member_type))
       cprime_error("anonymous union member requires nontrivial lifetime operations");
@@ -1654,8 +1662,29 @@ static void declare_anonymous_union(CType *type, AttributeDef *ad, int scope)
                          | (static_storage ? VT_CONST | VT_SYM : VT_LOCAL),
                        static_storage ? 0 : address + field->c);
     binding->a = ad->a;
-    if (static_storage) put_extern_sym(binding, bss_section, address + field->c, size);
+    if (static_storage)
+      put_extern_sym(binding, bss_section, address + field->c,
+                     allocation_size);
   }
+}
+
+static void declare_anonymous_union(CType *type, AttributeDef *ad, int scope)
+{
+  MemberFuncOverload *method;
+  int size, align, address;
+  int static_storage = scope == VT_CONST || (type->t & VT_STATIC);
+  for (method = member_func_overloads; method; method = method->next)
+    if (method->struct_tok == (type->ref->v & ~SYM_STRUCT))
+      cprime_error("anonymous union cannot declare member functions");
+  if (scope == VT_CONST && !(type->t & VT_STATIC)
+      && !symbol_has_internal_namespace_linkage(make_current_namespace_tok(tok_alloc_const("__anonymous_union"))))
+    cprime_error("namespace-scope anonymous union must be static");
+  size = type_size(type, &align);
+  if (ad->a.aligned && (1 << (ad->a.aligned - 1)) > align) align = 1 << (ad->a.aligned - 1);
+  if (static_storage) address = section_add(bss_section, size, align);
+  else { loc = (loc - size) & -align; address = loc; }
+  declare_anonymous_aggregate_members(type, ad, scope, address, size,
+                                      static_storage);
 }
 
 static void probe_static_aggregate_initializer(CType *original)
@@ -2169,6 +2198,7 @@ err_size:
        constructors, which otherwise have no generated body in which to set a
        vptr. */
     initialize_virtual_tables_for_object(&sym->type, sym->r, sym->c, sym);
+    initialize_virtual_tables_for_member_objects(&sym->type, sym->r, sym->c);
   }
   else if (sym && !NODATA_WANTED && !(type->t & VT_VLA)
            && cur_text_section)

@@ -316,6 +316,26 @@ static int cpp_try_conditional_prvalue(void)
       && class_has_single_arg_constructor_for(&other, &type);
     if (to_first && !to_second) { other = type; second_kind = 3; converted = 1; }
     else if (to_second && !to_first) { type = other; first_kind = 3; converted = 1; }
+    else if (!converted)
+    {
+      int first_class = get_struct_type_name_tok(&type);
+      int second_class = get_struct_type_name_tok(&other);
+      int offset;
+      if (first_class && second_class
+          && cpp_rtti_public_base_offset(first_class, second_class, &offset))
+      {
+        type = other;
+        first_kind = 3;
+        converted = 1;
+      }
+      else if (first_class && second_class
+               && cpp_rtti_public_base_offset(second_class, first_class, &offset))
+      {
+        other = type;
+        second_kind = 3;
+        converted = 1;
+      }
+    }
   }
   if (first_kind == 2 && second_kind == 1) type = other;
   if (first_kind == 1 && !saved_initializer_is_direct_constructor(yes, &type)) {

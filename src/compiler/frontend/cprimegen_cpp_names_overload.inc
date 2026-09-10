@@ -975,6 +975,18 @@ static int free_func_accepts_argument_count(FreeFuncOverload *overload, int coun
               && overload->func_type.ref->f.func_type == FUNC_ELLIPSIS));
 }
 
+/* A variadic member accepts every argument count at or above its required
+   parameters, so `A(...)` is a converting constructor for any argument
+   list, exactly as for a free function. */
+static int member_overload_accepts_argument_count(MemberFuncOverload *overload,
+                                                  int count)
+{
+  return count >= overload->min_arg_count
+      && (count <= overload->explicit_arg_count
+          || (overload->func_type.ref
+              && overload->func_type.ref->f.func_type == FUNC_ELLIPSIS));
+}
+
 static int free_func_overload_exists_for_arg_count(int name_tok,
                                                    int explicit_arg_count)
 {
@@ -1322,14 +1334,47 @@ static int default_arg_is_empty_braces(TokenString *str)
   return n == 2 && syntax[0] == '{' && syntax[1] == '}';
 }
 
+static Sym *push_default_arg_parameter_scope(Sym *func_type, Sym *arg,
+                                             int *saved_scope)
+{
+  Sym *saved_locals = local_stack, *parameter;
+  *saved_scope = local_scope;
+  local_stack = NULL;
+  ++local_scope;
+  sym_push2(&local_stack, SYM_FIELD, 0, 0);
+  if (func_type)
+    for (parameter = func_type->next; parameter; parameter = parameter->next)
+    {
+      int name = parameter->v & ~SYM_FIELD;
+      if (name >= TOK_UIDENT)
+      {
+        CType parameter_type = parameter->type;
+        convert_parameter_type(&parameter_type);
+        sym_push(name, &parameter_type, VT_LOCAL | VT_LVAL, 0);
+      }
+      if (parameter == arg)
+        break;
+    }
+  return saved_locals;
+}
+
+static void pop_default_arg_parameter_scope(Sym *saved_locals, int saved_scope)
+{
+  sym_pop(&local_stack, NULL, 0);
+  local_stack = saved_locals;
+  local_scope = saved_scope;
+}
+
 static void emit_default_arg(Sym *func_type, Sym *arg)
 {
   int entry_tok = tok;
   int saved_default_owner = active_member_class_tok;
+  int saved_parameter_scope;
   CValue entry_tokc = tokc;
   TokenString macro;
   TokenString *qualified_default = NULL;
   TokenString *value_init = NULL;
+  Sym *saved_parameter_locals;
   TokenString *saved_macro_stack = macro_stack;
   const int *saved_macro_ptr = macro_ptr;
 
@@ -1392,8 +1437,11 @@ static void emit_default_arg(Sym *func_type, Sym *arg)
     macro = *qualified_default;
   }
   begin_macro(&macro, 0);
+  saved_parameter_locals = push_default_arg_parameter_scope(func_type, arg,
+                                                            &saved_parameter_scope);
   next();
   expr_eq();
+  pop_default_arg_parameter_scope(saved_parameter_locals, saved_parameter_scope);
   while (macro_stack && macro_stack != saved_macro_stack)
     end_macro();
   if (qualified_default) tok_str_free(qualified_default);
@@ -1794,6 +1842,10 @@ static int emit_saved_arg_for_param(TokenString *arg, Sym *param)
   return 0;
 }
 
+static Sym *find_cpp_conversion_operator(CType *source, CType *target,
+                                        int allow_explicit, int *method,
+                                        int *conversion_rank);
+
 static void gfunc_param_typed_with_conversions(Sym *func_type, Sym *param)
 {
   if (param)
@@ -1801,6 +1853,7 @@ static void gfunc_param_typed_with_conversions(Sym *func_type, Sym *param)
     CType param_value_type = param->type;
     CType construct_type;
     CType arg_value_type = vtop->type;
+    int null_pointer_argument = 0;
 
     param_value_type.t &= ~VT_RVALUE_REFERENCE;
     if (is_reference_type(&param_value_type))
@@ -1808,6 +1861,15 @@ static void gfunc_param_typed_with_conversions(Sym *func_type, Sym *param)
     arg_value_type.t &= ~VT_RVALUE_REFERENCE;
     if (is_reference_type(&arg_value_type))
       arg_value_type = *pointed_type(&arg_value_type);
+    /* An integer constant zero is a null pointer constant. It converts to a
+       pointer parameter, so it also selects a converting constructor taking
+       one. The deferred-argument replay marks the same case with
+       VT_NULLPTR_TYPE; live arguments need it here or the constructor search
+       sees only `int` and rejects the conversion. */
+    null_pointer_argument = is_null_pointer(vtop)
+        && (vtop->type.t & VT_BTYPE) != VT_PTR;
+    if (null_pointer_argument)
+      arg_value_type.t |= VT_NULLPTR_TYPE;
     construct_type = param_value_type;
     construct_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
     if ((construct_type.t & VT_BTYPE) == VT_STRUCT
@@ -1821,8 +1883,26 @@ static void gfunc_param_typed_with_conversions(Sym *func_type, Sym *param)
         && class_has_single_arg_constructor_for(&construct_type,
                                                 &arg_value_type))
     {
+      /* The constructor search inside the construction helper reads the
+         live argument type, so carry the marker across that call too. */
+      if (null_pointer_argument)
+        vtop->type.t |= VT_NULLPTR_TYPE;
       try_materialize_constructor_conversion(&construct_type);
+      vtop->type.t &= ~VT_NULLPTR_TYPE;
     }
+    /* A conversion operator selected by overload resolution owns the
+       argument conversion; emit it here so the parameter receives the
+       converted temporary instead of the source object's storage. */
+    else if (!cpp_standard_conversion_only
+             && (arg_value_type.t & VT_BTYPE) == VT_STRUCT
+             && (param_value_type.t & VT_BTYPE) == VT_STRUCT
+             && !is_compatible_unqualified_types(&param_value_type,
+                                                 &arg_value_type)
+             && !same_concrete_template_instantiation(&param_value_type,
+                                                      &arg_value_type)
+             && find_cpp_conversion_operator(&arg_value_type, &param_value_type,
+                                             0, NULL, NULL))
+      try_call_cpp_conversion_operator(&param->type, 0);
   }
   gfunc_param_typed(func_type, param);
 }
@@ -1950,7 +2030,14 @@ static int cpp_pointer_to_bool_conversion(CType *parameter, CType *argument)
   return 1;
 }
 
-static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
+static Sym *find_cpp_conversion_operator(CType *source, CType *target,
+                                        int allow_explicit, int *method,
+                                        int *conversion_rank);
+
+static int call_arg_matches_param_type(CType *param_type, CType *arg_type);
+
+static int call_arg_matches_param_type_standard(CType *param_type,
+                                                CType *arg_type)
 {
   if (arg_type->t == VT_BRACED_LIST)
     return saved_list_argument_rank(param_type, arg_type->ref->default_arg) >= 0;
@@ -1962,6 +2049,7 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
       return resolve_function_address(source, param_type) != NULL;
   }
   CType decayed_arg, arg_value_type;
+  CType constructor_arg_type;
   CType param_value_type;
   CType normalized_arg;
   CType *param_pointed, *arg_pointed;
@@ -1980,6 +2068,7 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
   arg_value_type.t &= ~VT_RVALUE_REFERENCE;
   if (is_reference_type(&arg_value_type))
     arg_value_type = *pointed_type(&arg_value_type);
+  constructor_arg_type = arg_value_type;
   param_value_type = *param_type;
   param_value_type.t &= ~VT_RVALUE_REFERENCE;
   if (is_reference_type(&param_value_type))
@@ -2044,7 +2133,8 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
       return 1;
     if (!(param_type->t & VT_RVALUE_REFERENCE)
         && (param_pointed->t & VT_CONSTANT)
-        && class_has_single_arg_constructor_for(param_pointed, &arg_value_type))
+        && class_has_single_arg_constructor_for(param_pointed,
+                                                &constructor_arg_type))
       return 1;
     /* References use pointer storage internally, but a failed reference
        binding must not fall through to ordinary pointer conversion.  Doing
@@ -2085,7 +2175,8 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
       && class_value_is_derived_from(&arg_value_type, &param_value_type))
     return 1;
   if ((param_type->t & VT_BTYPE) == VT_STRUCT
-      && class_has_single_arg_constructor_for(param_type, &arg_value_type))
+      && class_has_single_arg_constructor_for(param_type,
+                                              &constructor_arg_type))
     return 1;
   if ((param_type->t & VT_BTYPE) == VT_PTR
       && (arg_value_type.t & VT_BTYPE) == VT_PTR
@@ -2098,9 +2189,26 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
   return 0;
 }
 
-static Sym *find_cpp_conversion_operator(CType *source, CType *target,
-                                        int allow_explicit, int *method,
-                                        int *conversion_rank);
+/* A class argument reaches a class parameter through a conversion operator
+   just as it does through a converting constructor. Ranking already accepts
+   that conversion (call_arg_match_rank); the viability predicate must agree
+   or a ranked candidate is discarded before it can be selected. */
+static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
+{
+  CType source;
+  int conversion_rank;
+
+  if (call_arg_matches_param_type_standard(param_type, arg_type))
+    return 1;
+  if (cpp_standard_conversion_only || !arg_type)
+    return 0;
+  source = *arg_type;
+  if (is_reference_type(&source)) source = *pointed_type(&source);
+  if ((source.t & VT_BTYPE) != VT_STRUCT)
+    return 0;
+  return find_cpp_conversion_operator(&source, param_type, 0, NULL,
+                                      &conversion_rank) != NULL;
+}
 
 static int cpp_enum_promotion_rank(CType *target, CType *source)
 {
@@ -2192,6 +2300,7 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
       return resolve_function_address(source, param_type) ? 0 : -1;
   }
   CType arg_value_type;
+  CType constructor_arg_type;
   CType param_value_type;
   CType normalized_arg;
   CType *param_pointed;
@@ -2210,6 +2319,9 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
   arg_value_type.t &= ~VT_RVALUE_REFERENCE;
   if (is_reference_type(&arg_value_type))
     arg_value_type = *pointed_type(&arg_value_type);
+  /* Keep the null pointer constant marker for the constructor search below;
+     the normalization for a non-pointer parameter drops it. */
+  constructor_arg_type = arg_value_type;
   param_value_type = *param_type;
   param_value_type.t &= ~VT_RVALUE_REFERENCE;
   if (is_reference_type(&param_value_type))
@@ -2281,7 +2393,8 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
     if ((param_value_type.t & VT_BTYPE) == VT_STRUCT
         && ((param_type->t & VT_RVALUE_REFERENCE) || (param_value_type.t & VT_CONSTANT))
         && !is_compatible_unqualified_types(&param_value_type, &arg_value_type)
-        && class_has_single_arg_constructor_for(&param_value_type, &arg_value_type))
+        && class_has_single_arg_constructor_for(&param_value_type,
+                                                &constructor_arg_type))
       return 8;
     if ((param_type->t & VT_RVALUE_REFERENCE)
         && !(arg_type->t & VT_RVALUE_REFERENCE))
@@ -2316,7 +2429,8 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
       return cpp_arithmetic_conversion_rank(param_pointed, &arg_value_type);
     if (!(param_type->t & VT_RVALUE_REFERENCE)
         && (param_pointed->t & VT_CONSTANT)
-        && class_has_single_arg_constructor_for(param_pointed, &arg_value_type))
+        && class_has_single_arg_constructor_for(param_pointed,
+                                                &constructor_arg_type))
       return 8;
     /* Do not reinterpret the internal pointer-shaped representation of a
        reference as a pointer parameter after reference binding failed. */
@@ -2340,7 +2454,8 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
       && btype_is_arithmetic_scalar(arg_value_type.t & VT_BTYPE))
     return cpp_arithmetic_conversion_rank(&param_value_type, &arg_value_type);
   if ((param_type->t & VT_BTYPE) == VT_STRUCT
-      && class_has_single_arg_constructor_for(param_type, &arg_value_type))
+      && class_has_single_arg_constructor_for(param_type,
+                                              &constructor_arg_type))
     return 8;
   return call_arg_matches_param_type(param_type, arg_type) ? 3 : -1;
 }
@@ -3466,6 +3581,13 @@ static int try_call_cpp_binary_operator(int op)
            && (saved_rhs.type.t & VT_BTYPE) != VT_FUNC)
           || (saved_rhs.r & VT_CXX_PRVALUE)))
     saved_rhs.type.t |= VT_RVALUE_REFERENCE;
+  /* An integer constant zero is a null pointer constant, so a member operator
+     taking a pointer parameter can select it (`tempHost = host() == 0`).
+     Candidate ranking only sees the operand type; mark it the same way the
+     live call-argument path does and drop the marker before the call. */
+  if (is_null_pointer(vtop) && (saved_rhs.type.t & VT_BTYPE) != VT_PTR
+      && (saved_rhs.type.t & VT_BTYPE) != VT_NULLPTR)
+    saved_rhs.type.t |= VT_NULLPTR_TYPE;
   instantiate_template_member_for_call(&saved_lhs.type, method_tok,
                                        &saved_rhs.type, 1);
   vtop = saved_operand_vtop;
@@ -3516,6 +3638,8 @@ static int try_call_cpp_binary_operator(int op)
      parameter cannot accept the right operand. */
   if (call_arg_match_rank(&sa->next->type, &saved_rhs.type) < 0)
     return 0;
+  saved_rhs.type.t &= ~VT_NULLPTR_TYPE;
+  *vtop = saved_rhs;
 
   /* Convert lhs/rhs into member call args: operator(this, rhs). */
   vswap();
@@ -4240,7 +4364,7 @@ static int try_call_cpp_assignment_operator(void)
   gv(RC_INT);
   vswap();
   save_lvalues();
-  gfunc_param_typed(func_type, value_arg);
+  gfunc_param_typed_with_conversions(func_type, value_arg);
   vswap();
   gfunc_param_typed(func_type, this_arg);
   vswap();

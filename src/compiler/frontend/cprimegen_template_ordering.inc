@@ -513,6 +513,37 @@ static int class_order_deduces(ClassOrderTypes *pattern, ClassOrderTypes *actual
   return 1;
 }
 
+/* Member-pointer patterns are not modelled by the structural type walk above.
+   A member function pointer pattern is more specialized than the plain
+   `T K::*` object form for the same class, because an arbitrary member type
+   cannot be deduced from a synthesized function member type. Returns 0 when
+   the parameter is not a member pointer, 1 for `T K::*` and 2 for
+   `R (K::*)(T1...) [cv]`. */
+static int class_order_member_pointer_form(MemberOrderPattern *pattern)
+{
+  int at, end, i, name, function_form = 0;
+  if (pattern->parameters != 1) return 0;
+  at = pattern->starts[0];
+  end = pattern->ends[0];
+  if (at >= end || pattern->tokens[at] >= 0) return 0;
+  ++at;
+  if (at < end && pattern->tokens[at] == '(') { function_form = 1; ++at; }
+  for (i = at, name = 0; i < end && pattern->tokens[i] != ':'
+       && pattern->tokens[i] != '*' && pattern->tokens[i] != '('
+       && pattern->tokens[i] != ')' && pattern->tokens[i] != ','
+       && pattern->tokens[i] != '&' && pattern->tokens[i] != '['
+       && pattern->tokens[i] != ']'; ++i)
+    ++name;
+  if (!name || i + 2 >= end) return 0;
+  if (pattern->tokens[i] != ':' || pattern->tokens[i + 1] != ':'
+      || pattern->tokens[i + 2] != '*') return 0;
+  if (!function_form)
+    return i + 3 == end ? 1 : 0;
+  if (i + 3 < end && pattern->tokens[i + 3] == ')')
+    return 2;
+  return 0;
+}
+
 static int compare_class_partial_template_order(TemplateDef *first,
                                                 TemplateDef *second)
 {
@@ -527,6 +558,13 @@ static int compare_class_partial_template_order(TemplateDef *first,
       result = class_order_deduces(tb, ta) - class_order_deduces(ta, tb);
     else
       result = member_order_deduces(b, a) - member_order_deduces(a, b);
+    if (result == 0)
+    {
+      int first_form = class_order_member_pointer_form(a);
+      int second_form = class_order_member_pointer_form(b);
+      if (first_form && second_form && first_form != second_form)
+        result = first_form > second_form ? 1 : -1;
+    }
     cprime_free(ta);
     cprime_free(tb);
   }

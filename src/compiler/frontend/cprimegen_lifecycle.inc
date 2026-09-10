@@ -8,6 +8,13 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
                                        int internal, int is_defaulted,
                                        int exception_spec, int is_explicit);
 
+static int cpp_class_tag_keyword_tok(CType *type)
+{
+  return IS_UNION(type->t)
+      || (type->ref && IS_UNION(type->ref->type.t))
+      ? TOK_UNION : TOK_STRUCT;
+}
+
 static void normalize_lifecycle_void_params(TokenString *params)
 {
   int i;
@@ -2478,8 +2485,7 @@ static Sym *resolve_member_func_by_arg_count(CType *type, int method_tok,
     Sym *s;
     if (profile_scans_enabled) ++profile_other_overload_scans[0];
     if (o->struct_tok != struct_tok || o->method_tok != method_tok
-        || explicit_arg_count < o->min_arg_count
-        || explicit_arg_count > o->explicit_arg_count)
+        || !member_overload_accepts_argument_count(o, explicit_arg_count))
       goto next_overload;
     if (!member_overload_receiver_ok(o, receiver_const, type))
     {
@@ -2550,8 +2556,7 @@ static int member_overload_exists_for_call(CType *type, int method_tok,
   {
     if (profile_scans_enabled) ++profile_other_overload_scans[1];
     if (o->struct_tok == struct_tok && o->method_tok == method_tok
-        && explicit_arg_count >= o->min_arg_count
-        && explicit_arg_count <= o->explicit_arg_count)
+        && member_overload_accepts_argument_count(o, explicit_arg_count))
       return 1;
   }
   if (is_lifecycle_member_tok(method_tok)) return 0;
@@ -2586,8 +2591,7 @@ static int member_func_owner_for_call(CType *type, int method_tok,
   {
     if (profile_scans_enabled) ++profile_other_overload_scans[2];
     if (o->struct_tok == struct_tok && o->method_tok == method_tok
-        && explicit_arg_count >= o->min_arg_count
-        && explicit_arg_count <= o->explicit_arg_count)
+        && member_overload_accepts_argument_count(o, explicit_arg_count))
       return struct_tok;
   }
   if (is_lifecycle_member_tok(method_tok)) return 0;
@@ -2720,7 +2724,10 @@ check_constructors:
     Sym *s;
     if (profile_scans_enabled) ++profile_other_overload_scans[4];
     if (o->struct_tok != class_tok || o->method_tok != TOK_CONSTRUCTOR1
-        || o->min_arg_count > 1 || o->explicit_arg_count < 1)
+        || o->min_arg_count > 1
+        || (o->explicit_arg_count < 1
+            && !(o->func_type.ref
+                 && o->func_type.ref->f.func_type == FUNC_ELLIPSIS)))
       continue;
     s = global_symbol_find(o->mangled_tok);
     if (!s)
@@ -2817,11 +2824,19 @@ static int try_materialize_constructor_conversion_into(CType *type, int allow_ex
     vtop = saved_top;
     *vtop = saved;
   }
-  ctor_func = resolve_member_func_by_arg_types(type, TOK_CONSTRUCTOR1,
-                                               &vtop->type, 1);
-  if (!ctor_func)
-    ctor_func = resolve_member_field_func_by_arg_types(type, TOK_CONSTRUCTOR1,
-                                                       &vtop->type, 1);
+  /* Copy-initialization never considers explicit constructors, so an
+     explicit converting constructor must not compete with an implicit one
+     here; ranking both together reported a spurious ambiguity. */
+  if (allow_explicit)
+  {
+    ctor_func = resolve_member_func_by_arg_types(type, TOK_CONSTRUCTOR1,
+                                                 &vtop->type, 1);
+    if (!ctor_func)
+      ctor_func = resolve_member_field_func_by_arg_types(type, TOK_CONSTRUCTOR1,
+                                                         &vtop->type, 1);
+  }
+  else
+    ctor_func = resolve_implicit_constructor_func(type, &vtop->type, 1);
   if (!ctor_func && (vtop->type.t & VT_ARRAY))
   {
     CType decayed_arg_type = vtop->type;
@@ -2843,6 +2858,33 @@ static int try_materialize_constructor_conversion_into(CType *type, int allow_ex
     copy_construct_struct_memberwise_from_base_ptr(type,&destination,&source,0,move_source);
     cpp_register_class_temporary(vtop);
     return 1;
+  }
+  /* An explicit cast to a base class type slices the derived object.  There is
+     no constructor to call, so copy the base subobject memberwise exactly as
+     the same-type arm above does, after adjusting the address to that
+     subobject. */
+  if (!ctor_func && allow_explicit
+      && class_value_is_derived_from(&vtop->type, type))
+  {
+    CType base_pointer = *type;
+    int move_source = (vtop->type.t & VT_RVALUE_REFERENCE) != 0;
+    mk_pointer(&base_pointer);
+    mk_pointer(&vtop->type);
+    gaddrof();
+    if (try_adjust_derived_pointer_to_base(&base_pointer))
+    {
+      source = *vtop--;
+      size = type_size(type, &align);
+      addr = get_temp_local_var(size, align, &r2);
+      vset(type, VT_LOCAL | VT_LVAL, addr);
+      vtop->r2 = r2;
+      vpushv(vtop); mk_pointer(&vtop->type); gaddrof(); destination = *vtop--;
+      copy_construct_struct_memberwise_from_base_ptr(type, &destination, &source,
+                                                     0, move_source);
+      cpp_register_class_temporary(vtop);
+      return 1;
+    }
+    indir();
   }
   if (!ctor_func)
     return 0;
@@ -3051,7 +3093,13 @@ static int member_func_matches_arg_types(Sym *s, CType *arg_types,
   for (i = 0; i < explicit_arg_count; ++i)
   {
     if (!arg)
+    {
+      /* Remaining arguments go through the ellipsis of a variadic
+         parameter list. */
+      if (s->type.ref->f.func_type == FUNC_ELLIPSIS)
+        continue;
       return 0;
+    }
     if (!call_arg_matches_param_type(&arg->type, &arg_types[i]))
       return 0;
     arg = arg->next;
@@ -3099,7 +3147,16 @@ static int member_func_arg_match_rank(Sym *s, CType *arg_types,
   for (i = 0; i < explicit_arg_count; ++i)
   {
     if (!arg)
+    {
+      /* A variadic parameter list forwards every remaining argument through
+         the ellipsis, at the worst conversion rank. */
+      if (s->type.ref->f.func_type == FUNC_ELLIPSIS)
+      {
+        total += 32;
+        continue;
+      }
       return -1;
+    }
     rank = call_arg_match_rank(&arg->type, &arg_types[i]);
     if (rank < 0)
       return -1;
@@ -3320,8 +3377,7 @@ static Sym *resolve_member_func_by_arg_types_filtered(CType *type, int method_to
     Sym *s;
     if (profile_scans_enabled) ++profile_overload_scans;
     if (o->struct_tok != struct_tok || o->method_tok != method_tok
-        || explicit_arg_count < o->min_arg_count
-        || explicit_arg_count > o->explicit_arg_count)
+        || !member_overload_accepts_argument_count(o, explicit_arg_count))
       goto next_overload;
     if (!member_function_matches_explicit_arguments(o->mangled_tok,
                                                      explicit_member_template_arg_tok))
@@ -3345,7 +3401,15 @@ static Sym *resolve_member_func_by_arg_types_filtered(CType *type, int method_to
     if (method_tok == TOK_CONSTRUCTOR1 && explicit_arg_count == 1
         && !is_compatible_unqualified_types(type, &arg_types[0])
         && lowered_member_func_single_param_is_self(type, s))
-      goto next_overload;
+    {
+      CType source_type = arg_types[0];
+      if (is_reference_type(&source_type))
+        source_type = *pointed_type(&source_type);
+      source_type.t &= ~VT_RVALUE_REFERENCE;
+      if (!class_value_is_derived_from(&source_type, type)
+          && !find_cpp_conversion_operator(&source_type, type, 0, NULL, NULL))
+        goto next_overload;
+    }
     {
       int arg_rank = member_func_arg_match_rank(s, arg_types,
                                                 explicit_arg_count);
@@ -3565,16 +3629,34 @@ static Sym *resolve_member_func_by_param_signature(CType *type, int method_tok,
   Sym *const_match = NULL;
   int receiver_const = is_lifecycle_member_tok(method_tok)
                          ? 0 : member_receiver_is_const(type);
+  /* A conversion function's name embeds its target type, and the class
+     pattern replay spells that target through a bound-type alias.  An
+     out-of-class definition therefore reaches here with the concrete
+     spelling, so match conversions by target type rather than by the method
+     token; otherwise the definition registers a second conversion function
+     and the call site sees an ambiguity. */
+  int conversion = func_type && func_type->ref
+                   && func_type->ref->f.func_cpp_conversion;
 
   struct_tok = get_struct_type_name_tok(type);
   if (!struct_tok)
     return NULL;
-  for (o = member_func_candidates(struct_tok, method_tok);
-       o; o = o->bucket_next)
+  o = conversion ? conversion_overloads[(unsigned)struct_tok & 4095]
+                 : member_func_candidates(struct_tok, method_tok);
+  for (; o; o = conversion ? o->conversion_next : o->bucket_next)
   {
     Sym *s;
     if (profile_scans_enabled) ++profile_other_overload_scans[5];
-    if (o->struct_tok != struct_tok || o->method_tok != method_tok)
+    if (o->struct_tok != struct_tok)
+      continue;
+    if (conversion)
+    {
+      if (!o->func_type.ref || !o->func_type.ref->f.func_cpp_conversion
+          || !is_compatible_types(&o->func_type.ref->type,
+                                   &func_type->ref->type))
+        continue;
+    }
+    else if (o->method_tok != method_tok)
       continue;
     /* An ordinary out-of-class definition cannot bind to an instantiated
        member template just because their substituted parameter types match. */
@@ -3705,7 +3787,7 @@ static int add_ctype_tokens(TokenString *str, CType *type)
     int struct_tok = get_struct_type_name_tok(type);
     if (!struct_tok)
       return 0;
-    tok_str_add(str, TOK_STRUCT);
+    tok_str_add(str, cpp_class_tag_keyword_tok(type));
     tok_str_add(str, struct_tok);
   }
   else
@@ -3830,6 +3912,33 @@ static int append_nested_lambda_tokens(TokenString *destination,
   return 0;
 }
 
+static int anonymous_class_name_index;
+
+/* An unnamed struct/union can still declare member functions, as in
+   `static struct { void f(); } x;` or `typedef struct { void f(); } S;`.
+   Those members need a stable class name for their member/overload
+   bookkeeping and mangled symbols, so the first member function declaration
+   gives the anonymous type a unique synthesized name.  Named types keep
+   their spelling exactly. */
+static int cpp_member_class_name_tok(CType *struct_type)
+{
+  char unique_name[64];
+  Sym *s;
+  int v;
+
+  v = get_struct_type_name_tok(struct_type);
+  if (v)
+    return v;
+  if ((struct_type->t & VT_BTYPE) != VT_STRUCT || !(s = struct_type->ref))
+    return 0;
+  snprintf(unique_name, sizeof(unique_name), "__cpc_anonymous_class_%u",
+           ++anonymous_class_name_index);
+  v = tok_alloc_const(unique_name);
+  s->v = v | SYM_STRUCT;
+  sym_link(s, 1);
+  return v;
+}
+
 static void add_pending_member_func(CType *struct_type, int method_tok,
                                     CType *func_type, TokenString *body,
                                     int is_auto_return)
@@ -3841,7 +3950,7 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   PendingMemberFunc *pm;
   TokenString *str;
 
-  struct_tok = get_struct_type_name_tok(struct_type);
+  struct_tok = cpp_member_class_name_tok(struct_type);
   if (!struct_tok)
     cprime_error("inline member functions require a named struct/class");
   mangled_tok = make_member_func_tok_for_type(struct_tok, method_tok, func_type);
@@ -3865,7 +3974,9 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
     cprime_error("unsupported member function return type");
   tok_str_add(str, mangled_tok);
   tok_str_add(str, '(');
-  tok_str_add(str, TOK_STRUCT);
+  /* The lowered `this` parameter must repeat the class's own tag keyword:
+     re-parsing `struct U *` for a union reports a redeclaration. */
+  tok_str_add(str, cpp_class_tag_keyword_tok(struct_type));
   tok_str_add(str, struct_tok);
   if (func_type->t & VT_CONSTANT)
     tok_str_add(str, TOK_CONST1);
@@ -3999,7 +4110,7 @@ static Sym *declare_member_func(CType *struct_type, int method_tok,
   int struct_tok, mangled_tok;
   CType lowered_type;
 
-  struct_tok = get_struct_type_name_tok(struct_type);
+  struct_tok = cpp_member_class_name_tok(struct_type);
   if (!struct_tok)
     cprime_error("member functions require a named struct/class");
   mangled_tok = make_member_func_tok_for_type(struct_tok, method_tok, func_type);
@@ -4015,7 +4126,7 @@ static Sym *declare_static_member_func(CType *struct_type, int method_tok,
   int struct_tok, base_tok, mangled_tok;
   CType static_type;
 
-  struct_tok = get_struct_type_name_tok(struct_type);
+  struct_tok = cpp_member_class_name_tok(struct_type);
   if (!struct_tok)
     cprime_error("static member functions require a named struct/class");
   base_tok = make_static_member_tok(struct_tok, method_tok);
@@ -4043,7 +4154,7 @@ static void add_pending_static_member_func(CType *struct_type, int method_tok,
   PendingMemberFunc *pm;
   TokenString *str;
 
-  struct_tok = get_struct_type_name_tok(struct_type);
+  struct_tok = cpp_member_class_name_tok(struct_type);
   if (!struct_tok)
     cprime_error("inline static member functions require a named struct/class");
 
@@ -4293,7 +4404,7 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
   tok_str_add(str, TOK_VOID);
   tok_str_add(str, mangled_tok);
   tok_str_add(str, '(');
-  tok_str_add(str, TOK_STRUCT);
+  tok_str_add(str, cpp_class_tag_keyword_tok(struct_type));
   tok_str_add(str, struct_tok);
   tok_str_add(str, '*');
   tok_str_add(str, tok_alloc_const("this"));
@@ -4364,7 +4475,7 @@ static void add_pending_lifecycle_decl(CType *struct_type, int method_tok,
   tok_str_add(str, TOK_VOID);
   tok_str_add(str, mangled_tok);
   tok_str_add(str, '(');
-  tok_str_add(str, TOK_STRUCT);
+  tok_str_add(str, cpp_class_tag_keyword_tok(struct_type));
   tok_str_add(str, struct_tok);
   tok_str_add(str, '*');
   tok_str_add(str, tok_alloc_const("this"));
@@ -5059,7 +5170,7 @@ static void append_counted_class_initialization(TokenString *body, CType *type,
     tok_str_add(body, '&');
     tok_str_append_without_eof(body, path);
     tok_str_add(body, ')');
-    tok_str_add(body, TOK_STRUCT);
+    tok_str_add(body, cpp_class_tag_keyword_tok(type));
     tok_str_add(body, struct_tok);
     tok_str_add(body, '(');
     for (i = first; i <= end; ++i)
@@ -5162,6 +5273,12 @@ close_initializer:
   pm->func_tok = func_tok;
   pm->struct_tok = active_member_class_tok;
   pm->is_static_member = active_member_class_tok != 0;
+  /* A namespace-scope initializer is replayed at the end of the translation
+     unit.  Record the namespace it was declared in so unqualified names in the
+     saved expression still find earlier members of that namespace; class
+     members keep deriving their scope from struct_tok. */
+  if (!pm->struct_tok)
+    pm->namespace_tok = current_namespace_scope_tok();
   queue_pending_member(pm);
 }
 
@@ -5231,7 +5348,7 @@ static void append_omitted_constructor_member_initializer(TokenString *dst,
     tok_str_add(dst, field_tok);
     tok_str_add(dst, ')');
     tok_str_add(dst, ')');
-    tok_str_add(dst, TOK_STRUCT);
+    tok_str_add(dst, cpp_class_tag_keyword_tok(&field->type));
     tok_str_add(dst, field_struct_tok);
     tok_str_add(dst, '(');
     append_saved_initializer_tokens(dst, field->default_arg);
@@ -5643,7 +5760,7 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
         tok_str_add(dst, field_tok);
         tok_str_add(dst, ')');
         tok_str_add(dst, ')');
-        tok_str_add(dst, TOK_STRUCT);
+        tok_str_add(dst, cpp_class_tag_keyword_tok(&field->type));
         tok_str_add(dst, field_struct_tok);
         tok_str_add(dst, '(');
         for (j = i + 4; j < pm->str->len && pm->str->str[j] != ';'; ++j)
@@ -5897,7 +6014,9 @@ static void compile_pending_member_funcs(int start)
     member_macro_parent = macro_stack;
     member_macro_ptr = macro_ptr;
     saved_namespace_tok = current_namespace_scope_tok();
-    enter_namespace_scope(symbol_namespace_scope_tok(pm->struct_tok));
+    enter_namespace_scope(pm->namespace_tok
+                          ? pm->namespace_tok
+                          : symbol_namespace_scope_tok(pm->struct_tok));
     /* The queue owns the body even if declaration replay fails. */
     begin_macro(pm->str, 3);
     next();

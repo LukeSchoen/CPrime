@@ -24,6 +24,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     int scope, deferred_members, binding_count, global_binding_count;
     int *query_alignment;
     int unevaluated_depth, probe_depth, standard_conversion_only;
+    int permit_incomplete_array;
     SValue values[1];
   } *saved = cprime_malloc(sizeof(*saved)
                            + (vtop - _vstack) * sizeof(SValue));
@@ -58,6 +59,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   saved->probe_depth = cpp_template_probe_depth++;
   saved->standard_conversion_only = cpp_standard_conversion_only;
   saved->unevaluated_depth = cpp_unevaluated_expression_depth;
+  saved->permit_incomplete_array = cpp_permit_incomplete_array_type;
   saved->lambda = lambda_probe;
   saved->construction = cpp_construction_destination;
   saved->member_address_target = cpp_member_address_target;
@@ -110,6 +112,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     cpp_member_decl_context = argument >= 6 ? saved->member_declaration_context : NULL;
     lambda_probe = NULL;
     ++nocode_wanted;
+    cpp_permit_incomplete_array_type = argument == 6;
     begin_macro(&saved->replay, 0);
     next();
     if (argument == 9)
@@ -226,6 +229,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   cpp_template_probe_depth = saved->probe_depth;
   cpp_standard_conversion_only = saved->standard_conversion_only;
   cpp_unevaluated_expression_depth = saved->unevaluated_depth;
+  cpp_permit_incomplete_array_type = saved->permit_incomplete_array;
   lambda_probe = saved->lambda;
   cpp_construction_destination = saved->construction;
   while (macro_stack && macro_stack != saved->macro) end_macro();

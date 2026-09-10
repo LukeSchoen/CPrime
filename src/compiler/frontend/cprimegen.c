@@ -32,6 +32,10 @@ static SValue _vstack[1 + VSTACK_SIZE];
 ST_DATA int nocode_wanted; // No Code Generation Wanted
 ST_DATA jmp_buf *cpp_substitution_jump;
 static int *active_type_query_alignment;
+/* Class whose in-class static data member initializer is being parsed.  A
+   non-static data member may be named without an object there when it is
+   only an unevaluated operand (`sizeof (member)`). */
+static int cpp_static_member_initializer_owner;
 #define NODATA_WANTED (nocode_wanted > 0) // No Static Data Output Wanted Either 
 #define DATA_ONLY_WANTED 0x80000000 // ON outside of functions and for static initializers 
 
@@ -353,6 +357,8 @@ static void assign_struct_memberwise_from_base_ptr(CType *type, SValue *dst_ptr,
                                                    int base_offset, int move_source);
 static int try_materialize_constructor_conversion(CType *type);
 static int try_materialize_constructor_conversion_mode(CType *type, int allow_explicit);
+static Sym *resolve_implicit_constructor_func(CType *type, CType *arguments,
+                                              int argument_count);
 static int try_cpp_builtin_increment_conversion(int operation);
 static Sym *resolve_copy_constructor_func(CType *type, CType *source_type);
 static int cpp_temp_has_flags(void);
@@ -926,6 +932,12 @@ typedef struct PendingMemberFunc
   int token_filter_valid;
   int func_tok;
   int struct_tok;
+  /* Namespace scope of a queued free declaration replay (currently only the
+     synthesized global dynamic-initializer functions): an initializer at
+     namespace scope must be replayed inside its own namespace, because an
+     unqualified name in the saved expression may name a member declared
+     earlier in that same namespace.  Zero means "derive from struct_tok". */
+  int namespace_tok;
   int is_template_member;
   int is_lifecycle_member;
   int is_defaulted_default_constructor;
@@ -1055,6 +1067,7 @@ static unsigned long long profile_other_overload_scans[8];
 static unsigned long long profile_linkage_scans;
 static int profile_scans_enabled;
 static int cpp_translation_unit = -1;
+static int cpp_permit_incomplete_array_type;
 typedef struct MemberNameCacheEntry {
   int owner, member, is_const, result;
 } MemberNameCacheEntry;
@@ -7833,6 +7846,23 @@ static TokenString *parse_explicit_constructor_member_initializers(
       tok_str_add(prefix, ')');
       tok_str_add(prefix, ';');
     }
+    else if (field && !saw_arg && (field_type.t & VT_BTYPE) == VT_STRUCT
+        && field_type.ref && !field_struct_tok)
+    {
+      /* `member()` value-initializes a class member. A member whose class
+         type carries no name token (an anonymous struct/union introduced
+         through a typedef) cannot use the placement-new path above, and the
+         plain initializer form would be emitted with an empty right-hand
+         side. Emit the equivalent brace form so the member is initialized
+         instead. */
+      tok_str_add(prefix, this_tok);
+      tok_str_add(prefix, TOK_ARROW);
+      tok_str_add(prefix, field_tok);
+      tok_str_add(prefix, TOK_INIT_MEMBER);
+      tok_str_add(prefix, '{');
+      tok_str_add(prefix, '}');
+      tok_str_add(prefix, ';');
+    }
     else
     {
       tok_str_add(prefix, this_tok);
@@ -8222,6 +8252,44 @@ static int try_skip_in_class_lifecycle_specifiers(int class_tok,
 
   tok_str_free(replay);
   *is_virtual = saw_virtual;
+  return 1;
+}
+
+/* A friend declaration may be preceded by inline/constexpr specifiers
+   (`inline friend float f() { ... }`).  The lifecycle and constructor probes
+   restore those tokens because the declarator is not the class name, so the
+   ordinary member parser then reads the specifier as the member type and
+   reports `invalid type for 'friend'`.  Consume the specifiers only when a
+   friend declaration follows, and report them so the saved declaration keeps
+   its inline/constexpr semantics. */
+static int try_skip_in_class_friend_specifiers(int *saw_inline,
+                                               int *saw_constexpr)
+{
+  TokenString *replay;
+
+  if (!is_cpp_translation_unit() || !is_cpp_inline_function_specifier(tok))
+    return 0;
+
+  replay = tok_str_alloc();
+  while (is_cpp_inline_function_specifier(tok))
+  {
+    if (tok == tok_constexpr)
+      *saw_constexpr = 1;
+    else
+      *saw_inline = 1;
+    tok_str_add_tok(replay);
+    next();
+    while (tok == TOK_LINENUM)
+      next();
+  }
+
+  if (!(tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "friend")))
+  {
+    restore_cpp_lifecycle_probe(replay);
+    return 0;
+  }
+
+  tok_str_free(replay);
   return 1;
 }
 
@@ -9609,6 +9677,30 @@ static int local_paren_starts_direct_initializer(void)
      the whole list, excluding expressions in array bounds/default arguments. */
   while (!is_initializer && tok != TOK_EOF && (tok != ')' || paren))
   {
+    /* Attribute arguments are not part of the parameter declaration.  A
+       value such as aligned(8) or section("name") would otherwise look like
+       an initializer operand and turn a function declaration into a direct
+       initializer.  Skip the balanced attribute sequence as a unit. */
+    if (tok == TOK_ATTRIBUTE1 || tok == TOK_ATTRIBUTE2)
+    {
+      tok_str_add_tok(replay);
+      next();
+      if (tok == '(')
+      {
+        int attribute_paren = 0;
+        do
+        {
+          if (tok == '(')
+            ++attribute_paren;
+          else if (tok == ')')
+            --attribute_paren;
+          tok_str_add_tok(replay);
+          next();
+        }
+        while (attribute_paren > 0 && tok != TOK_EOF);
+      }
+      continue;
+    }
     if (need_type && tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "typename")) {
       tok_str_add_tok(replay);
       next();
@@ -9681,6 +9773,54 @@ static int local_paren_starts_direct_initializer(void)
   }
   restore_cpp_lifecycle_probe(replay);
   return is_initializer;
+}
+
+/* A class member declaration may spell a function returning the class with
+   a parenthesized declarator and attributes, as in
+   `U (__attribute__((unused)) corge) (int);`.  That is not a constructor
+   parameter list even though the first tokens are `U (`. */
+static int constructor_paren_starts_declarator(void)
+{
+  TokenString *replay;
+  int result = 0;
+
+  if (tok != '(')
+    return 0;
+  replay = tok_str_alloc();
+  tok_str_add_tok(replay);
+  next();
+  if (tok == TOK_ATTRIBUTE1 || tok == TOK_ATTRIBUTE2)
+  {
+    int depth = 0;
+    tok_str_add_tok(replay);
+    next();
+    if (tok == '(')
+    {
+      do
+      {
+        if (tok == '(')
+          ++depth;
+        else if (tok == ')')
+          --depth;
+        tok_str_add_tok(replay);
+        next();
+      }
+      while (depth > 0 && tok != TOK_EOF);
+    }
+  }
+  if (tok >= TOK_UIDENT)
+  {
+    tok_str_add_tok(replay);
+    next();
+    if (tok == ')')
+    {
+      tok_str_add_tok(replay);
+      next();
+      result = tok == '(';
+    }
+  }
+  restore_cpp_lifecycle_probe(replay);
+  return result;
 }
 
 static int body_identifier_is_decl_target(TokenString *body, int i,
@@ -10713,6 +10853,15 @@ static void struct_decl(CType *type, int u, int is_class_tag)
   }
 
   v = 0;
+  {
+  int explicit_global_tag = 0;
+  if (is_cpp_translation_unit() && tok == ':') {
+    next();
+    if (tok != ':')
+      expect("'::'");
+    next();
+    explicit_global_tag = 1;
+  }
   if (tok >= TOK_IDENT) // Struct/Enum Tag
   {
     int source_name_tok = tok;
@@ -10748,7 +10897,7 @@ static void struct_decl(CType *type, int u, int is_class_tag)
         next();
       }
     }
-    if (!qualified_parent && is_cpp_translation_unit()
+    if (!explicit_global_tag && !qualified_parent && is_cpp_translation_unit()
         && (nb_defining_class_stack || active_member_class_tok)
         && !is_class_template_instantiation_tok(v)
         && !is_current_class_qualified_nested_tok(v))
@@ -10761,7 +10910,7 @@ static void struct_decl(CType *type, int u, int is_class_tag)
       else
         v = make_current_class_nested_tok(v);
     }
-    else if (!qualified_parent && nb_namespace_stack)
+    else if (!explicit_global_tag && !qualified_parent && nb_namespace_stack)
     {
       if (tok != '{' && tok != ':' && tok != ';')
         v = find_current_namespace_tok(v);
@@ -10775,6 +10924,7 @@ static void struct_decl(CType *type, int u, int is_class_tag)
           qualified_parent && !is_namespace_tok(qualified_parent) ? qualified_parent : nb_defining_class_stack
             ? defining_class_stack[nb_defining_class_stack - 1] : 0,
           qualified_parent && is_namespace_tok(qualified_parent) ? qualified_parent : current_namespace_scope_tok());
+  }
   }
 
   bt = ut = 0;
@@ -10836,6 +10986,8 @@ static void struct_decl(CType *type, int u, int is_class_tag)
       const CppRecordDeclInfo *source_record = lookup_cpp_record_decl(source_tok);
       note_class_source_name(v, source_record ? source_record->source_name_tok : source_tok);
     }
+    if (local_type_owner_tok)
+      note_local_type_function_owner(v, local_type_owner_tok);
     {
       Sym *lexical;
       int capture_types = 1;
@@ -10920,7 +11072,19 @@ do_decl:
 
   if (u == VT_STRUCT && tok == ':')
   {
+    const CppRecordDeclInfo *defined_record =
+      lookup_cpp_record_decl(s->v & ~SYM_STRUCT);
+    int saved_base_namespace = current_namespace_scope_tok();
+    int saved_base_class_depth = nb_defining_class_stack;
     has_base_classes = 1;
+    if (defined_record && defined_record->namespace_tok)
+      enter_namespace_scope(defined_record->namespace_tok);
+    if (defined_record && defined_record->owner_tok
+        && nb_defining_class_stack
+           < (int)(sizeof(defining_class_stack)
+                   / sizeof(defining_class_stack[0])))
+      defining_class_stack[nb_defining_class_stack++] =
+        defined_record->owner_tok;
     next();
     for (;;)
     {
@@ -10946,6 +11110,8 @@ do_decl:
           expect("base class type");
         base_tok = get_struct_type_name_tok(&base_type);
         if (!base_tok)
+          base_tok = cpp_member_class_name_tok(&base_type);
+        if (!base_tok)
           expect("named base class type");
       }
       note_class_base(s->v & ~SYM_STRUCT, base_tok, base_access, base_virtual);
@@ -10953,6 +11119,8 @@ do_decl:
         break;
       next();
     }
+    nb_defining_class_stack = saved_base_class_depth;
+    enter_namespace_scope(saved_base_namespace);
   }
 
   if (tok == '{')
@@ -11208,7 +11376,15 @@ enum_done:
             cprime_error("explicit is only supported on constructors and conversion operators");
         }
 
-        if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "friend"))
+        {
+        int extra_inline = 0, extra_constexpr = 0;
+        int is_friend_declaration = tok >= TOK_UIDENT
+            && !strcmp(get_tok_str(tok, NULL), "friend");
+        if (!is_friend_declaration)
+          is_friend_declaration =
+            try_skip_in_class_friend_specifiers(&extra_inline,
+                                                &extra_constexpr);
+        if (is_friend_declaration)
         {
           int fi, skipped_friend = 0, friend_has_body = 0;
           int class_tok = get_struct_type_name_tok(type);
@@ -11241,8 +11417,10 @@ enum_done:
             {
               skipped_friend = 1;
               tok_str_add(friend_decl, ft);
-              if (friend_has_body)
+              if (friend_has_body || extra_inline)
                 tok_str_add(friend_decl, TOK_INLINE1);
+              if (extra_constexpr)
+                tok_str_add(friend_decl, tok_constexpr);
               continue;
             }
             tok_str_add(friend_decl, ft);
@@ -11254,6 +11432,7 @@ enum_done:
           if (friend_src)
             tok_str_free(friend_src);
           continue;
+        }
         }
 
         if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "using"))
@@ -11397,6 +11576,12 @@ enum_done:
             if (tok != '(')
             {
               unget_tok(tok);
+              tok = class_tok;
+              lifecycle_tok = 0;
+            }
+            else if (constructor_paren_starts_declarator())
+            {
+              unget_tok('(');
               tok = class_tok;
               lifecycle_tok = 0;
             }
@@ -11723,6 +11908,8 @@ enum_done:
                 cprime_error("static data members require a named class");
               if (tok == '=')
               {
+                int saved_initializer_owner = cpp_static_member_initializer_owner;
+                cpp_static_member_initializer_owner = class_tok;
                 next();
                 if ((static_type.t & VT_CONSTANT)
                     && is_integer_btype(static_type.t & VT_BTYPE))
@@ -11732,6 +11919,7 @@ enum_done:
                 }
                 else
                   skip_initializer_expression();
+                cpp_static_member_initializer_owner = saved_initializer_owner;
               }
               static_tok = make_static_member_tok(class_tok, v);
               static_type.t = (static_type.t & ~VT_STATIC) | VT_EXTERN;
@@ -13509,6 +13697,7 @@ check:
     if ((type->t & VT_BTYPE) == VT_VOID
         || (!(td & TYPE_PARAM) && n != -1 && !(storage & VT_EXTERN)
             && type_size(type, &align) < 0
+            && !cpp_permit_incomplete_array_type
             && !(is_cpp_translation_unit() && (storage & VT_STATIC)
                  && nb_defining_class_stack > 0)))
       cprime_error("declaration of an array of incomplete type elements");
@@ -14662,11 +14851,269 @@ static const char *cpp_source_function_name(void)
   return name;
 }
 
+static int cpp_member_template_param_names(TemplateMemberDef *md, int *names,
+                                           int max)
+{
+  int i = 0, count = 0;
+
+  if (!md || !md->def_str || max <= 0)
+    return 0;
+  if (md->nb_stripped_member_params > 0) {
+    for (; i < md->nb_stripped_member_params && count < max; ++i)
+      names[count++] = md->stripped_member_param_toks[i];
+    return count;
+  }
+  while (i < md->def_str->len) {
+    int t = md->def_str->str[i];
+    if (TOK_HAS_VALUE(t))
+      i += 1 + tok_str_value_extra_words(md->def_str->str,
+                                         md->def_str->len, i);
+    else {
+      if (is_template_keyword_tok(t))
+        break;
+      ++i;
+    }
+  }
+  if (i >= md->def_str->len)
+    return 0;
+  ++i;
+  while (i + 1 < md->def_str->len && md->def_str->str[i] == TOK_LINENUM)
+    i += 2;
+  if (i >= md->def_str->len
+      || (md->def_str->str[i] != '<' && md->def_str->str[i] != TOK_LT))
+    return 0;
+  ++i;
+  while (i < md->def_str->len && count < max) {
+    int depth = 0, saw_type_keyword = 0, first_after_keyword = 0;
+    int last_identifier = 0;
+    while (i < md->def_str->len) {
+      int t = md->def_str->str[i];
+      if (TOK_HAS_VALUE(t)) {
+        i += 1 + tok_str_value_extra_words(md->def_str->str,
+                                           md->def_str->len, i);
+        continue;
+      }
+      if (depth == 0 && (t == ',' || t == '>' || t == TOK_SAR))
+        break;
+      if (t == '<' || t == '(' || t == '[') {
+        ++depth;
+        ++i;
+        continue;
+      }
+      if (t == '>' || t == ')' || t == ']') {
+        if (depth > 0)
+          --depth;
+        ++i;
+        continue;
+      }
+      if (t == TOK_CLASS || (t >= TOK_UIDENT
+          && !strcmp(get_tok_str(t, NULL), "typename")))
+        saw_type_keyword = 1;
+      else if (saw_type_keyword && !first_after_keyword && t >= TOK_UIDENT)
+        first_after_keyword = t;
+      if (t >= TOK_UIDENT)
+        last_identifier = t;
+      ++i;
+    }
+    if (first_after_keyword)
+      names[count++] = first_after_keyword;
+    else if (last_identifier)
+      names[count++] = last_identifier;
+    if (i < md->def_str->len && md->def_str->str[i] == ',') {
+      ++i;
+      continue;
+    }
+    break;
+  }
+  return count;
+}
+
+static TemplateMemberDef *cpp_generic_member_template(
+  const CppMemberDeclInfo *member)
+{
+  TemplateInstOwner *inst_owner;
+  TemplateMemberDef *definition;
+  int class_tok;
+
+  if (!member)
+    return NULL;
+  class_tok = member->owner_tok;
+  inst_owner = find_template_inst_owner_entry(class_tok);
+  if (inst_owner && inst_owner->owner)
+    class_tok = inst_owner->owner->name_tok;
+  for (definition = template_member_candidates(class_tok,
+                                               member->source_name_tok);
+       definition; definition = definition->bucket_next)
+    if (definition->class_tok == class_tok
+        && template_member_def_method_tok(definition) == member->source_name_tok
+        && template_member_type_param_tok(definition))
+      return definition;
+  return NULL;
+}
+
+static void cpp_compact_pointer_spacing(char *spelling)
+{
+  char *out = spelling;
+  char *in = spelling;
+  while (*in) {
+    if (*in == ' ' && (in[1] == '*' || in[1] == '&'))
+      ++in;
+    else
+      *out++ = *in++;
+  }
+  *out = 0;
+}
+
+static int cpp_saved_token_is_template_param(TemplateDef *definition, int token)
+{
+  int i;
+  if (!definition)
+    return 0;
+  for (i = 0; i < definition->nb_type_params; ++i)
+    if (definition->type_param_toks[i] == token)
+      return 1;
+  return 0;
+}
+
+static int cpp_saved_function_parameter_ranges(TemplateDef *definition,
+                                               int *starts, int *ends,
+                                               int max)
+{
+  TokenString *saved;
+  int open = -1, close = -1, depth = 0, i, count = 0;
+
+  if (!definition || !(saved = definition->def_str) || max <= 0)
+    return 0;
+  for (i = 0; i + 1 < saved->len; ++i) {
+    int next;
+    if (TOK_HAS_VALUE(saved->str[i])) {
+      i += tok_str_value_extra_words(saved->str, saved->len, i);
+      continue;
+    }
+    if (saved->str[i] != definition->name_tok)
+      continue;
+    next = tok_str_next_non_linenum_index(saved->str, saved->len, i + 1);
+    if (next < saved->len && saved->str[next] == '(') {
+      open = next;
+      break;
+    }
+  }
+  if (open < 0)
+    return 0;
+  for (i = open; i < saved->len; ++i) {
+    int token = saved->str[i];
+    if (TOK_HAS_VALUE(token))
+      continue;
+    if (token == '(')
+      ++depth;
+    else if (token == ')' && --depth == 0) {
+      close = i;
+      break;
+    }
+  }
+  if (close < 0)
+    return 0;
+  if (open + 1 == close)
+    return 0;
+  starts[count] = open + 1;
+  depth = 0;
+  for (i = open + 1; i < close; ++i) {
+    int token = saved->str[i];
+    if (TOK_HAS_VALUE(token)) {
+      i += tok_str_value_extra_words(saved->str, saved->len, i);
+      continue;
+    }
+    if (token == '(' || token == '[' || token == '{')
+      ++depth;
+    else if (token == ')' || token == ']' || token == '}') {
+      if (depth) --depth;
+    } else if (token == ',' && depth == 0) {
+      ends[count++] = i - 1;
+      if (count == max)
+        return count;
+      starts[count] = i + 1;
+    }
+  }
+  ends[count++] = close - 1;
+  return count;
+}
+
+static int cpp_render_saved_parameter_spelling(CString *name,
+                                               TokenString *saved,
+                                               int start, int end,
+                                               TemplateDef *definition,
+                                               CString *raw)
+{
+  int i, first = -1, last = -1, dependent = 0;
+
+  while (start <= end) {
+    int token = saved->str[start];
+    if (token == TOK_LINENUM) {
+      start += 2;
+      continue;
+    }
+    if (TOK_HAS_VALUE(token)) {
+      start += 1 + tok_str_value_extra_words(saved->str, saved->len, start);
+      continue;
+    }
+    break;
+  }
+  while (end >= start && (saved->str[end] == TOK_LINENUM
+                          || saved->str[end] == TOK_EOF))
+    --end;
+  for (i = start; i <= end; ++i) {
+    if (TOK_HAS_VALUE(saved->str[i])) {
+      i += tok_str_value_extra_words(saved->str, saved->len, i);
+      continue;
+    }
+    if (saved->str[i] == TOK_LINENUM || saved->str[i] == TOK_EOF)
+      continue;
+    if (first < 0) first = i;
+    last = i;
+  }
+  if (first < 0)
+    return 0;
+  if (last > first && saved->str[last] >= TOK_UIDENT
+      && !cpp_saved_token_is_template_param(definition, saved->str[last]))
+    last = tok_str_prev_token_index(saved->str, saved->len, last);
+  cstr_reset(raw);
+  for (i = first; i <= last; ++i) {
+    int token = saved->str[i];
+    if (TOK_HAS_VALUE(token)) {
+      i += tok_str_value_extra_words(saved->str, saved->len, i);
+      continue;
+    }
+    if (token == TOK_LINENUM || token == TOK_EOF)
+      continue;
+    if (cpp_saved_token_is_template_param(definition, token))
+      dependent = 1;
+    if (raw->size && raw->data[raw->size - 1] != ' ')
+      cstr_ccat(raw, ' ');
+    cstr_cat(raw, get_tok_str(token, NULL), -1);
+  }
+  cstr_reset(name);
+  for (i = 0; i < (int)raw->size; ++i) {
+    char current = raw->data[i];
+    if (current == ' ') {
+      char previous = name->size ? name->data[name->size - 1] : 0;
+      char next = i + 1 < (int)raw->size ? raw->data[i + 1] : 0;
+      if (previous == ':' || previous == '*' || previous == '&'
+          || next == ':' || next == '*' || next == '&')
+        continue;
+    }
+    cstr_ccat(name, current);
+  }
+  return dependent;
+}
+
 static const char *cpp_source_pretty_function_name(void)
 {
   static char pretty_buffer[512];
+  int member_template_params[16];
   int function, source_tok, class_tok, index;
+  int member_template_param_count = 0;
   const CppMemberDeclInfo *member;
+  TemplateMemberDef *member_template = NULL;
   const CppRecordDeclInfo *record;
   Sym *parameter;
   CString pretty;
@@ -14682,9 +15129,23 @@ static const char *cpp_source_pretty_function_name(void)
   function = tok_alloc_const(funcname);
   member = lookup_cpp_member_decl(function);
   owner = find_template_inst_owner_entry(function);
+  if (member && member->is_template) {
+    member_template = cpp_generic_member_template(member);
+    member_template_param_count =
+      cpp_member_template_param_names(member_template,
+                                      member_template_params,
+                                      (int)(sizeof(member_template_params)
+                                            / sizeof(member_template_params[0])));
+  }
   if (!member && owner && !owner->owner->is_class) {
+    TemplateDef *definition = owner->owner;
+    int free_starts[16], free_ends[16], free_dependent[16];
+    char free_spellings[16][160];
+    int free_param_count = 0, free_i, wrote_argument = 0;
+    CString spelling, raw;
+    Sym *free_parameter;
     cstr_new(&pretty);
-    inst_tok = owner->owner->inst_name_toks[owner->inst_index];
+    inst_tok = definition->inst_name_toks[owner->inst_index];
     function_symbol = global_symbol_find(inst_tok);
     if (!function_symbol)
       function_symbol = sym_find(inst_tok);
@@ -14693,29 +15154,92 @@ static const char *cpp_source_pretty_function_name(void)
                   &function_symbol->type.ref->type, NULL);
     else
       pstrcpy(type_buffer, sizeof(type_buffer), "void");
+    cpp_compact_pointer_spacing(type_buffer);
     cstr_cat(&pretty, type_buffer, -1);
     cstr_cat(&pretty, " ", -1);
-    cstr_cat(&pretty, get_tok_str(owner->owner->name_tok, NULL), -1);
-    cstr_cat(&pretty, "(", -1);
-    for (argument = 0; argument < owner->owner->nb_type_params; ++argument) {
-      if (argument)
-        cstr_cat(&pretty, ", ", -1);
-      cstr_cat(&pretty,
-               get_tok_str(owner->owner->type_param_toks[argument], NULL), -1);
+    cstr_cat(&pretty, get_tok_str(definition->name_tok, NULL), -1);
+    free_param_count = cpp_saved_function_parameter_ranges(definition,
+                                                           free_starts,
+                                                           free_ends, 16);
+    cstr_new(&raw);
+    for (free_i = 0; free_i < free_param_count; ++free_i) {
+      cstr_new(&spelling);
+      free_dependent[free_i] =
+        cpp_render_saved_parameter_spelling(&spelling, definition->def_str,
+                                            free_starts[free_i],
+                                            free_ends[free_i],
+                                            definition, &raw);
+      cstr_ccat(&spelling, 0);
+      pstrcpy(free_spellings[free_i], sizeof(free_spellings[free_i]),
+              spelling.data);
+      cstr_free(&spelling);
     }
-    cstr_cat(&pretty, ")", -1);
-    arguments = &owner->owner->inst_arg_lists[owner->inst_index];
-    if (arguments->nb) {
-      cstr_cat(&pretty, " [with ", -1);
-      for (argument = 0; argument < arguments->nb; ++argument) {
+    cstr_free(&raw);
+    free_parameter = function_symbol && function_symbol->type.ref
+      ? function_symbol->type.ref->next : NULL;
+    cstr_cat(&pretty, "(", -1);
+    if (free_param_count) {
+      for (free_i = 0; free_i < free_param_count; ++free_i) {
+        if (free_i)
+          cstr_cat(&pretty, ", ", -1);
+        cstr_cat(&pretty, free_spellings[free_i], -1);
+      }
+    } else {
+      for (argument = 0; argument < definition->nb_type_params; ++argument) {
         if (argument)
           cstr_cat(&pretty, ", ", -1);
         cstr_cat(&pretty,
-                 get_tok_str(owner->owner->type_param_toks[argument], NULL), -1);
+                 get_tok_str(definition->type_param_toks[argument], NULL), -1);
+      }
+    }
+    cstr_cat(&pretty, ")", -1);
+    arguments = &definition->inst_arg_lists[owner->inst_index];
+    {
+      int has_dependent_parameter = 0;
+      for (free_i = 0; free_i < free_param_count; ++free_i)
+        if (free_dependent[free_i]) has_dependent_parameter = 1;
+      if (arguments->nb || has_dependent_parameter) {
+      cstr_cat(&pretty, " [with ", -1);
+      for (argument = 0; argument < arguments->nb; ++argument) {
+        if (wrote_argument)
+          cstr_cat(&pretty, ", ", -1);
+        cstr_cat(&pretty,
+                 get_tok_str(definition->type_param_toks[argument], NULL), -1);
         cstr_cat(&pretty, " = ", -1);
         cstr_cat(&pretty, get_tok_str(arguments->toks[argument], NULL), -1);
+        wrote_argument = 1;
       }
-      cstr_cat(&pretty, "]", -1);
+      for (free_i = 0; free_i < free_param_count; ++free_i) {
+        int exact_template_parameter = 0, template_argument;
+        if (!free_dependent[free_i] || !free_parameter)
+          continue;
+        for (template_argument = 0;
+             template_argument < definition->nb_type_params;
+             ++template_argument)
+          if (!strcmp(free_spellings[free_i],
+                      get_tok_str(definition->type_param_toks[template_argument],
+                                  NULL))) {
+            exact_template_parameter = 1;
+            break;
+          }
+        if (exact_template_parameter) {
+          free_parameter = free_parameter->next;
+          continue;
+        }
+        type_to_str(type_buffer, sizeof(type_buffer), &free_parameter->type,
+                    NULL);
+        cpp_compact_pointer_spacing(type_buffer);
+        if (wrote_argument)
+          cstr_cat(&pretty, "; ", -1);
+        cstr_cat(&pretty, free_spellings[free_i], -1);
+        cstr_cat(&pretty, " = ", -1);
+        cstr_cat(&pretty, type_buffer, -1);
+        wrote_argument = 1;
+        free_parameter = free_parameter->next;
+      }
+      if (wrote_argument)
+        cstr_cat(&pretty, "]", -1);
+      }
     }
     cstr_cat(&pretty, "", 0);
     pstrcpy(pretty_buffer, sizeof(pretty_buffer), pretty.data);
@@ -14760,8 +15284,11 @@ static const char *cpp_source_pretty_function_name(void)
     cstr_cat(&pretty, get_tok_str(source_tok, NULL), -1);
   } else {
     if (member->kind != 3) {
+      if (member->is_static)
+        cstr_cat(&pretty, "static ", -1);
       type_to_str(type_buffer, sizeof(type_buffer),
                   &member->function_prototype.type, NULL);
+      cpp_compact_pointer_spacing(type_buffer);
       cstr_cat(&pretty, type_buffer, -1);
       cstr_cat(&pretty, " ", -1);
     }
@@ -14783,13 +15310,23 @@ static const char *cpp_source_pretty_function_name(void)
     cstr_cat(&pretty, get_tok_str(member->source_name_tok, NULL), -1);
   }
   cstr_cat(&pretty, "(", -1);
-  parameter = member->function_prototype.next;
-  while (parameter) {
-    type_to_str(type_buffer, sizeof(type_buffer), &parameter->type, NULL);
-    cstr_cat(&pretty, type_buffer, -1);
-    parameter = parameter->next;
-    if (parameter)
-      cstr_cat(&pretty, ", ", -1);
+  if (member_template_param_count > 0) {
+    for (argument = 0; argument < member_template_param_count; ++argument) {
+      if (argument)
+        cstr_cat(&pretty, ", ", -1);
+      cstr_cat(&pretty,
+               get_tok_str(member_template_params[argument], NULL), -1);
+    }
+  } else {
+    parameter = member->function_prototype.next;
+    while (parameter) {
+      type_to_str(type_buffer, sizeof(type_buffer), &parameter->type, NULL);
+      cpp_compact_pointer_spacing(type_buffer);
+      cstr_cat(&pretty, type_buffer, -1);
+      parameter = parameter->next;
+      if (parameter)
+        cstr_cat(&pretty, ", ", -1);
+    }
   }
   cstr_cat(&pretty, ")", -1);
   if (member->kind != 3 && member->function_type.t & (VT_CONSTANT | VT_VOLATILE)) {
@@ -14798,20 +15335,40 @@ static const char *cpp_source_pretty_function_name(void)
     if (member->function_type.t & VT_VOLATILE)
       cstr_cat(&pretty, " volatile", -1);
   }
-  if (class_owner && class_owner->owner->is_class
-      && class_owner->owner->inst_arg_lists) {
-    arguments = &class_owner->owner->inst_arg_lists[class_owner->inst_index];
-    if (arguments->nb) {
+  {
+    int wrote_argument = 0;
+    int member_argument_count = member && member->is_template
+      ? member->template_arguments.nb : 0;
+    if (member_argument_count > member_template_param_count)
+      member_argument_count = member_template_param_count;
+    arguments = class_owner && class_owner->owner->is_class
+                && class_owner->owner->inst_arg_lists
+      ? &class_owner->owner->inst_arg_lists[class_owner->inst_index] : NULL;
+    if (member_argument_count || (arguments && arguments->nb)) {
       cstr_cat(&pretty, " [with ", -1);
-      for (class_argument = 0; class_argument < arguments->nb;
-           ++class_argument) {
-        if (class_argument)
+      for (argument = 0; argument < member_argument_count; ++argument) {
+        if (argument)
           cstr_cat(&pretty, ", ", -1);
         cstr_cat(&pretty,
-                 get_tok_str(class_owner->owner->type_param_toks[class_argument],
-                             NULL), -1);
+                 get_tok_str(member_template_params[argument], NULL), -1);
         cstr_cat(&pretty, " = ", -1);
-        cstr_cat(&pretty, get_tok_str(arguments->toks[class_argument], NULL), -1);
+        cstr_cat(&pretty,
+                 get_tok_str(member->template_arguments.toks[argument], NULL),
+                 -1);
+        wrote_argument = 1;
+      }
+      if (arguments && arguments->nb) {
+        for (class_argument = 0; class_argument < arguments->nb;
+             ++class_argument) {
+          if (wrote_argument || class_argument)
+            cstr_cat(&pretty, wrote_argument ? "; " : ", ", -1);
+          cstr_cat(&pretty,
+                   get_tok_str(class_owner->owner->type_param_toks[class_argument],
+                               NULL), -1);
+          cstr_cat(&pretty, " = ", -1);
+          cstr_cat(&pretty,
+                   get_tok_str(arguments->toks[class_argument], NULL), -1);
+        }
       }
       cstr_cat(&pretty, "]", -1);
     }
@@ -14938,8 +15495,12 @@ tok_next:
         maybe_indir_call_result();
         goto unary_post;
       }
+      /* const_cast and reinterpret_cast admit their own reference rebinding
+         rules, which `cpp_validate_named_cast` has already enforced; only the
+         class-hierarchy static_cast shape needs a further base-offset check. */
       if (!is_compatible_unqualified_types(&source_type, &target_type)
-          && strcmp(get_tok_str(cast_name, NULL), "reinterpret_cast"))
+          && strcmp(get_tok_str(cast_name, NULL), "reinterpret_cast")
+          && strcmp(get_tok_str(cast_name, NULL), "const_cast"))
       {
         if (!strcmp(get_tok_str(cast_name, NULL), "static_cast")
             && !((source_type.t & ~target_type.t) & (VT_CONSTANT | VT_VOLATILE))
@@ -14988,11 +15549,15 @@ tok_next:
         gen_assign_cast(&cast_type);
     }
     else {
-      if (!strcmp(get_tok_str(cast_name, NULL), "static_cast"))
-        try_call_cpp_conversion_operator(&cast_type, 1);
-      if (strcmp(get_tok_str(cast_name, NULL), "static_cast")
-          || !cpp_static_pointer_downcast(&cast_type)) gen_cast(&cast_type);
-    }
+     if (!strcmp(get_tok_str(cast_name, NULL), "static_cast"))
+       try_call_cpp_conversion_operator(&cast_type, 1);
+     if (!strcmp(get_tok_str(cast_name, NULL), "reinterpret_cast")
+         && find_cpp_member_pointer_type(&cast_type)
+         && convert_cpp_member_pointer(&cast_type, 2))
+       goto unary_post;
+     if (strcmp(get_tok_str(cast_name, NULL), "static_cast")
+         || !cpp_static_pointer_downcast(&cast_type)) gen_cast(&cast_type);
+   }
     goto unary_post;
   }
   if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "delete"))
@@ -15367,7 +15932,8 @@ str_init:
         else if (is_cpp_translation_unit() && (type.t & VT_BTYPE) == VT_STRUCT)
         {
           if (!convert_cpp_member_pointer(&type, 1)
-              && !try_materialize_constructor_conversion_mode(&type, 1))
+              && !try_materialize_constructor_conversion_mode(&type, 1)
+              && !try_call_cpp_conversion_operator(&type, 2))
             cprime_error("no matching constructor for cast to '%s'",
                          get_tok_str(get_struct_type_name_tok(&type), NULL));
         }
@@ -15841,11 +16407,23 @@ str_init:
     if (r == VT_LLOCAL)
       r = VT_LOCAL;
     if (r != VT_LOCAL)
-      cprime_error("__builtin_va_start expects a local variable");
-    vtop->r = r;
-    vtop->type = char_pointer_type;
-    vtop->c.i += 8;
-    vstore();
+    {
+      /* The last named parameter may be spelled through an address-valued
+         expression, as in g++.dg/other/vararg-2.C.  In that case the
+         expression already yields the local address; add the register home
+         slot offset as an ordinary pointer operation. */
+      vtop->type = char_pointer_type;
+      vpushi(8);
+      gen_op('+');
+      vstore();
+    }
+    else
+    {
+      vtop->r = r;
+      vtop->type = char_pointer_type;
+      vtop->c.i += 8;
+      vstore();
+    }
     break;
 #else
   case TOK_builtin_va_arg_types:
@@ -17249,6 +17827,41 @@ tok_identifier:
                     vtop->r |= VT_MUSTBOUND;
 #endif
                 }
+                maybe_indir_reference();
+                break;
+              }
+            }
+          }
+          /* A non-static data member may be named without an object in an
+             unevaluated operand, including the initializer of a static data
+             member (`static const int n = sizeof (member);`).  There is no
+             receiver symbol in that context, so resolve the field through the
+             class currently being defined and materialize an lvalue of the
+             field type that is never evaluated. */
+          if (!this_sym && cpp_unevaluated_expression_depth > 0
+              && cpp_static_member_initializer_owner)
+          {
+            CType owner_type;
+            if (make_class_type_from_tok(&owner_type,
+                                         cpp_static_member_initializer_owner)
+                && (owner_type.t & VT_BTYPE) == VT_STRUCT)
+            {
+              int field_ofs;
+              Sym *field = find_field_try(&owner_type, t, &field_ofs);
+              if (field && !(field->type.t & VT_TYPEDEF)
+                  && (field->type.t & VT_BTYPE) != VT_FUNC)
+              {
+                CValue zero = {0};
+                mk_pointer(&owner_type);
+                vsetc(&owner_type, VT_CONST, &zero);
+                indir();
+                gaddrof();
+                vtop->type = char_pointer_type;
+                vpushi(field_ofs);
+                gen_op('+');
+                vtop->type = field->type;
+                if (!(vtop->type.t & VT_ARRAY))
+                  vtop->r |= VT_LVAL;
                 maybe_indir_reference();
                 break;
               }
@@ -18740,6 +19353,26 @@ static void expr_cond(void)
       type = sv.type;
       type.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE);
     }
+    /* Both operands may be class types, where one converts to the other
+       through a conversion function (`c ? qchar : qchar_ref`). The arms above
+       only covered a class operand against a non-class one, so this shape fell
+       through to the type-mismatch error. */
+    else if (is_cpp_translation_unit()
+             && ((sv.type.t & VT_BTYPE) == VT_STRUCT)
+             && ((vtop->type.t & VT_BTYPE) == VT_STRUCT)
+             && !is_compatible_unqualified_types(&sv.type, &vtop->type)
+             && find_cpp_conversion_operator(&vtop->type, &sv.type, 0, NULL, NULL)) {
+      type = sv.type;
+      type.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE);
+    }
+    else if (is_cpp_translation_unit()
+             && ((sv.type.t & VT_BTYPE) == VT_STRUCT)
+             && ((vtop->type.t & VT_BTYPE) == VT_STRUCT)
+             && !is_compatible_unqualified_types(&sv.type, &vtop->type)
+             && find_cpp_conversion_operator(&sv.type, &vtop->type, 0, NULL, NULL)) {
+      type = vtop->type;
+      type.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE);
+    }
     else if (!cpp_conditional_scalar_type(&sv, vtop, &type)
              && !combine_types(&type, &sv, vtop, '?'))
       type_incompatibility_error(&sv.type, &vtop->type,
@@ -18772,7 +19405,7 @@ static void expr_cond(void)
     if (c != 1)
     {
       if (islv) cpp_conditional_adjust_class_lvalue(&type);
-      if (is_cpp_translation_unit() && (type.t & VT_BTYPE) != VT_STRUCT)
+      if (is_cpp_translation_unit())
         try_call_cpp_conversion_operator(&type, 0);
       gen_cast(&type);
       if (islv)
@@ -18806,7 +19439,7 @@ static void expr_cond(void)
     {
       *vtop = sv;
       if (islv) cpp_conditional_adjust_class_lvalue(&type);
-      if (is_cpp_translation_unit() && (type.t & VT_BTYPE) != VT_STRUCT)
+      if (is_cpp_translation_unit())
         try_call_cpp_conversion_operator(&type, 0);
       gen_cast(&type);
       if (islv)
@@ -19832,6 +20465,57 @@ static void initialize_virtual_tables_for_object(CType *type, int r,
       vstore();
       vpop();
     }
+}
+
+/* Class-type member subobjects keep their own dispatch tables. A member of a
+   class with virtual bases or virtual functions whose constructor is implicit
+   has no generated constructor body to publish them, so the enclosing
+   object's construction path publishes them here. Base subobjects are
+   excluded: their vptr slots belong to the most-derived table. */
+static void initialize_virtual_tables_for_member_objects(CType *type, int r,
+                                                         int addr)
+{
+  Sym *field;
+  int align, elem_size, i, owner;
+
+  if (!type->ref) return;
+  if ((type->t & VT_ARRAY) && (type->t & VT_BTYPE) == VT_PTR
+      && type->ref->c > 0)
+  {
+    CType *elem_type = pointed_type(type);
+    elem_size = type_size(elem_type, &align);
+    if (elem_size < 0) return;
+    for (i = 0; i < type->ref->c; ++i)
+      initialize_virtual_tables_for_member_objects(elem_type, r,
+                                                   addr + i * elem_size);
+    return;
+  }
+  if ((type->t & VT_BTYPE) != VT_STRUCT) return;
+
+  owner = get_struct_type_name_tok(type);
+  for (field = type->ref->next; field; field = field->next)
+  {
+    int field_offset;
+    int is_base = 0;
+    ClassBaseInfo *base;
+    if ((field->type.t & VT_BTYPE) != VT_STRUCT
+        && !((field->type.t & VT_ARRAY)
+             && (field->type.t & VT_BTYPE) == VT_PTR))
+      continue;
+    for (base = owner ? class_base_candidates(owner) : NULL; base;
+         base = base->bucket_next)
+      if (base->class_tok == owner && base->field == field)
+      {
+        is_base = 1;
+        break;
+      }
+    if (is_base) continue;
+    field_offset = addr + field->c;
+    if ((field->type.t & VT_BTYPE) == VT_STRUCT)
+      initialize_virtual_tables_for_object(&field->type, r, field_offset,
+                                           NULL);
+    initialize_virtual_tables_for_member_objects(&field->type, r, field_offset);
+  }
 }
 
 static void initialize_virtual_tables_for_pointer(CType *type,
