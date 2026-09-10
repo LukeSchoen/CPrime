@@ -5516,6 +5516,7 @@ static void complete_defaulted_constructor_body(PendingMemberFunc *pm,
 static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
 {
   int i, in_body = 0, this_tok;
+  int nested_type_depth = 0, pending_type_definition = 0;
   Sym *class_sym;
   CType class_type;
   TokenString *dst;
@@ -5555,6 +5556,7 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
   for (i = 0; i < pm->str->len && pm->str->str[i] != TOK_EOF; ++i)
   {
     int t = pm->str->str[i];
+    int prev_i, next_i;
     if (TOK_HAS_VALUE(t))
     {
       tok_str_add_record(dst, pm->str->str, pm->str->len, &i);
@@ -5569,6 +5571,34 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
     }
     if (append_nested_lambda_tokens(dst, pm->str, &i))
       continue;
+    prev_i = tok_str_prev_token_index(pm->str, pm->str->len, i);
+    next_i = tok_str_next_non_linenum_index(pm->str, pm->str->len, i + 1);
+    if (nested_type_depth)
+    {
+      tok_str_add(dst, t);
+      if (t == '{') ++nested_type_depth;
+      else if (t == '}') --nested_type_depth;
+      continue;
+    }
+    if (pending_type_definition)
+    {
+      tok_str_add(dst, t);
+      if (t == '{')
+      {
+        nested_type_depth = 1;
+        pending_type_definition = 0;
+      }
+      else if (t == ';' || t == TOK_EOF)
+        pending_type_definition = 0;
+      continue;
+    }
+    if ((t == TOK_STRUCT || t == TOK_CLASS || t == TOK_UNION)
+        && body_token_starts_type_definition(pm->str, i, pm->str->len))
+    {
+      pending_type_definition = 1;
+      tok_str_add(dst, t);
+      continue;
+    }
     if (t == this_tok && i + 3 < pm->str->len
         && pm->str->str[i + 1] == TOK_ARROW
         && pm->str->str[i + 2] >= TOK_UIDENT
@@ -5665,6 +5695,7 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
     if (t >= TOK_IDENT
         && t != this_tok
         && !pending_member_signature_has_param_name(pm->str, t)
+        && !body_identifier_is_decl_target(pm->str, i, prev_i, next_i)
         && (i == 0 || (pm->str->str[i - 1] != '.'
                        && pm->str->str[i - 1] != TOK_ARROW
                        && pm->str->str[i - 1] != ':')))

@@ -1872,7 +1872,7 @@ static int class_value_is_derived_from(CType *derived, CType *base)
     return 0;
   derived_tok = get_struct_type_name_tok(derived);
   base_tok = get_struct_type_name_tok(base);
-  return derived_tok && base_tok && class_has_base(derived_tok, base_tok);
+  return derived_tok && base_tok && class_has_unique_base(derived_tok, base_tok);
 }
 
 static int call_arg_exact_param_type(CType *param_type, CType *arg_type);
@@ -2075,6 +2075,14 @@ static int call_arg_matches_param_type(CType *param_type, CType *arg_type)
     return 1;
   if (btype_is_arithmetic_scalar(param_value_type.t & VT_BTYPE)
       && btype_is_arithmetic_scalar(arg_value_type.t & VT_BTYPE))
+    return 1;
+  /* A class argument initializes a by-value base parameter through a
+     derived-to-base copy. Reference parameters reach the same predicate
+     above; without this arm the copy was rejected and the call reported as
+     an invalid operation. */
+  if ((param_value_type.t & VT_BTYPE) == VT_STRUCT
+      && (arg_value_type.t & VT_BTYPE) == VT_STRUCT
+      && class_value_is_derived_from(&arg_value_type, &param_value_type))
     return 1;
   if ((param_type->t & VT_BTYPE) == VT_STRUCT
       && class_has_single_arg_constructor_for(param_type, &arg_value_type))
@@ -2469,7 +2477,29 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
                && function != best
                && member_function_is_template(best->v)
                     == member_function_is_template(function->v))
-      ambiguous = 1;
+    {
+      /* When two conversion templates both deduce to this target, an
+         explicitly specialized instantiation supplies the requested body
+         and wins over a fresh implicit instantiation of the other family. */
+      int best_explicit = 0, candidate_explicit = 0, i;
+      for (i = 0; i < nb_explicit_function_specializations; ++i)
+      {
+        if (explicit_function_specializations[i] == best->v)
+          best_explicit = 1;
+        if (explicit_function_specializations[i] == function->v)
+          candidate_explicit = 1;
+      }
+      if (candidate_explicit && !best_explicit)
+      {
+        best = function;
+        best_rank = rank;
+        best_const = candidate->is_const;
+        if (method) *method = candidate->method_tok;
+        ambiguous = 0;
+      }
+      else if (!(best_explicit && !candidate_explicit))
+        ambiguous = 1;
+    }
   }
   }
   if (classes != local_classes) cprime_free(classes);
@@ -3218,8 +3248,6 @@ static int parse_cpp_operator_method_tok(void)
       next();
       return tok_alloc_const("operator->*");
     }
-    unget_tok(tok);
-    tok = TOK_ARROW;
     return tok_alloc_const("operator->");
   }
   name = cpp_operator_name_from_tok(tok);
@@ -3742,6 +3770,34 @@ static int try_call_cpp_free_binary_operator(int op)
   return 1;
 }
 
+/* A unary operator can be declared as a non-member function with exactly one
+   parameter. Resolve it the same way as the binary operators so that class
+   operands reach free operator! and friends instead of the builtin path. */
+static int try_call_cpp_free_unary_operator(int method_tok)
+{
+  CType arg_types[1];
+  Sym *func_sym, *func_type, *sa;
+
+  if (!method_tok)
+    return 0;
+  arg_types[0] = vtop->type;
+  func_sym = cpp_resolve_free_operator(method_tok, arg_types, 1);
+  if (!func_sym)
+    return 0;
+  if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
+    cprime_error("operator overload target is not declared as function");
+  func_type = func_sym->type.ref;
+  sa = func_type->next;
+  if (!sa || sa->next)
+    cprime_error("unary operator overload must have exactly one parameter");
+  gfunc_param_typed_with_conversions(func_type, sa);
+  save_lvalues();
+  vpushsym(&func_sym->type, func_sym);
+  vswap();
+  finish_cpp_member_func_call(func_type, 1);
+  return 1;
+}
+
 static int try_call_cpp_postfix_operator(int op)
 {
   if (!is_cpp_translation_unit()
@@ -3773,7 +3829,7 @@ static int try_call_cpp_unary_operator(int op)
     func_sym = resolve_member_func(&vtop->type, method_tok);
   if (!func_sym)
   {
-    return 0;
+    return try_call_cpp_free_unary_operator(method_tok);
   }
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("operator overload target is not declared as function");

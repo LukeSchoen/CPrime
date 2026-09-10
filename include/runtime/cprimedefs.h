@@ -38,7 +38,6 @@
 #define __UINTPTR_TYPE__ unsigned __PTRDIFF_TYPE__
 #define __INTPTR_TYPE__ __PTRDIFF_TYPE__
 #define __INT32_TYPE__ int
-#define __PRETTY_FUNCTION__ __FUNCTION__
 #define __has_feature(x) 0
 #define __has_extension(x) 0
 #define __assume(x) ((void)0)

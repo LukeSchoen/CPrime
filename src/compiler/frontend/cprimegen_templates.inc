@@ -6263,6 +6263,8 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
       if (tok == TOK_LT || tok == '<')
       {
         int angle = 1;
+        int all_class_params = 1;
+        TokenString *explicit_args = tok_str_alloc();
         next();
         while (tok != TOK_EOF && angle > 0)
         {
@@ -6277,12 +6279,46 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
               --angle;
           }
           if (angle > 0)
+          {
+            if (angle == 1 && tok != ','
+                && (tok < TOK_UIDENT
+                    || !template_member_class_arg_subst_tok(md,
+                                                            class_mangled_tok,
+                                                            tok)))
+              all_class_params = 0;
+            tok_str_add_template_member_subst(explicit_args, md,
+                                              class_mangled_tok,
+                                              md->type_param_tok, type_tok,
+                                              member_type_param_tok,
+                                              member_type_arg_tok,
+                                              value_param_tok);
             next();
+          }
         }
         if (tok != TOK_GT)
           cprime_error("member-template body type close expected before '%s'",
                        get_tok_str(tok, &tokc));
         next();
+        if (self_type_pos && tok != '(' && tok != '{' && tok != ':')
+          tok_str_add(body_def, TOK_STRUCT);
+        if (all_class_params)
+        {
+          /* Spelled entirely with this template's own parameters: the
+             injected class name still denotes this instantiation. */
+          tok_str_add(body_def, class_mangled_tok);
+          tok_str_free(explicit_args);
+          continue;
+        }
+        /* An explicit template-id in a member body names that specialization of
+           the enclosing template, not the current instantiation. Keep the
+           arguments, substituting the enclosing class and member parameters the
+           same way the member's written return type does. */
+        tok_str_add(body_def, md->class_tok);
+        tok_str_add(body_def, TOK_LT);
+        tok_str_append(body_def, explicit_args);
+        tok_str_add(body_def, TOK_GT);
+        tok_str_free(explicit_args);
+        continue;
       }
       if (self_type_pos && tok != '(' && tok != '{' && tok != ':')
         tok_str_add(body_def, TOK_STRUCT);
@@ -6496,6 +6532,7 @@ static void instantiate_template_member_body_for_func_tok_impl(CType *type,
   TemplateMemberDef *md;
   int struct_tok = get_struct_type_name_tok(type);
   int type_tok = 0;
+  int explicit_specialization_owner = 0;
   int saved_pending = nb_pending_member_funcs;
   int i, j;
   MemberFunctionScope *scope;
@@ -6530,10 +6567,12 @@ static void instantiate_template_member_body_for_func_tok_impl(CType *type,
   for (i = 0; i < td->nb_inst; ++i)
     if (td->inst_name_toks[i] == struct_tok)
     {
+      if (td->inst_states && (td->inst_states[i] & 64))
+        explicit_specialization_owner = 1;
       type_tok = td->inst_type_toks[i * td->nb_type_params];
       break;
     }
-  if (!type_tok)
+  if (!type_tok || explicit_specialization_owner)
     return;
 
   for (md = template_member_candidates(td->name_tok, method_tok);
@@ -6705,6 +6744,9 @@ static void instantiate_template_members_for_class(TemplateDef *td, int type_tok
       inst_index = i;
       break;
     }
+  if (inst_index >= 0 && td->inst_states
+      && (td->inst_states[inst_index] & 64))
+    return;
   if (inst_index >= 0 && td->inst_states)
   {
     if (td->inst_states[inst_index] >= 2)
@@ -7363,6 +7405,9 @@ static void instantiate_template_member_for_call(CType *type, int method_tok,
     if (!owner || !owner->owner->is_class)
       goto concrete_member_templates;
     td = owner->owner;
+    if (td->inst_states
+        && (td->inst_states[owner->inst_index] & 64))
+      goto concrete_member_templates;
     type_tok = td->inst_type_toks[owner->inst_index * td->nb_type_params];
     if (!type_tok)
       goto concrete_member_templates;
@@ -8050,7 +8095,6 @@ static void add_template_member_def(int class_tok, int type_param_tok,
   dynarray_add(&template_member_defs, &nb_template_member_defs, md);
   index_template_member(md);
 
-
   td = find_template_def(md->lookup_class_tok);
   if (!td || !td->is_class)
     return;
@@ -8058,6 +8102,8 @@ static void add_template_member_def(int class_tok, int type_param_tok,
   {
     int method_tok = template_member_def_method_tok(md);
     Sym *owner = struct_find(td->inst_name_toks[i]);
+    if (td->inst_states && (td->inst_states[i] & 64))
+      continue;
     /* A pointer/reference may have requested only a forward specialization.
        Its member aliases and declarations become available when the class
        definition is instantiated; publish interfaces after that point. */
@@ -8547,15 +8593,22 @@ static void parse_template_decl(void)
       if (!make_class_type_from_tok(&record, owner) || record.ref->c < 0)
         cprime_error("explicit instantiation requires a complete class template");
       skip(';');
-      for (member = member_func_overloads; member; member = member->next) {
-        Sym *function;
-        if (member->struct_tok != owner) continue;
-        instantiate_template_member_body_for_func_tok(&record, member->method_tok,
-                                                       member->mangled_tok);
-        function = global_symbol_find(member->mangled_tok);
-        if (function && pending_member_func_has_body_tok(member->mangled_tok))
-          put_extern_sym(function, NULL, 0, 0);
-      }
+      if (!extern_template_explicit_declaration)
+        for (member = member_func_overloads; member; member = member->next) {
+          Sym *function;
+          if (member->struct_tok != owner) continue;
+          instantiate_template_member_body_for_func_tok(&record, member->method_tok,
+                                                         member->mangled_tok);
+          function = global_symbol_find(member->mangled_tok);
+          /* Register the external demand only while the member still has no
+             definition. put_extern_sym rewrites an existing entry to
+             SHN_UNDEF/value 0, which would erase a body this explicit
+             instantiation just materialized and leave calls jumping to
+             address 0. */
+          if (function && pending_member_func_has_body_tok(member->mangled_tok)
+              && (!function->c || elfsym(function)->st_shndx == SHN_UNDEF))
+            put_extern_sym(function, NULL, 0, 0);
+        }
     } else {
       parse_explicit_function_specialization(1);
     }
@@ -8636,6 +8689,10 @@ static void parse_template_decl(void)
     tok_str_add(str, TOK_EOF);
 
     note_template_inst(td, &args, mangled_tok);
+    /* A full specialization declares its own members and never inherits
+       out-of-class primary-template member definitions.  Keep that
+       distinction on the instance so later definitions skip this entry. */
+    td->inst_states[td->nb_inst - 1] |= 64;
     if (macro_stack)
     {
       queue_pending_template_spec_in_namespace(str, args.nb > 0 ? args.toks[0] : 0, td->namespace_tok);
@@ -8654,7 +8711,6 @@ static void parse_template_decl(void)
       tok = saved_tok;
       tokc = saved_tokc;
     }
-    instantiate_template_members_for_class(td, args.toks[0], mangled_tok);
     return;
   }
   if (template_parameter_is_type())
@@ -9292,6 +9348,67 @@ static int validate_template_value_parameter_type(TemplateDef *definition,
   return valid;
 }
 
+/* A token that names a member of a qualified or member-access expression is
+   not a reference to a template parameter even when the spelling is the same.
+   Unqualified substitution in a default argument otherwise rewrites the
+   member name in `NumericTraits<...>::TInputImage` and makes the default
+   argument unparseable. */
+static int template_token_follows_scope(TokenString *tokens, int index)
+{
+  int previous = tok_str_prev_token_index(tokens->str, tokens->len, index);
+  if (previous >= 0 && is_template_keyword_tok(tokens->str[previous]))
+    previous = tok_str_prev_token_index(tokens->str, tokens->len, previous);
+  if (previous < 0)
+    return 0;
+  if (tokens->str[previous] == ':' || tokens->str[previous] == '.')
+    return 1;
+  if (tokens->str[previous] == '>') {
+    int before_previous = tok_str_prev_token_index(tokens->str, tokens->len, previous);
+    return before_previous >= 0 && tokens->str[before_previous] == '-';
+  }
+  return 0;
+}
+
+/* DR 1004: inside `B<int>`, the injected class name `B` names the
+   specialization as a type but the class template itself as a template-name.
+   A dependent template-template default such as `T::template B` therefore
+   resolves to the owner template of the supplied specialization. */
+static int template_default_injected_template_arg(TemplateDef *td,
+                                                  TemplateArgList *args,
+                                                  int param_index)
+{
+  TokenString *source = td->default_arg_strs[param_index];
+  int index[5];
+  int count = 0, i;
+  TemplateInstOwner *injected;
+  int lookup;
+
+  for (i = 0; i < source->len; ++i) {
+    if (TOK_HAS_VALUE(source->str[i]))
+      return 0;
+    if (count < (int)(sizeof(index) / sizeof(index[0])))
+      index[count] = i;
+    ++count;
+  }
+  if (count != (int)(sizeof(index) / sizeof(index[0]))
+      || source->str[index[1]] != ':' || source->str[index[2]] != ':'
+      || !is_template_keyword_tok(source->str[index[3]]))
+    return 0;
+  for (i = 0; i < args->nb && i < param_index; ++i)
+    if (source->str[index[0]] == td->type_param_toks[i])
+      break;
+  if (i >= args->nb || i >= param_index)
+    return 0;
+  injected = find_template_inst_owner_entry(args->toks[i]);
+  if (!injected || !injected->owner || !injected->owner->is_class)
+    return 0;
+  lookup = template_def_lookup_tok(injected->owner);
+  if (source->str[index[4]] != lookup
+      && source->str[index[4]] != injected->owner->name_tok)
+    return 0;
+  return lookup;
+}
+
 static int instantiate_default_template_arg(TemplateDef *td,
                                             TemplateArgList *args,
                                             int param_index)
@@ -9303,6 +9420,9 @@ static int instantiate_default_template_arg(TemplateDef *td,
   if (!td || param_index < 0 || param_index >= td->nb_type_params
       || !td->default_arg_strs[param_index])
     return 0;
+  result = template_default_injected_template_arg(td, args, param_index);
+  if (result)
+    return result;
   /* Defaults can contain dependent expressions, not just a single type name.
      Substitute the known parameters before parsing decltype/sizeof and nested
      calls so their ordinary expression parser never sees an unbound T. */
@@ -9319,7 +9439,9 @@ static int instantiate_default_template_arg(TemplateDef *td,
     for (j = 0; j < args->nb && j < param_index; ++j)
       if (t == td->type_param_toks[j])
         break;
-    tok_str_add(replay, j < args->nb && j < param_index ? args->toks[j] : t);
+    tok_str_add(replay, j < args->nb && j < param_index
+                        && !template_token_follows_scope(source, i)
+                      ? args->toks[j] : t);
   }
   result = template_probe_type(replay, 1, td->namespace_tok, &parsed)
              ? parsed.t : 0;
@@ -14640,13 +14762,9 @@ static int template_call_signature_rank_bound(TemplateDef *td, CType *arguments,
 {
   TemplateArgList bindings;
   TokenString *parameters;
-  CType result = { VT_VOID, NULL }, function;
+  CType function;
   Sym *parameter;
   int i, begin = -1, end = -1, depth = 0, rank = 0;
-  int dependent_signature = 0;
-  int saved_namespace, saved_nocode;
-  Sym **hidden_bindings;
-  int hidden_count;
   static int active;
   if (active || !td->def_str) return -2;
   for (i = 0; i + 1 < td->def_str->len; ++i)
@@ -14665,13 +14783,6 @@ static int template_call_signature_rank_bound(TemplateDef *td, CType *arguments,
       i += tok_str_value_extra_words(td->def_str->str, td->def_str->len, i);
       continue;
     }
-    if ((token >= TOK_UIDENT
-        && !strcmp(get_tok_str(token, NULL), "typename"))) dependent_signature = 1;
-    if (token == '[' || token == TOK_SIZEOF || token == TOK_DECLTYPE
-        || token == TOK_DECLTYPE2 || token == TOK_ALIGNOF1 || token == TOK_ALIGNOF2
-        || token == TOK_ALIGNOF3 || token == TOK_ALIGNOF4) dependent_signature = 1;
-    if (template_param_index(td, token) >= 0 && i + 1 < td->def_str->len
-        && td->def_str->str[i + 1] == ':') dependent_signature = 1;
     if (token == '(') ++depth;
     else if (token == ')') {
       if (!depth) { end = i; break; }
@@ -14706,7 +14817,12 @@ static int template_call_signature_rank_bound(TemplateDef *td, CType *arguments,
     tok_str_free(parameters);
     parameters = expanded;
   }
-  if (dependent_signature || td->member_class_tok) {
+  /* Parameter replay always runs under a substitution probe: forming a
+     substituted parameter type can fail (for example when instantiating a
+     class template whose defaulted argument is ill-formed for this binding),
+     and inside overload or partial-ordering deduction that has to drop the
+     candidate instead of aborting the translation unit. */
+  {
     TokenString *signature = tok_str_alloc();
     int valid;
     tok_str_add(signature, TOK_VOID);
@@ -14718,16 +14834,6 @@ static int template_call_signature_rank_bound(TemplateDef *td, CType *arguments,
                                    td->member_class_tok, 0, &function);
     tok_str_free(signature);
     if (!valid) { tok_str_free(parameters); active = 0; return -1; }
-  } else {
-  saved_namespace = current_namespace_scope_tok();
-  saved_nocode = nocode_wanted;
-  enter_namespace_scope(td->namespace_tok);
-  ++nocode_wanted;
-  hidden_bindings = sym_hide_local_bindings(local_stack, &hidden_count);
-  function = make_func_type_from_saved_params(&result, parameters);
-  sym_relink_stack(hidden_bindings, hidden_count);
-  nocode_wanted = saved_nocode;
-  enter_namespace_scope(saved_namespace);
   }
   tok_str_free(parameters);
   /* Member deduction also serves explicit specialization declarations,

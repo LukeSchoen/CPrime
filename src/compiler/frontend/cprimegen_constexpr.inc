@@ -11,6 +11,48 @@ typedef struct ConstexprFunction {
 static ConstexprFunction *constexpr_functions;
 static int constexpr_evaluation_depth;
 
+static int evaluate_builtin_function_call(Sym *function, SValue *arguments,
+                                          int count, SValue *result)
+{
+  const char *name;
+  SValue *argument;
+  ObjSym *symbol;
+  Section *section;
+  const unsigned char *bytes;
+  int length, available;
+  if (!function || !function->type.ref || count != 1)
+    return 0;
+  name = function->asm_label
+           ? get_tok_str(function->asm_label, NULL)
+           : get_tok_str(function->v, NULL);
+  if (!name || strcmp(name, "strlen"))
+    return 0;
+  argument = arguments;
+  if (!argument || !argument->sym
+      || (argument->r & (VT_VALMASK | VT_LVAL | VT_SYM)) != (VT_CONST | VT_SYM)
+      || !argument->sym->string_literal || !argument->sym->c)
+    return 0;
+  symbol = elfsym(argument->sym);
+  if (!symbol || symbol->st_shndx <= 0
+      || symbol->st_shndx >= cprime_state->nb_sections)
+    return 0;
+  section = cprime_state->sections[symbol->st_shndx];
+  if (!section || !section->data
+      || symbol->st_value >= section->data_offset)
+    return 0;
+  bytes = section->data + symbol->st_value;
+  available = (int)(section->data_offset - symbol->st_value);
+  for (length = 0; length < available; ++length)
+    if (!bytes[length])
+      break;
+  if (length == available)
+    return 0;
+  result->type = function->type.ref->type;
+  result->r = VT_CONST;
+  result->c.i = length;
+  return 1;
+}
+
 static void note_constexpr_function(Sym *function, TokenString *body)
 {
   int i, first, end;

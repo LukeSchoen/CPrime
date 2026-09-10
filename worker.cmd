@@ -7,13 +7,20 @@ cd /d "%~dp0"
 set "DONE=done.x"
 set "CODEX_EXE=codex.exe"
 set "TASK_PROMPT=implement task.md"
+set "CYCLE=0"
 
 :cycle
+set /a CYCLE+=1
 call :commit_work
-if exist "%DONE%" exit /b 0
+if exist "%DONE%" (
+    echo [%DATE% %TIME%] %DONE% found, stopping after %CYCLE% cycle^(s^).
+    exit /b 0
+)
+echo [%DATE% %TIME%] cycle %CYCLE%: starting codex
 call :clear_codex
 call :start_codex
-%SystemRoot%\System32\ping.exe -n 1801 127.0.0.1 >nul 2>&1
+echo [%DATE% %TIME%] waiting 15 minutes
+%SystemRoot%\System32\ping.exe -n 901 127.0.0.1 >nul 2>&1
 goto cycle
 
 :commit_work

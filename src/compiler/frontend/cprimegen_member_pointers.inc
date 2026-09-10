@@ -139,7 +139,18 @@ static int try_parse_cpp_member_pointer_owner(void)
       && !is_namespace_tok(tok)
       && !(alias && (alias->type.t & VT_TYPEDEF)
            && (alias->type.t & VT_BTYPE) == VT_STRUCT))
-    return 0;
+  {
+    /* A nested class of the class enclosing the current member declaration
+       is registered only under its qualified token (Outer_Inner), so the
+       unqualified spelling must still name a member-pointer owner here. */
+    int class_tok = cpp_member_decl_context
+                      ? cpp_member_decl_context->owner_tok
+                      : active_member_class_tok;
+    int scoped = class_tok ? find_class_scope_type_tok(class_tok, tok) : tok;
+    if (scoped == tok)
+      return 0;
+    first = scoped;
+  }
   replay = tok_str_alloc();
   owner = tok_str_alloc();
   for (;;)
@@ -147,7 +158,8 @@ static int try_parse_cpp_member_pointer_owner(void)
     if (tok < TOK_UIDENT)
       break;
     tok_str_add_tok(replay);
-    tok_str_add_tok(owner);
+    if (owner->len == 0) tok_str_add(owner, first);
+    else tok_str_add_tok(owner);
     next();
     if (tok == '<' || tok == TOK_LT)
     {
@@ -201,6 +213,13 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
   if (class_has_static_member_func(class_tok, member_tok))
     return 0;
   field = find_field_try(&owner_type, member_tok, &offset);
+  if (field && is_reference_type(&field->type))
+  {
+    /* A reference member has no address of its own: `&(C::m)` must reach
+       the referent through ordinary member access instead of forming a
+       pointer to member of reference type (CWG 4379). */
+    return 0;
+  }
   if (field && (field->type.t & VT_BTYPE) != VT_FUNC)
   {
     member_type = field->type;
@@ -393,7 +412,18 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
   }
   if (!is_compatible_unqualified_types(&target->member_type, &source->member_type)
       || ((source->member_type.t & ~target->member_type.t) & (VT_CONSTANT | VT_VOLATILE)))
-    cast_error(&vtop->type, type);
+  {
+    /* [expr.reinterpret.cast] permits an explicit conversion between two
+       pointer-to-member types that are both function types or both object
+       types.  Both members are stored as a target/adjustment pair, so the
+       words carry over unchanged. */
+    int source_is_func = (source->member_type.t & VT_BTYPE) == VT_FUNC;
+    int target_is_func = (target->member_type.t & VT_BTYPE) == VT_FUNC;
+    if (!explicit_cast || source_is_func != target_is_func)
+      cast_error(&vtop->type, type);
+    vtop->type = *type;
+    return 1;
+  }
   if (!class_subobject_offset(target->owner_tok, source->owner_tok, &offset))
   {
     if (!explicit_cast

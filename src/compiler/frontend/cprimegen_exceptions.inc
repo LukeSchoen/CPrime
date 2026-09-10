@@ -571,7 +571,11 @@ static void cpp_eh_throw_expression(void)
   TokenString *operand;
   int direct = 0;
   next();
-  if (tok == ';' || tok == ')' || tok == ',' || tok == ':' || tok == '}') {
+  /* A saved conditional arm is replayed from its own token stream, so a
+     rethrow is terminated by the end of that stream rather than by the
+     punctuation that followed it in the source. */
+  if (tok == ';' || tok == ')' || tok == ',' || tok == ':' || tok == '}'
+      || tok == TOK_EOF) {
     cpp_eh_push_helper("__cpc_eh_rethrow");
     gfunc_call(0);
     vset(&cpp_eh_void_type, VT_CONST | VT_THROW, 0);
