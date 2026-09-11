@@ -1,4 +1,5 @@
 static int compare_free_function_template_order(TemplateDef *, TemplateDef *);
+static int compare_free_function_return_template_order(TemplateDef *, TemplateDef *);
 static int infer_template_args_from_call_with_explicit(TemplateDef *, CType *, int,
                                                        TemplateArgList *, TemplateArgList *);
 
@@ -307,6 +308,98 @@ static int instantiate_explicit_conversion_member(int class_tok, CType *target,
   return best;
 }
 
+/* A parameterless function template leaves nothing to deduce an explicit
+   instantiation's argument list from, so `template int* f();` names the
+   template through its declared result type.  The template's own return-type
+   pattern is the token run between its `template<...>` header and its name. */
+static int template_declared_return_pattern(TemplateDef *td, int *start, int *end)
+{
+  TokenString *source = td->def_str;
+  int i, name_index = -1, header_end = 0, angle = 0, in_header = 0;
+
+  if (!source || !td->name_tok || td->nb_type_params <= 0) return 0;
+  for (i = 0; i < source->len; ++i) {
+    if (TOK_HAS_VALUE(source->str[i])) {
+      i += tok_str_value_extra_words(source->str, source->len, i);
+      continue;
+    }
+    if (source->str[i] == td->name_tok) { name_index = i; break; }
+  }
+  if (name_index < 0) return 0;
+  /* The saved declarator normally begins after the template<> header; a
+     nested member template keeps its own header in front of it. */
+  for (i = 0; i < name_index; ++i) {
+    int token = source->str[i];
+    if (TOK_HAS_VALUE(token)) {
+      i += tok_str_value_extra_words(source->str, source->len, i);
+      continue;
+    }
+    if (in_header) {
+      if (token == TOK_LT || token == '<') ++angle;
+      else if (token == TOK_GT || token == '>') {
+        if (angle > 0) --angle;
+      } else if (token == TOK_SAR) angle -= 2;
+      if (angle <= 0) {
+        in_header = 0;
+        header_end = i + 1;
+      }
+      continue;
+    }
+    if (is_template_keyword_tok(token)) { in_header = 1; angle = 0; continue; }
+    break;
+  }
+  if (header_end >= name_index) return 0;
+  *start = header_end;
+  *end = name_index;
+  return 1;
+}
+
+/* Deduce every template parameter the declared result type spells directly.
+   Parameters reached through a nested-name-specifier or a template argument
+   list stay non-deduced, exactly as they do in an ordinary call. */
+static int infer_template_args_from_declared_return_type(TemplateDef *td,
+                                                         CType *result,
+                                                         TemplateArgList *args)
+{
+  int start, end, parameter, i, j, depth, deduced = 0;
+
+  if (!template_declared_return_pattern(td, &start, &end)) return 0;
+  args->nb = 0;
+  for (j = 0; j < td->nb_type_params; ++j) {
+    /* A parameter the pattern cannot spell keeps its default; a required one
+       leaves the declared result type unable to name this template. */
+    if ((td->value_param_mask >> j) & 1) {
+      if (j < td->nb_required_type_params) return 0;
+      break;
+    }
+    parameter = -1;
+    depth = 0;
+    for (i = start; i < end; ++i) {
+      int token = td->def_str->str[i];
+      if (TOK_HAS_VALUE(token)) {
+        i += tok_str_value_extra_words(td->def_str->str, td->def_str->len, i);
+        continue;
+      }
+      if (!depth && token == td->type_param_toks[j]) { parameter = i; break; }
+      if (token == TOK_LT || token == '<' || token == '(' || token == '[')
+        ++depth;
+      else if ((token == TOK_GT || token == '>' || token == ')'
+                || token == ']') && depth > 0)
+        --depth;
+    }
+    if (parameter < 0) {
+      if (j < td->nb_required_type_params) return 0;
+      break;
+    }
+    args->toks[j] = deduce_direct_template_type(td->def_str, start, parameter,
+                                                end, result);
+    if (!args->toks[j]) return 0;
+    args->nb = j + 1;
+    deduced = 1;
+  }
+  return deduced;
+}
+
 static void parse_explicit_function_specialization(int instantiation)
 {
   TokenString *parameters = tok_str_alloc(), *definition = tok_str_alloc();
@@ -549,6 +642,7 @@ static void parse_explicit_function_specialization(int instantiation)
     }
   } else {
     TemplateDef *candidate;
+    int from_result = count == 0 && !explicit_args.nb;
     for (candidate = template_def_candidates(qualified); candidate;
          candidate = candidate->lookup_bucket_next) {
       TemplateArgList arguments;
@@ -556,7 +650,14 @@ static void parse_explicit_function_specialization(int instantiation)
       if (candidate->is_class || candidate->is_alias
           || template_def_lookup_tok(candidate) != qualified
           || candidate->func_max_args != count) continue;
-      if (!infer_template_args_from_call_with_explicit(candidate, actual, count,
+      if (from_result) {
+        /* The result type names the template; a declaration whose parameters
+           all carry defaults still resolves through ordinary inference. */
+        if (!infer_template_args_from_declared_return_type(candidate, &result,
+                                                           &arguments)
+            && !infer_template_args_from_call_with_explicit(candidate, actual, count,
+                          &arguments, NULL)) continue;
+      } else if (!infer_template_args_from_call_with_explicit(candidate, actual, count,
                           &arguments, explicit_args.nb ? &explicit_args : NULL)) continue;
       candidate_tok = instantiate_template_if_needed(candidate, &arguments);
       compile_pending_template_specs_without_member_flush();
@@ -564,7 +665,9 @@ static void parse_explicit_function_specialization(int instantiation)
       if (!symbol || !same_specialization_func_signature(&symbol->type, &function)
           || !compare_types(&symbol->type.ref->type, &result, 1)) continue;
       if (function_tok && function_tok != candidate_tok) {
-        int order = compare_free_function_template_order(candidate, selected_free);
+        int order = from_result
+          ? compare_free_function_return_template_order(candidate, selected_free)
+          : compare_free_function_template_order(candidate, selected_free);
         if (order < 0) continue;
         if (!order) cprime_error("ambiguous explicit function template specialization '%s'", get_tok_str(name, NULL));
       }

@@ -572,3 +572,66 @@ static int compare_class_partial_template_order(TemplateDef *first,
   cprime_free(b);
   return result;
 }
+
+/* Two parameterless function templates have no parameter list to order by, so
+   an explicit instantiation naming them through its result type (`template
+   int* f();`) is resolved by the structure of their return-type patterns,
+   exactly as class partial specializations order their argument patterns. */
+static int free_function_return_order_pattern(TemplateDef *definition,
+                                              MemberOrderPattern *pattern)
+{
+  TokenString *source = definition->def_str;
+  int i, start, end, angle = 0;
+
+  if (!template_declared_return_pattern(definition, &start, &end)) return 0;
+  pattern->variable_count = definition->nb_type_params;
+  for (i = 0; i < pattern->variable_count; ++i)
+    pattern->variables[i] = definition->type_param_toks[i];
+  for (i = start; i < end; ++i) {
+    int token = source->str[i], copies = 1;
+    if (TOK_HAS_VALUE(token)) {
+      if (token != TOK_LINENUM) return 0;
+      i += tok_str_value_extra_words(source->str, source->len, i);
+      continue;
+    }
+    if (token == TOK_SAR) token = TOK_GT, copies = 2;
+    while (copies--) {
+      int variable;
+      if (token == TOK_LT || token == '<') ++angle;
+      else if (token == TOK_GT || token == '>') --angle;
+      if (token == TOK_CONST2 || token == TOK_CONST3) token = TOK_CONST1;
+      else if (token == TOK_VOLATILE2 || token == TOK_VOLATILE3)
+        token = TOK_VOLATILE1;
+      variable = member_order_variable(pattern, token);
+      if (pattern->count >= 510) return 0;
+      pattern->tokens[pattern->count++] = variable ? -variable : token;
+    }
+  }
+  if (!pattern->count) return 0;
+  pattern->starts[0] = 0;
+  pattern->ends[0] = pattern->count;
+  pattern->parameters = 1;
+  return 1;
+}
+
+static int compare_free_function_return_template_order(TemplateDef *first,
+                                                       TemplateDef *second)
+{
+  MemberOrderPattern *a = cprime_mallocz(sizeof(*a));
+  MemberOrderPattern *b = cprime_mallocz(sizeof(*b));
+  int result = 0;
+  if (free_function_return_order_pattern(first, a)
+      && free_function_return_order_pattern(second, b)) {
+    ClassOrderTypes *ta = cprime_mallocz(sizeof(*ta));
+    ClassOrderTypes *tb = cprime_mallocz(sizeof(*tb));
+    if (class_order_types(a, ta) && class_order_types(b, tb))
+      result = class_order_deduces(tb, ta) - class_order_deduces(ta, tb);
+    else
+      result = member_order_deduces(b, a) - member_order_deduces(a, b);
+    cprime_free(ta);
+    cprime_free(tb);
+  }
+  cprime_free(a);
+  cprime_free(b);
+  return result;
+}

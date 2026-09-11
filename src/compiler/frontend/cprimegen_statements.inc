@@ -1533,6 +1533,9 @@ static void skip_or_save_block_mode(TokenString **str, int allow_eof, int logica
   int prev_sig = 0;
   int prev_prev_sig = 0;
   int qualified_name = 0;
+  int entity_name = 0;
+  int colon_owner = 0;
+  int qualified_member_owner = 0;
   if (str)
     *str = tok_str_alloc();
 
@@ -1563,7 +1566,21 @@ static void skip_or_save_block_mode(TokenString **str, int allow_eof, int logica
         && (angle > 0
             || (prev_sig >= TOK_UIDENT
                 && (find_template_def(prev_sig)
-                    || (logical_operator && saved_member_template_name(prev_sig))
+                    /* A qualified member template id (`Impl::member<...>`)
+                       opens an argument list in ordinary call arguments too;
+                       the `::` before the name makes the '<' unambiguous. */
+                    || ((logical_operator || prev_prev_sig == ':')
+                        && saved_member_template_name(prev_sig))
+                    /* A nested class template is registered under its
+                       interned member token when its owner is instantiated,
+                       so the bare name does not identify it.  Resolve it
+                       through the class named before the `::`, falling back
+                       to the owner's saved body before that instantiation. */
+                    || (prev_prev_sig == ':' && qualified_member_owner
+                        && (find_class_template_def(make_static_member_tok(
+                              qualified_member_owner, prev_sig))
+                            || class_template_body_declares_nested_class_template(
+                                 qualified_member_owner, prev_sig)))
                     || find_template_def(find_current_namespace_tok(prev_sig))
                     || (qualified_name && find_template_def(qualified_name))
                     || is_template_keyword_tok(prev_prev_sig)))))
@@ -1586,12 +1603,22 @@ static void skip_or_save_block_mode(TokenString **str, int allow_eof, int logica
     }
     if (t != TOK_LINENUM && !TOK_HAS_VALUE(t))
     {
-      if (t >= TOK_UIDENT) {
+      /* Track the qualified names spelled at this level.  Tokens inside a
+         template argument list are skipped so `Outer<int>::Inner<...>` keeps
+         Outer as the owner instead of the last argument type. */
+      if (angle == 0 && t >= TOK_UIDENT) {
         if (prev_sig == ':' && prev_prev_sig == ':' && qualified_name) {
           int parts[2] = { qualified_name, t };
+          qualified_member_owner = colon_owner;
           qualified_name = find_namespace_tok_from_parts(parts, 2);
-        } else qualified_name = find_current_namespace_tok(t);
+        } else {
+          qualified_member_owner = 0;
+          qualified_name = find_current_namespace_tok(t);
+        }
+        entity_name = t;
       }
+      else if (angle == 0 && t == ':' && prev_sig != ':')
+        colon_owner = entity_name;
       prev_prev_sig = prev_sig;
       prev_sig = t;
     }

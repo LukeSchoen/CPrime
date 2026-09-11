@@ -398,15 +398,18 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
     MemberFuncOverload *candidate;
     int ambiguous = 0;
     member_owner_tok = class_tok;
-    if (cpp_member_address_target
-        && class_or_inst_has_member_template_name(class_tok, member_tok)) {
-      CppMemberPointerType *target = find_cpp_member_pointer_type(cpp_member_address_target);
+    if (class_or_inst_has_member_template_name(class_tok, member_tok)
+        && (cpp_member_address_target || tok == TOK_LT || tok == '<')) {
+      CppMemberPointerType *target = cpp_member_address_target
+          ? find_cpp_member_pointer_type(cpp_member_address_target) : NULL;
       int saved_explicit = explicit_member_template_arg_tok, count = 0;
+      int parsed_explicit = 0;
       CType arguments[CPC_MAX_CALL_ARGUMENTS];
       if (tok == TOK_LT || tok == '<') {
         TemplateArgList explicit_arguments;
         parse_template_type_args(&explicit_arguments);
         explicit_member_template_arg_tok = intern_explicit_member_arguments(&explicit_arguments);
+        parsed_explicit = 1;
       }
       if (target && (target->member_type.t & VT_BTYPE) == VT_FUNC) {
         Sym *parameter;
@@ -422,6 +425,11 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
         }
         instantiate_template_member_for_call(&owner_type, member_tok, arguments, count);
       }
+      else if (parsed_explicit)
+        /* A non-type template argument such as `&A::good<int>` names a member
+           specialization without any contextual member-pointer type to deduce
+           from, so the explicit argument list is the whole specification. */
+        instantiate_template_member_for_call(&owner_type, member_tok, NULL, -1);
       explicit_member_template_arg_tok = saved_explicit;
     }
     function = find_member_func_address_candidate(class_tok, member_tok,
@@ -635,6 +643,15 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
     if (!explicit_cast)
       cast_error(&vtop->type, type);
     offset = -offset;
+  }
+  else if (explicit_cast < 2
+           && class_virtual_base_path(target->owner_tok, source->owner_tok))
+  {
+    /* [conv.mem]: a pointer to member of base `source` converts to a pointer
+       to member of derived `target` only when that base is non-virtual.  A
+       virtual base subobject has no fixed offset, so the adjustment the
+       conversion would need cannot be computed. */
+    cast_error(&vtop->type, type);
   }
   if (!offset) { vtop->type = *type; return 1; }
   source_slot = cpp_member_pointer_address_slot();

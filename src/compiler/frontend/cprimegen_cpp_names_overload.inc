@@ -1138,24 +1138,42 @@ static void merge_using_directive_overloads(int name_tok, int scope_tok,
 /* Two-stage lookup: an unqualified name that already named a free function
    where the template definition was written must not reach an overload
    declared later in the same namespace.  A name with no definition-visible
-   candidate keeps the ordinary instantiation-time resolution. */
-static int free_func_visible_at_bound(FreeFuncOverload *o)
+   candidate keeps the ordinary instantiation-time resolution.  A
+   specialization instantiated while the body is replayed is as old as the
+   template it came from: its own symbol is new, the declaration is not. */
+static int free_func_tok_visible_at_bound(int tok)
 {
   Sym *s;
+  TemplateInstOwner *owner;
   if (!cpp_template_replay_bound) return 1;
-  s = find_global_symbol(o->mangled_tok);
-  return s && s->decl_serial
-      && (unsigned)s->decl_serial <= cpp_template_replay_bound;
+  s = find_global_symbol(tok);
+  if (s && s->decl_serial
+      && (unsigned)s->decl_serial <= cpp_template_replay_bound)
+    return 1;
+  owner = find_template_inst_owner_entry(tok);
+  return owner && owner->owner && owner->owner->func_bound
+      && (unsigned)owner->owner->func_bound <= cpp_template_replay_bound;
+}
+
+static int free_func_visible_at_bound(FreeFuncOverload *o)
+{
+  return free_func_tok_visible_at_bound(o->mangled_tok);
 }
 
 static int free_func_bound_hides_later_overloads(int name_tok)
 {
   FreeFuncOverload *o;
+  TemplateDef *definition;
   if (!cpp_template_replay_bound) return 0;
   for (o = free_func_candidates(name_tok); o; o = o->name_next)
     if (o->name_tok == name_tok && free_func_visible_at_bound(o))
       return 1;
-  return 0;
+  /* A function template binds the name exactly like a concrete declaration
+     does, so the call instantiates it instead of reaching a later overload of
+     the same name. */
+  definition = find_function_template_def(name_tok);
+  return definition && definition->func_bound
+      && (unsigned)definition->func_bound <= cpp_template_replay_bound;
 }
 
 static int has_unresolved_free_func_overloads(int name_tok)
@@ -1167,7 +1185,10 @@ static int has_unresolved_free_func_overloads(int name_tok)
       if (first && first != overload->mangled_tok) return 1;
       first = overload->mangled_tok;
     }
-  return 0;
+  /* A function template is a member of the set even before its first
+     specialization is registered, so its presence makes the name an overload
+     set a destination signature still has to select from. */
+  return first && find_function_template_def(name_tok) != NULL;
 }
 
 static int is_member_func_mangled_tok(int tok)
@@ -3225,8 +3246,10 @@ static int free_func_has_exact_concrete_match(int name_tok,
 {
   Sym *s = find_global_symbol(name_tok);
   FreeFuncOverload *o;
+  int hide_later_overloads = free_func_bound_hides_later_overloads(name_tok);
 
-  if (s && (s->type.t & VT_BTYPE) == VT_FUNC && s->type.ref)
+  if (s && (s->type.t & VT_BTYPE) == VT_FUNC && s->type.ref
+      && !(hide_later_overloads && !free_func_tok_visible_at_bound(name_tok)))
   {
     Sym *arg = s->type.ref->next;
     int i, exact = 1;
@@ -3252,6 +3275,10 @@ static int free_func_has_exact_concrete_match(int name_tok,
     int i, exact = 1;
     if (o->name_tok != name_tok || arg_count < o->min_arg_count
         || arg_count > o->explicit_arg_count)
+      continue;
+    /* A concrete overload declared after the definition cannot keep the
+       definition-visible template out of the call. */
+    if (hide_later_overloads && !free_func_visible_at_bound(o))
       continue;
     s = find_global_symbol(o->mangled_tok);
     if (!s || (s->type.t & VT_BTYPE) != VT_FUNC || !s->type.ref)
@@ -3955,6 +3982,28 @@ static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type,
     return;
   }
   if ((type->t & VT_BTYPE) == VT_FUNC) {
+    /* An overload set argument stands for every member of the set, so each
+       member's parameter and return types - and the namespace it was
+       declared in - contribute to the associated namespaces. */
+    if (symbol->f.func_unresolved_overload && symbol->v) {
+      FreeFuncOverload *member;
+      for (member = free_func_candidates(symbol->v); member;
+           member = member->name_next) {
+        int member_namespace;
+        Sym *parameter;
+        if (member->name_tok != symbol->v || !member->func_type.ref) continue;
+        cpp_operator_associated_type(lookup, &member->func_type.ref->type, 0);
+        for (parameter = member->func_type.ref->next; parameter;
+             parameter = parameter->next)
+          cpp_operator_associated_type(lookup, &parameter->type, 0);
+        member_namespace = symbol_namespace_scope_tok(member->mangled_tok);
+        if (!member_namespace)
+          member_namespace = symbol_namespace_scope_tok(member->name_tok);
+        if (member_namespace)
+          cpp_operator_lookup_name(lookup, make_static_member_tok(member_namespace,
+                                                                  lookup->method_tok));
+      }
+    }
     cpp_operator_associated_type(lookup, &symbol->type, 0);
     for (symbol = symbol->next; symbol; symbol = symbol->next)
       cpp_operator_associated_type(lookup, &symbol->type, 0);
@@ -4097,7 +4146,9 @@ static Sym *cpp_resolve_associated_function(int method_tok, int ordinary_tok,
     candidates[candidate_count++] = overload->mangled_tok;
   }
   function = candidate_count
-    ? resolve_free_func_by_arg_types_filtered(method_tok, arguments, count,
+    ? resolve_free_func_by_arg_types_filtered(operator_call == 0 && ordinary_tok
+                                                ? ordinary_tok : method_tok,
+                                              arguments, count,
                                               0, candidates, candidate_count, call_args)
     : NULL;
   cprime_free(candidates);

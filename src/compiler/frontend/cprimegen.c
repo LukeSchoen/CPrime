@@ -6488,6 +6488,12 @@ static void verify_assign_cast(CType *dt)
       }
       else
       {
+        /* GCC rejects an incompatible pointer assignment in C++. Inside a
+           template substitution probe that owns a recovery point the invalid
+           conversion is a substitution failure, so the candidate is dropped
+           silently instead of the value being accepted with a warning. */
+        if (is_cpp_translation_unit() && cpp_substitution_jump)
+          cast_error(st, dt);
         cprime_warning("assignment from incompatible pointer type");
         break;
       }
@@ -11981,6 +11987,18 @@ static void struct_decl(CType *type, int u, int is_class_tag)
         if (!is_namespace_tok(qualified_parent)) {
           Sym *owner = struct_find(qualified_parent);
           if (owner) qualified_parent = owner->v & ~SYM_STRUCT;
+          else {
+            /* Template replay qualifies a nested tag through a bound-type
+               alias such as `struct __cpc_bound_type_7::X`, where the
+               qualifier stands for a class instead of being a tag itself.
+               Resolve the alias to its class so the nested tag is found
+               rather than a fresh incomplete one being declared. */
+            Sym *alias = global_symbol_find(qualified_parent);
+            int resolved;
+            if (!alias) alias = sym_find(qualified_parent);
+            resolved = alias ? get_struct_type_name_tok(&alias->type) : 0;
+            if (resolved) qualified_parent = resolved;
+          }
         }
         source_name_tok = tok;
         if (is_namespace_tok(qualified_parent)) {
@@ -13315,6 +13333,23 @@ static Sym *parse_template_nested_typedef_ex(Sym *class_sym, int allow_template)
   if (is_template_keyword_tok(tok))
     next();
   class_tok = class_sym->v & ~SYM_STRUCT;
+  if (tok != TOK_OPERATOR && tok >= TOK_UIDENT)
+  {
+    int predeclared_tok = template_member_scoped_alias_tok(class_tok, tok);
+    Sym *predeclared;
+    if (!predeclared_tok && class_sym->c < 0
+        && materialize_template_class_typedef(class_tok, tok))
+      predeclared_tok = template_member_scoped_alias_tok(class_tok, tok);
+    predeclared = predeclared_tok
+                  ? global_symbol_find(predeclared_tok) : NULL;
+    if (!predeclared && predeclared_tok)
+      predeclared = sym_find(predeclared_tok);
+    if (predeclared && (predeclared->type.t & VT_TYPEDEF))
+    {
+      next();
+      return predeclared;
+    }
+  }
   if (class_sym->c == -1)
   {
     CType materialized;
@@ -13369,7 +13404,10 @@ static Sym *parse_template_nested_typedef_ex(Sym *class_sym, int allow_template)
       if (!make_class_type_from_tok(&nested_type, nested_tok))
         cprime_error("nested class template instantiation failed");
       if (tok == ':')
-        return parse_template_nested_typedef(nested_type.ref);
+        /* Keep scanning the qualifier chain with the caller's template-name
+           tolerance, so `A<T>::AA<U>::template B` stays a template template
+           argument instead of demanding arguments for `B`. */
+        return parse_template_nested_typedef_ex(nested_type.ref, allow_template);
       nested_type.t |= VT_TYPEDEF;
       return sym_push(SYM_FIELD, &nested_type, 0, 0);
     }
@@ -20743,10 +20781,21 @@ cpp_object_member_destructor:
         TokenString *call_args[CPC_MAX_CALL_ARGUMENTS];
         CType call_arg_types[CPC_MAX_CALL_ARGUMENTS];
         int call_arg_count, ai, instantiated_member_tok;
+        int implicit_assignment_call = 0;
 
         next();
         call_arg_count = count_saved_call_args(call_args, CPC_MAX_CALL_ARGUMENTS);
         infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
+        if (v == tok_alloc_const("operator=") && call_arg_count == 1
+            && (vtop->type.t & VT_BTYPE) == VT_STRUCT)
+        {
+          CType assigned_type = call_arg_types[0];
+          if (is_reference_type(&assigned_type))
+            assigned_type = *pointed_type(&assigned_type);
+          assigned_type.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE);
+          implicit_assignment_call =
+            is_compatible_unqualified_types(&vtop->type, &assigned_type);
+        }
         last_instantiated_member_func_tok = 0;
         {
           int saved_explicit_member_arg_tok = explicit_member_template_arg_tok;
@@ -20787,8 +20836,42 @@ cpp_object_member_destructor:
                    lowered, get_struct_type_name_tok(&vtop->type)))
             func_sym = lowered;
         }
+        if (implicit_assignment_call && func_sym)
+        {
+          const CppMemberDeclInfo *decl = lookup_cpp_member_decl(func_sym->v);
+          int receiver_tok = get_struct_type_name_tok(&vtop->type);
+          MemberFuncOverload *candidate;
+          int using_declaration = 0;
+          for (candidate = member_func_candidates(receiver_tok, v);
+               candidate; candidate = candidate->bucket_next)
+            if (candidate->struct_tok == receiver_tok
+                && candidate->method_tok == v
+                && candidate->mangled_tok == func_sym->v
+                && candidate->is_using_declaration)
+            {
+              using_declaration = 1;
+              break;
+            }
+          if (!using_declaration && decl && decl->owner_tok
+              && decl->owner_tok != receiver_tok)
+            func_sym = NULL;
+        }
         if (!func_sym || IS_ASM_SYM(func_sym))
         {
+          /* An unqualified `operator=(rhs)` call in a member function can
+             name the implicit copy assignment operator.  That operator is
+             not a declared overload, so resolve the call through the same
+             memberwise assignment path used by `*this = rhs`. */
+          if (!func_sym && v == tok_alloc_const("operator=")
+              && call_arg_count == 1
+              && (vtop->type.t & VT_BTYPE) == VT_STRUCT)
+          {
+            emit_saved_arg_for_param(call_args[0], NULL);
+            tok_str_free(call_args[0]);
+            next();
+            vstore();
+            continue;
+          }
           if (is_cpp_translation_unit())
             cprime_error("no matching member function '%s::%s'",
                          get_tok_str(get_struct_type_name_tok(&vtop->type), NULL), name);

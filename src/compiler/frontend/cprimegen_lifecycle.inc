@@ -3523,8 +3523,14 @@ next_overload:
   if (is_lifecycle_member_tok(method_tok)) return NULL;
   /* The implicit same-class assignment hides base assignment operators.
      Its memberwise implementation must visit every base and data member. */
-  if (method_tok == tok_alloc_const("operator=") && explicit_arg_count == 1
-      && is_compatible_unqualified_types(type, &arg_types[0])) return NULL;
+  if (method_tok == tok_alloc_const("operator=") && explicit_arg_count == 1)
+  {
+    CType assigned_type = arg_types[0];
+    if (is_reference_type(&assigned_type))
+      assigned_type = *pointed_type(&assigned_type);
+    assigned_type.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE);
+    if (is_compatible_unqualified_types(type, &assigned_type)) return NULL;
+  }
   {
     ClassBaseInfo *info;
     for (info = class_base_candidates(struct_tok); info; info = info->bucket_next)
