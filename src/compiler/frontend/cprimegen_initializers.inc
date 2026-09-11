@@ -573,10 +573,12 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
     }
     else
     {
+      SValue object_size_value = *vtop;
       init_push_lvalue(p, &dtype, c);
       vswap();
       vstore();
       vpop();
+      object_size_store_value(p->object_size_target, &object_size_value);
     }
   }
 }
@@ -597,6 +599,44 @@ static int saved_initializer_close(TokenString *expression, int start,
     else if (token == closing && !--depth) return i;
   }
   return -1;
+}
+
+/* A member call evaluates its receiver subexpression before the final call and
+   passes it as the implicit object.  When that receiver group ends in a call
+   producing a prvalue of the result type, the receiver's object is a separate
+   temporary: the final call still has to construct its own result, so the
+   caller's result object must not be forwarded into it. */
+static int saved_initializer_receiver_claims_result(TokenString *expression,
+                                                     int first, int last,
+                                                     CType *type)
+{
+  TokenString *prefix;
+  CType receiver_type;
+  int is_prvalue = 0, i;
+  if (last < first) return 0;
+  prefix = tok_str_alloc();
+  for (i = first; i <= last; ++i)
+    if (TOK_HAS_VALUE(expression->str[i]))
+      tok_str_add_record(prefix, expression->str, expression->len, &i);
+    else
+      tok_str_add(prefix, expression->str[i]);
+  tok_str_add(prefix, TOK_EOF);
+  infer_saved_arg_type_and_category(prefix, &receiver_type, &is_prvalue);
+  tok_str_free(prefix);
+  return is_prvalue && !is_reference_type(&receiver_type)
+      && is_compatible_unqualified_types(type, &receiver_type);
+}
+
+/* The value produced by an elided initialization must be the destination
+   object itself, written through the storage an eliding call was given. */
+static int cpp_value_is_construction_destination(SValue *value,
+                                                  CppConstructionDestination *destination)
+{
+  if ((value->type.t & VT_BTYPE) != VT_STRUCT) return 0;
+  if ((value->r & (VT_VALMASK | VT_LVAL | VT_SYM)) != destination->storage)
+    return 0;
+  if ((int)value->c.i != destination->address) return 0;
+  return is_compatible_unqualified_types(&value->type, &destination->type);
 }
 
 static int saved_initializer_is_direct_constructor(TokenString *expression,
@@ -633,7 +673,34 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
     end = tok_str_prev_token_index(expression->str, expression->len, end);
   }
   if (first >= end) return 0;
-  if ((expression->str[first] < TOK_UIDENT && expression->str[first] != ':')
+  /* A comma expression's result is its final operand's value, so only that
+     operand can construct the result object.  Earlier operands are only
+     evaluated and discarded. */
+  {
+    int comma = cpp_expression_top_level_comma(expression);
+    if (comma >= 0) {
+      int operand = tok_str_next_non_linenum_index(expression->str,
+                                                   expression->len, comma + 1);
+      if (operand > end) return 0;
+      first = operand;
+    }
+  }
+  if (expression->str[first] == '(' || expression->str[first] == '[')
+  {
+    /* A member call on a computed receiver starts with the receiver group
+       `(*p).make()`.  Require it to end before the final call; the scan below
+       still validates the receiver and the rest of the expression. */
+    int leading_close = saved_initializer_close(expression, first,
+        expression->str[first], expression->str[first] == '(' ? ')' : ']');
+    int leading_next = leading_close < 0 ? -1
+        : tok_str_next_non_linenum_index(expression->str, expression->len,
+                                         leading_close + 1);
+    if (leading_close < 0 || leading_close >= end || leading_next > end
+        || (expression->str[leading_next] != '.'
+            && expression->str[leading_next] != TOK_ARROW))
+      return 0;
+  }
+  else if ((expression->str[first] < TOK_UIDENT && expression->str[first] != ':')
       || TOK_HAS_VALUE(expression->str[first]))
     return 0;
   if (is_cpp_lambda_marker(expression->str[first]))
@@ -723,8 +790,13 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
     int index, angles = 0, call = -1, is_class_prvalue;
     CType result;
     /* A single call can have a qualified/member name and explicit template
-       arguments. Reject operators and earlier calls before claiming storage;
-       make().convert() must not give make() the final result object. */
+       arguments.  A member call may also have a receiver subexpression, as in
+       `(*p).make()` or `A().make()`; those groups are skipped so the final call
+       still claims the result object.  That receiver is evaluated first and
+       becomes the implicit object of the call, so a receiver that is itself a
+       prvalue of the result type is a distinct temporary and blocks the claim
+       (`make().convert()` must not give make() the final result object).
+       Operators still reject the claim conservatively. */
     for (index = first; index <= end; ++index) {
       int token = expression->str[index];
       if (TOK_HAS_VALUE(token)) {
@@ -732,7 +804,30 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
         index += tok_str_value_extra_words(expression->str, expression->len, index);
         continue;
       }
-      if (!angles && token == '(') { call = index; break; }
+      if (!angles && (token == '(' || token == '['))
+      {
+        int close, next;
+        close = saved_initializer_close(expression, index, token,
+                                        token == '(' ? ')' : ']');
+        if (close < 0) return 0;
+        if (close == end)
+        {
+          if (token != '(') return 0;   /* a subscript is not a call */
+          call = index;
+          break;
+        }
+        next = tok_str_next_non_linenum_index(expression->str, expression->len,
+                                              close + 1);
+        if (next > end
+            || (expression->str[next] != '.'
+                && expression->str[next] != TOK_ARROW))
+          return 0;
+        if (saved_initializer_receiver_claims_result(expression, first, close,
+                                                     type))
+          return 0;
+        index = close;
+        continue;
+      }
       if (token == '<' || token == TOK_LT) ++angles;
       else if (token == TOK_GT && angles) --angles;
       else if ((token == TOK_SAR || token == TOK_SHR) && angles)
@@ -770,7 +865,7 @@ static int emit_class_initializer_expression_at(TokenString *expression,
   destination.storage = storage;
   destination.available = saved_initializer_is_direct_constructor(expression, type);
   forwarding = destination.available;
-  destination.conditional_marker = cpp_prepare_conditional_destination(expression);
+  destination.conditional_marker = cpp_prepare_expression_destination(expression);
   cpp_construction_destination = &destination;
   macro = *expression;
   begin_macro(&macro, 0);
@@ -781,7 +876,11 @@ static int emit_class_initializer_expression_at(TokenString *expression,
   cpp_construction_destination = saved_destination;
   tok = saved_tok;
   tokc = saved_tokc;
-  return forwarding && !destination.available;
+  /* The destination can be claimed by an inner call whose object is not the
+     expression's own result value (`(make()).convert()`). Report elision only
+     when the value produced for this initializer is the destination object. */
+  return forwarding && !destination.available
+      && cpp_value_is_construction_destination(vtop, &destination);
 }
 
 static void emit_class_initializer_expression(TokenString *expression,
@@ -2068,11 +2167,13 @@ err_size:
   {
     int a;
 
-    if (has_init)
-      cprime_error("variable length array cannot be initialized");
-
     if (NODATA_WANTED)
+    {
+      /* A probe still has to swallow the initializer tokens. */
+      if (has_init)
+        skip_or_save_block(NULL);
       goto no_alloc;
+    }
 
     // save before-VLA stack pointer if needed
     if (cur_scope->vla.num == 0)
@@ -2096,6 +2197,51 @@ err_size:
     gen_vla_sp_save(addr);
     cur_scope->vla.loc = addr;
     cur_scope->vla.num++;
+
+    if (has_init)
+    {
+      /* GNU initializes a VLA whose bound is only known at run time by
+         zeroing the whole object and then storing the listed elements.
+         The size-only replay completes the element count of the synthetic
+         array used for the storing pass. */
+      CType list_type = *type;
+      Sym *list_ref;
+      init_params list_init = {0};
+      TokenString *list_str = NULL;
+      int size_align;
+
+      if (!sym)
+        cprime_error("variable length array initializer requires an object");
+
+      list_type.t = (type->t & ~VT_VLA) | VT_ARRAY;
+      list_ref = sym_push(SYM_FIELD, pointed_type(type), 0, -1);
+      list_type.ref = list_ref;
+
+      skip_or_save_block(&list_str);
+      unget_tok(0);
+      begin_macro(list_str, 1);
+      list_init.flex_array_ref = list_ref;
+      next();
+      decl_initializer(&list_init, &list_type, 0, DIF_FIRST | DIF_SIZE_ONLY);
+      macro_ptr = list_str->str;
+      next();
+      list_init.list_initialization = tok == '{';
+
+      /* Zero the complete array; its extent is the run-time bound. */
+      vpush_helper_func(TOK_memset);
+      vset(&char_pointer_type, VT_LOCAL | VT_LVAL, sym->c);
+      vpushi(0);
+      vpush_type_size(type, &size_align);
+      gfunc_call(3);
+
+      /* The extent is a run-time value, so the compile-time bound check of
+         init_putv() cannot apply to the stored elements. */
+      list_init.indirect_base = sym->c;
+      list_init.local_offset = 0x3fffffff;
+      decl_initializer(&list_init, &list_type, 0, DIF_FIRST | DIF_CLEAR);
+      end_macro();
+      next();
+    }
   }
   else if (has_init)
   {
@@ -2111,6 +2257,10 @@ err_size:
                                    && (type->t & VT_CONSTANT)
                                    && is_integer_btype(type->t & VT_BTYPE)
                                    && !(type->t & (VT_ARRAY | VT_VLA));
+    p.object_size_target = sym && (r & VT_VALMASK) == VT_LOCAL
+                           && !(type->t & (VT_ARRAY | VT_VLA))
+                           && (type->t & VT_BTYPE) != VT_STRUCT
+                           ? sym : NULL;
     if (sec && !is_reference_type(type)) ++static_initializer_constant_fold;
     decl_initializer(&p, type, addr, DIF_FIRST);
     if (sec && !is_reference_type(type)) --static_initializer_constant_fold;

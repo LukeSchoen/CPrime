@@ -333,8 +333,26 @@ typedef union CValue {
     int tab[LDOUBLE_SIZE/4];
 } CValue;
 
+/* Best-effort tracking for the object-size builtins.  The frontend only
+   needs enough provenance to answer the object and subobject extents GCC
+   exposes; values whose origin is not modelled stay unknown. */
+typedef struct ObjectSizeInfo {
+    long long whole_size;
+    long long offset;
+    long long sub_size;
+    unsigned char whole_known;
+    unsigned char offset_known;
+    unsigned char sub_known;
+    unsigned char sub_trailing_root;
+    unsigned char sub_union;
+    unsigned char depth;
+} ObjectSizeInfo;
+
 typedef struct SValue {
     CType type;
+    ObjectSizeInfo object_size;
+    long long object_size_int_value;
+    unsigned char object_size_int_valid;
     int bound_member_receiver;
     int bound_member_name;
     int bound_member_qualified;
@@ -458,6 +476,13 @@ typedef struct Sym {
     int cpp_friend_owner;
     /* Owned lookup index for the direct fields of a completed record. */
     void *field_index;
+    /* Monotonic namespace-scope declaration order (see global_identifier_push).
+       Zero for symbols that were never published at namespace scope. */
+    int decl_serial;
+    /* Last known scalar value and object-size provenance for this binding. */
+    long long object_size_int_value;
+    ObjectSizeInfo object_size;
+    unsigned char object_size_int_valid;
     /* Linked non-global bindings, independent of retained symbol storage. */
     struct Sym *scope_prev, *scope_next;
     /* First typedef giving an unnamed tag its stable linkage identity. */
@@ -582,6 +607,10 @@ typedef struct InlineFunc {
     int preserve_type;
     int stable_heap;
     int expand_at_call;
+    /* Two-stage lookup boundary of the definition this body came from (see
+       cpp_template_replay_bound) and its definition-time class. */
+    unsigned replay_bound;
+    int replay_class_tok;
     char filename[1];
 } InlineFunc;
 

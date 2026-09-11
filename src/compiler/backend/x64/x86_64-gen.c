@@ -1276,12 +1276,12 @@ void gfunc_call(int nb_args)
     if (is_cpp_translation_unit() && win64_class_requires_indirect_argument(&sv->type)) {
       SValue destination, source;
       int alignment, address;
+      /* A by-value class argument is the caller's object and the caller
+         destroys it: a prvalue keeps its own temporary registration and any
+         other operand is copied into the caller's frame here. */
       if (sv->r & VT_CXX_PRVALUE) {
-        cpp_adopt_class_temporary(sv);
         sv->r &= ~VT_CXX_PRVALUE;
         sv->r |= VT_CXX_PARAMETER;
-        cpp_eh_register_parameter_copy(&sv->type,
-            sv->r & (VT_VALMASK | VT_LVAL | VT_SYM), sv->c.i);
         continue;
       }
       type_size(&sv->type, &alignment);
@@ -1356,6 +1356,20 @@ void gfunc_call(int nb_args)
     cur_scope->cl.s = argument_cleanup_stop;
     cur_scope->cl.n = argument_cleanup_depth;
   }
+  /* A by-value class argument stays with the caller, which destroys it when
+     the full expression ends and while unwinding from the call.  A prvalue is
+     already registered as a temporary; the copies made above are registered
+     here so the chain restored just above covers them. */
+  if (is_cpp_translation_unit() && cur_scope)
+    for (i = 0; i < nb_args; ++i)
+    {
+      SValue *sv = &vtop[-i];
+      if (sv->r & VT_CXX_PARAMETER)
+      {
+        SValue object = *sv;
+        cpp_register_class_temporary(&object);
+      }
+    }
 
   arg = nb_args;
   struct_size = args_size;

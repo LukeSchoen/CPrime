@@ -11,6 +11,8 @@
  DEF(TOK_THROW, "throw")
  DEF(TOK_CXX_EH_CONSTRUCTED, "__builtin_cpc_eh_constructed")
  DEF(TOK_CXX_CTOR_BODY, "__builtin_cpc_constructor_body")
+ DEF(TOK_CXX_BASE_SUBOBJECT, "__builtin_cpc_base_subobject")
+ DEF(TOK_CXX_BASE_CTOR_SPLIT, "__builtin_cpc_base_ctor_split")
      DEF(TOK_GOTO, "goto")
      DEF(TOK_SWITCH, "switch")
      DEF(TOK_CASE, "case")
@@ -204,6 +206,8 @@
      DEF(TOK_builtin_FILE, "__builtin_FILE")
      DEF(TOK_builtin_FUNCTION, "__builtin_FUNCTION")
      DEF(TOK_builtin_LINE, "__builtin_LINE")
+     DEF(TOK_builtin_object_size, "__builtin_object_size")
+     DEF(TOK_builtin_dynamic_object_size, "__builtin_dynamic_object_size")
      DEF(TOK_builtin_unreachable, "__builtin_unreachable")
 
      /* GCC's same-function non-local jump builtins.  Their five-pointer save

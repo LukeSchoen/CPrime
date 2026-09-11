@@ -430,6 +430,22 @@ static int is_namespace_tok(int ns_tok)
   return 0;
 }
 
+/* `is_namespace_tok` matches the plain spelling a namespace was declared
+   with; qualified lookup works with the mangled `__cpc_ns_...` token. */
+static int is_namespace_scope_tok(int ns_tok)
+{
+  int i;
+
+  if (!ns_tok) return 0;
+  for (i = 0; i < nb_namespace_scopes; ++i)
+    if (namespace_scopes[i].name_tok == ns_tok)
+      return 1;
+  for (i = 0; i < nb_namespace_toks; ++i)
+    if (namespace_toks[i] == ns_tok)
+      return 1;
+  return 0;
+}
+
 static void note_namespace_tok(int ns_tok)
 {
   if (is_namespace_tok(ns_tok))
@@ -441,6 +457,95 @@ static void note_namespace_tok(int ns_tok)
                                     al_namespace_toks * sizeof(*namespace_toks));
   }
   namespace_toks[nb_namespace_toks++] = ns_tok;
+}
+
+/* Namespaces whose members a namespace inherits through using-directives
+   declared in it, transitively.  `out` receives the member token for each
+   one that really declares `name_tok`; the declaring namespace itself is
+   assumed to have been checked already.  Scope zero is the global namespace,
+   whose using-directives are recorded the same way. */
+static int collect_using_directive_member_toks(int ns_tok, int name_tok,
+                                               int *out, int max)
+{
+  int queue[64], visited[64], nb_queue = 0, nb_visited = 0, count = 0, i;
+
+  if (ns_tok < 0 || !name_tok || max <= 0) return 0;
+  visited[nb_visited++] = ns_tok;
+  queue[nb_queue++] = ns_tok;
+  while (nb_queue && count < max)
+  {
+    int current = queue[--nb_queue];
+    for (i = 0; i < nb_using_namespace_toks; ++i)
+    {
+      int target, candidate, j, known;
+      if (using_namespace_scope_toks[i] != current) continue;
+      target = using_namespace_toks[i];
+      if (!target) continue;
+      known = 0;
+      for (j = 0; j < nb_visited; ++j)
+        if (visited[j] == target) { known = 1; break; }
+      if (!known && nb_visited < (int)(sizeof(visited) / sizeof(visited[0])))
+      {
+        visited[nb_visited++] = target;
+        if (nb_queue < (int)(sizeof(queue) / sizeof(queue[0])))
+          queue[nb_queue++] = target;
+      }
+      candidate = make_static_member_tok(target, name_tok);
+      if (!namespace_member_exists(candidate)) continue;
+      for (j = 0; j < count; ++j)
+        if (out[j] == candidate) break;
+      if (j == count) out[count++] = candidate;
+    }
+  }
+  return count;
+}
+
+/* Record that a namespace-scope using-declaration imports `target_tok`
+   under `name_tok`.  The pair is symmetric for lookup: a call written with
+   either spelling has to see the whole imported overload set. */
+static void note_cpp_using_lookup_target(int name_tok, int target_tok)
+{
+  int i;
+  if (!name_tok || !target_tok || name_tok == target_tok) return;
+  for (i = 0; i < nb_cpp_using_lookup_links; ++i)
+    if (cpp_using_lookup_links[i].name_tok == name_tok
+        && cpp_using_lookup_links[i].target_tok == target_tok)
+      return;
+  cpp_using_lookup_links = cprime_realloc(cpp_using_lookup_links,
+    (nb_cpp_using_lookup_links + 1) * sizeof(*cpp_using_lookup_links));
+  cpp_using_lookup_links[nb_cpp_using_lookup_links].name_tok = name_tok;
+  cpp_using_lookup_links[nb_cpp_using_lookup_links].target_tok = target_tok;
+  ++nb_cpp_using_lookup_links;
+}
+
+/* The lookup group of `name_tok`: itself plus every name its
+   using-declarations import, closed transitively. */
+static int collect_cpp_using_lookup_toks(int name_tok, int *out, int max)
+{
+  int nb = 0, i, j, round, changed;
+  if (!name_tok || max <= 0) return 0;
+  out[nb++] = name_tok;
+  for (round = 0; round < 8; ++round)
+  {
+    changed = 0;
+    for (i = 0; i < nb_cpp_using_lookup_links; ++i)
+    {
+      int name = cpp_using_lookup_links[i].name_tok;
+      int target = cpp_using_lookup_links[i].target_tok;
+      int in_name = 0, in_target = 0;
+      for (j = 0; j < nb; ++j)
+      {
+        if (out[j] == name) in_name = 1;
+        if (out[j] == target) in_target = 1;
+      }
+      if (in_name == in_target) continue;
+      if (nb >= max) return nb;
+      out[nb++] = in_name ? target : name;
+      changed = 1;
+    }
+    if (!changed) break;
+  }
+  return nb;
 }
 
 static int cpp_unnamed_tag_typedef_tok(CType *type);
@@ -943,6 +1048,113 @@ static int has_free_func_overload(int name_tok)
   FreeFuncOverload *o;
   for (o = free_func_candidates(name_tok); o; o = o->name_next)
     if (o->name_tok == name_tok) return 1;
+  return 0;
+}
+
+/* The namespace enclosing `ns_tok` in the scope chain, zero at global scope. */
+static int enclosing_namespace_tok(int ns_tok)
+{
+  int i;
+  if (!ns_tok) return 0;
+  for (i = 0; i < nb_namespace_scopes; ++i)
+    if (namespace_scopes[i].name_tok == ns_tok)
+      return namespace_scopes[i].parent_tok;
+  return 0;
+}
+
+/* Add the members `ns_tok`'s own using-directives nominate for `plain_tok` to
+   `name_tok`'s overload set.  `ns_tok` is zero for the global namespace; the
+   enclosing namespaces are the caller's business, because qualified lookup
+   stops at the namespace it was written with. */
+static void import_using_directive_overloads(int name_tok, int ns_tok,
+                                             int plain_tok)
+{
+  int via[16], nb_via, i;
+  FreeFuncOverload *overload;
+
+  if (!name_tok || !plain_tok) return;
+  nb_via = collect_using_directive_member_toks(ns_tok, plain_tok, via,
+                 (int)(sizeof(via) / sizeof(via[0])));
+  for (i = 0; i < nb_via; ++i)
+  {
+    Sym *candidate = global_symbol_find(via[i]);
+    if (!candidate) candidate = sym_find(via[i]);
+    /* A C-linkage function has one global identity that its plain spelling
+       already names, so a using-directive cannot add a distinct overload
+       for it.  Registering the qualified alias as well would make the same
+       declaration look like two candidates. */
+    if (candidate && candidate->type.ref
+        && candidate->type.ref->f.func_linkage_explicit
+        && candidate->type.ref->f.func_language_linkage == 1)
+      continue;
+    if (candidate && (candidate->type.t & VT_BTYPE) == VT_FUNC
+        && !(candidate->type.t & VT_TYPEDEF))
+      note_free_func_overload(name_tok, candidate->v, &candidate->type);
+    /* Only the first declaration of a spelling is stored under its own
+       token; the remaining overloads live in the registry. */
+    for (overload = free_func_candidates(via[i]); overload;
+         overload = overload->name_next)
+      if (overload->name_tok == via[i])
+        note_free_func_overload(name_tok, overload->mangled_tok,
+                                &overload->func_type);
+  }
+}
+
+/* An explicit C-linkage declaration keeps its plain object-file label even
+   when it is written in a namespace, so the qualified and plain spellings
+   name one function.  Importing it under the plain name must not make the
+   same declaration look like a second overload of itself. */
+static int c_linkage_alias_of_plain_symbol(int name_tok, Sym *imported)
+{
+  Sym *existing;
+
+  if (!imported || !imported->type.ref || !imported->asm_label
+      || !imported->type.ref->f.func_linkage_explicit
+      || imported->type.ref->f.func_language_linkage != 1)
+    return 0;
+  existing = find_global_symbol(name_tok);
+  return existing && existing != imported
+      && existing->asm_label == imported->asm_label;
+}
+
+/* A using-directive makes every member of the nominated namespaces visible to
+   unqualified lookup, so one name can denote declarations from several
+   namespaces at once.  The single-token lookup only reports one of them, so
+   add the members the enclosing scopes nominate to `name_tok`'s overload set
+   and let conversion ranking choose between them. */
+static void merge_using_directive_overloads(int name_tok, int scope_tok,
+                                            int plain_tok)
+{
+  int scope;
+
+  if (!name_tok || !plain_tok) return;
+  for (scope = scope_tok;; scope = enclosing_namespace_tok(scope))
+  {
+    import_using_directive_overloads(name_tok, scope, plain_tok);
+    if (!scope) break;
+  }
+}
+
+/* Two-stage lookup: an unqualified name that already named a free function
+   where the template definition was written must not reach an overload
+   declared later in the same namespace.  A name with no definition-visible
+   candidate keeps the ordinary instantiation-time resolution. */
+static int free_func_visible_at_bound(FreeFuncOverload *o)
+{
+  Sym *s;
+  if (!cpp_template_replay_bound) return 1;
+  s = find_global_symbol(o->mangled_tok);
+  return s && s->decl_serial
+      && (unsigned)s->decl_serial <= cpp_template_replay_bound;
+}
+
+static int free_func_bound_hides_later_overloads(int name_tok)
+{
+  FreeFuncOverload *o;
+  if (!cpp_template_replay_bound) return 0;
+  for (o = free_func_candidates(name_tok); o; o = o->name_next)
+    if (o->name_tok == name_tok && free_func_visible_at_bound(o))
+      return 1;
   return 0;
 }
 
@@ -1913,10 +2125,17 @@ static Sym *resolve_free_func_by_arg_count(int name_tok, int explicit_arg_count,
   FreeFuncOverload *o;
   Sym *s, *match = NULL;
   int matches = 0;
+  int hide_later_overloads = free_func_bound_hides_later_overloads(name_tok);
 
   for (o = free_func_overloads; o; o = o->next)
   {
     if (o->name_tok != name_tok || !free_func_accepts_argument_count(o, explicit_arg_count))
+      continue;
+    /* Only the definition's own lookup name is bound there.  A candidate the
+       instantiation reached through an associated namespace (argument
+       dependent lookup) is not part of that binding. */
+    if (hide_later_overloads && o->name_tok == name_tok
+        && !free_func_visible_at_bound(o))
       continue;
     if (template_deduction_failed
         && find_template_inst_owner_entry(o->mangled_tok))
@@ -2394,6 +2613,9 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
   if (!is_reference_type(param_type)) {
     CppMemberPointerType *target_member = find_cpp_member_pointer_type(&param_value_type);
     CppMemberPointerType *source_member = find_cpp_member_pointer_type(&arg_value_type);
+    if (target_member && source_member && source_member->deferred
+        && cpp_deferred_member_address_matches(target_member, source_member))
+      return 2;
     if (target_member && source_member
         && is_compatible_unqualified_types(&target_member->member_type, &source_member->member_type)
         && !((source_member->member_type.t & ~target_member->member_type.t)
@@ -2769,6 +2991,7 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
   int i, ok, matches = 0, best_arg_rank = 0x7fffffff;
   int best_is_provisional = 0;
   int best_is_template = 0;
+  int hide_later_overloads = free_func_bound_hides_later_overloads(name_tok);
 
   if (candidates) {
     /* Lookup is indexed, but retain registration order when comparing ties
@@ -2788,6 +3011,9 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
     int arg_rank = 0;
     int candidate_is_template;
     if ((o->name_tok != name_tok && !candidates) || !free_func_accepts_argument_count(o, explicit_arg_count))
+      continue;
+    if (hide_later_overloads && o->name_tok == name_tok
+        && !free_func_visible_at_bound(o))
       continue;
     if (template_deduction_failed
         && find_template_inst_owner_entry(o->mangled_tok))
@@ -4422,9 +4648,23 @@ static int try_call_cpp_assignment_operator(void)
   gfunc_param_typed_with_conversions(func_type, value_arg);
   vswap();
   gfunc_param_typed(func_type, this_arg);
-  vswap();
-  vpushsym(&func_sym->type, func_sym);
-  vrott(3);
+  {
+    int receiver_class = get_struct_type_name_tok(&receiver_type);
+    VirtualMethodInfo *virtual_method = receiver_class
+      ? find_virtual_method_for_symbol(receiver_class, func_sym->v) : NULL;
+
+    if (virtual_method)
+    {
+      push_virtual_call_target(receiver_class, virtual_method, func_sym);
+      vrev(3);
+    }
+    else
+    {
+      vswap();
+      vpushsym(&func_sym->type, func_sym);
+      vrott(3);
+    }
+  }
   finish_cpp_member_func_call(func_type, 2);
   return 1;
 }

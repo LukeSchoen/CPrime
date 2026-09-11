@@ -357,17 +357,36 @@ static TemplateDef *find_function_template_for_call(int name_tok,
   int variadic_specificity = -1000000;
   int template_count = 0;
   int definition_index;
+  int group[16], nb_group = 0, group_index;
 
-  for (definition_index = 0, td = nb_inline_namespace_scopes
-         ? (nb_template_defs ? template_defs[0] : NULL) : template_def_candidates(name_tok);
-       td; td = nb_inline_namespace_scopes
-         ? (++definition_index < nb_template_defs ? template_defs[definition_index] : NULL)
-         : td->lookup_bucket_next)
-    if (!td->is_class && !td->is_alias && template_function_matches_namespace(td, name_tok))
-      ++template_count;
+  /* A using-declaration makes every member it names visible under the
+     imported name, so deduction has to consider the whole imported set. */
+  if (nb_inline_namespace_scopes)
+  {
+    /* The inline-namespace scan already walks every definition and filters
+       by association, so one pass under the declared name is enough. */
+    group[nb_group++] = name_tok;
+  }
+  else
+    nb_group = collect_cpp_using_lookup_toks(name_tok, group,
+                                            (int)(sizeof(group) / sizeof(group[0])));
 
+  for (group_index = 0; group_index < nb_group; ++group_index)
+  {
+    int scan_tok = group[group_index];
+    for (definition_index = 0, td = nb_inline_namespace_scopes
+           ? (nb_template_defs ? template_defs[0] : NULL) : template_def_candidates(scan_tok);
+         td; td = nb_inline_namespace_scopes
+           ? (++definition_index < nb_template_defs ? template_defs[definition_index] : NULL)
+           : td->lookup_bucket_next)
+      if (!td->is_class && !td->is_alias && template_function_matches_namespace(td, scan_tok))
+        ++template_count;
+  }
+
+  for (group_index = 0; group_index < nb_group; ++group_index)
   for (definition_index = 0, td = nb_inline_namespace_scopes
-         ? (nb_template_defs ? template_defs[0] : NULL) : template_def_candidates(name_tok);
+         ? (nb_template_defs ? template_defs[0] : NULL)
+         : template_def_candidates(group[group_index]);
        td; td = nb_inline_namespace_scopes
          ? (++definition_index < nb_template_defs ? template_defs[definition_index] : NULL)
          : td->lookup_bucket_next)
@@ -375,7 +394,7 @@ static TemplateDef *find_function_template_for_call(int name_tok,
     TemplateArgList deduced;
     if (td->is_class || td->is_alias)
       continue;
-    if (!template_function_matches_namespace(td, name_tok))
+    if (!template_function_matches_namespace(td, group[group_index]))
       continue;
     /* Arity is part of candidate eligibility. Do not instantiate a dependent
        return type for a declaration that cannot accept this call. */
@@ -1951,11 +1970,13 @@ static int class_has_member_func_name(int class_tok, int member_tok)
 
 static int class_or_inst_has_member_template_name(int class_tok, int member_tok);
 
-static int type_has_member_func_name(CType *type, int member_tok)
+/* A member the class declares itself, ignoring inherited members.  Used to
+   tell an instantiated class's own members from members that only a base -
+   possibly one that was dependent at the template definition - supplies. */
+static int type_has_own_member_func_name(CType *type, int member_tok)
 {
   Sym *func_sym, *field;
   MemberFuncOverload *o;
-  ClassBaseInfo *info;
   int dummy_ofs, struct_tok;
 
   if (!type || ((type->t & VT_BTYPE) != VT_STRUCT))
@@ -1974,6 +1995,19 @@ static int type_has_member_func_name(CType *type, int member_tok)
   func_sym = resolve_member_func(type, member_tok);
   if (func_sym && !IS_ASM_SYM(func_sym))
     return 1;
+  return 0;
+}
+
+static int type_has_member_func_name(CType *type, int member_tok)
+{
+  ClassBaseInfo *info;
+  int struct_tok;
+
+  if (type_has_own_member_func_name(type, member_tok))
+    return 1;
+  if (!type || ((type->t & VT_BTYPE) != VT_STRUCT))
+    return 0;
+  struct_tok = get_struct_type_name_tok(type);
   for (info = class_base_candidates(struct_tok); info; info = info->bucket_next)
   {
     CType base_type;
@@ -1986,6 +2020,49 @@ static int type_has_member_func_name(CType *type, int member_tok)
     if (type_has_member_func_name(&base_type, member_tok))
       return 1;
   }
+  return 0;
+}
+
+/* Two-stage lookup (14.6.2.4): while a template definition body is replayed,
+   an unqualified call whose name the definition itself did not declare - so
+   it can only come from a base that was still dependent where the template
+   was written - must not hide a namespace-scope function that was already
+   visible at that point. */
+static int cpp_dependent_base_hides_function(CType *class_type, int name_tok)
+{
+  CType definition_type;
+  Sym *definition_class, *visible;
+  FreeFuncOverload *overload;
+  int namespace_tok;
+
+  if (!cpp_template_replay_bound || !cpp_template_replay_class_tok)
+    return 0;
+  if (!class_type || (class_type->t & VT_BTYPE) != VT_STRUCT
+      || !class_type->ref)
+    return 0;
+  /* The definition keeps the call whenever it declared the name itself (or
+     inherited it from a base that was already known then). */
+  if (type_has_own_member_func_name(class_type, name_tok))
+    return 0;
+  definition_class = struct_find(cpp_template_replay_class_tok);
+  if (definition_class)
+  {
+    definition_type.t = definition_class->type.t;
+    definition_type.ref = definition_class;
+    if (type_has_member_func_name(&definition_type, name_tok))
+      return 0;
+  }
+  namespace_tok = find_current_namespace_tok(name_tok);
+  visible = find_global_symbol(namespace_tok);
+  if (visible && (visible->type.t & VT_BTYPE) == VT_FUNC
+      && visible->decl_serial
+      && (unsigned)visible->decl_serial <= cpp_template_replay_bound)
+    return 1;
+  for (overload = free_func_candidates(namespace_tok); overload;
+       overload = overload->name_next)
+    if (overload->name_tok == namespace_tok
+        && free_func_visible_at_bound(overload))
+      return 1;
   return 0;
 }
 
@@ -6416,6 +6493,8 @@ finish_member_signature_replay:
     pm->is_template_member = 1;
     pm->is_lifecycle_member = is_lifecycle_member_tok(method_tok);
     pm->is_static_member = is_static_member;
+    pm->replay_bound = md->func_bound;
+    pm->replay_class_tok = md->class_tok;
     note_member_function_scope(member_func_tok, class_mangled_tok);
     queue_pending_member(pm);
   }
@@ -8008,6 +8087,7 @@ static void add_template_member_def(int class_tok, int type_param_tok,
       stripped_member_value_param_toks[i];
   prepare_saved_cpp_lambdas(str);
   md->def_str = str;
+  md->func_bound = cpp_global_decl_serial;
   for (i = 0; i + 4 < str->len; ++i)
   {
     int j, angle = 0;
@@ -8347,6 +8427,7 @@ static void complete_function_template_definition(TemplateDef *td,
   prepare_saved_cpp_lambdas(definition);
   td->def_str = definition;
   td->has_body = 1;
+  td->func_bound = cpp_global_decl_serial;
 }
 
 #include "cprimegen_function_specializations.inc"
@@ -9100,6 +9181,7 @@ static void parse_template_decl(void)
           tok_str_free(old->def_str);
           old->def_str = str;
           old->has_body = 1;
+          old->func_bound = cpp_global_decl_serial;
           return;
         }
         if (!is_class && !saw_body)
@@ -9154,6 +9236,7 @@ static void parse_template_decl(void)
                                         &td->func_sig_hash);
   prepare_saved_cpp_lambdas(str);
   td->def_str = str;
+  td->func_bound = cpp_global_decl_serial;
   dynarray_add(&template_defs, &nb_template_defs, td);
   index_template_def(td);
 
@@ -9379,6 +9462,32 @@ static int validate_template_value_parameter_type(TemplateDef *definition,
       Sym *argument = global_symbol_find(arguments->toks[parameter]);
       CppMemberPointerType *target = find_cpp_member_pointer_type(&type);
       CppMemberPointerType *source = argument ? find_cpp_member_pointer_type(&argument->type) : NULL;
+      if (argument && source && source->deferred) {
+        int owner_tok = 0;
+        Sym *selected = find_member_func_address_candidate(source->owner_tok,
+                                                           source->deferred_member_tok,
+                                                           target, &owner_tok, NULL);
+        if (!selected) return 0;
+        {
+          char name[160];
+          int binding_tok;
+          Sym *binding;
+          snprintf(name, sizeof(name), "__cpc_template_member_deferred_%d_%d_%d",
+                   source->owner_tok, source->deferred_member_tok, type.ref->v);
+          binding_tok = tok_alloc_const(name);
+          binding = global_symbol_find(binding_tok);
+          if (!binding) {
+            binding = global_identifier_push(binding_tok, type.t, 0);
+            binding->type = type;
+            binding->r = argument->r;
+            binding->template_address_target = selected;
+            binding->cpp_member_address_tok = selected->v;
+          }
+          arguments->toks[parameter] = binding_tok;
+          argument = binding;
+          source = find_cpp_member_pointer_type(&argument->type);
+        }
+      }
       if (!argument || !argument->cpp_member_address_tok || !source
           || source->owner_tok != target->owner_tok
           || ((source->member_type.t & ~target->member_type.t) & (VT_CONSTANT | VT_VOLATILE))
@@ -12281,6 +12390,177 @@ static int template_arguments_have_internal_linkage(TemplateArgList *arguments)
   return 0;
 }
 
+/* A class-scope name lookup sees base-class members before an enclosing
+   template parameter of the same spelling.  During class replay the
+   substituted specialization has not been parsed yet, so collect the
+   hiding names from the instantiated base specs before substituting the
+   class body.  The body then keeps those parameter tokens for ordinary
+   class-scope lookup instead of replacing them with the template argument. */
+static int class_scope_has_member_name(CType *class_type, int member_tok)
+{
+  int class_tok = get_struct_type_name_tok(class_type);
+  int offset;
+
+  if (!class_tok || member_tok < TOK_UIDENT)
+    return 0;
+  if (find_inherited_class_alias(class_tok, member_tok))
+    return 1;
+  if (find_static_member_by_class_try(class_tok, member_tok, NULL))
+    return 1;
+  if (struct_find(make_static_member_tok(class_tok, member_tok)))
+    return 1;
+  if (find_field_try(class_type, member_tok, &offset))
+    return 1;
+  if (find_field_try(class_type, member_tok | SYM_FIELD, &offset))
+    return 1;
+  if (type_has_member_func_name(class_type, member_tok))
+    return 1;
+  if (class_has_static_member_func(class_tok, member_tok))
+    return 1;
+  if (class_or_inst_has_member_template_name(class_tok, member_tok))
+    return 1;
+  return 0;
+}
+
+static int template_base_spec_hides_parameter(TemplateDef *td,
+                                              TemplateArgList *args,
+                                              TokenString *source,
+                                              int begin, int end,
+                                              int member_tok)
+{
+  TokenString *replay = tok_str_alloc();
+  CType base_type;
+  int i, valid;
+
+  /* A dependent or template-id base is materialized by the ordinary class
+     replay.  Probing it here can recursively instantiate the specialization
+     currently being built (for example the CRTP base in access28.C), so only
+     resolve plain non-dependent base names while collecting hiding names. */
+  for (i = begin; i < end; ++i)
+  {
+    int t = source->str[i];
+    if (TOK_HAS_VALUE(t))
+    {
+      i += tok_str_value_extra_words(source->str, source->len, i);
+      continue;
+    }
+    if (t == TOK_LT || t == '<' || template_param_index(td, t) >= 0)
+      return 0;
+  }
+  for (i = begin; i < end; ++i)
+  {
+    int t = source->str[i];
+    if (TOK_HAS_VALUE(t))
+    {
+      tok_str_add_record(replay, source->str, source->len, &i);
+      continue;
+    }
+    if (t == tok_public || t == tok_protected || t == tok_private
+        || (t >= TOK_UIDENT && !strcmp(get_tok_str(t, NULL), "virtual"))
+        || is_template_keyword_tok(t))
+      continue;
+    tok_str_add(replay, template_subst_token(td, args, 0, NULL, NULL, 0, t));
+  }
+  tok_str_add(replay, TOK_EOF);
+  valid = template_probe_type(replay, 0, td->namespace_tok, &base_type);
+  tok_str_free(replay);
+  if (!valid || (base_type.t & VT_BTYPE) != VT_STRUCT)
+    return 0;
+  return class_scope_has_member_name(&base_type, member_tok);
+}
+
+static unsigned template_hidden_parameter_mask(TemplateDef *td,
+                                               TemplateArgList *args)
+{
+  TokenString *source;
+  unsigned mask = 0;
+  int body = -1, colon = -1, depth = 0;
+  int i, parameter;
+
+  if (!td || !td->is_class || !td->def_str || td->nb_type_params <= 0)
+    return 0;
+  source = td->def_str;
+  for (i = 0; i < source->len; ++i)
+  {
+    int t = source->str[i];
+    if (TOK_HAS_VALUE(t))
+    {
+      i += tok_str_value_extra_words(source->str, source->len, i);
+      continue;
+    }
+    if (t == '{' && depth == 0)
+    {
+      body = i;
+      break;
+    }
+    if (t == '(' || t == '[' || t == TOK_LT || t == '<')
+      ++depth;
+    else if ((t == ')' || t == ']' || t == TOK_GT || t == '>') && depth > 0)
+      --depth;
+    else if (t == TOK_SAR && depth > 0)
+      depth = depth > 1 ? depth - 2 : 0;
+    else if (t == ':' && depth == 0 && colon < 0)
+    {
+      int previous = tok_str_prev_token_index(source->str, source->len, i);
+      int next = i + 1 < source->len ? source->str[i + 1] : 0;
+      if ((previous < 0 || source->str[previous] != ':')
+          && next != ':')
+        colon = i;
+    }
+  }
+  if (body < 0 || colon < 0 || colon > body)
+    return 0;
+  for (parameter = 0; parameter < td->nb_type_params
+       && parameter < 32; ++parameter)
+  {
+    int start = colon + 1, spec_depth = 0, found = 0;
+    for (i = colon + 1; i <= body; ++i)
+    {
+      int t = i < body ? source->str[i] : 0;
+      if (i == body || (t == ',' && spec_depth == 0))
+      {
+        if (template_base_spec_hides_parameter(
+              td, args, source, start, i, td->type_param_toks[parameter]))
+        {
+          found = 1;
+          break;
+        }
+        start = i + 1;
+        if (i == body)
+          break;
+      }
+      if (TOK_HAS_VALUE(t))
+      {
+        i += tok_str_value_extra_words(source->str, source->len, i);
+        continue;
+      }
+      if (t == '(' || t == '[' || t == TOK_LT || t == '<')
+        ++spec_depth;
+      else if ((t == ')' || t == ']' || t == TOK_GT || t == '>')
+               && spec_depth > 0)
+        --spec_depth;
+      else if (t == TOK_SAR && spec_depth > 0)
+        spec_depth = spec_depth > 1 ? spec_depth - 2 : 0;
+    }
+    if (found)
+      mask |= 1u << parameter;
+  }
+  return mask;
+}
+
+static int template_class_token_is_hidden_parameter(TemplateDef *td,
+                                                    unsigned hidden_mask,
+                                                    int class_body_started,
+                                                    int token)
+{
+  int parameter;
+  if (!td || !td->is_class || !class_body_started)
+    return 0;
+  parameter = template_param_index(td, token);
+  return parameter >= 0 && parameter < 32
+         && (hidden_mask & (1u << parameter)) != 0;
+}
+
 static int instantiate_template_named_if_needed(TemplateDef *td,
                                                  TemplateArgList *args,
                                                  int specialization_name_tok);
@@ -12322,6 +12602,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
   int preparing_class_index = -1;
   int materialize_existing_function_body = 0;
   int materialize_function_body = 0;
+  unsigned hidden_parameter_mask = 0;
   TokenString definition_replay;
   TokenString *expanded_pack_body = NULL;
   TokenString *expanded_class_definition = NULL;
@@ -12596,6 +12877,8 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
   }
   saved_tok = tok;
   saved_tokc = tokc;
+  if (td->is_class)
+    hidden_parameter_mask = template_hidden_parameter_mask(td, args);
   /* TokenString also carries begin_macro()'s parent cursor.  Template return
      discovery can demand an older specialization of this same definition
      while the new one is being assembled.  A shallow per-replay frame keeps
@@ -12637,6 +12920,12 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
           if (TOK_HAS_VALUE(t))
           {
             tok_str_add_record(spec, body->str, body->len, &bi);
+            continue;
+          }
+          if (template_class_token_is_hidden_parameter(
+                td, hidden_parameter_mask, class_body_started, t))
+          {
+            tok_str_add(spec, t);
             continue;
           }
           if (t == td->name_tok) {
@@ -13742,9 +14031,11 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
          angle list follows, and a typedef only matters where a type can
          occur.  Avoid two global semantic lookups for every ordinary name in
          every specialization. */
-      if (template_add_subst_token_if_changed(
-            spec, td, args, mangled_tok,
-            alias_from, alias_to, nb_aliases, tok))
+      if (!template_class_token_is_hidden_parameter(
+            td, hidden_parameter_mask, class_body_started, tok)
+          && template_add_subst_token_if_changed(
+               spec, td, args, mangled_tok,
+               alias_from, alias_to, nb_aliases, tok))
       {
         next();
         continue;
@@ -13820,12 +14111,13 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
     }
     if (!materialize_function_body) return mangled_tok;
   }
-  queue_pending_template_spec_in_namespace(spec,
+  queue_pending_template_spec_in_namespace_bound(spec,
                               td->friend_class_tok ? td->friend_class_tok :
                               incomplete_dependency_tok ? incomplete_dependency_tok :
                               td->is_class && args->nb > 0
                                 && !class_arg_incomplete
-                                ? args->toks[0] : 0, td->namespace_tok);
+                                ? args->toks[0] : 0, td->namespace_tok,
+                              td->func_bound, td->is_class ? td->name_tok : 0);
   if (preparing_class_index >= 0)
     td->inst_states[preparing_class_index] = 0;
   if (td->is_class)
@@ -14423,6 +14715,12 @@ static void compile_pending_template_specs(void)
       jmp_buf *replay_substitution_jump = cpp_substitution_jump;
       TokenString *spec_macro_parent = macro_stack;
       const int *spec_macro_ptr = macro_ptr;
+      unsigned saved_spec_bound = cpp_template_replay_bound;
+      int saved_spec_class = cpp_template_replay_class_tok;
+      cpp_template_replay_bound = pending_template_spec_bounds
+                                  ? pending_template_spec_bounds[i] : 0;
+      cpp_template_replay_class_tok = pending_template_spec_class_toks
+                                      ? pending_template_spec_class_toks[i] : 0;
       /* decl() performs one-token lookahead after a declaration.  Keep that
          lookahead inside this owned replay; otherwise a generated class that
          ends exactly at TOK_EOF can resume and parse the suspended caller
@@ -14474,6 +14772,8 @@ static void compile_pending_template_specs(void)
       active_member_class_tok = replay_member_class_tok;
       memcpy(defining_class_stack, replay_class_stack, sizeof(replay_class_stack));
       nb_defining_class_stack = replay_class_depth;
+      cpp_template_replay_bound = saved_spec_bound;
+      cpp_template_replay_class_tok = saved_spec_class;
     }
     /* end_macro() owns the replay buffer and frees it.  Clear the slot so
        later scans of pending_template_specs cannot dereference the dangling

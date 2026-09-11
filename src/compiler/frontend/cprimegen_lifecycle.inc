@@ -1638,7 +1638,8 @@ static void free_saved_placement_args(TokenString *placement,
 
 static void call_placement_constructor(CType *type, TokenString *placement,
                                        TokenString **call_args,
-                                       int call_arg_count, int value_initialize)
+                                       int call_arg_count, int value_initialize,
+                                       int base_subobject)
 {
   Sym *ctor_func, *func_type, *sa;
   CType call_arg_types[CPC_MAX_CALL_ARGUMENTS], ptr_type;
@@ -1726,7 +1727,8 @@ static void call_placement_constructor(CType *type, TokenString *placement,
     tok_str_add(typed_argument, TOK_EOF);
     tok_str_free(call_args[0]);
     call_args[0] = typed_argument;
-    call_placement_constructor(type, placement, call_args, 1, value_initialize);
+    call_placement_constructor(type, placement, call_args, 1, value_initialize,
+                               base_subobject);
     return;
   }
   if (!ctor_func && call_arg_count == 1)
@@ -1842,6 +1844,11 @@ static void call_placement_constructor(CType *type, TokenString *placement,
     mk_pointer(&receiver);
     gen_cast(&receiver);
   }
+  /* A base subobject is never the most-derived object: its own virtual bases
+     belong to the enclosing complete-object constructor. */
+  if (base_subobject
+      && class_has_virtual_base(get_struct_type_name_tok(type)))
+    ctor_func = base_object_variant_symbol(ctor_func);
   vpushsym(&ctor_func->type, ctor_func);
   vswap();
 
@@ -2034,7 +2041,8 @@ static Sym *cpp_placement_cleanup_adapter(Sym *deallocation, CType *types,
   return symbol;
 }
 
-static int try_parse_cpp_placement_new_after_name(int global_scope)
+static int try_parse_cpp_placement_new_after_name(int global_scope,
+                                                  int base_subobject)
 {
   CType type;
   AttributeDef ad;
@@ -2147,7 +2155,8 @@ static int try_parse_cpp_placement_new_after_name(int global_scope)
       tok_str_add(replay, template_exact_ctype_typedef_tok(&type));
       tok_str_free(allocation_args[0]);
       restore_cpp_lifecycle_probe(replay);
-      return try_parse_cpp_placement_new_after_name(global_scope);
+      return try_parse_cpp_placement_new_after_name(global_scope,
+                                                    base_subobject);
     }
 
     memset(&ad, 0, sizeof(ad));
@@ -2328,7 +2337,8 @@ static int try_parse_cpp_placement_new_after_name(int global_scope)
   }
   saved_tok = tok;
   saved_tokc = tokc;
-  call_placement_constructor(&type, placement, call_args, call_arg_count, value_initialize);
+  call_placement_constructor(&type, placement, call_args, call_arg_count,
+                             value_initialize, base_subobject);
   tok = saved_tok;
   tokc = saved_tokc;
 allocation_complete:
@@ -2408,8 +2418,16 @@ static Sym *resolve_member_func(CType *type, int method_tok)
   if (!s)
     return NULL;
   if ((s->type.t & VT_BTYPE) != VT_FUNC)
+  {
+    /* A static data member of pointer-to-function type is not a member
+       function. Callers that reached this fallback evaluate the member and
+       call the resulting pointer through the ordinary call path. */
+    if ((s->type.t & VT_BTYPE) == VT_PTR
+        && (pointed_type(&s->type)->t & VT_BTYPE) == VT_FUNC)
+      return NULL;
     cprime_error("member function target '%s' is not declared as function",
               get_tok_str(mangled_tok, NULL));
+  }
   return s;
 }
 
@@ -4034,7 +4052,8 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
         && !struct_find(body->str[i])
         && !struct_find(make_static_member_tok(struct_tok, body->str[i]))
         && (class_has_static_member_func(struct_tok, body->str[i])
-            || type_has_member_func_name(struct_type, body->str[i])))
+            || type_has_member_func_name(struct_type, body->str[i]))
+        && !cpp_dependent_base_hides_function(struct_type, body->str[i]))
     {
       int call_paren_i = tok_str_next_non_linenum_index(body->str,
                                                         body->len, i + 1);
@@ -4101,6 +4120,8 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   pm->auto_return_state = is_auto_return ? 1 : 0;
   pm->auto_return_kind = is_auto_return;
   pm->is_local_class_member = is_local_class_member;
+  pm->replay_bound = cpp_template_replay_bound;
+  pm->replay_class_tok = cpp_template_replay_class_tok;
   queue_pending_member(pm);
 }
 
@@ -4348,17 +4369,113 @@ static void add_lifecycle_param_tokens(TokenString *str, TokenString *params,
   }
 }
 
+/* The two markers that bracket the complete-object virtual-base section of a
+   generated constructor body.  Everything outside them is shared by both
+   constructor variants. */
+static void lifecycle_body_split_range(TokenString *body, int *open_index,
+                                       int *close_index)
+{
+  int i, seen = 0;
+  *open_index = *close_index = -1;
+  for (i = 0; i < body->len && body->str[i] != TOK_EOF; ++i)
+  {
+    if (TOK_HAS_VALUE(body->str[i]))
+    {
+      i += tok_str_value_extra_words(body->str, body->len, i);
+      continue;
+    }
+    if (body->str[i] != TOK_CXX_BASE_CTOR_SPLIT)
+      continue;
+    if (!seen)
+    {
+      *open_index = i;
+      seen = 1;
+    }
+    else
+    {
+      *close_index = i;
+      return;
+    }
+  }
+  *open_index = *close_index = -1;
+}
+
+/* Copy BODY, always dropping the split markers and, when DROP_TO > DROP_FROM,
+   the virtual-base section they bracket. */
+static TokenString *copy_lifecycle_body_variant(TokenString *body, int drop_from,
+                                                int drop_to)
+{
+  TokenString *out = tok_str_alloc();
+  int i;
+  for (i = 0; i < body->len && body->str[i] != TOK_EOF; ++i)
+  {
+    if (drop_to > drop_from && i >= drop_from && i < drop_to)
+      continue;
+    if (body->str[i] == TOK_CXX_BASE_CTOR_SPLIT)
+      continue;
+    if (TOK_HAS_VALUE(body->str[i]))
+    {
+      tok_str_add_record(out, body->str, body->len, &i);
+      continue;
+    }
+    tok_str_add(out, body->str[i]);
+  }
+  return out;
+}
+
+static TokenString *build_lifecycle_func_string(CType *struct_type,
+                                                int struct_tok, int mangled_tok,
+                                                TokenString *params,
+                                                TokenString *body, int internal,
+                                                int is_local_class_member,
+                                                struct FuncAttr *attr)
+{
+  TokenString *str = tok_str_alloc();
+  int i;
+  if (internal && !is_local_class_member)
+    tok_str_add(str, TOK_INLINE1);
+  tok_str_add(str, TOK_VOID);
+  tok_str_add(str, mangled_tok);
+  tok_str_add(str, '(');
+  tok_str_add(str, cpp_class_tag_keyword_tok(struct_type));
+  tok_str_add(str, struct_tok);
+  tok_str_add(str, '*');
+  tok_str_add(str, tok_alloc_const("this"));
+  if (params)
+  {
+    if (params->len > 1)
+      tok_str_add(str, ',');
+    add_lifecycle_param_tokens(str, params, struct_tok);
+  }
+  tok_str_add(str, ')');
+  append_function_exception_spec(str, attr);
+  for (i = 0; i < body->len && body->str[i] != TOK_EOF; ++i)
+  {
+    if (TOK_HAS_VALUE(body->str[i]))
+    {
+      tok_str_add_record(str, body->str, body->len, &i);
+      continue;
+    }
+    tok_str_add(str, body->str[i]);
+  }
+  tok_str_add(str, TOK_EOF);
+  return str;
+}
+
 static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
                                        TokenString *params,
                                        TokenString *body, int internal,
                                        int is_defaulted, int exception_spec,
                                        int is_explicit)
 {
-  int struct_tok, mangled_tok, i;
+  int struct_tok, mangled_tok;
   int is_local_class_member = local_stack || local_scope;
+  int needs_base_variant, split_open = -1, split_close = -1;
+  int base_mangled_tok = 0;
   CType ret_type, func_type, lowered_type;
-  PendingMemberFunc *pm;
+  PendingMemberFunc *pm, *base_pm = NULL;
   TokenString *str;
+  TokenString *complete_body = NULL, *base_body = NULL;
 
   struct_tok = get_struct_type_name_tok(struct_type);
   if (!struct_tok)
@@ -4373,6 +4490,15 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
                                                 &lowered_type, 1);
   if (pending_member_func_has_body_tok(mangled_tok))
     return;
+  /* A class with a virtual base needs two constructor/destructor entry points:
+     the complete-object one owns the virtual base subobjects, while the
+     base-object one is used whenever the class is constructed or destroyed as
+     a base subobject.  Both share this signature. */
+  needs_base_variant = (method_tok == TOK_CONSTRUCTOR1
+                        || method_tok == TOK_DESTRUCTOR1)
+                       && class_has_virtual_base(struct_tok);
+  if (method_tok == TOK_CONSTRUCTOR1)
+    lifecycle_body_split_range(body, &split_open, &split_close);
   /* Out-of-class definitions do not repeat the explicit specifier. */
   {
     Sym *prior = global_symbol_find(mangled_tok);
@@ -4396,36 +4522,13 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
   if (is_defaulted)
     note_defaulted_member_func(struct_tok, method_tok, &func_type);
 
-  str = tok_str_alloc();
-  if (internal && !is_local_class_member)
-  {
-    tok_str_add(str, TOK_INLINE1);
-  }
-  tok_str_add(str, TOK_VOID);
-  tok_str_add(str, mangled_tok);
-  tok_str_add(str, '(');
-  tok_str_add(str, cpp_class_tag_keyword_tok(struct_type));
-  tok_str_add(str, struct_tok);
-  tok_str_add(str, '*');
-  tok_str_add(str, tok_alloc_const("this"));
-  if (params)
-  {
-    if (params->len > 1)
-      tok_str_add(str, ',');
-    add_lifecycle_param_tokens(str, params, struct_tok);
-  }
-  tok_str_add(str, ')');
-  append_function_exception_spec(str, &func_type.ref->f);
-  for (i = 0; i < body->len && body->str[i] != TOK_EOF; ++i)
-  {
-    if (TOK_HAS_VALUE(body->str[i]))
-    {
-      tok_str_add_record(str, body->str, body->len, &i);
-      continue;
-    }
-    tok_str_add(str, body->str[i]);
-  }
-  tok_str_add(str, TOK_EOF);
+  /* The split marker is emission metadata: neither variant may keep it. */
+  complete_body = split_open >= 0
+                    ? copy_lifecycle_body_variant(body, -1, -1)
+                    : body;
+  str = build_lifecycle_func_string(struct_type, struct_tok, mangled_tok,
+                                    params, complete_body, internal,
+                                    is_local_class_member, &func_type.ref->f);
 
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
@@ -4439,6 +4542,47 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
     note_struct_member_init_list(struct_tok);
   pm->is_local_class_member = is_local_class_member;
   queue_pending_member(pm);
+
+  if (needs_base_variant)
+  {
+    base_mangled_tok = make_base_object_variant_tok(mangled_tok);
+    if (!pending_member_func_has_body_tok(base_mangled_tok))
+    {
+      if (method_tok == TOK_CONSTRUCTOR1 && split_open >= 0)
+        base_body = copy_lifecycle_body_variant(body, split_open + 1,
+                                                split_close);
+      else
+        base_body = copy_lifecycle_body_variant(body, -1, -1);
+      {
+        Sym *base_function = external_global_sym(base_mangled_tok,
+                                                 &lowered_type);
+        if (internal)
+        {
+          base_function->a.weak = 1;
+          update_storage(base_function);
+        }
+      }
+      base_pm = cprime_mallocz(sizeof(*base_pm));
+      base_pm->str = build_lifecycle_func_string(struct_type, struct_tok,
+                                                 base_mangled_tok, params,
+                                                 base_body, internal,
+                                                 is_local_class_member,
+                                                 &func_type.ref->f);
+      base_pm->token_filter_valid = 0;
+      base_pm->func_tok = base_mangled_tok;
+      base_pm->struct_tok = struct_tok;
+      base_pm->is_lifecycle_member = 1;
+      base_pm->is_base_object_variant = 1;
+      base_pm->is_defaulted_default_constructor =
+        pm->is_defaulted_default_constructor;
+      base_pm->is_local_class_member = is_local_class_member;
+      queue_pending_member(base_pm);
+    }
+  }
+  if (complete_body && complete_body != body)
+    tok_str_free(complete_body);
+  if (base_body)
+    tok_str_free(base_body);
 }
 
 static void add_pending_lifecycle_decl(CType *struct_type, int method_tok,
@@ -5276,9 +5420,15 @@ close_initializer:
   /* A namespace-scope initializer is replayed at the end of the translation
      unit.  Record the namespace it was declared in so unqualified names in the
      saved expression still find earlier members of that namespace; class
-     members keep deriving their scope from struct_tok. */
+     members keep deriving their scope from struct_tok.  A definition written
+     outside its namespace (`int X::g = bar;`) is replayed in the scope of the
+     object it defines, not the scope the definition appears in. */
   if (!pm->struct_tok)
-    pm->namespace_tok = current_namespace_scope_tok();
+  {
+    int declared_namespace = symbol_namespace_scope_tok(var_tok);
+    pm->namespace_tok = declared_namespace ? declared_namespace
+                                           : current_namespace_scope_tok();
+  }
   queue_pending_member(pm);
 }
 
@@ -5412,6 +5562,13 @@ static void inject_omitted_constructor_member_initializers(
   {
     int field_tok = 0, statement_end, parens = 0, brackets = 0, braces = 0;
     int placement_start = prefix_end;
+    if (prefix_end < pm->str->len
+        && pm->str->str[prefix_end] == TOK_CXX_BASE_SUBOBJECT)
+    {
+      /* Construction metadata for the base subobject that follows. */
+      ++prefix_end;
+      continue;
+    }
     if (placement_start + 2 < pm->str->len
         && pm->str->str[placement_start] == ':'
         && pm->str->str[placement_start + 1] == ':') placement_start += 2;
@@ -5620,6 +5777,32 @@ static void complete_defaulted_constructor_body(PendingMemberFunc *pm,
   tokc = saved_tokc;
   if (initializers)
   {
+    /* A rebuilt base-object body keeps only the shared subobject sequence. */
+    if (pm->is_base_object_variant)
+    {
+      int split_open = -1, split_close = -1;
+      lifecycle_body_split_range(initializers, &split_open, &split_close);
+      if (split_open >= 0)
+      {
+        TokenString *shared = copy_lifecycle_body_variant(initializers,
+                                                          split_open + 1,
+                                                          split_close);
+        tok_str_free(initializers);
+        initializers = shared;
+      }
+      else
+      {
+        TokenString *shared = copy_lifecycle_body_variant(initializers, -1, -1);
+        tok_str_free(initializers);
+        initializers = shared;
+      }
+    }
+    else
+    {
+      TokenString *complete = copy_lifecycle_body_variant(initializers, -1, -1);
+      tok_str_free(initializers);
+      initializers = complete;
+    }
     tok_str_append(body, initializers);
     tok_str_free(initializers);
   }
@@ -6006,47 +6189,62 @@ static void compile_pending_member_funcs(int start)
       pending_member_funcs[out++] = pm;
       continue;
     }
-    deduce_pending_member_return(pm->func_tok);
-    rewrite_pending_member_field_access(pm);
-    rewrite_pending_static_member_calls(pm);
-    if (guard_non_lifecycle)
-      compiling_non_lifecycle_template_member_body++;
-    member_macro_parent = macro_stack;
-    member_macro_ptr = macro_ptr;
-    saved_namespace_tok = current_namespace_scope_tok();
-    enter_namespace_scope(pm->namespace_tok
-                          ? pm->namespace_tok
-                          : symbol_namespace_scope_tok(pm->struct_tok));
-    /* The queue owns the body even if declaration replay fails. */
-    begin_macro(pm->str, 3);
-    next();
-    defer_pending_member_funcs = 1;
-    if (pm->func_tok && pm->struct_tok)
-      note_member_function_scope(pm->func_tok, pm->struct_tok);
-    decl(VT_CONST);
-    enter_namespace_scope(saved_namespace_tok);
-    defer_pending_member_funcs = saved_defer_pending_member_funcs;
-    token_set_add(&compiled_pending_members, pm->func_tok);
-    /* Each replayed member body is an independent function definition.
-       decl() leaves the enclosing local scope live, so restore the saved
-       scope before the next queued member is inspected; otherwise a member
-       appended mid-flush (e.g. a constructor needed by a static member's
-       body) is wrongly deferred forever. */
-    if (isolate_local_scope)
     {
-      local_stack = NULL;
-      local_scope = 0;
+      /* Names in this body bind where its definition was written, not where
+         the instantiation happens (two-stage lookup). */
+      unsigned saved_replay_bound = cpp_template_replay_bound;
+      int saved_replay_class = cpp_template_replay_class_tok;
+      cpp_template_replay_bound = pm->replay_bound;
+      cpp_template_replay_class_tok = pm->replay_class_tok;
+      deduce_pending_member_return(pm->func_tok);
+      rewrite_pending_member_field_access(pm);
+      rewrite_pending_static_member_calls(pm);
+      if (guard_non_lifecycle)
+        compiling_non_lifecycle_template_member_body++;
+      member_macro_parent = macro_stack;
+      member_macro_ptr = macro_ptr;
+      saved_namespace_tok = current_namespace_scope_tok();
+      enter_namespace_scope(pm->namespace_tok
+                            ? pm->namespace_tok
+                            : symbol_namespace_scope_tok(pm->struct_tok));
+      /* The queue owns the body even if declaration replay fails. */
+      begin_macro(pm->str, 3);
+      next();
+      defer_pending_member_funcs = 1;
+      if (pm->func_tok && pm->struct_tok)
+        note_member_function_scope(pm->func_tok, pm->struct_tok);
+      {
+        int saved_base_variant = cpp_compiling_base_object_variant;
+        cpp_compiling_base_object_variant = pm->is_base_object_variant;
+        decl(VT_CONST);
+        cpp_compiling_base_object_variant = saved_base_variant;
+      }
+      enter_namespace_scope(saved_namespace_tok);
+      defer_pending_member_funcs = saved_defer_pending_member_funcs;
+      token_set_add(&compiled_pending_members, pm->func_tok);
+      /* Each replayed member body is an independent function definition.
+         decl() leaves the enclosing local scope live, so restore the saved
+         scope before the next queued member is inspected; otherwise a member
+         appended mid-flush (e.g. a constructor needed by a static member's
+         body) is wrongly deferred forever. */
+      if (isolate_local_scope)
+      {
+        local_stack = NULL;
+        local_scope = 0;
+      }
+      while (macro_stack && macro_stack != member_macro_parent)
+        end_macro();
+      macro_ptr = member_macro_ptr;
+      if (guard_non_lifecycle)
+        compiling_non_lifecycle_template_member_body--;
+      /* Release the queue entry only after replay has restored its parent. */
+      pending_member_funcs[i] = NULL;
+      tok_str_free(pm->str);
+      unindex_pending_auto_member(pm);
+      cprime_free(pm);
+      cpp_template_replay_bound = saved_replay_bound;
+      cpp_template_replay_class_tok = saved_replay_class;
     }
-    while (macro_stack && macro_stack != member_macro_parent)
-      end_macro();
-    macro_ptr = member_macro_ptr;
-    if (guard_non_lifecycle)
-      compiling_non_lifecycle_template_member_body--;
-    /* Release the queue entry only after replay has restored its parent. */
-    pending_member_funcs[i] = NULL;
-    tok_str_free(pm->str);
-    unindex_pending_auto_member(pm);
-    cprime_free(pm);
     /* Member calls discovered while replaying this body stay on the body
        dependency worklist until the outer finalization loop.  Instantiating
        them here would nest template-specialization replay inside the shared
@@ -6230,6 +6428,20 @@ static int try_parse_using_namespace_directive(void)
     using_namespace_toks = cprime_realloc(
       using_namespace_toks, al_using_namespace_toks * sizeof(int));
   }
-  using_namespace_toks[nb_using_namespace_toks++] = namespace_tok;
+  if (nb_using_namespace_toks >= al_using_namespace_scope_toks)
+  {
+    al_using_namespace_scope_toks = al_using_namespace_scope_toks
+                                      ? al_using_namespace_scope_toks * 2 : 8;
+    using_namespace_scope_toks = cprime_realloc(
+      using_namespace_scope_toks, al_using_namespace_scope_toks * sizeof(int));
+  }
+  using_namespace_toks[nb_using_namespace_toks] = namespace_tok;
+  /* Only a namespace-scope directive adds members to that namespace's
+     qualified lookup; a directive inside a function body is visible there
+     alone, and the enclosing namespace does not inherit its members. */
+  using_namespace_scope_toks[nb_using_namespace_toks] =
+    local_scope == 0 && nb_namespace_stack
+      ? make_namespace_tok_from_parts(namespace_stack, nb_namespace_stack) : 0;
+  ++nb_using_namespace_toks;
   return 1;
 }

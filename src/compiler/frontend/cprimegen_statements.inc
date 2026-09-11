@@ -9,6 +9,8 @@ static void try_call_scope_cleanup(Sym *stop)
     SValue *saved_top = vtop;
     if (!fs || !vs || cls->a.cleanup_exception_only)
       continue;
+    if (cpp_cleanup_is_elided_return_object(cls))
+      continue;
     temporary_skip = cpp_temp_guard_cleanup(cls);
     cpp_eh_set_cleanup_state(cls->next);
     if (vs && (vs->type.t & VT_BTYPE) == VT_STRUCT)
@@ -822,6 +824,9 @@ again:
   }
   else if (t == TOK_CXX_EH_CONSTRUCTED)
     cpp_eh_constructed_member();
+  else if (t == TOK_CXX_BASE_SUBOBJECT)
+    /* Marks the placement construction that follows as a base subobject. */
+    cpp_pending_base_subobject_construction = 1;
   else if (t == TOK_CXX_CTOR_BODY)
     cpp_eh_constructor_body();
   else if (t == TOK_IF)
@@ -1093,9 +1098,19 @@ if_chain:
     }
     if (b && (func_vt.t & VT_BTYPE) == VT_STRUCT)
     {
-      a = try_gfunc_return_copy_construct(&func_vt);
-      if (!a)
+      if (cpp_elide_named_local_return(&func_vt))
       {
+        /* The operand names the returned object, so no copy or move
+           constructor runs; gfunc_return stores the object into the result
+           slot and the cleanup below skips its destructor. */
+        gfunc_return(&func_vt);
+        a = 1;
+      }
+      else if (!(a = try_gfunc_return_copy_construct(&func_vt)))
+      {
+        /* No constructor runs, but the trivial copy still lands in the
+           caller's result object. */
+        cpp_return_result_in_caller_slot = 1;
         gfunc_return(&func_vt);
         a = 1;
       }
@@ -1103,6 +1118,13 @@ if_chain:
         int return_align, return_regsize, n;
         aggregate_return_registers = cpp_current_return_regs(&func_vt,
           &aggregate_return_register_type, &return_align, &return_regsize);
+        if (!aggregate_return_registers && cpp_return_result_in_caller_slot)
+        {
+          /* The result object now lives in the caller's storage, which this
+             frame still owns until the return completes: a cleanup raised
+             later in this statement must destroy it before the caller can. */
+          cpp_eh_register_result_object_cleanup(&func_vt, func_vc);
+        }
         /* Keep packed results live on the value stack while temporary and
            local destructors run. Ordinary call spilling then preserves all
            return registers, including for records with defaulted dtors. */
@@ -1117,7 +1139,13 @@ if_chain:
       }
     }
     cpp_temp_end(temporary_mark);
+    if (cpp_elided_return_active || cpp_elided_return_result_active)
+      cpp_eh_defer_return_object_cleanups();
     leave_scope(root_scope);
+    cpp_elided_return_active = 0;
+    cpp_return_result_in_caller_slot = 0;
+    cpp_elided_return_result_active = 0;
+    cpp_eh_restore_deferred_cleanups();
     if (aggregate_return_registers > 0)
     {
       int n;

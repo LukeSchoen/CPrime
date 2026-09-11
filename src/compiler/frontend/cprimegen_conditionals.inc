@@ -54,6 +54,45 @@ static int cpp_conditional_member_pointer_type(SValue *first, SValue *second,
   return 0;
 }
 
+/* `cond ? p : string` with `char *` and `operator const char *` takes the
+   conversion result as the composite pointer type.  find_cpp_conversion_operator
+   only accepts a target the conversion result converts back to, which a
+   qualification conversion cannot do when the pointer operand is the less
+   qualified one, so probe the qualified variants of that pointer operand. */
+static int cpp_conditional_qualified_pointer_type(SValue *class_operand,
+                                                  SValue *pointer_operand,
+                                                  CType *result)
+{
+  static const int extra_qualifiers[] = { VT_CONSTANT, VT_VOLATILE,
+                                          VT_CONSTANT | VT_VOLATILE };
+  CType *pointer_type = &pointer_operand->type;
+  CType *class_type = &class_operand->type;
+  int i;
+  if (!is_cpp_translation_unit()
+      || (class_type->t & VT_BTYPE) != VT_STRUCT
+      || (pointer_type->t & VT_BTYPE) != VT_PTR
+      || !pointer_type->ref)
+    return 0;
+  for (i = 0; i < (int)(sizeof(extra_qualifiers) / sizeof(extra_qualifiers[0]));
+       ++i)
+  {
+    CType candidate = *pointer_type;
+    int qualifiers = extra_qualifiers[i];
+    if ((pointed_type(pointer_type)->t & qualifiers) == qualifiers)
+      continue;
+    candidate.ref = sym_push(SYM_FIELD, &pointer_type->ref->type, 0,
+                             pointer_type->ref->c);
+    pointed_type(&candidate)->t |= qualifiers;
+    if (find_cpp_conversion_operator(class_type, &candidate, 0, NULL, NULL))
+    {
+      *result = candidate;
+      result->t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE);
+      return 1;
+    }
+  }
+  return 0;
+}
+
 static int cpp_conditional_scalar_type(SValue *first, SValue *second, CType *result)
 {
   SValue left = *first, right = *second;
@@ -116,6 +155,95 @@ static int cpp_prepare_conditional_destination(TokenString *expression)
     expression->str[index] = tok_alloc_const(name);
   }
   return expression->str[index];
+}
+
+static int cpp_is_comma_marker(int token)
+{
+  return token >= TOK_UIDENT && token < SYM_FIRST_ANOM
+      && !strncmp(get_tok_str(token, NULL), "__cpc_comma_result_", 19);
+}
+
+/* Index of the last top-level comma operator in a saved expression, or -1.
+   Commas inside nested brackets, template arguments and lambdas belong to
+   those constructs and are not comma operators of this expression. */
+static int cpp_expression_top_level_comma(TokenString *expression)
+{
+  int first, end, i, last = -1, level = 0, angle = 0;
+  int previous = 0, before_previous = 0;
+  if (!expression || !expression->str) return -1;
+  first = tok_str_next_non_linenum_index(expression->str, expression->len, 0);
+  end = tok_str_prev_token_index(expression->str, expression->len,
+                                 expression->len);
+  if (end >= 0 && expression->str[end] == TOK_EOF)
+    end = tok_str_prev_token_index(expression->str, expression->len, end);
+  while (first < end && expression->str[first] == '('
+         && saved_initializer_close(expression, first, '(', ')') == end) {
+    first = tok_str_next_non_linenum_index(expression->str, expression->len,
+                                           first + 1);
+    end = tok_str_prev_token_index(expression->str, expression->len, end);
+  }
+  for (i = first; i <= end; ++i) {
+    int token = expression->str[i];
+    if (TOK_HAS_VALUE(token)) {
+      i += tok_str_value_extra_words(expression->str, expression->len, i);
+      continue;
+    }
+    if ((token == TOK_LT || token == '<')
+        && (angle || (previous >= TOK_UIDENT
+            && (find_template_def(previous)
+                || is_template_keyword_tok(before_previous)))))
+      ++angle;
+    else if ((token == TOK_SAR || token == TOK_SHR) && angle)
+      angle = angle > 1 ? angle - 2 : 0;
+    else if (token == TOK_GT && angle) --angle;
+    else if (token == '(' || token == '[' || token == '{'
+             || is_cpp_lambda_marker(token)) ++level;
+    else if (token == ')' || token == ']' || token == '}') --level;
+    else if (!level && !angle && token == ',') last = i;
+    if (token != TOK_LINENUM) {
+      before_previous = previous;
+      previous = token;
+    }
+  }
+  return last;
+}
+
+/* A comma expression's result object is its final operand's, so the result
+   object stays unclaimed until the expression parser reaches that operand.
+   Rewrite the final top-level comma with a marker the parser accepts there. */
+static int cpp_prepare_comma_destination(TokenString *expression)
+{
+  static unsigned sequence;
+  int last = cpp_expression_top_level_comma(expression);
+  char name[80];
+  if (last < 0 || cpp_is_comma_marker(expression->str[last]))
+    return 0;
+  snprintf(name, sizeof(name), "__cpc_comma_result_%u", ++sequence);
+  expression->str[last] = tok_alloc_const(name);
+  return expression->str[last];
+}
+
+/* Gate the initializer's result object at the operation that actually produces
+   it: the final operand of a comma expression, or the conditional itself. */
+static int cpp_prepare_expression_destination(TokenString *expression)
+{
+  int marker = cpp_prepare_comma_destination(expression);
+  if (marker) return marker;
+  return cpp_prepare_conditional_destination(expression);
+}
+
+/* The expression parser consumes the marked comma as an ordinary comma
+   operator and opens the result-object gate for the final operand. */
+static int cpp_accept_expression_comma(void)
+{
+  if (tok == ',') return 1;
+  if (cpp_construction_destination
+      && cpp_construction_destination->conditional_marker == tok
+      && cpp_is_comma_marker(tok)) {
+    cpp_construction_destination->conditional_marker = 0;
+    return 1;
+  }
+  return 0;
 }
 static TokenString *cpp_token_slice(TokenString *source, int first, int end)
 {
@@ -301,7 +429,12 @@ static void cpp_emit_conditional_arm(TokenString *arm, CType *type,
   macro = construction ? *construction : *arm;
   destination.type = *type; destination.storage = storage;
   destination.address = address; destination.available = 1;
-  destination.conditional_marker = cpp_prepare_conditional_destination(arm);
+  /* A converted glvalue arm is re-emitted as a construction of its value, so a
+     rewritten marker would not appear in that stream. */
+  destination.conditional_marker = kind == 3 ? 0
+      : cpp_prepare_conditional_destination(arm);
+  if (kind != 3 && !destination.conditional_marker)
+    destination.conditional_marker = cpp_prepare_comma_destination(arm);
   cpp_construction_destination = &destination;
   begin_macro(&macro, 0); next(); gexpr();
   if (!nocode_wanted && destination.available && !(vtop->r & VT_THROW))

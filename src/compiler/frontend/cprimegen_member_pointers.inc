@@ -232,12 +232,13 @@ static int member_func_address_signature_matches(CppMemberPointerType *target,
 
 static Sym *find_member_func_address_candidate(int class_tok, int member_tok,
                                                CppMemberPointerType *target,
-                                               int *owner_tok)
+                                               int *owner_tok, int *ambiguous)
 {
   MemberFuncOverload *candidate;
   ClassBaseInfo *base;
   Sym *found = NULL;
   int class_declares_name = 0;
+  if (ambiguous) *ambiguous = 0;
   for (candidate = member_func_candidates(class_tok, member_tok);
        candidate; candidate = candidate->bucket_next)
   {
@@ -253,7 +254,14 @@ static Sym *find_member_func_address_candidate(int class_tok, int member_tok,
     if (!selected || !member_func_address_signature_matches(target, selected))
       continue;
     if (found && found != selected)
+    {
+      if (!target)
+      {
+        if (ambiguous) *ambiguous = 1;
+        return NULL;
+      }
       cprime_error("overloaded member address requires a target member-pointer type");
+    }
     found = selected;
     if (owner_tok) *owner_tok = class_tok;
   }
@@ -266,15 +274,73 @@ static Sym *find_member_func_address_candidate(int class_tok, int member_tok,
     if (base->class_tok != class_tok)
       continue;
     base_found = find_member_func_address_candidate(base->base_tok, member_tok,
-                                                    target, &base_owner);
+                                                    target, &base_owner, ambiguous);
     if (!base_found)
       continue;
     if (found && found != base_found)
+    {
+      if (!target)
+      {
+        if (ambiguous) *ambiguous = 1;
+        return NULL;
+      }
       cprime_error("overloaded member address requires a target member-pointer type");
+    }
     found = base_found;
     if (owner_tok) *owner_tok = base_owner;
   }
   return found;
+}
+
+static int cpp_deferred_member_address_matches(CppMemberPointerType *target,
+                                               CppMemberPointerType *source)
+{
+  int owner_tok = 0;
+  if (!target || !source || !source->deferred)
+    return 0;
+  return find_member_func_address_candidate(source->owner_tok,
+                                            source->deferred_member_tok,
+                                            target, &owner_tok, NULL) != NULL;
+}
+
+static int make_deferred_cpp_member_pointer(int owner_tok, int member_tok)
+{
+  CType type = {0};
+  CppMemberPointerType *entry;
+  CType *member_slot = make_provisional_cpp_member_pointer(&type, owner_tok);
+  entry = find_cpp_member_pointer_type(&type);
+  if (!entry)
+    return 0;
+  entry->deferred = 1;
+  entry->deferred_member_tok = member_tok;
+  if (member_slot)
+    member_slot->t = VT_FUNC;
+  vset(&type, VT_CONST, 0);
+  vtop->sym = sym_push2(&global_stack, anon_sym++, type.t, 0);
+  vtop->sym->type = type;
+  vtop->sym->cpp_member_address_tok = member_tok;
+  forming_cpp_member_address = 0;
+  return 1;
+}
+
+static int resolve_deferred_cpp_member_address(CType *target_type)
+{
+  CppMemberPointerType *target = find_cpp_member_pointer_type(target_type);
+  CppMemberPointerType *source = find_cpp_member_pointer_type(&vtop->type);
+  CType *saved_target = cpp_member_address_target;
+  SValue marker;
+  int resolved;
+  if (!target || !source || !source->deferred)
+    return 0;
+  marker = *vtop;
+  vpop();
+  cpp_member_address_target = target_type;
+  resolved = try_form_cpp_member_pointer(source->owner_tok,
+                                        source->deferred_member_tok);
+  cpp_member_address_target = saved_target;
+  if (!resolved)
+    vpushv(&marker);
+  return resolved;
 }
 
 static int try_form_cpp_member_pointer(int class_tok, int member_tok)
@@ -292,7 +358,13 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
   if (!class_tok)
     return 0;
   function_owner_tok = class_tok;
-  if (class_has_static_member_func(class_tok, member_tok))
+  /* A static overload of the name is not a member-pointer candidate.  Keep the
+     plain function path when the contextual type cannot be a pointer to member,
+     but a `&C::f` that is initializing one still resolves against the instance
+     overloads, which a static overload must not hide. */
+  if (class_has_static_member_func(class_tok, member_tok)
+      && !(cpp_member_address_target
+           && find_cpp_member_pointer_type(cpp_member_address_target)))
     return 0;
   field = find_field_try_with_owner(&owner_type, member_tok, &offset,
                                     &member_owner_tok);
@@ -324,6 +396,7 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
   {
     Sym *prototype;
     MemberFuncOverload *candidate;
+    int ambiguous = 0;
     member_owner_tok = class_tok;
     if (cpp_member_address_target
         && class_or_inst_has_member_template_name(class_tok, member_tok)) {
@@ -354,7 +427,9 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
     function = find_member_func_address_candidate(class_tok, member_tok,
         cpp_member_address_target
           ? find_cpp_member_pointer_type(cpp_member_address_target) : NULL,
-        &function_owner_tok);
+        &function_owner_tok, &ambiguous);
+    if (ambiguous && !cpp_member_address_target)
+      return make_deferred_cpp_member_pointer(class_tok, member_tok);
     if (!function)
       function = resolve_member_func(&owner_type, member_tok);
     if (!function || (function->type.t & VT_BTYPE) != VT_FUNC)
@@ -491,6 +566,12 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
   CppMemberPointerType *source = find_cpp_member_pointer_type(&vtop->type);
   int offset, source_slot, result_slot, skip_adjustment;
   CType writable_type, word_type;
+  if (target && source && source->deferred)
+  {
+    if (!resolve_deferred_cpp_member_address(type))
+      return 0;
+    source = find_cpp_member_pointer_type(&vtop->type);
+  }
   if (!target)
   {
     if (source && (type->t & VT_BTYPE) == VT_BOOL)

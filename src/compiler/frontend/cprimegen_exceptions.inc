@@ -95,7 +95,7 @@ static int cpp_parse_class_return_expression(void)
   construction.storage = VT_LLOCAL | VT_LVAL;
   construction.address = func_vc;
   construction.available = saved_initializer_is_direct_constructor(expression, &func_vt);
-  construction.conditional_marker = cpp_prepare_conditional_destination(expression);
+  construction.conditional_marker = cpp_prepare_expression_destination(expression);
   saved_destination = cpp_construction_destination;
   cpp_construction_destination = &construction;
   saved_tok = tok; saved_tokc = tokc;
@@ -191,20 +191,9 @@ static void cpp_eh_collect_bases(int class_tok,
 
 static void cpp_eh_function_begin(Sym *sym)
 {
-  Sym *parameter;
   memset(&cpp_eh_function, 0, sizeof cpp_eh_function);
   cpp_eh_function.enabled = is_cpp_translation_unit();
   cpp_eh_function.function = sym;
-  if (cpp_eh_function.enabled)
-    for (parameter = sym->type.ref->next; parameter; parameter = parameter->next)
-      if ((!(parameter->v & ~SYM_FIELD)
-           || (parameter->v & ~SYM_FIELD) >= SYM_FIRST_ANOM)
-          && (parameter->type.t & VT_BTYPE) == VT_STRUCT
-          && resolve_autodtor_func(&parameter->type)) {
-        char name[64];
-        snprintf(name, sizeof name, "__cpc_parameter_lifetime_%u", anon_sym++);
-        parameter->v = tok_alloc_const(name);
-      }
   if (sym->type.ref && (sym->type.ref->f.func_noexcept
       || (sym->type.ref->f.func_cxx_destructor
           && !sym->type.ref->f.func_noexcept_specified
@@ -214,7 +203,7 @@ static void cpp_eh_function_begin(Sym *sym)
 }
 
 static void cpp_eh_register_subobject_cleanup(CType *type, Sym *this_symbol,
-                                              int offset)
+                                              int offset, int base_subobject)
 {
   Sym *destructor, *object, *cleanup;
   CType pointer;
@@ -223,10 +212,16 @@ static void cpp_eh_register_subobject_cleanup(CType *type, Sym *this_symbol,
     CType *element = pointed_type(type);
     size = type_size(element, &align);
     for (index = 0; index < type->ref->c; ++index)
-      cpp_eh_register_subobject_cleanup(element, this_symbol, offset + index * size);
+      cpp_eh_register_subobject_cleanup(element, this_symbol,
+                                        offset + index * size, base_subobject);
     return;
   }
   destructor = resolve_autodtor_func(type);
+  /* A base subobject is destroyed by the base-object variant, which leaves the
+     virtual base subobjects to the complete-object destructor. */
+  if (destructor && base_subobject
+      && class_has_virtual_base(get_struct_type_name_tok(type)))
+    destructor = base_object_variant_symbol(destructor);
   if (!destructor) return;
   pointer = *type;
   mk_pointer(&pointer);
@@ -249,32 +244,12 @@ static void cpp_eh_register_subobject_cleanup(CType *type, Sym *this_symbol,
   cur_scope->cl.s = cleanup;
 }
 
-/* Subobjects outlive a destructor's body locals. Putting their ordinary
-   cleanups in the outer body scope gives returns and exceptional exits the
-   same reverse construction order as normal fallthrough. */
-static void cpp_eh_register_function_parameters(Sym *parameter)
-{
-  Sym *destructor, *object, *cleanup;
-  if (!parameter) return;
-  /* Argument copies are constructed from right to left by the call backend.
-     Register in that order so normal and exceptional cleanup reverse it. */
-  cpp_eh_register_function_parameters(parameter->next);
-  if ((parameter->type.t & VT_BTYPE) != VT_STRUCT) return;
-  destructor = resolve_autodtor_func(&parameter->type);
-  object = sym_find(parameter->v);
-  if (!destructor || !object) return;
-  cleanup = sym_push2(&all_cleanups, SYM_FIELD | ++cur_scope->cl.n, 0, 0);
-  cleanup->cleanup_sym = object; cleanup->cleanup_func = destructor;
-  cleanup->next = cur_scope->cl.s; cur_scope->cl.s = cleanup;
-}
-
 static void cpp_eh_enter_function_body(void)
 {
   Sym *function = cpp_eh_function.function;
   Sym *this_symbol, *field;
   CType *type;
   if (!cpp_eh_function.enabled || local_scope != 1 || !function) return;
-  cpp_eh_register_function_parameters(function->type.ref->next);
   if (!function->type.ref->f.func_cxx_destructor) return;
   this_symbol = sym_find(function->type.ref->next->v);
   if (!this_symbol) cprime_error("destructor requires its implicit object parameter");
@@ -291,19 +266,41 @@ static void cpp_eh_enter_function_body(void)
   }
   {
     int pass, owner = get_struct_type_name_tok(type);
+    int vbase_list[CPC_MAX_VIRTUAL_BASES];
+    int vbase_count = 0, vi;
     /* Cleanups run in reverse registration order: members, nonvirtual bases,
-       then virtual bases, independently of their physical layout order. */
+       then virtual bases, independently of their physical layout order.  The
+       most-derived destructor owns every virtual base subobject; a base-object
+       destructor leaves them to the complete-object destructor driving it. */
+    collect_class_virtual_bases(owner, vbase_list, &vbase_count, 0);
     for (pass = 0; pass < 2; ++pass)
+    {
+      if (pass == 0)
+      {
+        if (cpp_compiling_base_object_variant)
+          continue;
+        for (vi = 0; vi < vbase_count; ++vi)
+        {
+          CType vbase_type;
+          int offset;
+          if (!make_class_type_from_tok(&vbase_type, vbase_list[vi])
+              || !class_subobject_offset(owner, vbase_list[vi], &offset))
+            continue;
+          cpp_eh_register_subobject_cleanup(&vbase_type, this_symbol, offset, 1);
+        }
+        continue;
+      }
       for (field = type->ref->next; field; field = field->next)
       {
-        ClassBaseInfo *base;
-        int virtual_base = 0;
-        for (base = class_base_candidates(owner); base; base = base->bucket_next)
-          if (base->class_tok == owner && base->field == field)
-            virtual_base = base->is_virtual;
-        if (virtual_base == (pass == 0))
-          cpp_eh_register_subobject_cleanup(&field->type, this_symbol, field->c);
+        int is_virtual = 0;
+        ClassBaseInfo *base = class_direct_base_for_field(owner, field,
+                                                          &is_virtual);
+        if (is_virtual)
+          continue;
+        cpp_eh_register_subobject_cleanup(&field->type, this_symbol, field->c,
+                                          base != NULL);
       }
+    }
   }
 }
 
@@ -412,6 +409,102 @@ static void cpp_eh_register_parameter_copy(CType *type, int storage, int address
   cleanup = sym_push2(&all_cleanups, SYM_FIELD | ++cur_scope->cl.n, 0, 0);
   cleanup->cleanup_sym = object; cleanup->cleanup_func = destructor;
   cleanup->next = cur_scope->cl.s; cur_scope->cl.s = cleanup;
+}
+
+/* A result object built in the caller's storage still belongs to this frame
+   until the return completes.  Give it a cleanup of this return statement: the
+   normal path skips it because the caller takes ownership, while every
+   exception state raised by a later cleanup in the same statement still
+   destroys it.  The object lives behind the result pointer held in `slot`. */
+static void cpp_eh_register_result_object_cleanup(CType *type, int slot)
+{
+  Sym *destructor, *object, *cleanup;
+  CType object_type;
+  if (!cpp_eh_function.enabled || nocode_wanted) return;
+  object_type = *type;
+  object_type.t &= ~VT_CONSTANT;
+  destructor = resolve_autodtor_func(&object_type);
+  if (!destructor) return;
+  object = sym_push2(&local_stack, SYM_FIELD, 0, slot);
+  object->type = object_type; object->r = VT_LLOCAL | VT_LVAL;
+  cleanup = sym_push2(&all_cleanups, SYM_FIELD | ++cur_scope->cl.n, 0, 0);
+  cleanup->cleanup_sym = object; cleanup->cleanup_func = destructor;
+  cleanup->next = cur_scope->cl.s; cur_scope->cl.s = cleanup;
+  cpp_elided_return_result_active = 1;
+}
+
+/* A return statement that elides the copy of a named local gives the caller
+   ownership of that object.  Its destructor is skipped while the return's own
+   cleanups run, but the frame still owns the object until the return actually
+   completes, so it must stay in every exception state raised during that
+   sequence.  The object's cleanup nodes are moved behind the rest of the chain
+   for the duration of that sequence and put back afterwards, so each state
+   owns them exactly once and destroys them last. */
+typedef struct CppEhDeferredCleanup {
+  Sym **link;
+  Sym *node;
+  Sym *next;
+} CppEhDeferredCleanup;
+
+static CppEhDeferredCleanup *cpp_eh_deferred_cleanups;
+static int cpp_eh_deferred_count, cpp_eh_deferred_capacity;
+/* Slot that received the first deferred node, so the temporary trail can be
+   detached again without disturbing the rest of the chain. */
+static Sym **cpp_eh_deferred_tail_link;
+
+static void cpp_eh_defer_return_object_cleanups(void)
+{
+  Sym **link = &cur_scope->cl.s, *node, *tail;
+  int i;
+  cpp_eh_deferred_count = 0;
+  cpp_eh_deferred_tail_link = NULL;
+  while ((node = *link) != NULL) {
+    if (!cpp_cleanup_is_elided_return_object(node)) {
+      link = &node->next;
+      continue;
+    }
+    if (cpp_eh_deferred_count == cpp_eh_deferred_capacity) {
+      cpp_eh_deferred_capacity = cpp_eh_deferred_capacity
+          ? 2 * cpp_eh_deferred_capacity : 8;
+      cpp_eh_deferred_cleanups = cprime_realloc(cpp_eh_deferred_cleanups,
+          cpp_eh_deferred_capacity * sizeof(*cpp_eh_deferred_cleanups));
+    }
+    cpp_eh_deferred_cleanups[cpp_eh_deferred_count].link = link;
+    cpp_eh_deferred_cleanups[cpp_eh_deferred_count].node = node;
+    cpp_eh_deferred_cleanups[cpp_eh_deferred_count].next = node->next;
+    ++cpp_eh_deferred_count;
+    *link = node->next;
+    node->next = NULL;
+  }
+  if (!cpp_eh_deferred_count) return;
+  tail = cur_scope->cl.s;
+  while (tail && tail->next) tail = tail->next;
+  cpp_eh_deferred_tail_link = tail ? &tail->next : &cur_scope->cl.s;
+  for (i = 0; i < cpp_eh_deferred_count; ++i) {
+    node = cpp_eh_deferred_cleanups[i].node;
+    if (tail) { tail->next = node; }
+    else { cur_scope->cl.s = node; }
+    tail = node;
+    node->next = NULL;
+  }
+}
+
+static void cpp_eh_restore_deferred_cleanups(void)
+{
+  int i;
+  /* Detach the temporary trail first; the recorded links are the original
+     slots, and any slot overwritten by the append must be dropped before the
+     deferred nodes are spliced back, or the chain would close into a cycle. */
+  if (cpp_eh_deferred_tail_link) {
+    *cpp_eh_deferred_tail_link = NULL;
+    cpp_eh_deferred_tail_link = NULL;
+  }
+  for (i = cpp_eh_deferred_count; --i >= 0;) {
+    Sym *node = cpp_eh_deferred_cleanups[i].node;
+    *cpp_eh_deferred_cleanups[i].link = node;
+    node->next = cpp_eh_deferred_cleanups[i].next;
+  }
+  cpp_eh_deferred_count = 0;
 }
 
 static int cpp_eh_cleanup_index(Sym *symbol)
