@@ -18,7 +18,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     CType *member_address_target;
     jmp_buf *previous;
     int token, depth, nocode, local_offset, temporary_count, namespace_tok;
-    int declarator_depth;
+    int declarator_depth, alias_layout_depth;
     int global_expression;
     int member_class, declaration_auto, declaration_typedef, declaration_decltype;
     int scope, deferred_members, binding_count, global_binding_count;
@@ -31,6 +31,9 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
                            + (vtop - _vstack) * sizeof(SValue));
   jmp_buf recovery;
   volatile int success = 0;
+  /* Mode 11 replays a member function template's substituted parameter list,
+     so it uses the declaration-context setup of the probes below mode 6. */
+  int declaration_context = argument < 6 || argument == 11;
   saved->macro = macro_stack; saved->ptr = macro_ptr;
   saved->replay = *tokens;
   saved->token = tok; saved->value = tokc;
@@ -44,6 +47,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   saved->global_bindings = NULL; saved->global_binding_count = 0;
   saved->scope = local_scope;
   saved->declarator_depth = cpp_member_declarator_depth;
+  saved->alias_layout_depth = class_alias_layout_depth;
   saved->global_expression = global_expr;
   saved->deferred_members = defer_pending_member_funcs;
   saved->nocode = nocode_wanted; saved->local_offset = loc;
@@ -69,10 +73,10 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
      context. Other probes use the template's declaration context. A caller's
      local typedef must not hide a name in that context. Substituted type
      arguments already have stable global spellings from template_subst_token. */
-  if (saved->locals && argument < 6)
+  if (saved->locals && declaration_context)
     saved->local_bindings = sym_hide_local_bindings(saved->locals,
                                                     &saved->binding_count);
-  if (saved->scope && argument < 6)
+  if (saved->scope && declaration_context)
   {
     Sym *frame, *next_binding;
     /* Types materialized inside a parameter declaration can add anonymous
@@ -110,8 +114,10 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   {
     AttributeDef attributes;
     enter_namespace_scope(namespace_tok);
-    active_member_class_tok = argument >= 6 ? saved->member_class : owner_tok;
-    cpp_member_decl_context = argument >= 6 ? saved->member_declaration_context : NULL;
+    active_member_class_tok = declaration_context
+                              ? owner_tok : saved->member_class;
+    cpp_member_decl_context = declaration_context
+                              ? NULL : saved->member_declaration_context;
     lambda_probe = NULL;
     ++nocode_wanted;
     cpp_permit_incomplete_array_type = argument == 6;
@@ -209,6 +215,19 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
         decl(VT_CONST);
       success = 1;
     }
+    else if (argument == 11)
+    {
+      /* The substituted parameter list of a member function template. Build
+         its prototype in the declaration's own context; a template argument
+         that cannot match a parameter's value type is a substitution failure,
+         so the enclosing call candidate is dropped instead of hard-erroring.
+         The caller's return type arrives in *result and the prototype leaves
+         through the same place. */
+      CType ret_type = *result;
+      *result = make_member_func_type_from_saved_params(&ret_type, tokens,
+                                                        owner_tok);
+      success = 1;
+    }
     else if (argument && argument < 6)
     {
       int token = parse_one_template_type_arg();
@@ -263,6 +282,10 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   local_stack = saved->locals;
   local_scope = saved->scope;
   cpp_member_declarator_depth = saved->declarator_depth;
+  /* A recovered replay can abandon a declarator that still owned an indirect
+     class alias layout.  Leaving the counter raised makes every later
+     specialization publish only a forward type, so its members go missing. */
+  class_alias_layout_depth = saved->alias_layout_depth;
   cpp_member_address_target = saved->member_address_target;
   global_expr = saved->global_expression;
   defer_pending_member_funcs = saved->deferred_members;

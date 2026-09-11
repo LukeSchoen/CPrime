@@ -3,21 +3,20 @@
 Target: 100% of fast tests and the retained pedantic GCC checks, with no missing
 coverage, weakened expectations, compiler internal errors, or timeout retries.
 
-State (2026-09-12): 175 retained failures of 175 selected rows -- 167
-FAIL_COMPILE, 4 FAIL_RUN, 4 FAIL_RUN_CRASH -- on root `cpc.exe` SHA256
-`708137d879bdc37d78bb516735afdc1758fc6344d9035dd4cf063e8d11429e79`. All fifteen
+State (2026-09-12): 152 retained failures of 152 selected rows -- 146
+FAIL_COMPILE, 3 FAIL_RUN, 3 FAIL_RUN_CRASH -- on root `cpc.exe` SHA256
+`b6e16ca86ae7a6965b840c3f00dabec3f15c84f06ba5af4098e4a4e7e17ad489`. All fifteen
 selected fast language suites pass (`Tests/run-all.ps1 -Tier fast`, 0
-regressions); the cycle-38 promotion (`g++.dg/template/mem-partial1.C`) passes;
-the pedantic GCC partition passes 522/522 and the language partition fails the
-16 known cases below; triage is current as of cycle 38
-(`build/compiler-bug-triage.txt`). Cycle 38 retired the member class template
-spelled with an explicit argument list: a saved initializer keeps the whole
-list instead of stopping at its comma, and the injected member class name with
-explicit arguments inside the primary member's own body names the template, so
-`inner<T,int>::N` selects the partial specialization and `mem-partial1.C`
-joins the already-passing `memclass5.C`. Its regressions are
-`features/Templates/pass/test_nested_member_template_two_argument_id_in_global_initializer.cpp`
-and `test_member_template_specialization_named_in_own_body.cpp`.
+regressions); every promotion through cycle 53 passes; the pedantic GCC
+partition passes 546/546 and the language partition fails only the 16 known
+cases below; triage is current as of cycle 53
+(`build/compiler-bug-triage.txt`). Cycle 53 dropped a function template
+candidate whose declared parameter pattern never names one of its template
+parameters, so an explicit-argument call no longer substitutes the argument
+into that parameter and instantiates the class template it names
+(`dr1391-1.C`), and let a declaration-only conversion member template deduce
+against the written conversion target (`conv6.C`); earlier cycles are
+recorded in git history.
 
 ## Cycle contract
 
@@ -48,29 +47,23 @@ pass.
 1. Long tail: mostly one row per fix in template deduction, substitution,
    dependent lookup and overload selection. Batch two or three small
    independent fixes in a session instead of one deep defect.
-   Cycles 24-38 retired the clusters recorded in git history, most recently the
-   recursive class-typedef lookup (`recurse4.C`), the invalid substituted
-   partial-specialization argument (`pr51385.C`), the dependent-base
-   class-template registration (`overload14.C`, `template36.C`), the nested
-   template-name template argument (`qualttp13.C`), the dependent elaborated
-   nested tag (`typename27.C`, `union1.C`), the array static-member template
-   argument (`qualified-id2.C`), the member class template partial
-   specialization used in the class body (`partial14.C`), the member-template
-   address template argument (`ptrmem5.C`, `template-id-4.C`), the result type
-   naming a parameterless function template (`partial9.C`) and the member class
-   templates completed from an explicit argument list (`spec7.C`,
-   `mem-partial1.C`).
-   Current lead: `g++.dg/template/local8.C`, the first single-row
-   `g++.dg/template` cluster in the regenerated triage (`'kCapacity'
-   undeclared`): the constructor of a local class inside a function template
-   body cannot read the enclosing function's local constant from its
-   mem-initializer.
+   Cycles 24-50 retired the clusters recorded in git history, most recently
+   `friend23.C`, `typedef15.C`, `crash53.C`, `local11.C`, `friend73.C`,
+   `inherit.C`, `friend49.C`, `qualttp16.C`, `member3.C`, `injected2.C` and
+   `sfinae27.C`; cycles 51-53 retired `spec20.C`, `sts_partial.C`, `dr408.C`,
+   `deduce8.C`, `typename1.C`, `dr1391-1.C` and `conv6.C`; current lead:
+   `conv1.C` (`First__D_operator` undeclared), then `conv20.C` (incomplete
+   base).
 2. Coroutines (~30 rows) and `_Complex` (~13 rows) are whole features with no
    historical yield. Start them only after an explicit decision to fund them as
    multi-cycle projects.
 
 Narrowed leads, each already reduced to one site:
 
+- An object declaration materializes its class template specialization even
+  where completeness is not required, so `extern B<int> b;` reports `base
+  class 'A__int' is incomplete` for a `B` derived from an incomplete `A`;
+  `conv20.C` therefore never reaches the arity short-circuit it tests.
 - Template template argument through a dependent chain: `T::template AA<U>::template B`
   now names the nested template, but the enclosing argument is lost, so
   `chain<outer<char>, char>` still builds `middle<int>::inner` (probe: `sizeof`
@@ -86,7 +79,8 @@ Narrowed leads, each already reduced to one site:
   `(long long) (vector)` conversion.
 - Template parameter hiding: cycle 24 covers plain non-dependent bases; a
   dependent base can still substitute the argument, and probing it must avoid
-  recursively instantiating the current specialization (`access28.C`).
+  recursively instantiating the current specialization (`access28.C`; cycle 52
+  re-checked that its first diagnostic matches the previous compiler).
 - Member function template of a member class template's specialization:
   `template<> template<> template<class V> void A<int>::B<char>::g(V) { }` is
   still a namespace-scope template, so a linked call to `g` is an undefined
@@ -97,7 +91,6 @@ Narrowed leads, each already reduced to one site:
 - Array decay: a static member array compared against a pointer where the
   comparison opens a statement or `?:` reports `invalid operand types for
   binary operation` (`return X::p == X::c ? 0 : 1;`); `if (!(...))` works.
-
 ## Known pedantic language-suite failures (16)
 
 Pre-existing, confirmed against earlier published compilers, so not regressions

@@ -139,7 +139,7 @@ static int member_order_pattern(TemplateMemberDef *definition,
     else if (token == '[') ++bracket;
     else if (token == ']') --bracket;
     if (skip_default) continue;
-    if (token == TOK_DOTS || token == TOK_EOF || paren || bracket) return 0;
+    if (token == TOK_DOTS || token == TOK_EOF) return 0;
     if (pattern->count >= 510) return 0;
     variable = member_order_variable(pattern, token);
     if (token == TOK_SAR)
@@ -177,8 +177,12 @@ static int member_order_match(MemberOrderPattern *pattern, int position, int end
   {
     int current = actual->tokens[i];
     MemberOrderBinding trial[32];
-    if (current == TOK_LT || current == '<') ++depth;
-    if (current == TOK_GT || current == '>') --depth;
+    if (current == TOK_LT || current == '<' || current == '('
+        || current == '[')
+      ++depth;
+    else if (current == TOK_GT || current == '>' || current == ')'
+             || current == ']')
+      --depth;
     if (depth < 0 || (!depth && current == ',')) break;
     if (depth) continue;
     memcpy(trial, bindings, sizeof(trial));
@@ -239,6 +243,34 @@ static int compare_member_function_template_order(int first_tok, int second_tok)
   return compare_member_function_template_order_for_call(first_tok, second_tok, -1);
 }
 
+/* A function reference/pointer parameter is written `R (&)(A...)` or
+   `R (*)(A...)`.  Its result type cannot carry cv-qualifiers, so a plain
+   reference pattern such as `const T&` must ignore its leading qualifier
+   when the opposing parameter is this form. */
+static int member_order_function_parameter(MemberOrderPattern *pattern,
+                                           int parameter)
+{
+  int begin = pattern->starts[parameter];
+  int end = pattern->ends[parameter];
+  return begin + 4 < end && pattern->tokens[begin] < 0
+      && pattern->tokens[begin + 1] == '('
+      && (pattern->tokens[begin + 2] == '&'
+          || pattern->tokens[begin + 2] == TOK_LAND
+          || pattern->tokens[begin + 2] == '*')
+      && pattern->tokens[begin + 3] == ')'
+      && pattern->tokens[begin + 4] == '(';
+}
+
+static void member_order_drop_plain_reference_cv(MemberOrderPattern *pattern,
+                                                 int parameter)
+{
+  int begin = pattern->starts[parameter];
+  int end = pattern->ends[parameter];
+  while (begin < end && member_order_cv(pattern->tokens[begin])) ++begin;
+  if (begin < end && begin + 1 == end && pattern->tokens[begin] < 0)
+    pattern->starts[parameter] = begin;
+}
+
 static int compare_free_function_template_order(TemplateDef *first, TemplateDef *second)
 {
   TemplateMemberDef av = {0}, bv = {0};
@@ -251,8 +283,18 @@ static int compare_free_function_template_order(TemplateDef *first, TemplateDef 
   bv.nb_stripped_member_type_params = second->nb_type_params;
   memcpy(av.stripped_member_type_param_toks, first->type_param_toks, first->nb_type_params * sizeof(int));
   memcpy(bv.stripped_member_type_param_toks, second->type_param_toks, second->nb_type_params * sizeof(int));
-  if (member_order_pattern(&av, a) && member_order_pattern(&bv, b))
+  if (member_order_pattern(&av, a) && member_order_pattern(&bv, b)) {
+    int i;
+    for (i = 0; i < a->parameters && i < b->parameters; ++i) {
+      int function_a = member_order_function_parameter(a, i);
+      int function_b = member_order_function_parameter(b, i);
+      if (function_a && !function_b)
+        member_order_drop_plain_reference_cv(b, i);
+      else if (function_b && !function_a)
+        member_order_drop_plain_reference_cv(a, i);
+    }
     result = member_order_deduces(b, a) - member_order_deduces(a, b);
+  }
   cprime_free(a); cprime_free(b);
   return result;
 }

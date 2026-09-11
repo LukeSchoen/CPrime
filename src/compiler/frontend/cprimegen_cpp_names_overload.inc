@@ -2425,6 +2425,17 @@ static int call_arg_matches_param_type_standard(CType *param_type,
       return 1;
     return 0;
   }
+  /* A function argument decays to a pointer for a by-value pointer
+     parameter.  The rank predicate already accepts this conversion; the
+     viability predicate must agree or the ranked candidate is discarded
+     before it can be selected (for example `object = function_name;`). */
+  if ((!is_reference_type(param_type)
+       || (param_value_type.t & VT_CONSTANT)
+       || (param_type->t & VT_RVALUE_REFERENCE))
+      && (param_value_type.t & VT_BTYPE) == VT_PTR
+      && (arg_value_type.t & VT_BTYPE) == VT_FUNC)
+    return is_compatible_unqualified_types(pointed_type(&param_value_type),
+                                           &arg_value_type);
   if (compare_types(param_type, &arg_value_type, 1))
     return 1;
   if (btype_is_arithmetic_scalar(param_value_type.t & VT_BTYPE)

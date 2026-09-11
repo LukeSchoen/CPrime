@@ -126,6 +126,10 @@ typedef struct
   int integral_constexpr_valid;
   long long integral_constexpr_value;
   Sym *object_size_target;
+  /* Automatic reference object whose initializer had a frame-independent
+     address; the referent is recorded on the symbol for deferred member
+     bodies of local classes. */
+  Sym *reference_capture_sym;
 } init_params;
 
 #if 1
@@ -906,7 +910,7 @@ static int compiling_non_lifecycle_template_member_body;
 static int materializing_template_interface;
 static int *explicit_function_specializations;
 static int nb_explicit_function_specializations;
-static int parse_cpp_scoped_member_def_body(CType *, int, int);
+static int parse_cpp_scoped_member_def_body(CType *, int, int, int);
 static TemplateMemberDef *requested_template_member_body;
 static PendingTemplateMemberBodyRequest *pending_template_member_body_requests;
 static int nb_pending_template_member_body_requests;
@@ -9703,7 +9707,8 @@ static void qualify_saved_default_arg_current_class(TokenString **str, int compl
 }
 
 static int parse_cpp_scoped_member_def_body(CType *ret_type, int class_tok,
-                                               int specialization_tok)
+                                               int specialization_tok,
+                                               int friend_declaration)
 {
   int method_tok, saved_tok, paren, i, mangled_tok, cv_qualifiers, noexcept_spec;
   int has_params = 0;
@@ -9793,20 +9798,33 @@ static int parse_cpp_scoped_member_def_body(CType *ret_type, int class_tok,
   if (has_conversion_ret_type)
   {
     MemberFuncOverload *conversion;
+    int deduced = 0;
     /* Conversion functions are identified by their target type, including
        when a definition spells a typedef with a class qualifier. */
-    for (conversion = conversion_overloads[(unsigned)class_tok & 4095]; conversion;
-         conversion = conversion->conversion_next)
-      if (conversion->struct_tok == class_tok
-          && conversion->is_const == !!(cv_qualifiers & VT_CONSTANT)
-          && conversion->func_type.ref
-          && compare_types(&conversion->func_type.ref->type,
-                           &conversion_ret_type, 1))
-      {
-        method_tok = conversion->method_tok;
-        mangled_tok = conversion->mangled_tok;
+    for (;;)
+    {
+      for (conversion = conversion_overloads[(unsigned)class_tok & 4095];
+           conversion; conversion = conversion->conversion_next)
+        if (conversion->struct_tok == class_tok
+            && conversion->is_const == !!(cv_qualifiers & VT_CONSTANT)
+            && conversion->func_type.ref
+            && compare_types(&conversion->func_type.ref->type,
+                             &conversion_ret_type, 1))
+        {
+          method_tok = conversion->method_tok;
+          mangled_tok = conversion->mangled_tok;
+          break;
+        }
+      if (conversion || deduced || !friend_declaration)
         break;
-      }
+      /* A friend declaration can name a member conversion function template
+         through its target type alone (`friend A::operator X();`).  Deduce
+         the specialization against the written target before giving up; a
+         body-less declaration is enough, the friend name supplies identity. */
+      deduced = 1;
+      instantiate_explicit_conversion_member(class_tok, &conversion_ret_type,
+                                             cv_qualifiers);
+    }
   }
   if (cv_qualifiers & VT_CONSTANT)
     class_type.t |= VT_CONSTANT;
@@ -10087,7 +10105,8 @@ static int resolve_class_typedef_tok(int class_tok)
   return class_tok;
 }
 
-static int try_parse_cpp_scoped_member_def(CType *ret_type)
+static int try_parse_cpp_scoped_member_def(CType *ret_type,
+                                           int friend_declaration)
 {
   int class_tok, member_tok, saved_tok;
   CValue saved_tokc;
@@ -10172,6 +10191,12 @@ scoped_class_found:
     next();
     parse_template_type_args(&arguments);
     class_tok = instantiate_template_if_needed(record, &arguments);
+    /* Naming a member of the specialization needs its interface now. While
+       another generated declaration is replaying (a friend declaration in a
+       class template) the instantiation only publishes a forward type and
+       queues the class body, so demand the definition before the member
+       lookup below. */
+    compile_pending_template_class_definition_now(class_tok);
     compile_pending_template_specs_without_member_flush();
     replay = tok_str_alloc();
     tok_str_add(replay, class_tok);
@@ -10272,11 +10297,13 @@ scoped_class_found:
     restore_cpp_lifecycle_probe(replay);
   }
 
-  return parse_cpp_scoped_member_def_body(ret_type, class_tok, 0);
+  return parse_cpp_scoped_member_def_body(ret_type, class_tok, 0,
+                                          friend_declaration);
 }
 
 static int try_parse_cpp_scoped_member_def_after_declarator(CType *ret_type,
-                                                           int class_tok)
+                                                           int class_tok,
+                                                           int friend_declaration)
 {
   if (tok != ':' || class_tok < TOK_UIDENT)
     return 0;
@@ -10315,7 +10342,8 @@ static int try_parse_cpp_scoped_member_def_after_declarator(CType *ret_type,
     next();
     class_tok = nested_class_tok;
   }
-  return parse_cpp_scoped_member_def_body(ret_type, class_tok, 0);
+  return parse_cpp_scoped_member_def_body(ret_type, class_tok, 0,
+                                          friend_declaration);
 }
 
 static int try_rewrite_cpp_scoped_static_data_after_declarator(CType *type,
@@ -11829,7 +11857,17 @@ static void parse_cpp_class_using_member(CType *derived, int first_name)
       compile_pending_template_specs_without_member_flush();
     }
     skip(':'); skip(':');
-    if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "typename")) next();
+    for (;;) {
+      if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "typename")) {
+        next();
+        continue;
+      }
+      if (is_template_keyword_tok(tok)) {
+        next();
+        continue;
+      }
+      break;
+    }
     if (tok == TOK_OPERATOR) {
       name = parse_cpp_operator_method_tok();
       conversion_tokens = take_cpp_conversion_operator_type_tokens();
@@ -11847,7 +11885,23 @@ static void parse_cpp_class_using_member(CType *derived, int first_name)
     if (is_namespace_tok(owner)) {
       int parts[2] = { owner, name };
       owner = make_namespace_tok_from_parts(parts, 2);
-    } else owner = make_static_member_tok(owner, name);
+    } else {
+      /* A member typedef of an instantiated class template is registered
+         under its scoped alias token (the `Class__member` name produced
+         while the member class template body was substituted), so a chain
+         such as `tuple_impl<T1, null_type>::append<T1>::type` resolves to
+         the alias's class instead of an empty static-member token. */
+      Sym *member_owner = struct_find(owner);
+      int scoped_alias = 0;
+      if (member_owner) {
+        int class_tok = member_owner->v & ~SYM_STRUCT;
+        scoped_alias = template_member_scoped_alias_tok(class_tok, name);
+        if (!scoped_alias && member_owner->c < 0
+            && materialize_template_class_typedef(class_tok, name))
+          scoped_alias = template_member_scoped_alias_tok(class_tok, name);
+      }
+      owner = scoped_alias ? scoped_alias : make_static_member_tok(owner, name);
+    }
   }
   if (!make_type_from_type_arg_tok(&base_type, owner)
       && !make_type_from_type_arg_tok(&base_type, first_name))
@@ -12134,6 +12188,42 @@ static void struct_decl(CType *type, int u, int is_class_tag)
           alias->a.cpp_lexical_constant = 1;
           if (IS_ENUM_VAL(lexical->type.t)) alias->enum_val = lexical->enum_val;
           else alias->c = lexical->c;
+        }
+        else if ((lexical->type.t & VT_CONSTANT) && lexical->a.integral_constexpr
+                 && is_integer_btype(lexical->type.t & VT_BTYPE)
+                 && !(lexical->type.t & (VT_ARRAY | VT_VLA | VT_VOLATILE))
+                 && name >= TOK_UIDENT && name < SYM_FIRST_ANOM
+                 && sym_find(name) == lexical) {
+          /* A local class's member bodies are lowered with the enclosing
+             function's own locals out of scope, so an automatic constant that
+             the enclosing body already folded has to survive as its value.
+             The standard only lets such a member body read an enclosing
+             constant expression, so the value is the whole captured state. */
+          int alias_tok = make_static_member_tok(v, name);
+          Sym *alias = global_symbol_find(alias_tok);
+          if (!alias) alias = global_identifier_push(alias_tok, lexical->type.t, 0);
+          alias->type = lexical->type;
+          alias->r = VT_CONST;
+          alias->const_value = lexical->const_value;
+          alias->a.cpp_lexical_constant = 1;
+          alias->a.integral_constexpr = 1;
+        }
+        else if (!(lexical->type.t & VT_STATIC)
+                 && is_reference_type(&lexical->type)
+                 && lexical->lexical_reference_target
+                 && name >= TOK_UIDENT && name < SYM_FIRST_ANOM
+                 && sym_find(name) == lexical) {
+          /* Only a reference whose referent does not belong to the frame can
+             be re-created for a deferred member body; the address is already
+             fixed at link time. */
+          int alias_tok = make_static_member_tok(v, name);
+          Sym *alias = global_symbol_find(alias_tok);
+          if (!alias) alias = global_identifier_push(alias_tok, lexical->type.t, 0);
+          alias->type = lexical->type;
+          alias->r = VT_CONST;
+          alias->lexical_reference_target = lexical->lexical_reference_target;
+          alias->lexical_reference_offset = lexical->lexical_reference_offset;
+          alias->a.cpp_lexical_constant = 1;
         }
       }
     }
@@ -16414,6 +16504,17 @@ static int cpp_member_scope_token(int scope_tok, int name_tok, int receiver_tok)
   }
   if (is_namespace_tok(candidate))
     return make_namespace_tok_from_parts(&candidate, 1);
+  if (!scope_tok) {
+    ClassBaseInfo *base;
+    /* A base of the receiver is named in the derived class's scope, so its
+       injected class name hides a namespace-scope template of the same
+       spelling: `z.X::f()` on `Z : X<int>` names the base, not the
+       namespace template X. */
+    for (base = class_base_candidates(receiver_tok); base; base = base->bucket_next)
+      if (base->class_tok == receiver_tok
+          && class_tok_matches_unqualified_name(base->base_tok, name_tok))
+        return base->base_tok;
+  }
   if (struct_find(candidate) || find_class_template_def(candidate)) return candidate;
   alias = sym_find(candidate);
   if (!alias) alias = global_symbol_find(candidate);
@@ -20462,6 +20563,17 @@ tok_identifier:
         maybe_indir_reference();
         break;
       }
+      /* Only the published alias reaches here; the enclosing function still
+         reads its own automatic through the frame slot. */
+      if (s->lexical_reference_target && (s->r & VT_VALMASK) == VT_CONST)
+      {
+        /* Captured automatic reference: the address is the recorded
+           referent, so the binding does not depend on the dead frame. */
+        vset(&s->type, VT_CONST | VT_SYM, s->lexical_reference_offset);
+        vtop->sym = s->lexical_reference_target;
+        maybe_indir_reference();
+        break;
+      }
       r = s->r;
       /* A symbol that has a register is a local register variable,
          which starts out as VT_LOCAL value.  */
@@ -20489,6 +20601,11 @@ tok_identifier:
           symbol_value_type.ref = signature;
         }
         symbol_value.i = s->c;
+        /* A folded integral object carries its value, not an address or a
+           placeholder, even when the use is not itself a constant context
+           (an ordinary call argument, for example). */
+        if (s->a.integral_constexpr && (r & (VT_VALMASK | VT_LVAL)) == VT_CONST)
+          symbol_value.i = s->const_value;
         if ((s->type.t & VT_CONSTANT)
             && (((r & (VT_VALMASK | VT_LVAL)) == VT_CONST
                   && (s->type.t & VT_EXTERN))
@@ -24648,7 +24765,8 @@ static int decl_context(int l, int condition)
     }
 
 
-    if (l == VT_CONST && try_parse_cpp_scoped_member_def(&btype))
+    if (l == VT_CONST && try_parse_cpp_scoped_member_def(&btype,
+                                                         friend_declaration))
       continue;
 
     if (tok == ';')
@@ -24699,7 +24817,8 @@ static int decl_context(int l, int condition)
       if (ad.static_member_owner)
         scoped_static_data_definition = 1;
       if (l == VT_CONST
-          && try_parse_cpp_scoped_member_def_after_declarator(&type, v))
+          && try_parse_cpp_scoped_member_def_after_declarator(&type, v,
+                                                              friend_declaration))
         break;
       if (l == VT_CONST)
       {

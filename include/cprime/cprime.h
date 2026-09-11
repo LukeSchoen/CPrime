@@ -468,6 +468,10 @@ typedef struct Sym {
     };
     /* Symbolic constant substituted for an address template argument. */
     struct Sym *template_address_target;
+    /* Frame-independent referent recorded for an automatic reference, so a
+       deferred local class member body can name it without the frame. */
+    struct Sym *lexical_reference_target;
+    int lexical_reference_offset;
     int template_address_arguments;
     int cpp_member_address_tok;
     int cpp_using_target;

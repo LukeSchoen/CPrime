@@ -3002,9 +3002,15 @@ static int is_same_template_family_conversion_ctor(CType *class_type,
   /* Named tokens are interned; the instance-owner index identifies the
      family without comparing every instantiated class name. */
   class_owner = find_template_inst_owner_entry(class_tok);
+  if (!class_owner || !class_owner->owner->is_class)
+    return 0;
   arg_owner = find_template_inst_owner_entry(arg_tok);
-  return class_owner && arg_owner && class_owner->owner->is_class
-         && class_owner->owner == arg_owner->owner;
+  if (arg_owner && arg_owner->owner == class_owner->owner)
+    return 1;
+  /* Deduction through `Class<U>` also accepts an argument whose class
+     hierarchy contains an instance of that class template, so a derived
+     argument still selects the converting constructor of its base. */
+  return class_hierarchy_has_template_instance(class_owner->owner, arg_tok, 0);
 }
 
 static int member_field_func_arg_match_rank(Sym *field, CType *arg_types,
@@ -4043,6 +4049,18 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
         && prev_body_tok != '.' && prev_body_tok != TOK_ARROW
         && class_tok_matches_unqualified_name(struct_tok, body->str[i]))
     {
+      int following = tok_str_next_non_linenum_index(body->str, body->len,
+                                                     i + 1);
+      /* The injected class name denotes this specialization, but an explicit
+         template-id spelled with the class template's own name names that
+         other specialization instead. `S<int>::bar()` must keep its argument
+         list rather than becoming the enclosing `S__char`. */
+      if (following < body->len
+          && (body->str[following] == TOK_LT || body->str[following] == '<'))
+      {
+        tok_str_add(str, body->str[i]);
+        continue;
+      }
       tok_str_add(str, struct_tok);
       continue;
     }

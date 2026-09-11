@@ -325,6 +325,20 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       mk_pointer(&vtop->type);
       gaddrof();
     }
+    /* An automatic reference whose address is a link-time constant is not
+       frame state.  Record the referent so a deferred local class member body
+       can keep naming the same object after the frame is gone. */
+    if (p->reference_capture_sym && vtop->sym
+        && (vtop->r & (VT_VALMASK | VT_LVAL | VT_NONCONST | VT_SYM))
+             == (VT_CONST | VT_SYM)
+        && (vtop->sym->type.t & VT_BTYPE) != VT_FUNC
+        && !(vtop->sym->type.t & VT_TYPEDEF)
+        && (vtop->sym->r & VT_VALMASK) == VT_CONST)
+    {
+      p->reference_capture_sym->lexical_reference_target = vtop->sym;
+      p->reference_capture_sym->lexical_reference_offset = (int)vtop->c.i;
+      p->reference_capture_sym = NULL;
+    }
   }
 
   size = type_size(type, &align);
@@ -2261,6 +2275,9 @@ err_size:
                            && !(type->t & (VT_ARRAY | VT_VLA))
                            && (type->t & VT_BTYPE) != VT_STRUCT
                            ? sym : NULL;
+    p.reference_capture_sym = sym && is_reference_type(type)
+                              && (r & VT_VALMASK) == VT_LOCAL
+                              && !(type->t & VT_STATIC) ? sym : NULL;
     if (sec && !is_reference_type(type)) ++static_initializer_constant_fold;
     decl_initializer(&p, type, addr, DIF_FIRST);
     if (sec && !is_reference_type(type)) --static_initializer_constant_fold;

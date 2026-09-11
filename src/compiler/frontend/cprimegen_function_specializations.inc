@@ -10,6 +10,12 @@ static int infer_template_args_from_call_with_explicit(TemplateDef *, CType *, i
 static int *explicit_static_data_specializations;
 static int nb_explicit_static_data_specializations;
 
+/* A specialization's class qualifier is instantiated before the specialized
+   member itself is registered.  The out-of-class static data definition of
+   the primary template must not complete that member's type in this window:
+   the specialization is the definition. */
+static int parsing_explicit_specialization;
+
 static int is_explicit_static_data_specialization(int member_tok)
 {
   int i;
@@ -400,7 +406,7 @@ static int infer_template_args_from_declared_return_type(TemplateDef *td,
   return deduced;
 }
 
-static void parse_explicit_function_specialization(int instantiation)
+static void parse_explicit_specialization_body(int instantiation)
 {
   TokenString *parameters = tok_str_alloc(), *definition = tok_str_alloc();
   CType result, function, actual[16];
@@ -750,9 +756,17 @@ static void parse_explicit_function_specialization(int instantiation)
   saved_tok = tok; saved_tokc = tokc;
   enter_namespace_scope(owner ? symbol_namespace_scope_tok(owner) : selected_free->namespace_tok);
   begin_macro(definition, 1); next();
-  if (owner) parse_cpp_scoped_member_def_body(&result, owner, function_tok);
+  if (owner) parse_cpp_scoped_member_def_body(&result, owner, function_tok, 0);
   else decl(VT_CONST);
   end_macro(); tok = saved_tok; tokc = saved_tokc;
   enter_namespace_scope(saved_namespace);
   tok_str_free(parameters);
+}
+
+static void parse_explicit_function_specialization(int instantiation)
+{
+  int saved = parsing_explicit_specialization;
+  parsing_explicit_specialization = 1;
+  parse_explicit_specialization_body(instantiation);
+  parsing_explicit_specialization = saved;
 }
