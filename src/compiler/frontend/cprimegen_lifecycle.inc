@@ -6110,6 +6110,13 @@ static void parse_namespace_decl(int is_inline)
     ns_tok = tok;
     next();
   }
+  /* A namespace definition may carry GNU attribute specifiers after its
+     name (`namespace std __attribute__((__visibility__("default"))) {`),
+     a spelling the GCC standard-library headers use pervasively.  The
+     attributes are parsed and ignored here so the following '{' or '='
+     is read normally. */
+  while (tok == TOK_ATTRIBUTE1 || tok == TOK_ATTRIBUTE2)
+    parse_attribute(NULL);
   if (tok == '=') {
     int target, alias_name, parts[17], count, global = 0, known = 0, i;
     Sym *binding;
@@ -6199,7 +6206,20 @@ static int try_parse_using_namespace_directive(void)
       cprime_error("namespace name expected in using directive");
   }
   skip(';');
-  namespace_tok = make_namespace_tok_from_parts(parts, nb_parts);
+  /* The leading name may be a namespace alias declared in this block scope
+     (`namespace B = A; using namespace B;`).  Resolve it before mangling so
+     the directive imports the alias target, not a same-named namespace. */
+  {
+    int resolved[16], i;
+    int first = find_current_namespace_tok(parts[0]);
+    if (first != parts[0] && !strncmp(get_tok_str(first, NULL), "__cpc_ns", 8))
+      resolved[0] = first;
+    else
+      resolved[0] = parts[0];
+    for (i = 1; i < nb_parts; ++i)
+      resolved[i] = parts[i];
+    namespace_tok = make_namespace_tok_from_parts(resolved, nb_parts);
+  }
   for (i = 0; i < nb_using_namespace_toks; ++i)
     if (using_namespace_toks[i] == namespace_tok)
       return 1;

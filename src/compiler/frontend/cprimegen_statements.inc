@@ -778,6 +778,44 @@ again:
       merge_funcattr(&alias_sym->type.ref->f, &alias_ad.f);
     skip(';');
   }
+  else if (t == TOK_NAMESPACE && is_cpp_translation_unit())
+  {
+    /* Block-scope namespace alias: namespace NAME = target;.  The alias
+       binding is block-local, so it shadows (and later unshadows) any
+       enclosing alias or namespace with the same name. */
+    int ns_tok, target, global = 0, parts[17];
+    Sym *binding;
+    CType alias_type;
+
+    if (tok < TOK_UIDENT)
+      cprime_error("namespace name");
+    ns_tok = tok;
+    next();
+    if (tok != '=')
+      cprime_error("namespace alias definition expected");
+    next();
+    if (tok == ':') { next(); skip(':'); global = 1; }
+    if (tok < TOK_UIDENT)
+      cprime_error("namespace alias target expected");
+    target = global ? make_namespace_tok_from_parts(&tok, 1)
+                    : find_namespace_qualifier_tok(tok);
+    next();
+    while (tok == ':') {
+      next();
+      skip(':');
+      if (tok < TOK_UIDENT)
+        cprime_error("qualified namespace alias target expected");
+      parts[0] = target;
+      parts[1] = tok;
+      target = make_namespace_tok_from_parts(parts, 2);
+      next();
+    }
+    skip(';');
+    alias_type.t = VT_VOID | VT_TYPEDEF;
+    alias_type.ref = NULL;
+    binding = sym_push(ns_tok, &alias_type, 0, 0);
+    binding->cpp_using_target = target;
+  }
   else if (t == TOK_TRY)
   {
     cpp_eh_parse_try();
@@ -1347,12 +1385,25 @@ skip_switch:
       if (tok == ':')
       {
         tok_str_add2(scope_probe, tok, &tokc);
-        tok_str_add(scope_probe, 0);
-        begin_macro(scope_probe, 1);
-        tok = t;
-        goto expr;
+        next();
+        if (tok != ':')
+        {
+          /* Keep the token that followed the `::`; the lookahead already
+             consumed it, and the replay must resume before it. */
+          tok_str_add_tok(scope_probe);
+          tok_str_add(scope_probe, 0);
+          begin_macro(scope_probe, 1);
+          tok = t;
+          goto expr;
+        }
+        /* `X: ::stmt` (a label whose name is also a class) keeps the two
+           remaining colons as the `::` of the labelled statement, which
+           begins after the label. */
+        tok_str_free(scope_probe);
+        unget_tok(':');
       }
-      tok_str_free(scope_probe);
+      else
+        tok_str_free(scope_probe);
       // Label Case
       s = label_find(t);
       if (s)

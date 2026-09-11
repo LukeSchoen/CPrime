@@ -112,6 +112,8 @@
      DEF(TOK___HAS_INCLUDE_NEXT, "__has_include_next")
      DEF(TOK___HAS_ATTRIBUTE, "__has_attribute")
      DEF(TOK___HAS_BUILTIN, "__has_builtin")
+     DEF(TOK___HAS_FEATURE, "__has_feature")
+     DEF(TOK___HAS_EXTENSION, "__has_extension")
 
      DEF(TOK___FUNC__, "__func__")
 
@@ -196,10 +198,19 @@
      DEF(TOK_builtin_frame_address, "__builtin_frame_address")
      DEF(TOK_builtin_return_address, "__builtin_return_address")
      DEF(TOK_builtin_expect, "__builtin_expect")
+     DEF(TOK_builtin_convertvector, "__builtin_convertvector")
+     DEF(TOK_builtin_shuffle, "__builtin_shuffle")
+     DEF(TOK_builtin_shufflevector, "__builtin_shufflevector")
      DEF(TOK_builtin_FILE, "__builtin_FILE")
      DEF(TOK_builtin_FUNCTION, "__builtin_FUNCTION")
      DEF(TOK_builtin_LINE, "__builtin_LINE")
      DEF(TOK_builtin_unreachable, "__builtin_unreachable")
+
+     /* GCC's same-function non-local jump builtins.  Their five-pointer save
+        area is smaller than the CRT jmp_buf, so the frontend lowers them onto
+        the runtime helpers rather than wrapping setjmp. */
+     DEF(TOK_builtin_setjmp, "__builtin_setjmp")
+     DEF(TOK_builtin_longjmp, "__builtin_longjmp")
 
 #if defined CPRIME_TARGET_PE && defined CPRIME_TARGET_X86_64
      DEF(TOK_builtin_va_start, "__builtin_va_start")
@@ -234,6 +245,28 @@
      DEF(TOK___atomic_exchange_n, "__atomic_exchange_n")
      DEF(TOK___atomic_compare_exchange_n, "__atomic_compare_exchange_n")
      DEF(TOK___atomic_always_lock_free, "__atomic_always_lock_free")
+
+     /* The legacy full-barrier primitives.  They are lowered onto the same
+        runtime helpers as the __atomic family with the sequentially
+        consistent order the __sync spelling implies. */
+     DEF(TOK___sync_fetch_and_add, "__sync_fetch_and_add")
+     DEF(TOK___sync_fetch_and_sub, "__sync_fetch_and_sub")
+     DEF(TOK___sync_fetch_and_or, "__sync_fetch_and_or")
+     DEF(TOK___sync_fetch_and_xor, "__sync_fetch_and_xor")
+     DEF(TOK___sync_fetch_and_and, "__sync_fetch_and_and")
+     DEF(TOK___sync_fetch_and_nand, "__sync_fetch_and_nand")
+     DEF(TOK___sync_add_and_fetch, "__sync_add_and_fetch")
+     DEF(TOK___sync_sub_and_fetch, "__sync_sub_and_fetch")
+     DEF(TOK___sync_or_and_fetch, "__sync_or_and_fetch")
+     DEF(TOK___sync_xor_and_fetch, "__sync_xor_and_fetch")
+     DEF(TOK___sync_and_and_fetch, "__sync_and_and_fetch")
+     DEF(TOK___sync_nand_and_fetch, "__sync_nand_and_fetch")
+     DEF(TOK___sync_bool_compare_and_swap, "__sync_bool_compare_and_swap")
+     DEF(TOK___sync_val_compare_and_swap, "__sync_val_compare_and_swap")
+     DEF(TOK___sync_lock_test_and_set, "__sync_lock_test_and_set")
+     DEF(TOK___sync_lock_release, "__sync_lock_release")
+     DEF(TOK___sync_synchronize, "__sync_synchronize")
+
      DEF(TOK_builtin_addressof, "__builtin_addressof")
      DEF(TOK_builtin_launder, "__builtin_launder")
      DEF(TOK_builtin_bit_cast, "__builtin_bit_cast")

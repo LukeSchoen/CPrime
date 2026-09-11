@@ -22,6 +22,38 @@ static void cpp_conditional_scalar_candidate(CType *receiver, int owner,
       cpp_conditional_scalar_candidate(receiver, base->base_tok, result, count);
 }
 
+/* A conditional between two pointer-to-member operands uses the member pointer
+   of the more-derived owner, just as it would for object pointers
+   (`cond ? &Base::f : &Derived::g`).  Without this the conditional fell through
+   the scalar/class arms into the invalid-binary-operation error. */
+static int cpp_conditional_member_pointer_type(SValue *first, SValue *second,
+                                               CType *result)
+{
+  CppMemberPointerType *left = find_cpp_member_pointer_type(&first->type);
+  CppMemberPointerType *right = find_cpp_member_pointer_type(&second->type);
+
+  if (!left || !right)
+    return 0;
+  if (!is_compatible_unqualified_types(&left->member_type, &right->member_type))
+    return 0;
+  if (left->owner_tok == right->owner_tok)
+  {
+    *result = first->type;
+    return 1;
+  }
+  if (class_has_base(right->owner_tok, left->owner_tok))
+  {
+    *result = second->type;
+    return 1;
+  }
+  if (class_has_base(left->owner_tok, right->owner_tok))
+  {
+    *result = first->type;
+    return 1;
+  }
+  return 0;
+}
+
 static int cpp_conditional_scalar_type(SValue *first, SValue *second, CType *result)
 {
   SValue left = *first, right = *second;

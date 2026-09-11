@@ -99,6 +99,70 @@ __atomic_compare_exchange_8:
     xorl %eax, %eax
     ret
 
+    /* The legacy __sync compare-and-swap pair takes the expected value
+       directly instead of through a pointer and reports either the outcome
+       of the comparison or the value that was observed. */
+    .globl __sync_bool_compare_and_swap_1
+__sync_bool_compare_and_swap_1:
+    movb %dl, %al
+    lock cmpxchgb %r8b, (%rcx)
+    jne 1f
+    movl $1, %eax
+    ret
+1:  xorl %eax, %eax
+    ret
+    .globl __sync_bool_compare_and_swap_2
+__sync_bool_compare_and_swap_2:
+    movw %dx, %ax
+    lock cmpxchgw %r8w, (%rcx)
+    jne 1f
+    movl $1, %eax
+    ret
+1:  xorl %eax, %eax
+    ret
+    .globl __sync_bool_compare_and_swap_4
+__sync_bool_compare_and_swap_4:
+    movl %edx, %eax
+    lock cmpxchgl %r8d, (%rcx)
+    jne 1f
+    movl $1, %eax
+    ret
+1:  xorl %eax, %eax
+    ret
+    .globl __sync_bool_compare_and_swap_8
+__sync_bool_compare_and_swap_8:
+    movq %rdx, %rax
+    lock cmpxchgq %r8, (%rcx)
+    jne 1f
+    movl $1, %eax
+    ret
+1:  xorl %eax, %eax
+    ret
+
+    /* Both forms leave the observed (pre-exchange) value in %rax. */
+    .globl __sync_val_compare_and_swap_1
+__sync_val_compare_and_swap_1:
+    movb %dl, %al
+    lock cmpxchgb %r8b, (%rcx)
+    movzbl %al, %eax
+    ret
+    .globl __sync_val_compare_and_swap_2
+__sync_val_compare_and_swap_2:
+    movw %dx, %ax
+    lock cmpxchgw %r8w, (%rcx)
+    movzwl %ax, %eax
+    ret
+    .globl __sync_val_compare_and_swap_4
+__sync_val_compare_and_swap_4:
+    movl %edx, %eax
+    lock cmpxchgl %r8d, (%rcx)
+    ret
+    .globl __sync_val_compare_and_swap_8
+__sync_val_compare_and_swap_8:
+    movq %rdx, %rax
+    lock cmpxchgq %r8, (%rcx)
+    ret
+
     /* The test-and-set builtin, like atomic_flag, accesses one byte. */
     .globl __atomic_test_and_set_1
     .globl __atomic_test_and_set_2

@@ -992,6 +992,30 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
   return 1;
 }
 
+/* A block-scope `const int` object is a constant expression once its
+   initializer is one, so a reference to another integral constant still
+   supplies a value even though the initializer itself is evaluated as an
+   ordinary (non-constant) expression context. */
+static int initializer_integral_constant_value(SValue *value, int64_t *result)
+{
+  Sym *symbol = value->sym;
+  int kind = value->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST);
+
+  if (kind == VT_CONST && is_integer_btype(value->type.t & VT_BTYPE))
+  {
+    *result = value->c.i;
+    return 1;
+  }
+  if (!symbol || !symbol->a.integral_constexpr
+      || !(symbol->type.t & VT_CONSTANT)
+      || !is_integer_btype(symbol->type.t & VT_BTYPE))
+    return 0;
+  if (kind != (VT_CONST | VT_SYM) && kind != (VT_LOCAL | VT_LVAL))
+    return 0;
+  *result = symbol->const_value;
+  return 1;
+}
+
 /* 't' contains the type and storage info. 'c' is the offset of the
    object in section 'sec'. If 'sec' is NULL, it means stack based
    allocation. 'flags & DIF_FIRST' is true if array '{' must be read (multi
@@ -1278,11 +1302,11 @@ do_init_list:
         parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
       }
       if (p->capture_integral_constexpr
-          && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST
-          && is_integer_btype(vtop->type.t & VT_BTYPE))
+          && initializer_integral_constant_value(vtop,
+                                                 &p->integral_constexpr_value))
       {
-        gen_cast(type);
-        p->integral_constexpr_value = vtop->c.i;
+        if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST)
+          gen_cast(type);
         p->integral_constexpr_valid = 1;
       }
       if (!p->sec && (flags & DIF_CLEAR) // Container Was Already Zero'D
@@ -1534,11 +1558,11 @@ do_init_list:
         parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
       }
       if (p->capture_integral_constexpr
-          && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST
-          && is_integer_btype(vtop->type.t & VT_BTYPE))
+          && initializer_integral_constant_value(vtop,
+                                                 &p->integral_constexpr_value))
       {
-        gen_cast(type);
-        p->integral_constexpr_value = vtop->c.i;
+        if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST)
+          gen_cast(type);
         p->integral_constexpr_valid = 1;
       }
       if (!p->sec && (flags & DIF_CLEAR) // Container Was Already Zero'D
@@ -2078,7 +2102,7 @@ err_size:
     Sym *initial_cleanup = cur_scope ? cur_scope->cl.s : NULL;
     int initial_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
     p.sec = sec;
-    p.track_partial_cleanups = is_cpp_translation_unit() && !sec
+    p.track_partial_cleanups = cur_scope && is_cpp_translation_unit() && !sec
                                && (r & VT_VALMASK) == VT_LOCAL
                                && (type->t & VT_BTYPE) == VT_STRUCT && type->ref
                                && !type->ref->a.cpp_user_constructor

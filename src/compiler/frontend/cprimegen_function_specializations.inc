@@ -2,6 +2,33 @@ static int compare_free_function_template_order(TemplateDef *, TemplateDef *);
 static int infer_template_args_from_call_with_explicit(TemplateDef *, CType *, int,
                                                        TemplateArgList *, TemplateArgList *);
 
+/* Static data members explicitly specialized by the program must not be
+   replayed from their primary template's out-of-class definition.  Record the
+   specialized member token when its declaration or definition is parsed, and
+   let the demand-driven static-data queue skip those instances. */
+static int *explicit_static_data_specializations;
+static int nb_explicit_static_data_specializations;
+
+static int is_explicit_static_data_specialization(int member_tok)
+{
+  int i;
+  for (i = 0; i < nb_explicit_static_data_specializations; ++i)
+    if (explicit_static_data_specializations[i] == member_tok)
+      return 1;
+  return 0;
+}
+
+static void note_explicit_static_data_specialization(int member_tok)
+{
+  if (is_explicit_static_data_specialization(member_tok))
+    return;
+  explicit_static_data_specializations =
+    cprime_realloc(explicit_static_data_specializations,
+                   (nb_explicit_static_data_specializations + 1) * sizeof(int));
+  explicit_static_data_specializations[nb_explicit_static_data_specializations++]
+    = member_tok;
+}
+
 /* Explicit specializations may write a parameter whose only difference from
    the substituted template parameter is cv-qualification reached through
    array/function parameter adjustment (CWG 1001/1322 cases).  Ordinary
@@ -381,9 +408,11 @@ static void parse_explicit_function_specialization(int instantiation)
   }
   if (owner && tok != '(' && !instantiation && !explicit_args.nb) {
     int braces = 0, parentheses = 0, brackets = 0;
-    Sym *member = global_symbol_find(make_static_member_tok(owner, name));
+    int member_tok = make_static_member_tok(owner, name);
+    Sym *member = global_symbol_find(member_tok);
     if (!member || (member->type.t & VT_BTYPE) == VT_FUNC)
       cprime_error("specialization requires a declared static data member");
+    note_explicit_static_data_specialization(member_tok);
     add_ctype_tokens(definition, &result);
     tok_str_add(definition, owner);
     tok_str_add(definition, ':'); tok_str_add(definition, ':');

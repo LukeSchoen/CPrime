@@ -979,7 +979,10 @@ static int template_qualified_declarator_follows(TokenString *str, int index)
       continue;
     }
     return index < n && (str->str[index] == '(' || str->str[index] == '='
-                         || str->str[index] == '{' || str->str[index] == ';');
+                         || str->str[index] == '{' || str->str[index] == ';'
+                         /* A class definition may open a base-clause list
+                            (`struct C<T>::B : Base { ... }`). */
+                         || str->str[index] == ':');
   }
   return 0;
 }
@@ -1900,6 +1903,9 @@ static int skip_member_func_cv_qualifiers(void)
       }
       continue;
     }
+    else if (tok == TOK_RESTRICT1 || tok == TOK_RESTRICT2
+             || tok == TOK_RESTRICT3)
+      ; /* GNU restrict on a function declarator has no effect. */
     else
       break;
     next();
@@ -8645,10 +8651,6 @@ static void parse_template_decl(void)
     parse_template_type_args(&args);
     mangled_tok = make_template_inst_name_tok(td, &args);
 
-    if (template_lookup_inst(td, &args))
-      cprime_error("redefinition of template specialization '%s'",
-                   get_tok_str(name_tok, NULL));
-
     str = tok_str_alloc();
     tok_str_add(str, class_tok);
     tok_str_add(str, mangled_tok);
@@ -8688,11 +8690,39 @@ static void parse_template_decl(void)
     }
     tok_str_add(str, TOK_EOF);
 
-    note_template_inst(td, &args, mangled_tok);
-    /* A full specialization declares its own members and never inherits
-       out-of-class primary-template member definitions.  Keep that
-       distinction on the instance so later definitions skip this entry. */
-    td->inst_states[td->nb_inst - 1] |= 64;
+    /* A `template<> ... ;` declaration may be completed by a later
+       `template<> ... { }` definition of the same specialization; only a
+       second definition is a redefinition. Reuse the instance entry the
+       declaration created instead of appending a duplicate. */
+    {
+      int existing_inst = template_lookup_inst(td, &args);
+      int inst_index = -1, k;
+      if (existing_inst)
+      {
+        for (k = 0; k < td->nb_inst; ++k)
+          if (td->inst_name_toks[k] == existing_inst)
+          {
+            inst_index = k;
+            break;
+          }
+        if (saw_body && inst_index >= 0 && td->inst_states
+            && (td->inst_states[inst_index] & 32))
+          cprime_error("redefinition of template specialization '%s'",
+                       get_tok_str(name_tok, NULL));
+        mangled_tok = existing_inst;
+        if (saw_body && inst_index >= 0 && td->inst_states)
+          td->inst_states[inst_index] |= 32;
+      }
+      else
+      {
+        note_template_inst(td, &args, mangled_tok);
+        /* A full specialization declares its own members and never inherits
+           out-of-class primary-template member definitions.  Keep that
+           distinction on the instance so later definitions skip this entry. */
+        td->inst_states[td->nb_inst - 1] |= 64;
+        if (saw_body) td->inst_states[td->nb_inst - 1] |= 32;
+      }
+    }
     if (macro_stack)
     {
       queue_pending_template_spec_in_namespace(str, args.nb > 0 ? args.toks[0] : 0, td->namespace_tok);
@@ -8852,6 +8882,49 @@ static void parse_template_decl(void)
     next();
   }
   tok_str_add(str, TOK_EOF);
+
+  /* An out-of-class nested class template names its class with a qualified
+     id (`struct A::B { ... }` or `struct N::B { ... }`).  The scan above
+     records the *qualifier* as the name, so the definition would register a
+     template named after the qualifier instead of completing the nested
+     class template declared inside it (and the qualifier itself would be
+     shadowed as a template).  Rewrite the name to the interned member token
+     so the ordinary redeclaration path merges the body into the nested
+     template.  Dependent qualifiers (`C<T>::B`) keep the member-class
+     staging below and are left untouched. */
+  if (is_class && !is_alias && name_tok)
+  {
+    int i;
+    for (i = 1; i + 4 < str->len; ++i)
+    {
+      if (str->str[i] == name_tok
+          && (str->str[i - 1] == TOK_CLASS || str->str[i - 1] == TOK_STRUCT
+              || str->str[i - 1] == TOK_UNION)
+          && !is_namespace_tok(name_tok)
+          && str->str[i + 1] == ':' && str->str[i + 2] == ':'
+          && str->str[i + 3] >= TOK_UIDENT)
+      {
+        int j = i + 3, qualified;
+        qualified = name_tok;
+        do {
+          qualified = make_static_member_tok(qualified, str->str[j]);
+          if (!(j + 3 < str->len && str->str[j + 1] == ':'
+                && str->str[j + 2] == ':' && str->str[j + 3] >= TOK_UIDENT))
+            break;
+          j += 3;
+        } while (1);
+        /* The stored definition is replayed verbatim when the template is
+           instantiated, so replace the qualifier chain with the single
+           interned token. */
+        str->str[i] = qualified;
+        memmove(str->str + i + 1, str->str + j + 1,
+                (str->len - j - 1) * sizeof(str->str[0]));
+        str->len -= j - i;
+        name_tok = qualified;
+        break;
+      }
+    }
+  }
 
   if (!is_class && !is_alias)
     /* Resolve non-dependent class qualifiers before classifying a member
@@ -10633,6 +10706,21 @@ static int parse_one_template_type_arg(void)
     int name_tok = tok;
     TemplateDef *td;
     int static_const_tok = global_scope ? 0 : template_static_const_arg_tok(tok);
+    /* A type-trait builtin call is a value, not a type name; `bool B =
+       __has_nothrow_assign (void)` has to answer the trait here so the
+       argument parser does not look for a type called after the name.  One
+       token of lookahead distinguishes the call from a type name and the
+       rewind restores the stream exactly. */
+    if (cpp_type_trait_name_tok(name_tok))
+    {
+      next();
+      if (tok == '(')
+      {
+        unget_tok(name_tok);
+        return parse_template_constant_expression_arg();
+      }
+      unget_tok(name_tok);
+    }
     if (static_const_tok)
     {
       tok = static_const_tok;
@@ -13026,6 +13114,18 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
             }
           }
         }
+        /* A bound template-template parameter names the concrete class
+           template supplied as the argument.  Emit that template's name so
+           an elaborated use such as `friend class F<int>;` replays as a use
+           of the argument (e.g. `friend class data<int>;`), instead of
+           leaving the parameter token for the elaborated-type lookup. */
+        if (!nested_inst_tok)
+        {
+          int tpl_param = partial_pattern_template_parameter(td,
+                                                              nested_name_tok);
+          if (tpl_param >= 0 && tpl_param < args->nb)
+            nested_inst_tok = args->toks[tpl_param];
+        }
         /* C has one global tag namespace, so replaying an inner C++ type with
            its source spelling would make two outer specializations collide.
            Publish the nested tag under the concrete outer specialization and
@@ -13283,6 +13383,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
       int previous = 0, braces = 0;
       TokenString *typedef_str = tok_str_alloc();
       TokenString *alias_decl = tok_str_alloc();
+      int has_array_bound = 0;
 
       while (tok != TOK_EOF)
       {
@@ -13297,7 +13398,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
         else if (tok == TOK_LT) ++angles;
         else if (tok == TOK_GT) --angles;
         else if ((tok == TOK_SAR || tok == TOK_SHR) && angles >= 2) angles -= 2;
-        else if (tok == '[') ++brackets;
+        else if (tok == '[') { ++brackets; has_array_bound = 1; }
         else if (tok == ']') --brackets;
         else if (tok == '{') ++braces;
         else if (tok == '}') --braces;
@@ -13385,7 +13486,13 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
                                            nb_aliases, t));
         }
       }
-      if (new_alias_tok && !self_alias && !global_symbol_find(new_alias_tok)
+      /* An array typedef needs its element bound as a value, and the eager
+         alias parse runs with class_alias_layout_depth set, which forces a
+         referenced class-template specialization to stay an incomplete
+         forward declaration.  Defer the declaration to the ordinary class
+         replay so a bound such as `ffff<A>::value` can be materialized. */
+      if (new_alias_tok && !self_alias && !has_array_bound
+          && !global_symbol_find(new_alias_tok)
           && template_alias_decl_is_ready(alias_decl, new_alias_tok))
         compile_template_alias_decl_now(alias_decl);
       else
@@ -14075,6 +14182,7 @@ static void queue_demanded_template_static_data(void)
     for(instance=0;instance<owner->nb_inst;++instance) {
       int class_tok=owner->inst_name_toks[instance];
       int member_tok=make_static_member_tok(class_tok,definition->member_tok);
+      if(is_explicit_static_data_specialization(member_tok))continue;
       Sym *member=global_symbol_find(member_tok);
       int i,j;
       TokenString *replay;

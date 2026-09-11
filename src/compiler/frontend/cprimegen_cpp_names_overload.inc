@@ -2097,6 +2097,30 @@ static int call_arg_matches_param_type_standard(CType *param_type,
       return 0;
     return 1;
   }
+  /* A pointer-to-member argument converts to a pointer-to-member parameter
+     when the member types agree and the target owner is reachable from the
+     source owner. Ranking already accepts this conversion
+     (call_arg_match_rank_standard); the viability predicate must agree or the
+     ranked candidate is discarded before it can be selected and the call
+     falls through to the arity-only fallback. */
+  if (!is_reference_type(param_type))
+  {
+    CppMemberPointerType *target_member =
+      find_cpp_member_pointer_type(&param_value_type);
+    CppMemberPointerType *source_member =
+      find_cpp_member_pointer_type(&arg_value_type);
+    if (target_member && source_member
+        && is_compatible_unqualified_types(&target_member->member_type,
+                                           &source_member->member_type)
+        && !((source_member->member_type.t & ~target_member->member_type.t)
+             & (VT_CONSTANT | VT_VOLATILE)))
+    {
+      int offset;
+      if (target_member->owner_tok == source_member->owner_tok) return 1;
+      if (class_subobject_offset(target_member->owner_tok,
+                                 source_member->owner_tok, &offset)) return 1;
+    }
+  }
   /* Unscoped enums convert to arithmetic types, but an arithmetic value (or
      a different enum) does not implicitly convert to an enum parameter. */
   if (IS_ENUM(param_value_type.t) || IS_ENUM_VAL(param_value_type.t))
@@ -3541,9 +3565,8 @@ static void finish_cpp_member_func_call(Sym *func_type, int nb_args)
   finish_cpp_member_func_call_to(func_type, nb_args, 0, VT_LOCAL | VT_LVAL, 0);
 }
 
-static int try_call_cpp_binary_operator(int op)
+static int try_call_cpp_binary_operator_method(int method_tok)
 {
-  int method_tok;
   int instantiated_member_tok;
   Sym *func_sym, *func_type, *sa;
   Sym stable_func_type;
@@ -3552,7 +3575,6 @@ static int try_call_cpp_binary_operator(int op)
   SValue *saved_operand_vtop;
   int lhs_was_nonstruct;
 
-  method_tok = get_cpp_binary_operator_method_tok(op);
   if (!method_tok)
     return 0;
 
@@ -3656,6 +3678,12 @@ static int try_call_cpp_binary_operator(int op)
   vrott(3);
   finish_cpp_member_func_call(func_type, 2);
   return 1;
+}
+
+static int try_call_cpp_binary_operator(int op)
+{
+  return try_call_cpp_binary_operator_method(
+    get_cpp_binary_operator_method_tok(op));
 }
 
 /* Function and operator candidates combine ordinary lookup and the namespaces
@@ -3858,13 +3886,11 @@ static Sym *cpp_resolve_free_operator(int method_tok, CType *arguments, int coun
     find_current_namespace_tok(method_tok), arguments, count, NULL, 1);
 }
 
-static int try_call_cpp_free_binary_operator(int op)
+static int try_call_cpp_free_binary_operator_method(int method_tok)
 {
-  int method_tok;
   CType arg_types[2];
   Sym *func_sym, *func_type, *sa;
 
-  method_tok = get_cpp_binary_operator_method_tok(op);
   if (!method_tok)
     return 0;
 
@@ -3892,6 +3918,27 @@ static int try_call_cpp_free_binary_operator(int op)
   vrott(3);
   finish_cpp_member_func_call(func_type, 2);
   return 1;
+}
+
+static int try_call_cpp_free_binary_operator(int op)
+{
+  return try_call_cpp_free_binary_operator_method(
+    get_cpp_binary_operator_method_tok(op));
+}
+
+/* `a ->* b` and `a .* b` are overloadable. When the built-in member access
+   does not apply (the left operand is not a class pointer for `->*`, or not a
+   class object for `.*`), resolve a user-declared member or non-member
+   operator the same way the other binary operators are. The right operand has
+   not been parsed yet, so consume it here before resolving the call. */
+static int try_call_cpp_member_access_operator(int is_arrow)
+{
+  int method_tok = tok_alloc_const(is_arrow ? "operator->*" : "operator.*");
+  unary();
+  if ((vtop[-1].type.t & VT_BTYPE) == VT_STRUCT
+      && try_call_cpp_binary_operator_method(method_tok))
+    return 1;
+  return try_call_cpp_free_binary_operator_method(method_tok);
 }
 
 /* A unary operator can be declared as a non-member function with exactly one
@@ -4099,6 +4146,14 @@ static int try_call_cpp_bool_conversion_operator(void)
 
   if ((vtop->type.t & VT_BTYPE) != VT_STRUCT)
     return 0;
+  /* A pointer-to-member value converts to bool directly; the class-operand
+     paths above reach this once a conversion function has produced the
+     member pointer. */
+  if (find_cpp_member_pointer_type(&vtop->type))
+  {
+    CType boolean_type = { VT_BOOL, NULL };
+    return convert_cpp_member_pointer(&boolean_type, 0);
+  }
   func_sym = resolve_member_func_by_arg_count(&vtop->type, method_tok, 0);
   if (!func_sym)
     func_sym = resolve_member_func(&vtop->type, method_tok);

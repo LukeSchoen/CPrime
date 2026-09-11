@@ -237,12 +237,17 @@ static Sym *find_member_func_address_candidate(int class_tok, int member_tok,
   MemberFuncOverload *candidate;
   ClassBaseInfo *base;
   Sym *found = NULL;
+  int class_declares_name = 0;
   for (candidate = member_func_candidates(class_tok, member_tok);
        candidate; candidate = candidate->bucket_next)
   {
     Sym *selected;
     if (candidate->struct_tok != class_tok || candidate->method_tok != member_tok)
       continue;
+    /* A member declared in this class hides the same name imported from a
+       base ([class.member.lookup]); `&Derived::f` must not consider a base
+       overload once the derived class declares `f` itself. */
+    class_declares_name = 1;
     selected = global_symbol_find(candidate->mangled_tok);
     if (!selected) selected = sym_find(candidate->mangled_tok);
     if (!selected || !member_func_address_signature_matches(target, selected))
@@ -252,6 +257,8 @@ static Sym *find_member_func_address_candidate(int class_tok, int member_tok,
     found = selected;
     if (owner_tok) *owner_tok = class_tok;
   }
+  if (class_declares_name)
+    return found;
   for (base = class_base_candidates(class_tok); base; base = base->bucket_next)
   {
     Sym *base_found;
@@ -276,6 +283,7 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
   Sym *field, *function = NULL, *saved_local;
   VirtualMethodInfo *vm = NULL;
   int offset = 0, function_owner_tok = class_tok, function_owner_offset = 0;
+  int member_owner_tok = class_tok, function_owner_offset_known = 0;
   size_t location;
   uint64_t words[2] = {0, 0};
   if (!make_class_type_from_tok(&owner_type, class_tok))
@@ -286,7 +294,8 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
   function_owner_tok = class_tok;
   if (class_has_static_member_func(class_tok, member_tok))
     return 0;
-  field = find_field_try(&owner_type, member_tok, &offset);
+  field = find_field_try_with_owner(&owner_type, member_tok, &offset,
+                                    &member_owner_tok);
   if (field && is_reference_type(&field->type))
   {
     /* A reference member has no address of its own: `&(C::m)` must reach
@@ -297,12 +306,25 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
   if (field && (field->type.t & VT_BTYPE) != VT_FUNC)
   {
     member_type = field->type;
+    /* `&Derived::member` names the class that declares the member, so the
+       stored offset is relative to that class; the derived-to-base subobject
+       offset is re-applied by the ordinary member-pointer conversion. */
+    if (member_owner_tok != class_tok)
+    {
+      int owner_offset = 0;
+      if (class_nonvirtual_subobject_offset(class_tok, member_owner_tok,
+                                            &owner_offset))
+        offset -= owner_offset;
+      else
+        member_owner_tok = class_tok;
+    }
     words[0] = (uint64_t)offset + 1;
   }
   else
   {
     Sym *prototype;
     MemberFuncOverload *candidate;
+    member_owner_tok = class_tok;
     if (cpp_member_address_target
         && class_or_inst_has_member_template_name(class_tok, member_tok)) {
       CppMemberPointerType *target = find_cpp_member_pointer_type(cpp_member_address_target);
@@ -337,10 +359,19 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
       function = resolve_member_func(&owner_type, member_tok);
     if (!function || (function->type.t & VT_BTYPE) != VT_FUNC)
       return 0;
-    if (function_owner_tok != class_tok
-        && !class_subobject_offset(class_tok, function_owner_tok,
-                                   &function_owner_offset))
-      function_owner_offset = 0;
+    if (function_owner_tok == class_tok)
+      function_owner_offset_known = 1;
+    else if (class_nonvirtual_subobject_offset(class_tok, function_owner_tok,
+                                               &function_owner_offset))
+      function_owner_offset_known = 1;
+    else
+    {
+      /* A virtual base has no constant offset; the address keeps the
+         qualifying class as its owner, as before. */
+      if (!class_subobject_offset(class_tok, function_owner_tok,
+                                  &function_owner_offset))
+        function_owner_offset = 0;
+    }
     member_type = function->type;
     if (member_type.ref->next
         && (member_type.ref->next->type.t & VT_BTYPE) == VT_PTR)
@@ -366,10 +397,36 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
       words[0] = ((uint64_t)(vptr_offset - root_offset) << 32) | (unsigned)vm->slot;
       words[1] = (uint64_t)root_offset * 2 + 1;
     }
-    else if (function_owner_offset)
+    else if (function_owner_offset_known)
+    {
+      /* The pointer names the declaring class, so its adjustment is relative
+         to that class rather than to the qualified class. */
+      member_owner_tok = function_owner_tok;
+      words[1] = 0;
+    }
+    else
       words[1] = (uint64_t)function_owner_offset * 2;
   }
-  mk_cpp_member_pointer(&member_type, class_tok);
+  if (cpp_member_address_target && !(words[1] & 1))
+  {
+    /* The address is about to be converted to the contextual member-pointer
+       type.  A global constant initializer cannot run the adjustment code
+       that conversion would emit, so fold the subobject offset into the
+       stored words here and let the conversion become an identity. */
+    CppMemberPointerType *target =
+      find_cpp_member_pointer_type(cpp_member_address_target);
+    int adjust;
+    if (target
+        && is_compatible_unqualified_types(&target->member_type, &member_type)
+        && !((member_type.t & ~target->member_type.t)
+             & (VT_CONSTANT | VT_VOLATILE))
+        && class_subobject_offset(target->owner_tok, member_owner_tok, &adjust))
+    {
+      words[1] = (uint64_t)((long long)words[1] + (long long)adjust * 2);
+      member_owner_tok = target->owner_tok;
+    }
+  }
+  mk_cpp_member_pointer(&member_type, member_owner_tok);
   if (NODATA_WANTED) {
     /* The expression is a constant prvalue. There is no backing object in a
        no-output probe, so an lvalue placeholder would incorrectly reject
@@ -582,6 +639,24 @@ static void bind_cpp_member_pointer(int is_arrow)
   Sym *prototype, *receiver, *saved_local;
   int receiver_slot, member_slot, target_slot, skip_virtual;
   int object_cv;
+  {
+    /* The built-in operator applies to a class object (`.*`) or a class
+       pointer (`->*`). Any other left operand selects an overloaded
+       operator, which owns the right operand's parse. */
+    int left_bt = vtop->type.t & VT_BTYPE;
+    int builtin_applies = is_arrow
+      ? (left_bt == VT_PTR
+         && (pointed_type(&vtop->type)->t & VT_BTYPE) == VT_STRUCT)
+      : left_bt == VT_STRUCT;
+    if (!builtin_applies)
+    {
+      if (is_cpp_translation_unit()
+          && try_call_cpp_member_access_operator(is_arrow))
+        return;
+      cprime_error(is_arrow ? "class pointer required for ->* operator"
+                            : "object required for .* operator");
+    }
+  }
   if (is_arrow) try_cpp_pointer_conversion(0);
   if (!is_arrow)
   {

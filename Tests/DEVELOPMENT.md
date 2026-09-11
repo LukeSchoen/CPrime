@@ -21,9 +21,19 @@ failure does not authorize switching compilers. Keep CPC as the default host.
    `build/pedantic-gcc-*/results.jsonl`). Read the cluster summary and exact
    paths from `build/compiler-bug-triage.txt`/`.json`; keep full diagnostics in
    the result file rather than reproducing inventories in notes or chat.
+   When selecting the next cluster, prefer the one whose first diagnostic many
+   rows share over a feature header, and land several small independent repairs
+   per cycle; the measured per-cycle yield, the current row buckets and the
+   cluster order are in `task.md`'s yield analysis.
 5. **Only at the end of a large change that needs deeper verification**, run
    the relevant `tests_pedantic.cmd -Group language|gcc|checks|performance` group or the
    complete pedantic entry point. Avoid pedantic sweeps during routine fixes.
+
+Keep each session to one cluster from `task.md`: reproduce, fix, promote to
+pedantic, verify with one fast tier run, update the state line, exit. Sessions
+are expected to be short and are relaunched fresh; a landed small fix plus an
+accurate state line beats a long session that runs out of context. Batch two or
+three already-narrow independent fixes in one session, never a second cluster.
 
 Keep compilation and builds serial. Language compiler/program invocations and
 fast standalone gates have five-second ceilings. Pedantic standalone gate totals

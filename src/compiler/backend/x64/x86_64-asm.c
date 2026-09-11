@@ -1339,6 +1339,11 @@ static inline int constraint_priority(const char *str)
     case 'g':
       pr = 4;
       break;
+    case ',':
+      /* Multiple alternative constraints are separated by commas
+         ("+m,r").  The allocator uses the first viable alternative, so the
+         priority scan ends with it. */
+      return priority;
     default:
       cprime_error("unknown constraint '%c'", c);
       pr = 0;

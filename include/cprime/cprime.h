@@ -381,7 +381,8 @@ struct SymAttr {
     cpp_mutable_field : 1,
     cpp_trivial_construction : 1,
     cpp_trivial_destruction : 1,
-    cpp_lexical_constant : 1;
+    cpp_lexical_constant : 1,
+    vector : 1;
 };
 
 struct FuncAttr {
@@ -569,6 +570,7 @@ typedef struct AttributeDef {
     int asm_label;
     int static_member_owner;
     char attr_mode;
+    int vector_size;
     char is_constexpr;
     char is_global_declarator;
 } AttributeDef;
@@ -579,6 +581,7 @@ typedef struct InlineFunc {
     CType type;
     int preserve_type;
     int stable_heap;
+    int expand_at_call;
     char filename[1];
 } InlineFunc;
 

@@ -38,13 +38,21 @@
 #define __UINTPTR_TYPE__ unsigned __PTRDIFF_TYPE__
 #define __INTPTR_TYPE__ __PTRDIFF_TYPE__
 #define __INT32_TYPE__ int
-#define __has_feature(x) 0
-#define __has_extension(x) 0
 #define __assume(x) ((void)0)
 #define _Nonnull
 #define _Nullable
 #define _Nullable_result
 #define _Null_unspecified
+
+/* GCC answers the C++/C attribute queries from the same attribute table as
+   __has_attribute(), so the aliases keep one source of truth. Both spellings
+   are visible in either language mode, as the GCC preprocessor does. */
+#define __has_cpp_attribute(x) __has_attribute(x)
+#define __has_c_attribute(x) __has_attribute(x)
+
+/* Compile-time execution charset names. */
+#define __GNUC_EXECUTION_CHARSET_NAME "UTF-8"
+#define __GNUC_WIDE_EXECUTION_CHARSET_NAME "UTF-32LE"
 
 
 #ifndef __CPRIME_PP__

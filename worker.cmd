@@ -2,73 +2,93 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 rem Run from the repository root that contains this script.
+rem
+rem Cycle pacing is work driven: codex runs in the foreground and the next
+rem cycle starts as soon as it exits. There is no fixed sleep, and a running
+rem agent is never killed. The 45-minute budget is enforced by task.md.
+rem Run one worker per working tree; each cycle waits for its own codex.
+rem
+rem Optional environment overrides:
+rem   DONE             stop marker file (default done.x)
+rem   CODEX_EXE        codex executable (default codex.exe)
+rem   TASK_PROMPT      prompt passed to codex exec (default "implement task.md")
+rem   MAX_CYCLES       stop after N cycles, 0 = unlimited (default 0)
+rem   FAIL_EXIT_LIMIT  stop after N consecutive nonzero codex exits (default 3)
 cd /d "%~dp0"
 
 if not defined DONE set "DONE=done.x"
 if not defined CODEX_EXE set "CODEX_EXE=codex.exe"
 if not defined TASK_PROMPT set "TASK_PROMPT=implement task.md"
-if not defined WAIT_MINUTES set "WAIT_MINUTES=45"
+if not defined MAX_CYCLES set "MAX_CYCLES=0"
+if not defined FAIL_EXIT_LIMIT set "FAIL_EXIT_LIMIT=3"
+set "CYCLE_LOG=build\worker-cycle.log"
 set "CYCLE=0"
+set "FAILS=0"
+
+if not exist build mkdir build
+git rev-parse --git-dir >nul 2>&1
+if errorlevel 1 (
+    echo [%DATE% %TIME%] not a git repository: %CD%
+    exit /b 1
+)
 
 echo [%DATE% %TIME%] ==========================================================
 echo [%DATE% %TIME%] worker starting
 echo [%DATE% %TIME%] directory    : %CD%
 echo [%DATE% %TIME%] task prompt  : %TASK_PROMPT%
-echo [%DATE% %TIME%] cycle length : %WAIT_MINUTES% minute^(s^)
+echo [%DATE% %TIME%] cycle log    : %CYCLE_LOG%
 echo [%DATE% %TIME%] stop marker  : %DONE% ^(create this file to stop after the current cycle^)
+echo [%DATE% %TIME%] pacing       : next cycle starts when codex exits; no fixed wait
 echo [%DATE% %TIME%] ==========================================================
 
 :cycle
-set /a CYCLE+=1 >nul
-echo.
-echo [%DATE% %TIME%] ---------- cycle !CYCLE! starting ----------
 call :commit_work
 if exist "%DONE%" (
     echo [%DATE% %TIME%] !DONE! found, stopping after !CYCLE! cycle^(s^).
     exit /b 0
 )
-call :clear_codex
-call :start_codex
-call :wait_cycle
+set /a CYCLE+=1 >nul
+if %MAX_CYCLES% gtr 0 if !CYCLE! gtr %MAX_CYCLES% (
+    echo [%DATE% %TIME%] cycle limit %MAX_CYCLES% reached, stopping.
+    exit /b 0
+)
+echo.
+echo [%DATE% %TIME%] ---------- cycle !CYCLE! starting ----------
+call :run_codex
+if !FAILS! geq %FAIL_EXIT_LIMIT% (
+    echo [%DATE% %TIME%] codex exited nonzero !FAILS! times in a row; inspect %CYCLE_LOG% and stop.
+    echo [%DATE% %TIME%] ---------- stopping after !CYCLE! cycle^(s^) ----------
+    exit /b 1
+)
 echo [%DATE% %TIME%] ---------- cycle !CYCLE! finished, looping ----------
 goto cycle
 
 :commit_work
-echo [%DATE% %TIME%] committing any work left from the previous cycle...
 git add -A
-git commit -m "work"
+git diff --cached --quiet >nul 2>&1
 if errorlevel 1 (
-    echo [%DATE% %TIME%] nothing committed ^(working tree clean or no repository^).
-) else (
-    for /f "delims=" %%H in ('git rev-parse --short HEAD 2^>nul') do set "HEAD=%%H"
-    echo [%DATE% %TIME%] committed work as !HEAD!.
-)
-exit /b 0
-
-:clear_codex
-rem Terminate only Codex processes launched for this task and their child trees.
-set "KILLED=0"
-for /f "tokens=2 delims==" %%P in ('%SystemRoot%\System32\wbem\WMIC.exe process where "name='codex.exe' and CommandLine like '%%implement task.md%%'" get ProcessId /value 2^>nul ^| find "="') do (
-    if not "%%P"=="" (
-        echo [%DATE% %TIME%] stopping previous codex process %%P
-        taskkill /PID %%P /T /F
-        set /a KILLED+=1 >nul
+    git commit -m "work cycle !CYCLE! %DATE%" >nul 2>&1
+    if errorlevel 1 (
+        echo [%DATE% %TIME%] commit failed; leaving the working tree as it is.
+    ) else (
+        for /f "delims=" %%H in ('git rev-parse --short HEAD 2^>nul') do set "HEAD=%%H"
+        echo [%DATE% %TIME%] committed work as !HEAD!.
     )
+) else (
+    echo [%DATE% %TIME%] nothing to commit ^(working tree clean^).
 )
-if "!KILLED!"=="0" echo [%DATE% %TIME%] no previous codex process was running.
 exit /b 0
 
-:start_codex
-echo [%DATE% %TIME%] launching codex: %CODEX_EXE% exec "%TASK_PROMPT%"
-start "" /B "%ComSpec%" /d /c ""%CODEX_EXE%" exec "%TASK_PROMPT%" >nul 2>&1"
-echo [%DATE% %TIME%] codex running in the background ^(its own output is suppressed^).
-exit /b 0
-
-:wait_cycle
-echo [%DATE% %TIME%] waiting %WAIT_MINUTES% minute^(s^), progress prints once a minute
-for /l %%M in (1,1,%WAIT_MINUTES%) do (
-    %SystemRoot%\System32\ping.exe -n 61 127.0.0.1 >nul 2>&1
-    echo [%DATE% %TIME%] cycle !CYCLE!: waited %%M of %WAIT_MINUTES% minute^(s^)
+:run_codex
+echo [%DATE% %TIME%] running codex: %CODEX_EXE% exec "%TASK_PROMPT%"
+rem `call` keeps control flow intact when CODEX_EXE is a wrapper script
+rem (.cmd/.bat); it is harmless for codex.exe itself.
+call "%CODEX_EXE%" exec "%TASK_PROMPT%" > "%CYCLE_LOG%" 2>&1
+set "RC=!ERRORLEVEL!"
+if "!RC!"=="0" (
+    set "FAILS=0"
+) else (
+    set /a FAILS+=1 >nul
+    echo [%DATE% %TIME%] codex exited with %RC%; consecutive failure !FAILS! of %FAIL_EXIT_LIMIT%.
 )
-echo [%DATE% %TIME%] wait complete
 exit /b 0

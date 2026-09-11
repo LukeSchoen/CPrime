@@ -498,7 +498,7 @@ static void cpp_eh_data_pointer(Sym *owner, unsigned member_offset, Sym *target)
             R_X86_64_64, 0);
 }
 
-static Sym *cpp_eh_type_descriptor(CType *original)
+static Sym *cpp_eh_type_descriptor(CType *original, int nested)
 {
   CType type = *original;
   CpcEhType descriptor;
@@ -507,21 +507,30 @@ static Sym *cpp_eh_type_descriptor(CType *original)
   CppEhBaseEntry *bases = NULL;
   Sym **base_types = NULL;
   int base_count = 0, i;
-  int align;
+  int align, complete;
   if (is_reference_type(&type)) type = *pointed_type(&type);
   memset(&descriptor, 0, sizeof descriptor);
   descriptor.qualifiers = ((type.t & VT_CONSTANT) ? CPC_EH_CONST : 0)
                         | ((type.t & VT_VOLATILE) ? CPC_EH_VOLATILE : 0);
   type.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE);
   descriptor.size = type_size(&type, &align);
-  if ((int)descriptor.size < 0) cprime_error("exception type must be complete");
+  complete = (int)descriptor.size >= 0;
+  if (!complete)
+  {
+    /* A pointer chain may name an incomplete class: matching compares the
+       pointed-to type's identity and qualifiers, never its size, and such a
+       class has no reachable bases. Only the thrown/handled type itself must
+       be complete. */
+    if (!nested) cprime_error("exception type must be complete");
+    descriptor.size = 0;
+  }
   descriptor.kind = (type.t & VT_BTYPE) == VT_STRUCT ? CPC_EH_CLASS
       : (type.t & VT_BTYPE) == VT_PTR ? CPC_EH_POINTER
       : (type.t & VT_BTYPE) == VT_VOID ? CPC_EH_VOID
       : (type.t & VT_BTYPE) == VT_FUNC ? CPC_EH_FUNCTION
       : ((type.t & VT_BTYPE) == VT_NULLPTR) ? CPC_EH_NULLPTR : CPC_EH_SCALAR;
-  if (descriptor.kind == CPC_EH_POINTER) pointee = cpp_eh_type_descriptor(pointed_type(&type));
-  if (descriptor.kind == CPC_EH_CLASS) {
+  if (descriptor.kind == CPC_EH_POINTER) pointee = cpp_eh_type_descriptor(pointed_type(&type), 1);
+  if (descriptor.kind == CPC_EH_CLASS && complete) {
     int source_class = get_struct_type_name_tok(&type);
     cpp_eh_collect_bases(source_class, &bases, &base_count);
     for (i = 0; i < base_count; ++i) {
@@ -533,7 +542,7 @@ static Sym *cpp_eh_type_descriptor(CType *original)
                                       &bases[i].offset)) continue;
       if (!make_class_type_from_tok(&base_type, bases[i].class_tok)) continue;
       base_types = cprime_realloc(base_types, (descriptor.base_count + 1) * sizeof(*base_types));
-      base_types[descriptor.base_count] = cpp_eh_type_descriptor(&base_type);
+      base_types[descriptor.base_count] = cpp_eh_type_descriptor(&base_type, 0);
       bases[descriptor.base_count++] = bases[i];
     }
     if (descriptor.base_count) {
@@ -629,7 +638,7 @@ static void cpp_eh_throw_expression(void)
   vset(&pointer_type, VT_LOCAL | VT_LVAL, source_pointer_slot);
   source = *vtop--;
 allocate_exception:
-  descriptor = cpp_eh_type_descriptor(&type);
+  descriptor = cpp_eh_type_descriptor(&type, 0);
   destructor = resolve_autodtor_func(&type);
   cpp_eh_push_helper("__cpc_eh_allocate");
   vpushsym(&char_pointer_type, descriptor);
@@ -1174,7 +1183,7 @@ static void cpp_eh_parse_try(void)
       entry->data.landing_rva = landing;
       entry->data.cleanup_stop = cleanup_stop;
       entry->data.context_offset = context_offset;
-      if (!catch_all) entry->type = cpp_eh_type_descriptor(&caught_type);
+      if (!catch_all) entry->type = cpp_eh_type_descriptor(&caught_type, 0);
     }
     context_symbol = sym_push(anon_sym++, &char_pointer_type, VT_LOCAL | VT_LVAL, context_offset);
     if (!catch_all && !reference && (caught_type.t & VT_BTYPE) == VT_STRUCT) {

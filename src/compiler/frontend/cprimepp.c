@@ -34,6 +34,10 @@ static TokenString unget_buf;
 static unsigned char isidnum_table[256 - CH_EOF];
 static int pp_debug_tok, pp_debug_symv;
 static int pp_counter;
+/* Set while preprocessing a translation unit with a C++ source suffix; the
+   language-dependent builtin spellings below follow the same rule as the
+   __cplusplus predefine. */
+static int cprime_cpp_mode;
 static void tok_print(const int *str, const char *msg, ...);
 
 static void next_nomacro(void);
@@ -1777,25 +1781,165 @@ resolved_include_candidate:
   return 1;
 }
 
+static int cprime_name_in_list(const char *name, const char *const *names,
+                               unsigned count);
+
+/* Attribute spellings reported through __has_attribute(). The queried name
+   is macro substituted before the query is answered, so the answer has to
+   come from the spelling: names without a keyword token (alloc_size,
+   deprecated, musttail) arrive as ordinary identifiers. The list mirrors the
+   attributes the frontend parses or harmlessly ignores. */
+static const char *const cprime_attribute_names[] =
+{
+  "__always_inline__", "__const__", "__constructor__", "__destructor__",
+  "__malloc__", "__mode__", "__noinline__", "__noreturn__", "__packed__",
+  "__pure__", "__unused__", "__used__", "__visibility__",
+  "__warn_unused_result__",
+  "aligned", "alias", "alloc_align", "alloc_size", "always_inline",
+  "cleanup", "cold", "const", "constructor", "deprecated", "destructor",
+  "error", "flatten", "format", "format_arg", "gnu_inline", "hot", "leaf",
+  "malloc", "mode", "musttail", "noinline", "nonnull", "noreturn", "nothrow",
+  "packed", "pure", "returns_nonnull", "section", "sentinel", "unused",
+  "used", "visibility", "warning", "warn_unused_result", "weak",
+};
+
 static int cprime_has_attribute(int attribute)
 {
-  switch (attribute)
-  {
-  case TOK_PACKED1: case TOK_PACKED2:
-  case TOK_ALIGNED1: case TOK_ALIGNED2:
-  case TOK_CLEANUP1: case TOK_CLEANUP2:
-  case TOK_SECTION1: case TOK_SECTION2:
-  case TOK_WEAK1: case TOK_WEAK2:
-  case TOK_ALIAS1: case TOK_ALIAS2:
-  case TOK_CONSTRUCTOR1: case TOK_CONSTRUCTOR2:
-  case TOK_DESTRUCTOR1: case TOK_DESTRUCTOR2:
-  case TOK_NORETURN1: case TOK_NORETURN2:
-  case TOK_UNUSED1: case TOK_UNUSED2:
-  case TOK_NOINLINE: case TOK_NOINLINE2:
-    return 1;
-  default:
-    return 0;
-  }
+  return cprime_name_in_list(get_tok_str(attribute, NULL),
+                             cprime_attribute_names,
+                             sizeof(cprime_attribute_names)
+                               / sizeof(cprime_attribute_names[0]));
+}
+
+/* Names GCC answers __has_builtin() for in both languages. Some are declared
+   through cprimedefs.h rather than through a compiler token, and the library
+   aliases (abs, isalpha) have no __builtin_ spelling. */
+static const char *const cprime_common_builtin_names[] =
+{
+  "abs",
+  "isalpha",
+  "__builtin_abs",
+  "__builtin_isalpha",
+  "__builtin__Exit",
+  "__builtin_alloca",
+  "__builtin_apply",
+  "__builtin_bswap16",
+  "__builtin_bswap32",
+  "__builtin_frob_return_addr",
+  "__builtin_has_attribute",
+  "__builtin_ia32_pause",
+  "__builtin_inf",
+  "__builtin_longjmp",
+  "__builtin_nan",
+  "__builtin_object_size",
+  "__builtin_return",
+  "__builtin_setjmp",
+  "__builtin_trap",
+  "__builtin_add_overflow",
+  "__builtin_add_overflow_p",
+  "__builtin_sadd_overflow",
+  "__sync_add_and_fetch",
+  "__sync_and_and_fetch",
+  "__sync_bool_compare_and_swap",
+  "__sync_fetch_and_add",
+  "__sync_fetch_and_and",
+  "__sync_fetch_and_nand",
+  "__sync_fetch_and_or",
+  "__sync_fetch_and_sub",
+  "__sync_fetch_and_xor",
+  "__sync_lock_release",
+  "__sync_lock_test_and_set",
+  "__sync_nand_and_fetch",
+  "__sync_or_and_fetch",
+  "__sync_sub_and_fetch",
+  "__sync_synchronize",
+  "__sync_val_compare_and_swap",
+  "__sync_xor_and_fetch",
+};
+
+/* C++-only spellings. GCC answers __has_builtin() for the standard trait
+   builtins and for the cast helpers only while compiling C++. */
+static const char *const cprime_cpp_builtin_names[] =
+{
+  "__add_lvalue_reference",
+  "__add_pointer",
+  "__add_rvalue_reference",
+  "__array_rank",
+  "__decay",
+  "__remove_all_extents",
+  "__remove_cv",
+  "__remove_cvref",
+  "__remove_extent",
+  "__remove_pointer",
+  "__remove_reference",
+  "__underlying_type",
+  "__reference_constructs_from_temporary",
+  "__reference_converts_from_temporary",
+  "__has_nothrow_assign",
+  "__has_nothrow_constructor",
+  "__has_nothrow_copy",
+  "__has_trivial_assign",
+  "__has_trivial_constructor",
+  "__has_trivial_copy",
+  "__has_trivial_destructor",
+  "__has_unique_object_representations",
+  "__has_virtual_destructor",
+  "__is_abstract",
+  "__is_aggregate",
+  "__is_array",
+  "__is_assignable",
+  "__is_base_of",
+  "__is_bounded_array",
+  "__is_class",
+  "__is_const",
+  "__is_constructible",
+  "__is_convertible",
+  "__is_empty",
+  "__is_enum",
+  "__is_final",
+  "__is_function",
+  "__is_invocable",
+  "__is_layout_compatible",
+  "__is_literal_type",
+  "__is_member_function_pointer",
+  "__is_member_object_pointer",
+  "__is_member_pointer",
+  "__is_nothrow_assignable",
+  "__is_nothrow_constructible",
+  "__is_nothrow_convertible",
+  "__is_nothrow_invocable",
+  "__is_object",
+  "__is_pod",
+  "__is_pointer",
+  "__is_pointer_interconvertible_base_of",
+  "__is_polymorphic",
+  "__is_reference",
+  "__is_same",
+  "__is_same_as",
+  "__is_scoped_enum",
+  "__is_standard_layout",
+  "__is_trivial",
+  "__is_trivially_assignable",
+  "__is_trivially_constructible",
+  "__is_trivially_copyable",
+  "__is_unbounded_array",
+  "__is_union",
+  "__is_volatile",
+  "__builtin_bit_cast",
+  "__builtin_is_constant_evaluated",
+  "__builtin_is_corresponding_member",
+  "__builtin_is_pointer_interconvertible_with_class",
+  "__builtin_source_location",
+};
+
+static int cprime_name_in_list(const char *name, const char *const *names,
+                               unsigned count)
+{
+  unsigned i;
+  for (i = 0; i < count; ++i)
+    if (!strcmp(name, names[i]))
+      return 1;
+  return 0;
 }
 
 static int cprime_has_builtin(int builtin)
@@ -1803,10 +1947,18 @@ static int cprime_has_builtin(int builtin)
   const char *name = get_tok_str(builtin, NULL);
   /* These tokens have compiler expression handlers. Macro-backed varargs
      operations are also available during preprocessing-only queries. */
+  if (builtin == TOK_builtin_types_compatible_p)
+    return !cprime_cpp_mode;
+  if (builtin == TOK_builtin_addressof || builtin == TOK_builtin_launder)
+    return cprime_cpp_mode;
   if ((builtin >= TOK_builtin_types_compatible_p && builtin <= TOK_builtin_unreachable)
-      || (builtin >= TOK___atomic_store && builtin <= TOK___atomic_compare_exchange_n)
-      || builtin == TOK_builtin_addressof || builtin == TOK_builtin_launder
-      || builtin == TOK_builtin_bit_cast)
+      || (builtin >= TOK___atomic_store && builtin <= TOK___atomic_compare_exchange_n))
+    return 1;
+  if (cprime_name_in_list(name, cprime_common_builtin_names,
+                          sizeof(cprime_common_builtin_names) / sizeof(cprime_common_builtin_names[0]))
+      || (cprime_cpp_mode
+          && cprime_name_in_list(name, cprime_cpp_builtin_names,
+                                 sizeof(cprime_cpp_builtin_names) / sizeof(cprime_cpp_builtin_names[0]))))
     return 1;
   if (!strcmp(name, "__builtin_va_start") || !strcmp(name, "__builtin_va_arg")
       || !strcmp(name, "__builtin_va_end") || !strcmp(name, "__builtin_va_copy"))
@@ -1814,8 +1966,107 @@ static int cprime_has_builtin(int builtin)
   return !strncmp(name, "__builtin_", 10) && define_find(builtin) != NULL;
 }
 
+/* Names GCC answers __has_feature()/__has_extension() for in every language. */
+static const char *const cprime_common_feature_names[] =
+{
+  "__enumerator_attributes__",
+  "__attribute_deprecated_with_message__",
+  "__attribute_unavailable_with_message__",
+  "__tls__",
+  "enumerator_attributes",
+  "attribute_deprecated_with_message",
+  "attribute_unavailable_with_message",
+  "tls",
+};
+
+/* Spellings GCC reports as an extension only. */
+static const char *const cprime_extension_feature_names[] =
+{
+  "__gnu_asm_goto_with_outputs__",
+  "__gnu_asm_goto_with_outputs_full__",
+  "gnu_asm_goto_with_outputs",
+  "gnu_asm_goto_with_outputs_full",
+};
+
+/* C++ language features. cxx_exceptions and cxx_rtti stay unknown because the
+   __cpp_exceptions/__cpp_rtti predefines are not emitted. */
+static const char *const cprime_cpp_feature_names[] =
+{
+  "cxx_access_control_sfinae",
+  "cxx_aggregate_nsdmi",
+  "cxx_alias_templates",
+  "cxx_alignas",
+  "cxx_alignof",
+  "cxx_attributes",
+  "cxx_auto_type",
+  "cxx_binary_literals",
+  "cxx_constexpr",
+  "cxx_decltype",
+  "cxx_decltype_auto",
+  "cxx_decltype_incomplete_return_types",
+  "cxx_default_function_template_args",
+  "cxx_defaulted_functions",
+  "cxx_delegating_constructors",
+  "cxx_deleted_functions",
+  "cxx_explicit_conversions",
+  "cxx_generalized_initializers",
+  "cxx_generic_lambdas",
+  "cxx_implicit_moves",
+  "cxx_inheriting_constructors",
+  "cxx_init_captures",
+  "cxx_inline_namespaces",
+  "cxx_lambdas",
+  "cxx_local_type_template_args",
+  "cxx_noexcept",
+  "cxx_nonstatic_member_init",
+  "cxx_nullptr",
+  "cxx_override_control",
+  "cxx_range_for",
+  "cxx_raw_string_literals",
+  "cxx_reference_qualified_functions",
+  "cxx_relaxed_constexpr",
+  "cxx_return_type_deduction",
+  "cxx_rvalue_references",
+  "cxx_static_assert",
+  "cxx_strong_enums",
+  "cxx_thread_local",
+  "cxx_trailing_return",
+  "cxx_unicode_literals",
+  "cxx_unrestricted_unions",
+  "cxx_user_literals",
+  "cxx_variable_templates",
+  "cxx_variadic_templates",
+};
+
+static int cprime_has_feature(const char *name, int extension)
+{
+  if (cprime_name_in_list(name, cprime_common_feature_names,
+                          sizeof(cprime_common_feature_names) / sizeof(cprime_common_feature_names[0])))
+    return 1;
+  if (cprime_name_in_list(name, cprime_extension_feature_names,
+                          sizeof(cprime_extension_feature_names) / sizeof(cprime_extension_feature_names[0])))
+    return extension;
+  if (cprime_cpp_mode
+      && cprime_name_in_list(name, cprime_cpp_feature_names,
+                             sizeof(cprime_cpp_feature_names) / sizeof(cprime_cpp_feature_names[0])))
+    return 1;
+  return 0;
+}
+
+/* 0 = attribute, 1 = builtin, 2 = feature, 3 = extension. */
+static int cprime_capability_kind(int t)
+{
+  switch (t)
+  {
+  case TOK___HAS_ATTRIBUTE: return 0;
+  case TOK___HAS_BUILTIN: return 1;
+  case TOK___HAS_FEATURE: return 2;
+  default: return 3;
+  }
+}
+
 /* Leave the closing parenthesis for the caller's normal token advance. */
-static int cprime_capability_query(int builtin_query)
+static int cprime_capability_query(int kind)
 {
   int name, supported_scope = 1;
   next();
@@ -1824,9 +2075,10 @@ static int cprime_capability_query(int builtin_query)
   if (tok < TOK_IDENT) expect("capability name");
   name = tok;
   next();
-  if (!builtin_query && tok == ':') {
+  if (kind < 2 && tok == ':') {
     const char *scope = get_tok_str(name, NULL);
-    supported_scope = !strcmp(scope, "gnu") || !strcmp(scope, "__gnu__");
+    supported_scope = !strcmp(scope, "gnu") || !strcmp(scope, "__gnu__")
+      || !strcmp(scope, "clang") || !strcmp(scope, "__clang__");
     next();
     if (tok != ':') expect("'::'");
     next();
@@ -1835,7 +2087,11 @@ static int cprime_capability_query(int builtin_query)
     next();
   }
   if (tok != ')') expect("')'");
-  return supported_scope && (builtin_query ? cprime_has_builtin(name) : cprime_has_attribute(name));
+  if (kind == 0)
+    return supported_scope && cprime_has_attribute(name);
+  if (kind == 1)
+    return supported_scope && cprime_has_builtin(name);
+  return cprime_has_feature(get_tok_str(name, NULL), kind == 3);
 }
 
 // Eval An Expression For #If/#Elif
@@ -1872,10 +2128,11 @@ static int expr_preprocess(CPRIMEState *s1)
       if (s1->run_test)
         maybe_run_test(s1);
       c = 0;
-      if (define_find(tok)
+     if (define_find(tok)
           || tok == TOK___HAS_INCLUDE
           || tok == TOK___HAS_INCLUDE_NEXT
-          || tok == TOK___HAS_ATTRIBUTE || tok == TOK___HAS_BUILTIN)
+          || tok == TOK___HAS_ATTRIBUTE || tok == TOK___HAS_BUILTIN
+          || tok == TOK___HAS_FEATURE || tok == TOK___HAS_EXTENSION)
         c = 1;
       if (t == '(')
       {
@@ -1885,9 +2142,10 @@ static int expr_preprocess(CPRIMEState *s1)
       }
       goto c_number;
     }
-    else if (tok == TOK___HAS_ATTRIBUTE || tok == TOK___HAS_BUILTIN)
+    else if (tok == TOK___HAS_ATTRIBUTE || tok == TOK___HAS_BUILTIN
+             || tok == TOK___HAS_FEATURE || tok == TOK___HAS_EXTENSION)
     {
-      c = cprime_capability_query(tok == TOK___HAS_BUILTIN);
+      c = cprime_capability_query(cprime_capability_kind(tok));
       goto c_number;
     }
     else if (tok == TOK___HAS_INCLUDE ||
@@ -2318,7 +2576,8 @@ do_ifdef:
     if (define_find(tok)
         || tok == TOK___HAS_INCLUDE
         || tok == TOK___HAS_INCLUDE_NEXT
-          || tok == TOK___HAS_ATTRIBUTE || tok == TOK___HAS_BUILTIN)
+          || tok == TOK___HAS_ATTRIBUTE || tok == TOK___HAS_BUILTIN
+          || tok == TOK___HAS_FEATURE || tok == TOK___HAS_EXTENSION)
       c ^= 1;
     next_nomacro();
     if (elif_directive) {
@@ -4410,6 +4669,7 @@ static void cprime_predefs(CPRIMEState *s1, CString *cs, int is_asm)
   if (!is_asm)
   {
     putdef(cs, "__STDC__");
+    cprime_cpp_mode = cprimepp_is_cpp_filename(file->filename);
     if (cprimepp_is_cpp_filename(file->filename))
     {
       cstr_cat(cs, "#define __CPRIME_CPP__ 1\n", -1);
