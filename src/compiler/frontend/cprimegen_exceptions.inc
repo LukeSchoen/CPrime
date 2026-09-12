@@ -429,6 +429,12 @@ static void cpp_eh_register_result_object_cleanup(CType *type, int slot)
   object->type = object_type; object->r = VT_LLOCAL | VT_LVAL;
   cleanup = sym_push2(&all_cleanups, SYM_FIELD | ++cur_scope->cl.n, 0, 0);
   cleanup->cleanup_sym = object; cleanup->cleanup_func = destructor;
+  /* The caller takes ownership of this object as soon as the return
+     completes, so the ordinary path must never destroy it.  Keeping the node
+     exception-only also stops it from being replayed by a later scope exit in
+     the same function, which would destroy an object the frame no longer
+     owns. */
+  cleanup->a.cleanup_exception_only = 1;
   cleanup->next = cur_scope->cl.s; cur_scope->cl.s = cleanup;
   cpp_elided_return_result_active = 1;
 }
@@ -890,12 +896,13 @@ static Sym *cpp_eh_register_array_cleanup(int pointer_slot, int count_slot,
   return cpp_eh_register_local_cleanup(object, "__cpc_eh_destroy_array");
 }
 
-static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment)
+static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment,
+                          TokenString **placement_args, int placement_count)
 {
   CType pointer = *type, count_type = { VT_LLONG | VT_UNSIGNED, NULL };
   Sym *destructor = resolve_autodtor_func(type), *constructor;
   Sym *old_cleanup, *object, *cleanup;
-  int old_depth, count_slot, pointer_slot, allocation_slot;
+  int old_depth, count_slot, pointer_slot, allocation_slot, placement_index;
   int cookie = cpp_array_cookie_size(type, destructor), context = 0;
   int index_slot, loop, done, value_initialize = 0, null_allocation_jump = 0;
   (void)alignment;
@@ -943,7 +950,18 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment)
   vpushi(size); gen_op('*');
   if (cookie) { vpushi(cookie); gen_op('+'); }
   gfunc_param_typed(allocation->type.ref, allocation->type.ref->next);
-  gfunc_call(1);
+  {
+    /* Placement array allocation passes the bound list through the same
+       operator new[](size_t, ...) signature the placement arguments selected. */
+    Sym *parameter = allocation->type.ref->next;
+    if (parameter) parameter = parameter->next;
+    for (placement_index = 0; placement_index < placement_count; ++placement_index) {
+      emit_saved_arg_for_param(placement_args[placement_index], parameter);
+      gfunc_param_typed_with_conversions(allocation->type.ref, parameter);
+      if (parameter) parameter = parameter->next;
+    }
+  }
+  gfunc_call(1 + placement_count);
   loc = (loc - PTR_SIZE) & -PTR_SIZE; allocation_slot = loc;
   vset(&pointer, VT_LOCAL | VT_LVAL, allocation_slot);
   vpush(&pointer); PUT_R_RET(vtop, pointer.t);

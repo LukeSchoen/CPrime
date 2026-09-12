@@ -22,7 +22,10 @@ struct Owner
 int Owner::Sum() const
 {
   int total = 0;
-  for (Item &item : indexes)
+  // `indexes` is a member read from a const object, so the range is
+  // `const Items` and the range-for element is the const overload's
+  // `const Item &`.  A non-const loop variable cannot bind to it.
+  for (const Item &item : indexes)
     total = total + item.value + bias;
   return total;
 }
@@ -34,6 +37,5 @@ int main()
   owner.indexes.values[0].value = 2;
   owner.indexes.values[1].value = 3;
   owner.indexes.values[2].value = 4;
-  owner.Sum();
-  return 0;
+  return owner.Sum() == 12 ? 0 : 1;
 }

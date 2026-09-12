@@ -570,6 +570,29 @@ static int cpp_try_conditional_prvalue(void)
   }
   first_kind = cpp_probe_conditional_arm(yes, &type);
   second_kind = cpp_probe_conditional_arm(no, &other);
+  /* Two class glvalues related by inheritance leave the conditional itself an
+     lvalue of the base class, so the ordinary conditional grammar has to
+     select one operand's address.  Constructing a result object here would
+     copy the operand and lose the base-subobject adjustment. */
+  if (first_kind == 3 && second_kind == 3
+      && !is_compatible_unqualified_types(&type, &other))
+  {
+    int offset;
+    int first_class = get_struct_type_name_tok(&type);
+    int second_class = get_struct_type_name_tok(&other);
+    if (first_class && second_class
+        && (cpp_rtti_public_base_offset(first_class, second_class, &offset)
+            || cpp_rtti_public_base_offset(second_class, first_class,
+                                           &offset)))
+    {
+      replay = tok_str_alloc(); tok_str_add(replay, question);
+      tok_str_append_without_eof(replay, yes); tok_str_add(replay, ':');
+      tok_str_append_without_eof(replay, no);
+      tok_str_free(yes); tok_str_free(no);
+      restore_cpp_lifecycle_probe(replay);
+      return 0;
+    }
+  }
   if (first_kind != 2 && second_kind != 2
       && !is_compatible_unqualified_types(&type, &other)) {
     int to_first = (type.t & VT_BTYPE) == VT_STRUCT

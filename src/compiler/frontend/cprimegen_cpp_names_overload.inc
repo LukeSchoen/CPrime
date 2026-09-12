@@ -32,7 +32,7 @@ static int is_current_class_qualified_nested_tok(int name_tok)
 static int make_class_lexical_type_tok(int class_tok, int name_tok)
 {
   return make_static_member_tok(make_static_member_tok(class_tok,
-      tok_alloc_const("__cpc_lexical_types")), name_tok);
+      CPP_TOK_LEXICAL_TYPES), name_tok);
 }
 
 static int find_class_scope_type_tok(int class_tok, int name_tok)
@@ -88,6 +88,14 @@ static int find_current_class_nested_type_tok(int name_tok)
 {
   int class_i, found;
   if (name_tok < TOK_UIDENT)
+    return name_tok;
+  /* No member class is being defined and no enclosing class is on the
+     definition stack, and no member declarator is being parsed, so every
+     remaining path returns the spelling that was passed in: the local lookup
+     below only decides where the class search starts.  This lookup sits on the
+     ordinary declaration path. */
+  if (!active_member_class_tok && nb_defining_class_stack <= 0
+      && !cpp_member_decl_context)
     return name_tok;
   {
     Sym *local = sym_find(name_tok);
@@ -296,6 +304,15 @@ static int find_current_namespace_tok_ex(int name_tok, int ignore_locals)
   Sym *local;
 
   if (name_tok < TOK_UIDENT)
+    return name_tok;
+  /* Without a binding that redirects this name, a namespace scope, an unnamed
+     namespace, a using-directive or an inline namespace, every path below
+     rebuilds the spelling it was handed.  Ordinary code in a translation unit
+     that never declares a namespace reaches this on every declaration, so
+     answer it here instead of probing the local symbol stack first. */
+  if (!cpp_using_binding_seen && !nb_namespace_stack
+      && !nb_inline_namespace_scopes && !unnamed_namespace_tok
+      && !nb_using_namespace_toks)
     return name_tok;
   local = sym_find(name_tok);
   if (local && local->cpp_using_target && (!ignore_locals || !local->sym_scope))
@@ -971,6 +988,10 @@ static void note_free_func_overload(int name_tok, int mangled_tok,
 {
   FreeFuncOverload *o;
 
+  /* Every registration funnels through here, including the ones a using
+     declaration or an argument-dependent lookup performs, so this is the
+     complete "some overload exists" state the expression path checks. */
+  cpp_operator_overload_seen = 1;
 
   for (o = free_func_candidates(name_tok); o; o = o->name_next)
   {
@@ -1243,7 +1264,7 @@ static int has_suffix(const char *s, const char *suffix)
   return n >= m && !strcmp(s + n - m, suffix);
 }
 
-static int is_cpp_translation_unit(void)
+static int is_cpp_translation_unit_slow(void)
 {
   BufferedFile *root_file = NULL;
   const char *filename;
@@ -3815,6 +3836,7 @@ static int parse_cpp_operator_method_tok(void)
 {
   const char *name;
 
+  cpp_operator_overload_seen = 1;
   if (last_cpp_conversion_operator_type_tokens)
     tok_str_free(last_cpp_conversion_operator_type_tokens);
   last_cpp_conversion_operator_type_tokens = NULL;
@@ -3887,7 +3909,20 @@ static int parse_cpp_operator_method_tok(void)
 static int get_cpp_binary_operator_method_tok(int op)
 {
   const char *name = cpp_operator_name_from_tok(op);
-  return name ? tok_alloc_const(name) : 0;
+  int method_tok;
+
+  if (!name)
+    return 0;
+  /* Every operand pair reaches this with the same handful of operators, so
+     intern each spelling once instead of per call. */
+  if ((unsigned)op < (unsigned)TOK_IDENT)
+  {
+    method_tok = cpp_binary_operator_method_toks[op];
+    if (!method_tok)
+      method_tok = cpp_binary_operator_method_toks[op] = tok_alloc_const(name);
+    return method_tok;
+  }
+  return tok_alloc_const(name);
 }
 
 static void finish_cpp_member_func_call_to(Sym *func_type, int nb_args,
@@ -4057,6 +4092,14 @@ static int try_call_cpp_binary_operator_method(int method_tok)
     }
     vswap();
   }
+
+  /* A class operand declared through a pointer or reference
+     (`const Matrix4x4<T> &m`) keeps only the specialization's identity while
+     the declaration is parsed; the member operator is registered when that
+     identity's class body is materialized.  Materialize it here, as the index
+     operator path does, before resolving the member candidate. */
+  materialize_incomplete_template_type(lhs_was_nonstruct ? &vtop->type
+                                                         : &vtop[-1].type);
 
   saved_operand_vtop = vtop;
   saved_lhs = vtop[-1];
@@ -4303,10 +4346,16 @@ static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type,
               cpp_operator_associated_type(lookup, &argument_type, 0);
             else {
               TemplateDef *argument_template = find_template_def(arguments->toks[i]);
-              if (argument_template && argument_template->namespace_tok)
+              /* A template declared inside a class keeps its enclosing
+                 namespace only through its qualified lookup token, so
+                 recover it from that token when the definition has none. */
+              int argument_namespace = argument_template
+                ? argument_template->namespace_tok : 0;
+              if (!argument_namespace)
+                argument_namespace = symbol_namespace_scope_tok(arguments->toks[i]);
+              if (argument_namespace)
                 cpp_operator_lookup_name(lookup,
-                  make_static_member_tok(argument_template->namespace_tok,
-                                         lookup->method_tok));
+                  make_static_member_tok(argument_namespace, lookup->method_tok));
             }
           }
           break;
@@ -4315,12 +4364,34 @@ static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type,
   }
 }
 
+/* Complete the class type of every argument a call associated through
+   argument-dependent lookup.  A class template specialization that was only
+   named (as a reference parameter type, for example) publishes its hidden
+   friend declarations when it is instantiated.  Returns non-zero when a
+   class was completed, so a caller can retry a lookup that found nothing. */
+static int materialize_associated_class_arguments(CType *arguments, int count)
+{
+  int i, completed = 0;
+  for (i = 0; i < count; ++i) {
+    CType value = arguments[i];
+    int class_tok;
+    Sym *class_sym;
+    if (is_reference_type(&value)) value = *pointed_type(&value);
+    if ((value.t & VT_BTYPE) != VT_STRUCT) continue;
+    class_tok = get_struct_type_name_tok(&value);
+    class_sym = class_tok ? struct_find(class_tok) : NULL;
+    if (!class_sym || class_sym->c >= 0) continue;
+    if (materialize_incomplete_template_type(&value)) ++completed;
+  }
+  return completed;
+}
+
 static Sym *cpp_resolve_associated_function(int method_tok, int ordinary_tok,
     CType *arguments, int count, TokenString **call_args, int operator_call)
 {
   CppOperatorLookup lookup;
   FreeFuncOverload *overload;
-  int i, j, name_index, *candidates = NULL, candidate_count = 0, has_class_operand = 0;
+  int i, j, name_index, attempt, *candidates = NULL, candidate_count = 0, has_class_operand = 0;
   int associated = cpp_call_has_associated_argument(arguments, count);
   Sym *function;
   memset(&lookup, 0, sizeof lookup);
@@ -4341,7 +4412,20 @@ static Sym *cpp_resolve_associated_function(int method_tok, int ordinary_tok,
     CType value = arguments[i];
     if (is_reference_type(&value)) value = *pointed_type(&value);
     if ((value.t & VT_BTYPE) == VT_STRUCT) has_class_operand = 1;
-    cpp_operator_associated_type(&lookup, &arguments[i], 1);
+    /* An ordinary call reaches its associated classes through the argument's
+       type identity alone.  Materializing an incomplete class template
+       specialization here would make argument-dependent lookup instantiate
+       the class, which C++ does not require.  Operator lookup keeps the
+       complete-type walk. */
+    cpp_operator_associated_type(&lookup, &arguments[i], operator_call > 0);
+  }
+  for (attempt = 0; ; ++attempt)
+  {
+  if (attempt)
+  {
+    cprime_free(candidates);
+    candidates = NULL;
+    candidate_count = 0;
   }
   for (i = 0; i < lookup.name_count; ++i) {
     Sym **saved_adl_classes = template_adl_classes;
@@ -4398,6 +4482,13 @@ static Sym *cpp_resolve_associated_function(int method_tok, int ordinary_tok,
                                               0, candidates, candidate_count,
                                               call_args, associated)
     : NULL;
+  /* A hidden friend is declared by the class definition that introduced it,
+     so a lookup that found nothing must complete the class arguments once
+     before it fails: `read(Friend<int> const&)` reaches the friend declared
+     in an otherwise unnamed specialization. */
+  if (function || attempt || operator_call != 0 || !associated) break;
+  if (!materialize_associated_class_arguments(arguments, count)) break;
+  }
   cprime_free(candidates);
   cprime_free(lookup.names);
   cprime_free(lookup.visited);
@@ -4601,15 +4692,27 @@ static void cpp_builtin_increment_candidate(CType *receiver, int owner,
       cpp_builtin_increment_candidate(receiver, base->base_tok, operation, best, target);
 }
 
-static int try_cpp_builtin_increment_conversion(int operation)
+/* Convert the class value at vtop through a conversion function that yields a
+   modifiable scalar lvalue, which is what a built-in operator needs.
+   Returns 0 without converting when no such function exists; callers that
+   require the conversion report their own diagnostic. */
+static int try_cpp_builtin_scalar_reference_conversion(int operation)
 {
   CType receiver = vtop->type, target;
   Sym *best = NULL;
+  if ((receiver.t & VT_BTYPE) != VT_STRUCT)
+    return 0;
   cpp_builtin_increment_candidate(&receiver, get_struct_type_name_tok(&receiver),
                                    operation, &best, &target);
-  if (!best)
-    cprime_error("no conversion to a modifiable scalar reference for increment/decrement");
+  if (!best) return 0;
   return try_call_cpp_conversion_operator(&target, 0);
+}
+
+static int try_cpp_builtin_increment_conversion(int operation)
+{
+  if (!try_cpp_builtin_scalar_reference_conversion(operation))
+    cprime_error("no conversion to a modifiable scalar reference for increment/decrement");
+  return 1;
 }
 
 static void cpp_pointer_conversion_candidate(CType *receiver, int owner,
@@ -4662,7 +4765,7 @@ static void try_cpp_pointer_conversion(int mode)
 
 static int try_call_cpp_bool_conversion_operator(void)
 {
-  int method_tok = tok_alloc_const("operator bool");
+  int method_tok = CPP_TOK_BOOL_OP;
   Sym *func_sym;
   Sym *canonical_sym = NULL;
   Sym *func_type;
@@ -4747,7 +4850,7 @@ static int try_call_cpp_conversion_operator(CType *target, int allow_explicit)
 
 static int try_call_cpp_index_operator(void)
 {
-  int method_tok = tok_alloc_const("operator[]");
+  int method_tok = CPP_TOK_INDEX_OP;
   Sym *func_sym;
   Sym *func_type;
   Sym *sa;
@@ -4787,7 +4890,7 @@ static int try_call_cpp_index_operator(void)
 
 static int try_call_cpp_call_operator(void)
 {
-  const int method_tok = tok_alloc_const("operator()");
+  const int method_tok = CPP_TOK_CALL_OP;
   TokenString *call_args[CPC_MAX_CALL_ARGUMENTS];
   CType call_arg_types[CPC_MAX_CALL_ARGUMENTS];
   SValue saved_receiver;
@@ -4890,7 +4993,7 @@ static int try_call_cpp_call_operator(void)
 
 static int try_call_cpp_assignment_operator(void)
 {
-  int method_tok = tok_alloc_const("operator=");
+  int method_tok = CPP_TOK_ASSIGN;
   Sym *func_sym;
   Sym *func_type;
   Sym *sa, *this_arg, *value_arg;
@@ -4904,6 +5007,17 @@ static int try_call_cpp_assignment_operator(void)
     receiver_type.t &= ~VT_CONSTANT;
   func_sym = resolve_member_func_by_arg_types(&receiver_type, method_tok,
                                               &vtop->type, 1);
+  /* Assigning the receiver's own class type is the implicit copy or move
+     assignment, which is an exact match and is therefore never beaten by an
+     operator= that would need a user-defined conversion of the source.  The
+     implicit members are not declared symbols here, so a conversion target
+     such as `operator=(bool)` fed by a safe-bool conversion would otherwise
+     be called for a plain `left = right` of two objects of the same class.
+     Drop such a candidate and let the store of the subobject happen. */
+  if (func_sym
+      && is_compatible_unqualified_types(&receiver_type, &vtop->type)
+      && !lowered_member_func_single_param_is_self(&receiver_type, func_sym))
+    func_sym = NULL;
   if (!func_sym)
   {
     func_sym = resolve_member_field_func_by_arg_types(&vtop[-1].type,

@@ -84,7 +84,7 @@ static CType make_lifecycle_func_type(CType *struct_type)
   this_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
   mk_pointer(&this_type);
   param = sym_push(SYM_FIELD, &this_type, VT_LOCAL | VT_LVAL, 0);
-  param->v = tok_alloc_const("this");
+  param->v = CPP_TOK_THIS;
   fref->next = param;
   local_stack = saved_ls;
   return func_type;
@@ -756,7 +756,7 @@ static int struct_needs_memberwise_assignment(CType *type)
   if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref)
     return 0;
 
-  method_tok = tok_alloc_const("operator=");
+  method_tok = CPP_TOK_ASSIGN;
   if (resolve_member_func(type, method_tok))
     return 1;
 
@@ -782,15 +782,16 @@ static int struct_needs_memberwise_assignment(CType *type)
 
 /* The implicit copy parameter is const T& only when every class subobject
    can be copied that way; a non-const-only subobject instead requires T&. */
-static int class_copy_accepts_const(CType *type, int assignment)
+static int class_copy_accepts_const_impl(CType *type, int assignment)
 {
   CType source = *type;
   Sym *field, *constant_function, *mutable_function;
-  if (type->t & VT_ARRAY) return class_copy_accepts_const(pointed_type(type), assignment);
+  if (type->t & VT_ARRAY)
+    return class_copy_accepts_const_impl(pointed_type(type), assignment);
   if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref) return 1;
   source.t |= VT_CONSTANT;
   if (assignment) {
-    int operation = tok_alloc_const("operator=");
+    int operation = CPP_TOK_ASSIGN;
     constant_function = resolve_member_func_by_arg_types(type, operation, &source, 1);
     mutable_function = resolve_member_func_by_arg_types(type, operation, type, 1);
   } else {
@@ -800,8 +801,17 @@ static int class_copy_accepts_const(CType *type, int assignment)
   if (constant_function) return 1;
   if (mutable_function) return 0;
   for (field = type->ref->next; field; field = field->next)
-    if (!class_copy_accepts_const(&field->type, assignment)) return 0;
+    if (!class_copy_accepts_const_impl(&field->type, assignment)) return 0;
   return 1;
+}
+
+static int class_copy_accepts_const(CType *type, int assignment)
+{
+  int result;
+  ++suppress_template_member_body_demand;
+  result = class_copy_accepts_const_impl(type, assignment);
+  --suppress_template_member_body_demand;
+  return result;
 }
 
 /* Source mode: 0 mutable lvalue, 1 xvalue, 2 const lvalue. */
@@ -2133,7 +2143,7 @@ static int try_parse_cpp_placement_new_after_name(int global_scope,
       CType size_type = { VT_SIZE_T, NULL };
       Sym *replacement = cpp_resolve_allocation_function(&type, 1, &size_type, 1, global_scope);
       if (replacement) malloc_sym = replacement;
-      cpp_new_array(&type, malloc_sym, size, align);
+      cpp_new_array(&type, malloc_sym, size, align, NULL, 0);
       return 1;
     }
 
@@ -2189,6 +2199,49 @@ static int try_parse_cpp_placement_new_after_name(int global_scope,
                     ? VT_CONSTANT : VT_VOLATILE;
         next();
       }
+    }
+    if (type.t & VT_ARRAY) {
+      TokenString *dimensions = tok_str_alloc();
+      /* Bounds written after an array alias are outer dimensions. */
+      while (tok == '[') {
+        int depth = 0;
+        do {
+          if (tok == TOK_EOF) expect("array bound");
+          if (tok == '[') ++depth;
+          else if (tok == ']') --depth;
+          tok_str_add_tok(dimensions);
+          next();
+        } while (depth);
+      }
+      while (type.t & VT_ARRAY) {
+        CValue bound;
+        if (!type.ref || type.ref->c < 0) cprime_error("new requires a complete array type");
+        bound.i = type.ref->c;
+        tok_str_add(dimensions, '[');
+        tok_str_add2(dimensions, TOK_CLLONG, &bound);
+        tok_str_add(dimensions, ']');
+        type = *pointed_type(&type);
+      }
+      restore_cpp_lifecycle_probe(dimensions);
+    }
+    if (tok == '[')
+    {
+      /* Placement array new resolves operator new[] with the bound list as
+         its first argument, then reuses the ordinary array construction
+         path so element initialization and cleanup stay shared. */
+      CType allocation_signature[CPC_MAX_CALL_ARGUMENTS + 1];
+      size = type_size(&type, &align);
+      if (size < 0) cprime_error("placement new requires a complete element type");
+      allocation_signature[0].t = VT_SIZE_T;
+      allocation_signature[0].ref = NULL;
+      infer_saved_arg_types(allocation_args, allocation_signature + 1, allocation_count);
+      allocation_function = cpp_resolve_allocation_function(&type, 1,
+                                allocation_signature, allocation_count + 1, global_scope);
+      if (!allocation_function) cprime_error("no matching placement operator new[]");
+      cpp_new_array(&type, allocation_function, size, align,
+                    allocation_args, allocation_count);
+      for (ai = 0; ai < allocation_count; ++ai) tok_str_free(allocation_args[ai]);
+      return 1;
     }
     allocation_types[0].t = VT_SIZE_T;
     allocation_types[0].ref = NULL;
@@ -2547,7 +2600,8 @@ next_overload:
   match = member_overload_pick_match(match, const_match, receiver_const);
   if (match)
   {
-    instantiate_template_member_body_for_func_tok(type, method_tok, match->v);
+    if (!suppress_template_member_body_demand)
+      instantiate_template_member_body_for_func_tok(type, method_tok, match->v);
     return match;
   }
   /* Constructors/destructors belong to their declaring class. Implicit
@@ -3079,7 +3133,7 @@ static Sym *resolve_member_field_func_by_arg_types_filtered(CType *type, int met
         && field->type.ref->f.func_cpp_explicit) continue;
     rank = member_field_func_arg_match_rank(field, arg_types,
                                             explicit_arg_count);
-    if (method_tok == tok_alloc_const("operator=") && explicit_arg_count == 1
+    if (method_tok == CPP_TOK_ASSIGN && explicit_arg_count == 1
         && field->type.ref && field->type.ref->next
         && !is_compatible_unqualified_types(type, &arg_types[0]))
     {
@@ -3536,7 +3590,8 @@ next_overload:
   match = member_overload_pick_match(match, const_match, receiver_const);
   if (match)
   {
-    instantiate_template_member_body_for_func_tok(type, method_tok, match->v);
+    if (!suppress_template_member_body_demand)
+      instantiate_template_member_body_for_func_tok(type, method_tok, match->v);
     return match;
   }
   /* Constructors/destructors belong to their declaring class. Implicit
@@ -3544,7 +3599,7 @@ next_overload:
   if (is_lifecycle_member_tok(method_tok)) return NULL;
   /* The implicit same-class assignment hides base assignment operators.
      Its memberwise implementation must visit every base and data member. */
-  if (method_tok == tok_alloc_const("operator=") && explicit_arg_count == 1)
+  if (method_tok == CPP_TOK_ASSIGN && explicit_arg_count == 1)
   {
     CType assigned_type = arg_types[0];
     if (is_reference_type(&assigned_type))
@@ -3909,7 +3964,7 @@ static CType make_lowered_member_func_type(CType *struct_type, CType *func_type)
     this_type.t |= VT_CONSTANT;
   mk_pointer(&this_type);
   param = sym_push(SYM_FIELD, &this_type, VT_LOCAL | VT_LVAL, 0);
-  param->v = tok_alloc_const("this");
+  param->v = CPP_TOK_THIS;
   fref->next = param;
   last = param;
 
@@ -4000,9 +4055,9 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
     cprime_error("inline member functions require a named struct/class");
   mangled_tok = make_member_func_tok_for_type(struct_tok, method_tok, func_type);
   note_cpp_member_decl(struct_tok, method_tok, mangled_tok, func_type, 0, 0);
-  this_tok = make_joined_name_tok(tok_alloc_const("__cprime_this"),
+  this_tok = make_joined_name_tok(CPP_TOK_PRIVATE_THIS,
                                    mangled_tok, "_", "");
-  public_this_tok = tok_alloc_const("this");
+  public_this_tok = CPP_TOK_THIS;
   {
     CType lowered_type = make_lowered_member_func_type(struct_type, func_type);
   note_member_func_overload(struct_tok, method_tok, mangled_tok, &lowered_type);
@@ -4479,7 +4534,7 @@ static TokenString *build_lifecycle_func_string(CType *struct_type,
   tok_str_add(str, cpp_class_tag_keyword_tok(struct_type));
   tok_str_add(str, struct_tok);
   tok_str_add(str, '*');
-  tok_str_add(str, tok_alloc_const("this"));
+  tok_str_add(str, CPP_TOK_THIS);
   if (params)
   {
     if (params->len > 1)
@@ -4661,7 +4716,7 @@ static void add_pending_lifecycle_decl(CType *struct_type, int method_tok,
   tok_str_add(str, cpp_class_tag_keyword_tok(struct_type));
   tok_str_add(str, struct_tok);
   tok_str_add(str, '*');
-  tok_str_add(str, tok_alloc_const("this"));
+  tok_str_add(str, CPP_TOK_THIS);
   if (params)
   {
     if (params->len > 1)
@@ -5897,7 +5952,7 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
     }
   }
   if (!this_tok)
-    this_tok = tok_alloc_const("this");
+    this_tok = CPP_TOK_THIS;
   if (!pm->is_defaulted_default_constructor)
     inject_omitted_constructor_member_initializers(pm, &class_type, this_tok);
   prepare_saved_cpp_lambdas(pm->str);
@@ -6406,7 +6461,7 @@ static void parse_namespace_decl(int is_inline)
       binding = global_symbol_find(alias_name);
       if (binding && binding->cpp_using_target != target) cprime_error("conflicting namespace alias");
       if (!binding) binding = global_identifier_push(alias_name, VT_VOID | VT_TYPEDEF, 0);
-      binding->cpp_using_target = target;
+      note_cpp_using_binding(binding, target);
       note_namespace_tok(alias_name);
     }
     note_namespace_tok(ns_tok);

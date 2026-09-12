@@ -6,6 +6,7 @@ struct Vec2
   T x, y;
   Vec2(T a, T b) : x(a), y(b) {}
   T *Data() { return &x; }
+  const T *Data() const { return &x; }
   T &operator[](const long long &index) { return Data()[index]; }
   const T &operator[](const long long &index) const { return Data()[index]; }
 };

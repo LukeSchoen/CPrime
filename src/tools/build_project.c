@@ -401,6 +401,18 @@ static void cache_job(Job *j) {
     for(k=0;k<inputs.n;k++)distinct(&dirs,directory(inputs.v[k]));
     cache_save(j->object,j->key,&inputs,&dirs);
 }
+static double build_start;
+static const char *file_name(const char *p) {
+    const char *s=strrchr(p,'\\'),*t=strrchr(p,'/');
+    if(t&&(!s||t>s))s=t;
+    return s?s+1:p;
+}
+static unsigned long long elapsed_ms(double begin) {
+    return (unsigned long long)((seconds()-begin)*1000.0+0.5);
+}
+static void complete(void) {
+    printf("Complete (%llums elapsed)\n",elapsed_ms(build_start));
+}
 static void diagnostic_line(const char *line) {
     unsigned idx,ms;
     int code;
@@ -417,7 +429,10 @@ static void diagnostic_line(const char *line) {
         j=batch_jobs[batch_done];
         for(p=diagnostics.s;p&&(p=strstr(p,"warning:"))!=NULL;p+=8)warnings++;
         write_utf8(cat(outdir,cat("/",cat(j->label,".err.log"))),diagnostics.s?diagnostics.s:"");
-        printf("%s %7.3fs exit=%d warnings=%d %s\n",j->label,(double)ms/1000,code,warnings,j->inputs.v[0]);
+        printf("%ums %s",ms,file_name(j->inputs.v[0]));
+        if(j->inputs.n>1)printf(" (+%d more)",j->inputs.n-1);
+        if(warnings)printf(" warnings=%d",warnings);
+        printf("\n");
         fflush(stdout);
         if(code||!exists(j->object)){
             if(diagnostics.s)fputs(diagnostics.s,stderr);
@@ -557,9 +572,9 @@ static void run_tool(const char *tool,List *args,const char *cwd,const char *lab
     free(err.s);
     free(line.s);
 }
-static void cached_tool(const char *tool,List *args,const char *cwd,const char *label,const char *output,List *inputs,List *dirs,const char *dep,int resource) {
+static int cached_tool(const char *tool,List *args,const char *cwd,const char *label,const char *output,List *inputs,List *dirs,const char *dep,int resource) {
     char *key=build_key(tool,args,cwd);
-    if(cache_valid(output,key))return;
+    if(cache_valid(output,key))return 0;
     remove_file(state_path(output));
     remove_file(output);
     refresh(output);
@@ -567,6 +582,7 @@ static void cached_tool(const char *tool,List *args,const char *cwd,const char *
     if(!exists(output))die("Tool did not produce output");
     if(dep)dependencies(inputs,dep,cwd);
     cache_save(output,key,inputs,dirs);
+    return 1;
 }
 static const char *env_value(const char *name) {
     const char *s=getenv(name);
@@ -760,7 +776,6 @@ static List job_arguments(Job *j) {
 }
 static void compile_jobs(void) {
     int i,k,batch_index=0;
-    double begin=seconds();
     for(i=0;i<job_count;i++)if(jobs[i].dirty){
         Buf response={
             0
@@ -788,7 +803,6 @@ static void compile_jobs(void) {
         free(batch_jobs);
         i=k-1;
     }
-    printf("Compile elapsed: %.3fs; %d source files\n",seconds()-begin,source_count);
 }
 static int newer_version(const char *a,const char *b) {
     unsigned av[4]={
@@ -1074,8 +1088,8 @@ static void resources_and_archives(void) {
                 add(&a,"rcs");
                 add(&a,p->archive);
                 extend(&a,&objects);
-                cached_tool(compiler,&a,p->directory,cat(p->label,"_archive"),p->archive,&objects,&d,NULL,0);
-                printf("Library: %s\n",p->archive);
+                if(cached_tool(compiler,&a,p->directory,cat(p->label,"_archive"),p->archive,&objects,&d,NULL,0))
+                    printf("Library %s.lib\n",val(p->data,"targetName"));
             }
         }
         else if(strcmp(val(p->data,"kind"),"Application"))die("Unsupported project kind");
@@ -1236,6 +1250,7 @@ static int project_main(int argc,char **argv) {
     };
     int i;
     double begin=seconds(),prepare,cache_begin,cache_seconds;
+    build_start=begin;
     if(!GetModuleFileNameW(NULL,module_w,CAP))die("Cannot locate build driver");
     self=utf8(module_w);
     repo=directory(directory(self));
@@ -1358,7 +1373,7 @@ static int project_main(int argc,char **argv) {
         dirty_count+=jobs[i].dirty;
     }
     cache_seconds=seconds()-cache_begin;
-    printf("Incremental: %d to compile; %d up to date\n",dirty_count,job_count-dirty_count);
+    printf("%d New Item%s (%d/%d)\n",dirty_count,dirty_count==1?"":"s",job_count-dirty_count,job_count);
     fflush(stdout);
     if(dirty_count&&!skiplink){
         remove_file(exepath);
@@ -1374,6 +1389,7 @@ static int project_main(int argc,char **argv) {
     compile_jobs();
     if(skiplink){
         build_succeeded=1;
+        complete();
         return 0;
     }
     if(schema==2)resources_and_archives();
@@ -1416,7 +1432,7 @@ static int project_main(int argc,char **argv) {
     put(metrics,"Processes",measurements);
     json(&report,metrics);
     write_utf8(metricspath,report.s);
-    printf("Executable: %s\nBuild elapsed: %.3fs; %d/%d translation units compiled; unity=%s\nCompiler process time: %.3fs; resource tools: %.3fs\n",exepath,seconds()-begin,dirty_count,job_count,unity?"True":"False",compiler_seconds,resource_seconds);
+    complete();
     build_succeeded=1;
     return 0;
 }

@@ -2,6 +2,11 @@ static int compare_free_function_template_order(TemplateDef *, TemplateDef *);
 static int compare_free_function_return_template_order(TemplateDef *, TemplateDef *);
 static int infer_template_args_from_call_with_explicit(TemplateDef *, CType *, int,
                                                        TemplateArgList *, TemplateArgList *);
+static int template_function_parameter_range(TemplateDef *, int *, int *);
+static int template_substituted_function_type(TemplateDef *, int, int,
+                                              TemplateArgList *, CType *);
+static int template_subst_token(TemplateDef *, TemplateArgList *, int,
+                                int *, int *, int, int);
 
 /* Static data members explicitly specialized by the program must not be
    replayed from their primary template's out-of-class definition.  Record the
@@ -314,6 +319,30 @@ static int instantiate_explicit_conversion_member(int class_tok, CType *target,
   return best;
 }
 
+static int template_declarator_name_index(TemplateDef *td, int *name_start)
+{
+  TokenString *source = td->def_str;
+  int i;
+  if (!source || !td->name_tok) return 0;
+  for (i = 0; i + 1 < source->len; ++i) {
+    int token = source->str[i];
+    if (TOK_HAS_VALUE(token)) {
+      i += tok_str_value_extra_words(source->str, source->len, i);
+      continue;
+    }
+    if (token == td->name_tok && source->str[i + 1] == '(')
+    { *name_start = i; return 1; }
+    /* An overloaded operator spells its name as the operator keyword plus
+       the operator's tokens, so the recorded name token is not literally
+       present in the saved declarator. */
+    if (token == TOK_OPERATOR && i + 2 < source->len
+        && get_cpp_binary_operator_method_tok(source->str[i + 1]) == td->name_tok
+        && source->str[i + 2] == '(')
+    { *name_start = i; return 1; }
+  }
+  return 0;
+}
+
 /* A parameterless function template leaves nothing to deduce an explicit
    instantiation's argument list from, so `template int* f();` names the
    template through its declared result type.  The template's own return-type
@@ -324,14 +353,7 @@ static int template_declared_return_pattern(TemplateDef *td, int *start, int *en
   int i, name_index = -1, header_end = 0, angle = 0, in_header = 0;
 
   if (!source || !td->name_tok || td->nb_type_params <= 0) return 0;
-  for (i = 0; i < source->len; ++i) {
-    if (TOK_HAS_VALUE(source->str[i])) {
-      i += tok_str_value_extra_words(source->str, source->len, i);
-      continue;
-    }
-    if (source->str[i] == td->name_tok) { name_index = i; break; }
-  }
-  if (name_index < 0) return 0;
+  if (!template_declarator_name_index(td, &name_index)) return 0;
   /* The saved declarator normally begins after the template<> header; a
      nested member template keeps its own header in front of it. */
   for (i = 0; i < name_index; ++i) {
@@ -358,6 +380,34 @@ static int template_declared_return_pattern(TemplateDef *td, int *start, int *en
   *start = header_end;
   *end = name_index;
   return 1;
+}
+
+/* Substitute the result type a function template's declarator spells.
+   A specialization declaration replayed while the pending-specialization
+   drain is already running has no instantiated symbol to compare against, so
+   this supplies the declared result its written signature must match
+   (friend28.C). */
+static int template_substituted_declared_result(TemplateDef *td,
+                                                TemplateArgList *bindings,
+                                                CType *result)
+{
+  TokenString *probe;
+  int start, end, i, valid;
+  if (!template_declared_return_pattern(td, &start, &end)) return 0;
+  probe = tok_str_alloc();
+  for (i = start; i < end; ++i) {
+    int token = td->def_str->str[i];
+    if (TOK_HAS_VALUE(token))
+      tok_str_add_record(probe, td->def_str->str, td->def_str->len, &i);
+    else
+      tok_str_add(probe, template_subst_token(td, bindings, 0,
+                                              NULL, NULL, 0, token));
+  }
+  tok_str_add(probe, TOK_EOF);
+  valid = template_probe_type_ex(probe, 0, td->namespace_tok,
+                                 td->member_class_tok, 0, result);
+  tok_str_free(probe);
+  return valid;
 }
 
 /* Deduce every template parameter the declared result type spells directly.
@@ -398,7 +448,7 @@ static int infer_template_args_from_declared_return_type(TemplateDef *td,
       break;
     }
     args->toks[j] = deduce_direct_template_type(td->def_str, start, parameter,
-                                                end, result);
+                                                end, result, 0);
     if (!args->toks[j]) return 0;
     args->nb = j + 1;
     deduced = 1;
@@ -406,10 +456,26 @@ static int infer_template_args_from_declared_return_type(TemplateDef *td,
   return deduced;
 }
 
+/* Deduce an explicit specialization's arguments from the parameter types the
+   declaration spells. Unlike a call, those types keep the reference a
+   parameter names, so `template<class T> bool f(T); ... f<>(const S&)`
+   deduces `T` as `const S&` and the substituted signature matches. */
+static int infer_declared_parameter_types(TemplateDef *candidate, CType *types,
+                                          int count, TemplateArgList *arguments,
+                                          TemplateArgList *explicit_bindings)
+{
+  int saved = deduce_from_declared_parameter_types, inferred;
+  deduce_from_declared_parameter_types = 1;
+  inferred = infer_template_args_from_call_with_explicit(candidate, types, count,
+                                                         arguments, explicit_bindings);
+  deduce_from_declared_parameter_types = saved;
+  return inferred;
+}
+
 static void parse_explicit_specialization_body(int instantiation)
 {
   TokenString *parameters = tok_str_alloc(), *definition = tok_str_alloc();
-  CType result, function, actual[16];
+  CType result, function, actual[16], declared[16];
   AttributeDef attributes;
   TemplateArgList explicit_args = {{0}, 0};
   int name, qualified, owner = 0, qualifier = 0, cv, exception_spec;
@@ -488,6 +554,24 @@ static void parse_explicit_specialization_body(int instantiation)
       }
       qualifier = qualified;
       if (struct_find(qualifier)) owner = qualifier;
+      else
+      {
+        /* The qualifier may be a typedef naming the class, including a class
+           template specialization (`IntSlot::probe`). */
+        Sym *alias = global_symbol_find(qualifier);
+        if (!alias)
+          alias = find_typedef_sym_in_stack(global_stack, qualifier);
+        if (alias && (alias->type.t & VT_TYPEDEF)
+            && (alias->type.t & VT_BTYPE) == VT_STRUCT && alias->type.ref)
+        {
+          int struct_tok = get_struct_type_name_tok(&alias->type);
+          if (struct_tok && struct_find(struct_tok))
+          {
+            owner = struct_tok;
+            qualifier = struct_tok;
+          }
+        }
+      }
     }
   if (lifecycle) {
     if (!owner || !class_tok_matches_unqualified_name(owner, name))
@@ -555,6 +639,7 @@ static void parse_explicit_specialization_body(int instantiation)
   for (parameter = function.ref->next; parameter; parameter = parameter->next) {
     if (count == 16) cprime_error("too many specialization parameters");
     actual[count] = parameter->type;
+    declared[count] = parameter->type;
     /* Deduction takes the referred-to expression type. Preserve lvalue
        category for reference patterns without adding a pointer level. */
     if (is_reference_type(&actual[count])) {
@@ -661,15 +746,31 @@ static void parse_explicit_specialization_body(int instantiation)
            all carry defaults still resolves through ordinary inference. */
         if (!infer_template_args_from_declared_return_type(candidate, &result,
                                                            &arguments)
-            && !infer_template_args_from_call_with_explicit(candidate, actual, count,
+            && !infer_declared_parameter_types(candidate, declared, count,
                           &arguments, NULL)) continue;
-      } else if (!infer_template_args_from_call_with_explicit(candidate, actual, count,
+      } else if (!infer_declared_parameter_types(candidate, declared, count,
                           &arguments, explicit_args.nb ? &explicit_args : NULL)) continue;
       candidate_tok = instantiate_template_if_needed(candidate, &arguments);
       compile_pending_template_specs_without_member_flush();
       symbol = global_symbol_find(candidate_tok);
-      if (!symbol || !same_specialization_func_signature(&symbol->type, &function)
-          || !compare_types(&symbol->type.ref->type, &result, 1)) continue;
+      if (!symbol) {
+        CType substituted;
+        int begin, end;
+        /* The instance has not been materialized yet because the pending
+           specialization drain is already running. Verify the written
+           signature against the substituted parameter list and declared
+           result type instead of the absent symbol. */
+        if (!template_function_parameter_range(candidate, &begin, &end)
+            || !template_substituted_function_type(candidate, begin, end,
+                                                   &arguments, &substituted)
+            || !same_specialization_func_signature(&substituted, &function))
+          continue;
+        if (!template_substituted_declared_result(candidate, &arguments,
+                                                  &substituted)
+            || !compare_types(&substituted, &result, 1)) continue;
+      }
+      else if (!same_specialization_func_signature(&symbol->type, &function)
+               || !compare_types(&symbol->type.ref->type, &result, 1)) continue;
       if (function_tok && function_tok != candidate_tok) {
         int order = from_result
           ? compare_free_function_return_template_order(candidate, selected_free)
@@ -685,7 +786,18 @@ static void parse_explicit_specialization_body(int instantiation)
   symbol = global_symbol_find(function_tok);
   if (instantiation) {
     skip(';');
-    if (!symbol) cprime_error("explicit instantiation has no function symbol");
+    if (!symbol) {
+      /* A friend specialization replayed inside the pending-specialization
+         drain can name an instance the worklist has not materialized yet.
+         Mode 2 only checks the declaration, and the drain supplies the
+         symbol afterwards (friend28.C). */
+      if (compiling_pending_template_specs && instantiation != 1) {
+        tok_str_free(parameters);
+        tok_str_free(definition);
+        return;
+      }
+      cprime_error("explicit instantiation has no function symbol");
+    }
     /* Register emission demand even when this translation unit never calls
        the function. The normal deferred drain supplies the primary's body. */
     if (!extern_template_explicit_declaration && instantiation == 1)

@@ -45,6 +45,72 @@ static void skip_empty_array_fields(Sym **field)
     *field = (*field)->next;
 }
 
+/* The trailing flexible array member a braced initializer can extend, if the
+   aggregate has one.  Unions keep using the constant path's member search. */
+static Sym *flexible_array_member(CType *type)
+{
+  Sym *field;
+  if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref || IS_UNION(type->t))
+    return NULL;
+  for (field = type->ref->next; field && field->next; field = field->next)
+    ;
+  if (field && (field->type.t & VT_ARRAY) && field->type.ref
+      && field->type.ref->c < 0)
+    return field;
+  return NULL;
+}
+
+/* Element count the saved braced initializer 'initializer' gives the trailing
+   flexible array member of 'type', measured by replaying it in a size-only
+   pass.  The member keeps its unknown size afterwards so that every
+   declaration derives its own extent.  Stores the member in '*field' and
+   returns the count, or -1 when the initializer does not reach the member. */
+static int flexible_array_element_count(CType *type, TokenString *initializer,
+                                        Sym **field)
+{
+  init_params probe = {0};
+  TokenString macro, *parent;
+  const int *parent_ptr;
+  int saved_tok = tok, extent = -1;
+  CValue saved_tokc = tokc;
+  Sym *member = flexible_array_member(type);
+
+  if (field)
+    *field = NULL;
+  if (!member || !initializer || !saved_initializer_starts_brace(initializer))
+    return -1;
+  probe.flex_array_ref = member->type.ref;
+  parent = macro_stack;
+  parent_ptr = macro_ptr;
+  macro = *initializer;
+  begin_macro(&macro, 0);
+  next();
+  decl_initializer(&probe, type, 0, DIF_FIRST | DIF_SIZE_ONLY);
+  while (macro_stack && macro_stack != parent)
+    end_macro();
+  macro_ptr = parent_ptr;
+  tok = saved_tok;
+  tokc = saved_tokc;
+  if (probe.flex_array_ref->c >= 0)
+    extent = probe.flex_array_ref->c;
+  probe.flex_array_ref->c = -1;
+  if (field)
+    *field = member;
+  return extent;
+}
+
+/* Reserve room for the 'extent' flexible-array elements a braced initializer
+   writes inside the object described by 'p'. */
+static void prepare_flexible_array_initializer(init_params *p, Sym *field,
+                                               int extent)
+{
+  int align;
+  if (!field || extent <= 0)
+    return;
+  p->flex_array_ref = field->type.ref;
+  p->local_offset += extent * type_size(&field->type.ref->type, &align);
+}
+
 /* t is the array or struct type. c is the array or struct
    address. cur_field is the pointer to the current
    field, for arrays the 'c' member contains the current start
@@ -969,8 +1035,13 @@ static void emit_placement_aggregate_initializer(CType *type, TokenString *place
   int saved_tok = tok, alignment;
   CValue saved_tokc = tokc;
   Sym *old_cleanup = cur_scope->cl.s;
+  Sym *flex_field = NULL;
   int old_cleanup_depth = cur_scope->cl.n;
+  int flex_extent;
   CType pointer = *type;
+  /* A braced initializer fixes the extent of a trailing flexible array
+     member.  The declaration reserved that many elements already. */
+  flex_extent = flexible_array_element_count(type, initializer, &flex_field);
   mk_pointer(&pointer);
   replay_saved_placement_expr(placement);
   gen_cast(&pointer);
@@ -978,6 +1049,7 @@ static void emit_placement_aggregate_initializer(CType *type, TokenString *place
   p.indirect_base = loc;
   p.local_offset = type_size(type, &alignment);
   p.track_partial_cleanups = 1;
+  prepare_flexible_array_initializer(&p, flex_field, flex_extent);
   vdup();
   vset(&pointer, VT_LOCAL | VT_LVAL, p.indirect_base);
   vswap(); vstore(); vpop();
@@ -988,6 +1060,8 @@ static void emit_placement_aggregate_initializer(CType *type, TokenString *place
   decl_initializer(&p, type, 0, DIF_FIRST);
   while (macro_stack && macro_stack != parent) end_macro();
   macro_ptr = parent_ptr;
+  if (flex_field)
+    flex_field->type.ref->c = -1;
   restore_initializer_cleanups(old_cleanup, old_cleanup_depth);
   tok = saved_tok; tokc = saved_tokc;
 }
@@ -1003,7 +1077,8 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
   int class_tok = get_struct_type_name_tok(type), is_list = 0, implicit_copy = 0;
   if (tok != '{' || p->sec || (flags & DIF_SIZE_ONLY)
       || !is_cpp_translation_unit() || !type->ref
-      || !type->ref->a.cpp_user_constructor || type_is_std_initializer_list(type))
+      || !type->ref->a.cpp_user_provided_constructor
+      || type_is_std_initializer_list(type))
     return 0;
   target.t &= ~(VT_CONSTANT | VT_VOLATILE);
   skip_or_save_block(&initializer);
@@ -1874,7 +1949,8 @@ static int type_has_mutable_subobject(CType *type)
 
 static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
                                    int has_init, int has_ctor_init,
-                                   TokenString *copy_ctor_init, int v, int decl_scope, int direct_init)
+                                   TokenString *copy_ctor_init, int v, int decl_scope,
+                                   int direct_init, int flex_extent)
 {
   int size, align, addr;
   TokenString *init_str = NULL;
@@ -1979,6 +2055,15 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
       }
     }
   }
+  else if (flex_extent > 0 && size >= 0)
+  {
+    /* A deferred dynamic initializer still fixes the extent of a trailing
+       flexible array member, so the storage has to hold those elements.  The
+       member keeps its unknown size for later declarations. */
+    Sym *field = flexible_array_member(type);
+    if (field)
+      size += flex_extent * pointed_size(&field->type);
+  }
 
   if (size < 0)
   {
@@ -2024,6 +2109,15 @@ err_size:
     else if (flexible_array && flexible_array->type.ref->c > 0)
       size += flexible_array->type.ref->c
               * pointed_size(&flexible_array->type);
+
+    /* The size-only pass completed a flexible member's extent, and the real
+       pass below re-derives it from the same initializer.  A completed count
+       of zero would otherwise drop the member from the field list the second
+       pass walks, rejecting an initializer such as `{ 1, {} }`. */
+    if (flexible_array)
+      flexible_array->type.ref->c = -1;
+    else if (p.flex_union_fields && p.flex_array_ref)
+      p.flex_array_ref->c = -1;
   }
 
   // take into account specified alignment if bigger
@@ -2041,6 +2135,8 @@ err_size:
 
   if ((r & VT_VALMASK) == VT_LOCAL)
   {
+    int nrvo_result_object = cpp_nrvo_take_result_object(v, type, has_init,
+                                                         copy_ctor_init);
     sec = NULL;
 #ifdef CONFIG_CPRIME_BCHECK
     if (bcheck && v)
@@ -2049,9 +2145,19 @@ err_size:
       loc -= align;
     }
 #endif
-    loc = (loc - size) & -align;
-    addr = loc;
-    p.local_offset = addr + size;
+    if (nrvo_result_object)
+    {
+      /* This object is the caller's result object: it gets no frame storage,
+         and its constructors must run at the address the caller sees. */
+      addr = func_vc;
+      p.local_offset = size;
+    }
+    else
+    {
+      loc = (loc - size) & -align;
+      addr = loc;
+      p.local_offset = addr + size;
+    }
 #ifdef CONFIG_CPRIME_BCHECK
     if (bcheck && v)
     {
@@ -2070,7 +2176,9 @@ err_size:
           r = (r & ~VT_VALMASK) | reg;
       }
 #endif
-      sym = sym_push(v, type, r, addr);
+      sym = sym_push(v, type, nrvo_result_object
+                                      ? ((r & ~VT_VALMASK) | VT_LLOCAL) : r,
+                     addr);
       if (!NODATA_WANTED)
         cpp_eh_mark_local_initializing(sym);
       {

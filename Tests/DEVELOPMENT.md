@@ -13,11 +13,13 @@ ceilings; record timeouts as failures and never retry with a relaxed budget.
 
 ## One session, one cluster
 
-Pick the next item from the wave plan in `task.md` (Wave A while the language
-long tail lasts; Waves B and C need a funding decision), or the top cluster in
-`build/compiler-bug-triage.txt` when the ordered list is empty. Reproduce,
-repair and verify that cluster only. If a fix has not landed after roughly half
-the session budget, revert it, record the narrowed lead in `task.md`, and stop.
+Pick the next unfinished pre-step in `task.md` first -- a green internal
+baseline, then the compilation-speed wave. Only then work the wave plan (Wave A
+while the language long tail lasts; Waves B and C need a funding decision), or
+the top cluster in `build/compiler-bug-triage.txt` when the ordered list is
+empty. Reproduce, repair and verify that cluster only. If a fix has not landed
+after roughly half the session budget, revert it, record the narrowed lead in
+`task.md`, and stop.
 
 ### Repairing a retained GCC row
 

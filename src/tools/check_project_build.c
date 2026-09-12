@@ -121,7 +121,6 @@ int main(int argc, char **argv)
         WIN32_FILE_ATTRIBUTE_DATA info;
         DWORD result = 1;
         unsigned long long stamp, size;
-        LARGE_INTEGER link_begin, link_end;
         /* Invalidate before starting: failure or interruption cannot leave a
            partially written executable certified by the previous snapshot. */
         f = fopen(argv[1], "r+b");
@@ -130,7 +129,6 @@ int main(int argc, char **argv)
         memset(&startup, 0, sizeof startup);
         memset(&process, 0, sizeof process);
         startup.cb = sizeof startup;
-        QueryPerformanceCounter(&link_begin);
         if (CreateProcessW(compiler, command, NULL, NULL, TRUE, 0, NULL, directory, &startup, &process)) {
             if (WaitForSingleObject(process.hProcess, timeout * 1000) != WAIT_OBJECT_0) {
                 TerminateProcess(process.hProcess, 1);
@@ -139,7 +137,6 @@ int main(int argc, char **argv)
             CloseHandle(process.hThread);
             CloseHandle(process.hProcess);
         }
-        QueryPerformanceCounter(&link_end);
         if (result || !GetFileAttributesExW(output, GetFileExInfoStandard, &info)
             || (info.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)) {
             DeleteFileW(output);
@@ -157,13 +154,12 @@ int main(int argc, char **argv)
         if (fclose(f)) ok = 0;
         if (!ok) return 1;
         QueryPerformanceCounter(&end);
-        printf("Relinked: %u translation units reused; compiler %.3f s; total %.3f s.\n", units,
-            (double)(link_end.QuadPart - link_begin.QuadPart) / frequency.QuadPart,
-            (double)(end.QuadPart - begin.QuadPart) / frequency.QuadPart);
+        printf("Linked (%u units, %llums elapsed)\n", units,
+            (unsigned long long)((double)(end.QuadPart - begin.QuadPart) * 1000.0 / frequency.QuadPart + 0.5));
         return 0;
     }
     QueryPerformanceCounter(&end);
-    printf("Up to date: %u translation units; no compiler or linker work (check %.3f s).\n",
-           units, (double)(end.QuadPart - begin.QuadPart) / frequency.QuadPart);
+    printf("Up to date (%u units, %llums elapsed)\n",
+           units, (unsigned long long)((double)(end.QuadPart - begin.QuadPart) * 1000.0 / frequency.QuadPart + 0.5));
     return 0;
 }

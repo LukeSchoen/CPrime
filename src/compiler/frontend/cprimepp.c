@@ -50,6 +50,10 @@ static struct TinyAlloc *tokstr_alloc;
 
 static TokenString *macro_stack;
 
+/* Set once any identifier with the synthetic member-receiver prefix has been
+   interned.  See find_cpp_this_symbol(). */
+static int cpp_this_prefixed_identifier_seen;
+
 static int cprimepp_has_suffix(const char *s, const char *suffix)
 {
   size_t n, m;
@@ -524,6 +528,12 @@ static TokenSym *tok_alloc_new(TokenSym **pts, const char *str, int len, unsigne
   ts->hash_next = NULL;
   memcpy(ts->str, str, len);
   ts->str[len] = '\0';
+  /* The C++ member-call lowering derives synthetic receiver names from this
+     prefix.  Recording that one exists keeps the receiver lookup in
+     find_cpp_this_symbol() from walking the local stack for every ordinary
+     call expression. */
+  if (len >= 14 && !memcmp(ts->str, "__cprime_this_", 14))
+    cpp_this_prefixed_identifier_seen = 1;
   *pts = ts;
   /* Keep identifier lookup proportional to the bucket load even in a
      template-heavy unity translation unit. Token addresses stay stable. */
@@ -585,9 +595,9 @@ ST_FUNC const char *get_tok_str(int v, CValue *cv)
   char *p;
   int i, len;
 
-  cstr_reset(&cstr_buf);
   if ((unsigned)(v - TOK_IDENT) < (unsigned)(tok_ident - TOK_IDENT))
     return table_ident[v - TOK_IDENT]->str;
+  cstr_reset(&cstr_buf);
   p = cstr_buf.data;
 
   switch (v)

@@ -117,12 +117,20 @@ static void canonicalize_cpp_member_pointer_declarator(CType *type)
 static int cpp_member_pointer_declarator_ahead(void)
 {
   TokenString *replay;
-  int angle = 0, colons = 0, result = 0;
+  int angle = 0, colons = 0, result = 0, qualified = 1, names = 0;
   if (tok < TOK_UIDENT) return 0;
   replay = tok_str_alloc();
   while (tok != TOK_EOF) {
-    if (!angle && tok == '*') { result = colons == 2; break; }
+    /* `(C::*name)` is a declarator group only while the leading identifiers
+       form a qualified owner.  A parameter list can also start with a
+       member-pointer type (`(T C::*)`), where two adjacent identifiers mean
+       the group declares a function parameter instead. */
+    if (!angle && tok == '*') { result = colons == 2 && qualified; break; }
     if (!angle && tok < TOK_UIDENT && tok != ':' && tok != TOK_LT) break;
+    if (!angle && tok >= TOK_UIDENT) {
+      if (names && colons != 2) qualified = 0;
+      ++names;
+    }
     if (tok == TOK_LT) ++angle;
     else if (tok == TOK_GT) --angle;
     else if (tok == TOK_SAR) angle -= 2;
@@ -748,11 +756,30 @@ static void bind_cpp_member_pointer(int is_arrow)
       : left_bt == VT_STRUCT;
     if (!builtin_applies)
     {
-      if (is_cpp_translation_unit()
+      /* With no operator->* declared anywhere in the translation unit, the
+         built-in candidate is the only one left, and it accepts a class
+         operand through its conversion to a pointer to the member's owner
+         class (`Pointer` declaring `operator Item *`).  Do this before the
+         overload attempt consumes the right operand: that attempt cannot
+         rewind the token stream when no candidate applies. */
+      if (is_arrow && is_cpp_translation_unit()
+          && (vtop->type.t & VT_BTYPE) == VT_STRUCT)
+      {
+        int operator_tok = tok_alloc_const("operator->*");
+        if (!free_func_candidates(operator_tok)
+            && !resolve_member_func(&vtop->type, operator_tok))
+        {
+          try_cpp_pointer_conversion(0);
+          builtin_applies = (vtop->type.t & VT_BTYPE) == VT_PTR
+            && (pointed_type(&vtop->type)->t & VT_BTYPE) == VT_STRUCT;
+        }
+      }
+      if (!builtin_applies && is_cpp_translation_unit()
           && try_call_cpp_member_access_operator(is_arrow))
         return;
-      cprime_error(is_arrow ? "class pointer required for ->* operator"
-                            : "object required for .* operator");
+      if (!builtin_applies)
+        cprime_error(is_arrow ? "class pointer required for ->* operator"
+                              : "object required for .* operator");
     }
   }
   if (is_arrow) try_cpp_pointer_conversion(0);

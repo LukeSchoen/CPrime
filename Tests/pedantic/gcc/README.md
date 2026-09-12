@@ -48,10 +48,6 @@ for the remaining clusters are below.
 Each lead is already reduced to one site and is the shortest path for the
 matching cluster:
 
-- `conv20.C`: an object declaration materializes its class template
-  specialization even where completeness is not required, so `extern B<int> b;`
-  reports `base class 'A__int' is incomplete` for a `B` derived from an
-  incomplete `A` and the arity short-circuit is never reached.
 - Dependent template template argument: `T::template AA<U>::template B` names
   the nested template but loses the enclosing argument, so
   `chain<outer<char>, char>` still builds `middle<int>::inner` (`sizeof` stays 4

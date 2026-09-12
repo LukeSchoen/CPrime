@@ -42,6 +42,9 @@ function Build([int]$Expected, [switch]$Fail, [switch]$Force) {
     } finally { $ErrorActionPreference = $savedPreference }
     if ($Fail) { if ($buildExit -eq 0) { throw 'Broken source reused a cached object' }; return }
     if ($buildExit) { throw ([IO.File]::ReadAllText((Join-Path $fixture 'build.log'))) }
+    $log = @(Get-Content (Join-Path $fixture 'build.log') | Where-Object { $_ -ne '' })
+    if ($log[0] -notmatch '^\d+ New Items? \(\d+/\d+\)$') { throw "Unexpected build summary: $($log[0])" }
+    if ($log[-1] -notmatch '^Complete \(\d+ms elapsed\)$') { throw "Unexpected build result: $($log[-1])" }
     $metrics = Get-Content (Join-Path $out 'build_metrics.json') -Raw | ConvertFrom-Json
     if ($metrics.CompiledUnits -ne $Expected) { throw "Expected $Expected compiled units, got $($metrics.CompiledUnits)" }
     & $exe

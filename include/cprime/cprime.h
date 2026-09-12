@@ -394,6 +394,7 @@ struct SymAttr {
     local_tag_alias : 1,
     cpp_field_access : 2,
     cpp_user_constructor : 1,
+    cpp_user_provided_constructor : 1,
     cpp_user_destructor : 1,
     cpp_nontrivial_copy_assignment : 1,
     cpp_mutable_field : 1,

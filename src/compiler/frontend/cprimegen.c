@@ -153,6 +153,8 @@ static CType vector_element_type(const CType *type);
 static void make_vector_type(CType *type, int size);
 static void gen_vector_binop(int op);
 static void gen_vector_logical(int op);
+static int gen_vector_scalar_bitcast(CType *type);
+static int vector_integer_bitcast_cast(CType *target);
 static int is_compatible_types(CType *type1, CType *type2);
 static int parse_btype(CType *type, AttributeDef *ad, int ignore_label);
 static CType *type_decl(CType *type, AttributeDef *ad, int *v, int td);
@@ -203,9 +205,15 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
 static void probe_static_aggregate_initializer(CType *type);
 static void emit_placement_aggregate_initializer(CType *type, TokenString *placement,
                                                  TokenString *initializer);
+static int flexible_array_element_count(CType *type, TokenString *initializer,
+                                        Sym **field);
+static Sym *flexible_array_member(CType *type);
+static void prepare_flexible_array_initializer(init_params *p, Sym *field,
+                                               int extent);
 static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r, int has_init,
                                    int has_ctor_init, TokenString *copy_ctor_init,
-                                   int v, int decl_scope, int direct_init);
+                                   int v, int decl_scope, int direct_init,
+                                   int flex_extent);
 static int decl(int l);
 static int decl_context(int l, int condition);
 static void note_constexpr_function(Sym *function, TokenString *body);
@@ -228,7 +236,10 @@ static void check_integer_list_initialization(CType *target, SValue *value);
 static int try_adjust_derived_pointer_to_base(CType *target_pointer);
 static int adjust_derived_address_to_base(CType *target_pointer, int preserve_null);
 static int class_value_is_derived_from(CType *derived, CType *base);
-static int is_cpp_translation_unit(void);
+static int is_cpp_translation_unit_slow(void);
+static int cpp_trace_incomplete(void);
+static int cpp_dump_autoret(void);
+static int cpp_trace_return(void);
 static int gvtst(int inv, int t);
 static void type_to_str(char *buf, int buf_size, CType *type, const char *varstr);
 static int get_struct_type_name_tok(CType *type);
@@ -238,7 +249,8 @@ static void cpp_eh_function_begin(Sym *sym);
 static void cpp_eh_function_end(void);
 static void cpp_delete_pointer(int array_delete);
 static Sym *cpp_implicit_deallocation_function(int name);
-static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment);
+static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment,
+                          TokenString **placement_args, int placement_count);
 static void cpp_eh_throw_expression(void);
 static void cpp_eh_note_call(void);
 static void cpp_eh_set_cleanup_state(Sym *state);
@@ -297,6 +309,7 @@ static int class_has_single_arg_constructor_for(CType *class_type,
                                                 CType *arg_type);
 static int member_func_arg_match_rank(Sym *s, CType *arg_types,
                                       int explicit_arg_count);
+static int lowered_member_func_single_param_is_self(CType *type, Sym *s);
 static int type_is_std_initializer_list(CType *type);
 static Sym *resolve_implicit_constructor_func(CType *type, CType *arguments,
                                                int argument_count);
@@ -393,6 +406,7 @@ static int try_materialize_constructor_conversion_mode(CType *type, int allow_ex
 static Sym *resolve_implicit_constructor_func(CType *type, CType *arguments,
                                               int argument_count);
 static int try_cpp_builtin_increment_conversion(int operation);
+static int try_cpp_builtin_scalar_reference_conversion(int operation);
 static Sym *resolve_copy_constructor_func(CType *type, CType *source_type);
 static int cpp_temp_has_flags(void);
 static void cpp_temp_emit_flag_initializers(void);
@@ -429,6 +443,7 @@ static void note_defaulted_member_func(int struct_tok, int method_tok,
 static int is_defaulted_lifecycle_constructor(CType *struct_type,
                                               Sym *func_sym);
 static void restore_cpp_lifecycle_probe(TokenString *replay);
+static Sym *find_typedef_sym_in_stack(Sym *stack, int tok);
 static int make_type_from_saved_type_tokens(CType *type, TokenString *tokens);
 static int tok_str_add_integer_const_sym(TokenString *str, Sym *s);
 static void instantiate_template_member_body_for_func_tok(CType *type,
@@ -745,6 +760,53 @@ static Sym *lambda_capture_symbol(Sym *symbol);
 static Sym *find_lambda_static_symbol(int name);
 static Sym *find_cpp_this_symbol(void);
 static int cpp_this_name_tok, cpp_lambda_this_name_tok, cpp_namespace_prefix_tok;
+/* Spellings the front end interns while resolving names.  Interning is
+   idempotent, but every tok_alloc_const() call hashes the literal again and
+   walks its identifier bucket, and the call paths below run once per
+   expression, per argument and per member lookup.  Remember the token for
+   each fixed spelling once per translation unit instead.  The cache is filled
+   at the first use of the spelling, which is where the literal was interned
+   before, so identifier numbering is unchanged. */
+#define CPC_CACHED_TOK(cache, name) \
+  ((cache) ? (cache) : ((cache) = tok_alloc_const(name)))
+static int cpp_private_this_tok, cpp_assign_operator_tok, cpp_bool_operator_tok;
+static int cpp_index_operator_tok, cpp_call_operator_tok;
+static int cpp_new_operator_tok, cpp_new_array_operator_tok;
+static int cpp_delete_operator_tok, cpp_delete_array_operator_tok;
+static int cpp_no_name_tok, cpp_lexical_types_tok, cpp_vptr_name_tok;
+static int cpp_binary_operator_method_toks[TOK_IDENT];
+/* Set once the parser has built any `operator<op>` spelling or registered any
+   overload.  Until then no user-defined operator can be found, so the operator
+   lookups on the ordinary expression path cannot succeed. */
+static int cpp_operator_overload_seen;
+/* Set once any binding redirects its name through a using-declaration or a
+   namespace alias.  Until then a lookup cannot be answered by such a binding,
+   so the namespace lookup can skip the local symbol probe. */
+static int cpp_using_binding_seen;
+/* Only sym_push2() creates a binding, and it zeroes the new symbol, so every
+   redirect comes from one of these calls. */
+static void note_cpp_using_binding(Sym *binding, int target)
+{
+  binding->cpp_using_target = target;
+  if (target)
+    cpp_using_binding_seen = 1;
+}
+#define CPP_TOK_THIS CPC_CACHED_TOK(cpp_this_name_tok, "this")
+#define CPP_TOK_PRIVATE_THIS CPC_CACHED_TOK(cpp_private_this_tok, "__cprime_this")
+#define CPP_TOK_ASSIGN CPC_CACHED_TOK(cpp_assign_operator_tok, "operator=")
+#define CPP_TOK_BOOL_OP CPC_CACHED_TOK(cpp_bool_operator_tok, "operator bool")
+#define CPP_TOK_INDEX_OP CPC_CACHED_TOK(cpp_index_operator_tok, "operator[]")
+#define CPP_TOK_CALL_OP CPC_CACHED_TOK(cpp_call_operator_tok, "operator()")
+#define CPP_TOK_NEW_OP CPC_CACHED_TOK(cpp_new_operator_tok, "operator new")
+#define CPP_TOK_NEW_ARRAY_OP \
+  CPC_CACHED_TOK(cpp_new_array_operator_tok, "operator new[]")
+#define CPP_TOK_DELETE_OP CPC_CACHED_TOK(cpp_delete_operator_tok, "operator delete")
+#define CPP_TOK_DELETE_ARRAY_OP \
+  CPC_CACHED_TOK(cpp_delete_array_operator_tok, "operator delete[]")
+#define CPP_TOK_NO_NAME CPC_CACHED_TOK(cpp_no_name_tok, "<no name>")
+#define CPP_TOK_LEXICAL_TYPES \
+  CPC_CACHED_TOK(cpp_lexical_types_tok, "__cpc_lexical_types")
+#define CPP_TOK_VPTR_NAME CPC_CACHED_TOK(cpp_vptr_name_tok, "__cprime_vptr")
 static void free_lambda_expressions(void);
 static void publish_template_member_proto(TokenString *proto, int class_tok);
 static void push_saved_param_scope(TokenString *params, Sym **saved_ls,
@@ -804,6 +866,10 @@ static int nb_pending_template_specs;
 static int first_pending_template_spec;
 static int al_pending_template_specs;
 static int suppress_template_member_flush;
+/* Capability queries inspect a member's signature and existence without
+   emitting a call.  Resolving one must not turn a declared template member
+   into a demanded body; the actual call site does that separately. */
+static int suppress_template_member_body_demand;
 static int pending_cpp_extern_linkage;
 /* 0 is the ordinary source context, 1 is C, and 2 is C++. */
 static int cpp_language_linkage;
@@ -985,7 +1051,7 @@ static void queue_pending_template_spec_in_namespace_bound(TokenString *str,
                                                       unsigned replay_bound,
                                                       int replay_class_tok)
 {
-  if (getenv("CPRIME_TRACE_INCOMPLETE"))
+  if (cpp_trace_incomplete())
     fprintf(stderr, "[q] dep=%s class=%s bound=%u\n",
             dependency_tok ? get_tok_str(dependency_tok, NULL) : "",
             replay_class_tok ? get_tok_str(replay_class_tok, NULL) : "",
@@ -1213,6 +1279,35 @@ static unsigned long long profile_other_overload_scans[8];
 static unsigned long long profile_linkage_scans;
 static int profile_scans_enabled;
 static int cpp_translation_unit = -1;
+#define is_cpp_translation_unit() \
+  (cpp_translation_unit >= 0 ? cpp_translation_unit : is_cpp_translation_unit_slow())
+
+/* Environment-driven debug traces are consulted from per-instantiation hot
+   paths, and getenv() scans the whole environment block on every call.  The
+   environment cannot change while a compilation runs, so resolve each gate
+   once per state instead of once per queue or materialization. */
+static int cpp_trace_incomplete_state; /* 0 undecided, 1 disabled, 2 enabled */
+static int cpp_trace_incomplete(void)
+{
+  if (!cpp_trace_incomplete_state)
+    cpp_trace_incomplete_state =
+      getenv("CPRIME_TRACE_INCOMPLETE") ? 2 : 1;
+  return cpp_trace_incomplete_state == 2;
+}
+static int cpp_dump_autoret_state;
+static int cpp_dump_autoret(void)
+{
+  if (!cpp_dump_autoret_state)
+    cpp_dump_autoret_state = getenv("CPRIME_DUMP_AUTORET") ? 2 : 1;
+  return cpp_dump_autoret_state == 2;
+}
+static int cpp_trace_return_state;
+static int cpp_trace_return(void)
+{
+  if (!cpp_trace_return_state)
+    cpp_trace_return_state = getenv("CPC_TRACE_RETURN") ? 2 : 1;
+  return cpp_trace_return_state == 2;
+}
 static int cpp_permit_incomplete_array_type;
 /* A type-id probe may encounter an array bound that names the surrounding
    function's local state (a variable-length array, a GNU extension).  Such a
@@ -2240,9 +2335,19 @@ static void ptype(const char *msg, CType *type, int v)
 // initialize vstack and types.  This must be done also for cpc -E
 ST_FUNC void cprimegen_init(CPRIMEState *s1)
 {
-  cpp_this_name_tok = cpp_lambda_this_name_tok = cpp_namespace_prefix_tok = 0;
+  cpp_this_name_tok = cpp_private_this_tok = cpp_assign_operator_tok = 0;
+  cpp_bool_operator_tok = cpp_index_operator_tok = cpp_call_operator_tok = 0;
+  cpp_new_operator_tok = cpp_new_array_operator_tok = 0;
+  cpp_delete_operator_tok = cpp_delete_array_operator_tok = 0;
+  cpp_no_name_tok = cpp_lexical_types_tok = cpp_vptr_name_tok = 0;
+  memset(cpp_binary_operator_method_toks, 0,
+         sizeof cpp_binary_operator_method_toks);
+  cpp_lambda_this_name_tok = cpp_namespace_prefix_tok = 0;
+  cpp_operator_overload_seen = 0;
+  cpp_using_binding_seen = 0;
 
   profile_scans_enabled = getenv("CPC_PROFILE_SCANS") != NULL;
+  cpp_trace_incomplete_state = cpp_dump_autoret_state = cpp_trace_return_state = 0;
   profile_linkage_scans = 0;
   vtop = vstack - 1;
   memset(vtop, 0, sizeof *vtop);
@@ -5991,6 +6096,11 @@ static void gen_cast(CType *type)
   if (dbt == VT_NULLPTR)
     dbt = VT_PTR;
 
+  /* A GNU vector and an integer scalar of the same size convert by
+     reinterpreting the same bytes ([GCC] Vector Extensions). */
+  if (gen_vector_scalar_bitcast(type))
+    return;
+
 again:
   if (sbt != dbt)
   {
@@ -6911,6 +7021,50 @@ static void vector_push_temp_address(int offset)
   vtop->type = char_pointer_type;
 }
 
+/* True when the pending cast target and the value on top of the stack are a
+   GNU vector and an integer (in either order).  Vectors are modelled as
+   aggregates, so the C++ cast syntax must not read such a conversion as a
+   constructor call. */
+static int vector_integer_bitcast_cast(CType *target)
+{
+  CType *source = &vtop->type;
+  if (is_vector_type(target) == is_vector_type(source))
+    return 0;
+  if (is_vector_type(target))
+    return is_integer_btype(source->t & VT_BTYPE);
+  return is_integer_btype(target->t & VT_BTYPE);
+}
+
+/* GNU vectors are modelled as a struct holding one array member, so the
+   conversion between a vector and an integer scalar of the same size copies
+   the value through a local temporary and re-reads it as the other type
+   ([GCC] Vector Extensions).  Returns nonzero when vtop was converted and the
+   cast must not be applied again. */
+static int gen_vector_scalar_bitcast(CType *type)
+{
+  CType src = vtop->type;
+  int src_vector = is_vector_type(&src), dst_vector = is_vector_type(type);
+  int size, src_size, align, src_align;
+
+  if (src_vector == dst_vector)
+    return 0;
+  if (!src_vector && !is_integer_btype(src.t & VT_BTYPE))
+    return 0;
+  if (!dst_vector && !is_integer_btype(type->t & VT_BTYPE))
+    return 0;
+  if ((src.t & VT_BTYPE) == VT_BOOL || (type->t & VT_BTYPE) == VT_BOOL)
+    return 0;
+  size = type_size(type, &align);
+  src_size = type_size(&src, &src_align);
+  if (size <= 0 || size != src_size)
+    return 0;
+  {
+    int offset = vector_store_temp(&src);
+    vset(type, VT_LOCAL | VT_LVAL, offset);
+  }
+  return 1;
+}
+
 /* Apply a scalar operator element-wise to vector operands.  A scalar operand
    is broadcast.  On return only the result vector lvalue remains. */
 static void gen_vector_binop(int op)
@@ -6962,10 +7116,11 @@ static void gen_vector_binop(int op)
   {
     vset(&elem, VT_LOCAL | VT_LVAL, loff + (scalar_left ? 0 : i * esize));
     vset(&elem, VT_LOCAL | VT_LVAL, roff + (scalar_right ? 0 : i * esize));
-    gen_op(comparison ? TOK_NE : op);
+    gen_op(op);
     if (comparison)
     {
-      /* GCC models a vector comparison as -1 for true and 0 for false. */
+      /* GCC models a vector comparison as -1 for true and 0 for false, so
+         turn the scalar 1/0 result into 0/-1. */
       vpushi(0);
       vswap();
       gen_op('-');
@@ -8062,7 +8217,7 @@ static void queue_defaulted_assignment_body(CType *struct_type, int struct_tok,
   tok_str_add(str, TOK_STRUCT);
   tok_str_add(str, struct_tok);
   tok_str_add(str, '*');
-  tok_str_add(str, tok_alloc_const("this"));
+  tok_str_add(str, CPP_TOK_THIS);
   tok_str_add(str, ',');
   if (!add_ctype_tokens(str, &func_type->ref->next->type))
     cprime_error("unsupported defaulted member parameter type");
@@ -8083,16 +8238,16 @@ static void queue_defaulted_assignment_body(CType *struct_type, int struct_tok,
       CType value_type = member->type;
       use_explicit_assignment =
         resolve_member_func_by_arg_types(&member->type,
-                                         tok_alloc_const("operator="),
+                                         CPP_TOK_ASSIGN,
                                          &value_type, 1) != NULL;
     }
-    tok_str_add(str, tok_alloc_const("this"));
+    tok_str_add(str, CPP_TOK_THIS);
     tok_str_add(str, TOK_ARROW);
     tok_str_add(str, name_tok);
     if (use_explicit_assignment)
     {
       tok_str_add(str, '.');
-      tok_str_add(str, tok_alloc_const("operator="));
+      tok_str_add(str, CPP_TOK_ASSIGN);
       tok_str_add(str, '(');
     }
     else
@@ -8118,7 +8273,7 @@ static void queue_defaulted_assignment_body(CType *struct_type, int struct_tok,
   }
   tok_str_add(str, TOK_RETURN);
   tok_str_add(str, '*');
-  tok_str_add(str, tok_alloc_const("this"));
+  tok_str_add(str, CPP_TOK_THIS);
   tok_str_add(str, ';');
   tok_str_add(str, '}');
   tok_str_add(str, TOK_EOF);
@@ -8136,7 +8291,7 @@ static void emit_defaulted_member_bodies(CType *struct_type)
   struct_tok = get_struct_type_name_tok(struct_type);
   if (!struct_tok)
     return;
-  method_tok = tok_alloc_const("operator=");
+  method_tok = CPP_TOK_ASSIGN;
   for (i = 0; i < nb_defaulted_member_funcs; ++i)
   {
     if (defaulted_member_struct_toks[i] != struct_tok
@@ -8224,7 +8379,7 @@ static void emit_implicit_virtual_assignment_bodies(CType *struct_type)
   if (!struct_tok || struct_type->ref->a.cpp_nontrivial_copy_assignment)
     return;
 
-  method_tok = tok_alloc_const("operator=");
+  method_tok = CPP_TOK_ASSIGN;
   func_type = make_implicit_copy_assignment_type(struct_type);
   for (base = class_base_candidates(struct_tok); base; base = base->bucket_next)
     if (base->class_tok == struct_tok
@@ -8283,10 +8438,10 @@ static void append_constructor_field_lvalue(TokenString *tokens, CType *owner,
       tok_str_add(tokens, '*'); tok_str_add(tokens, '('); tok_str_add(tokens, '(');
       tok_str_add(tokens, TOK_STRUCT); tok_str_add(tokens, base->base_tok);
       tok_str_add(tokens, '*'); tok_str_add(tokens, ')');
-      tok_str_add(tokens, tok_alloc_const("this")); tok_str_add(tokens, ')');
+      tok_str_add(tokens, CPP_TOK_THIS); tok_str_add(tokens, ')');
       return;
     }
-  tok_str_add(tokens, tok_alloc_const("this"));
+  tok_str_add(tokens, CPP_TOK_THIS);
   tok_str_add(tokens, TOK_ARROW); tok_str_add(tokens, name);
 }
 
@@ -8380,7 +8535,7 @@ static TokenString *parse_explicit_constructor_member_initializers(
   int *is_delegating_constructor, TokenString ***pieces)
 {
   TokenString *prefix, *args;
-  int this_tok = tok_alloc_const("this");
+  int this_tok = CPP_TOK_THIS;
 
   if (tok != ':')
     return NULL;
@@ -8830,7 +8985,7 @@ static TokenString *parse_constructor_member_initializers(CType *struct_type)
   TokenString *prefix = NULL, *vbase_prefix = NULL;
   Sym *field;
   int is_delegating_constructor = 0;
-  int this_tok = tok_alloc_const("this");
+  int this_tok = CPP_TOK_THIS;
   int owner = get_struct_type_name_tok(struct_type);
   int split_virtual_bases = owner && class_has_virtual_base(owner);
   int piece_index;
@@ -9842,7 +9997,7 @@ static int parse_cpp_scoped_member_def_body(CType *ret_type, int class_tok,
     next();
   }
   this_tok = 0;
-  public_this_tok = tok_alloc_const("this");
+  public_this_tok = CPP_TOK_THIS;
   mangled_tok = make_member_func_tok(class_tok, method_tok);
   skip('(');
 
@@ -9983,7 +10138,7 @@ static int parse_cpp_scoped_member_def_body(CType *ret_type, int class_tok,
   {
     char suffix[32];
     snprintf(suffix, sizeof(suffix), "_%d", scoped_member_this_counter++);
-    this_tok = make_joined_name_tok(tok_alloc_const("__cprime_this"),
+    this_tok = make_joined_name_tok(CPP_TOK_PRIVATE_THIS,
                                      mangled_tok, "_", suffix);
   }
 
@@ -11436,6 +11591,81 @@ static Sym *find_shared_static_member_func(CType *type, int member_tok)
   return shared;
 }
 
+/* The class that declares the static member function `member_tok` reached by
+   ordinary lookup in `class_tok`'s class scope: the class itself when it
+   declares the name, otherwise the single declaring class reached through its
+   bases.  `*declares_name` reports a declaration of the name that is not a
+   static member function, which still hides anything further up, and
+   `*ambiguous` records two distinct base declarations of the same name. */
+static int find_scope_static_member_func_class(int class_tok, int member_tok,
+                                               int *declares_name,
+                                               int *ambiguous)
+{
+  ClassBaseInfo *info;
+  int owner = 0;
+
+  if (!class_tok)
+    return 0;
+  if (class_has_static_member_func(class_tok, member_tok))
+  {
+    *declares_name = 1;
+    return class_tok;
+  }
+  if (class_has_instance_member_func(class_tok, member_tok))
+  {
+    *declares_name = 1;
+    return 0;
+  }
+  for (info = class_base_candidates(class_tok); info; info = info->bucket_next)
+  {
+    int base_declares_name = 0;
+    int base_owner;
+
+    if (info->class_tok != class_tok)
+      continue;
+    base_owner = find_scope_static_member_func_class(info->base_tok,
+                                                     member_tok,
+                                                     &base_declares_name,
+                                                     ambiguous);
+    if (base_declares_name)
+      *declares_name = 1;
+    if (*ambiguous)
+      return 0;
+    if (!base_owner)
+      continue;
+    if (owner && owner != base_owner)
+    {
+      *ambiguous = 1;
+      return 0;
+    }
+    owner = base_owner;
+  }
+  return owner;
+}
+
+/* Unqualified lookup inside a member body keeps the scopes of the enclosing
+   classes, so a nested class can name a static member function of an
+   enclosing class or of one of that class's bases without a qualifier. */
+static int find_enclosing_static_member_func_class(int class_tok, int member_tok,
+                                                   int *ambiguous)
+{
+  while (class_tok)
+  {
+    const CppRecordDeclInfo *record;
+    int declares_name = 0;
+    int owner = find_scope_static_member_func_class(class_tok, member_tok,
+                                                    &declares_name, ambiguous);
+
+    if (owner || *ambiguous)
+      return owner;
+    if (declares_name)
+      return 0;
+    record = lookup_cpp_record_decl(class_tok);
+    class_tok = record ? record->lexical_owner_tok : 0;
+  }
+  return 0;
+}
+
 static void check_fields (CType *type, int check)
 {
   Sym *s = type->ref;
@@ -12045,7 +12275,12 @@ static void parse_cpp_class_using_member(CType *derived, int first_name)
     binding->r = alias->r;
     binding->c = alias->c;
     binding->a = alias->a;
-    binding->cpp_using_target = alias->cpp_using_target ? alias->cpp_using_target : alias->v;
+    /* A using-declaration of an in-class integral constant makes the name
+       visible without giving it storage of its own, so the imported binding
+       has to carry the folded value rather than a fresh address. */
+    if (alias->a.integral_constexpr)
+      binding->const_value = alias->const_value;
+    note_cpp_using_binding(binding, alias->cpp_using_target ? alias->cpp_using_target : alias->v);
     found = 1;
   }
   {
@@ -12070,7 +12305,7 @@ static void parse_cpp_class_using_member(CType *derived, int first_name)
         binding = global_identifier_push(binding_tok, marker.t, 0);
         binding->type = marker;
       }
-      binding->cpp_using_target = template_def_lookup_tok(nested_td);
+      note_cpp_using_binding(binding, template_def_lookup_tok(nested_td));
       found = 1;
     }
   }
@@ -12954,6 +13189,11 @@ enum_done:
                  members.  This also keeps same-type list initialization on
                  the copy/move-constructor path for C++17 elision. */
               type->ref->a.cpp_user_constructor = 1;
+              /* Only a constructor that is not explicitly defaulted on its
+                 first declaration is user-provided, so only it removes the
+                 class from the aggregate case of list-initialization. */
+              if (lifecycle_default_suffix != 1)
+                type->ref->a.cpp_user_provided_constructor = 1;
             }
             else if (lifecycle_tok == TOK_DESTRUCTOR1
                      && lifecycle_default_suffix != 1)
@@ -13134,8 +13374,8 @@ enum_done:
             if ((type1.t & VT_BTYPE) == VT_FUNC)
             {
               int default_suffix;
-              if (v == tok_alloc_const("operator new") || v == tok_alloc_const("operator new[]")
-                  || v == tok_alloc_const("operator delete") || v == tok_alloc_const("operator delete[]"))
+              if (v == CPP_TOK_NEW_OP || v == CPP_TOK_NEW_ARRAY_OP
+                  || v == CPP_TOK_DELETE_OP || v == CPP_TOK_DELETE_ARRAY_OP)
                 type1.t |= VT_STATIC;
               type1.t |= skip_member_func_cv_qualifiers();
               default_suffix = skip_defaulted_or_deleted_member_suffix();
@@ -13144,7 +13384,7 @@ enum_done:
                 parse_attribute(&ad1);
               }
               if (!(type1.t & VT_STATIC) && default_suffix != 1
-                  && v == tok_alloc_const("operator="))
+                  && v == CPP_TOK_ASSIGN)
               {
                 Sym *parameter = type1.ref->next;
                 if (parameter && !parameter->next)
@@ -13594,7 +13834,7 @@ static Sym *parse_template_nested_typedef_ex(Sym *class_sym, int allow_template)
         if (allow_template) {
           CType marker = { VT_VOID | VT_TYPEDEF, NULL };
           Sym *binding = sym_push(SYM_FIELD, &marker, 0, 0);
-          binding->cpp_using_target = template_def_lookup_tok(nested_td);
+          note_cpp_using_binding(binding, template_def_lookup_tok(nested_td));
           return binding;
         }
         cprime_error("nested class template requires template arguments");
@@ -14228,7 +14468,7 @@ storage:
               TemplateArgList class_args;
               Sym *nested_type_field;
               parse_template_type_args(&class_args);
-              inst_tok = instantiate_template_declaration_type(class_td, &class_args);
+              inst_tok = instantiate_template_declaration_type(class_td, &class_args, (t & VT_EXTERN) != 0);
               compile_pending_template_specs_without_member_flush();
               s = struct_find(inst_tok);
               if (!s)
@@ -14389,7 +14629,7 @@ storage:
                 Sym *nested_type_field;
                 tok_str_free(replay);
                 parse_template_type_args(&args);
-                mangled_tok = instantiate_template_declaration_type(td, &args);
+                mangled_tok = instantiate_template_declaration_type(td, &args, (t & VT_EXTERN) != 0);
                 compile_pending_template_specs_without_member_flush();
                 s = struct_find(mangled_tok);
                 if (!s)
@@ -14453,7 +14693,7 @@ storage:
             goto the_end;
           }
           parse_template_type_args(&args);
-          mangled_tok = instantiate_template_declaration_type(td, &args);
+          mangled_tok = instantiate_template_declaration_type(td, &args, (t & VT_EXTERN) != 0);
           compile_pending_template_specs_without_member_flush();
           s = struct_find(mangled_tok);
           if (!s)
@@ -14510,7 +14750,7 @@ storage:
               int inst_tok;
               TemplateArgList class_args;
               parse_template_type_args(&class_args);
-              inst_tok = instantiate_template_declaration_type(class_td, &class_args);
+              inst_tok = instantiate_template_declaration_type(class_td, &class_args, (t & VT_EXTERN) != 0);
               compile_pending_template_specs_without_member_flush();
               s = struct_find(inst_tok);
               if (!s)
@@ -14740,7 +14980,7 @@ storage:
             TemplateArgList class_args;
             Sym *nested_type_field;
             parse_template_type_args(&class_args);
-            inst_tok = instantiate_template_declaration_type(class_td, &class_args);
+            inst_tok = instantiate_template_declaration_type(class_td, &class_args, (t & VT_EXTERN) != 0);
             compile_pending_template_specs_without_member_flush();
             s = struct_find(inst_tok);
             if (!s)
@@ -15986,6 +16226,10 @@ static int cpp_type_trait_name_tok(int name_tok)
 {
   const char *name = get_tok_str(name_tok, NULL);
 
+  if (name[0] != '_' || name[1] != '_'
+      || (name[2] != 'i' && name[2] != 'h'))
+    return 0;
+
   return !strcmp(name, "__is_pod")
          || !strcmp(name, "__is_constructible")
          || !strcmp(name, "__is_trivially_constructible")
@@ -16590,15 +16834,20 @@ static Sym *find_cpp_this_symbol(void)
     Sym *visible = sym_find(lambda_probe->outer_this->v & ~SYM_FIELD);
     return visible ? visible : lambda_probe->outer_this;
   }
-  if (!cpp_this_name_tok) cpp_this_name_tok = tok_alloc_const("this");
-  Sym *s = sym_find(cpp_this_name_tok);
+
+  Sym *s = sym_find(CPP_TOK_THIS);
   if (s && (s->type.t & VT_BTYPE) == VT_PTR)
     return s;
-  for (s = local_stack; s; s = s->prev)
-    if ((s->type.t & VT_BTYPE) == VT_PTR && s->v >= TOK_UIDENT
-        && !strncmp(get_tok_str(s->v & ~SYM_FIELD, NULL),
-                    "__cprime_this_", 14))
-      return s;
+  /* The synthetic receiver names are mangled from a fixed prefix, so the
+     scan over every live local only matters once such a name exists at all.
+     Ordinary C and C++ code calls this for every call expression, and the
+     prefix check there would otherwise walk the whole local stack. */
+  if (cpp_this_prefixed_identifier_seen)
+    for (s = local_stack; s; s = s->prev)
+      if ((s->type.t & VT_BTYPE) == VT_PTR && s->v >= TOK_UIDENT
+          && !strncmp(get_tok_str(s->v & ~SYM_FIELD, NULL),
+                      "__cprime_this_", 14))
+        return s;
   return NULL;
 }
 
@@ -17430,14 +17679,73 @@ static int inline_expansion_token(const char *prefix)
   return tok_alloc_const(name);
 }
 
+/* Call expansion asks whether a called symbol has a saved inline body for
+   every call expression.  Bucketing the saved definitions by callee name
+   keeps that proportional to the overloads of that name instead of the whole
+   inline table, which the runtime headers fill with hundreds of bodies. */
+static CPRIMEState *inline_fn_index_state;
+static InlineFunc **inline_fn_index_array;
+static int *inline_fn_index_heads;
+static int *inline_fn_index_next;
+static unsigned inline_fn_index_size;
+static int inline_fn_indexed;
+
+static void inline_fn_index_sync(void)
+{
+  CPRIMEState *state = cprime_state;
+  int count = state ? state->nb_inline_fns : 0;
+  int i;
+
+  if (inline_fn_index_state == state && inline_fn_index_array == state->inline_fns
+      && inline_fn_indexed == count)
+    return;
+  inline_fn_index_state = state;
+  inline_fn_index_array = state->inline_fns;
+  inline_fn_indexed = count;
+  if (!count)
+  {
+    if (inline_fn_index_heads)
+      memset(inline_fn_index_heads, 0, inline_fn_index_size * sizeof(int));
+    return;
+  }
+  if (inline_fn_index_size < (unsigned)count * 2)
+  {
+    while (inline_fn_index_size < (unsigned)count * 2)
+      inline_fn_index_size = inline_fn_index_size ? inline_fn_index_size * 2 : 32;
+    inline_fn_index_heads = cprime_realloc(inline_fn_index_heads,
+                                           inline_fn_index_size * sizeof(int));
+  }
+  inline_fn_index_next = cprime_realloc(inline_fn_index_next,
+                                        count * sizeof(int));
+  memset(inline_fn_index_heads, 0, inline_fn_index_size * sizeof(int));
+  /* Entries are prepended from the end, so a bucket walk visits them in
+     registration order -- the order the linear scan used. */
+  for (i = count; --i >= 0;)
+  {
+    InlineFunc *fn = state->inline_fns[i];
+    unsigned bucket;
+    if (!fn || !fn->sym)
+      continue;
+    bucket = ((unsigned)fn->sym->v * 2654435761u) & (inline_fn_index_size - 1);
+    inline_fn_index_next[i] = inline_fn_index_heads[bucket];
+    inline_fn_index_heads[bucket] = i + 1;
+  }
+}
+
 static InlineFunc *find_expand_inline_function(Sym *sym)
 {
-  int i;
+  int i, indexed;
 
   if (!sym || !cprime_state)
     return NULL;
-  for (i = 0; i < cprime_state->nb_inline_fns; ++i)
+  inline_fn_index_sync();
+  if (!inline_fn_index_heads)
+    return NULL;
+  for (indexed = inline_fn_index_heads[((unsigned)sym->v * 2654435761u)
+                                        & (inline_fn_index_size - 1)];
+       indexed > 0; indexed = inline_fn_index_next[i])
   {
+    i = indexed - 1;
     InlineFunc *fn = cprime_state->inline_fns[i];
     if (!fn || !fn->expand_at_call || !fn->sym || !fn->func_str
         || (fn->type.t & VT_BTYPE) != VT_FUNC || !fn->type.ref)
@@ -18167,6 +18475,7 @@ ST_FUNC void unary(void)
   CType type;
   Sym *s;
   AttributeDef ad;
+  const char *tok_name;
 
   // Generate Line Number Info
   if (debug_modes)
@@ -18194,17 +18503,20 @@ tok_next:
   }
   if (try_expand_cpp_alias_template(explicit_global_scope))
     goto tok_next;
-  if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "typename")) {
+  tok_name = (tok >= TOK_UIDENT
+              && (unsigned)(tok - TOK_IDENT) < (unsigned)(tok_ident - TOK_IDENT))
+             ? table_ident[tok - TOK_IDENT]->str : NULL;
+  if (tok_name && tok_name[0] == 't' && !strcmp(tok_name, "typename")) {
     memset(&ad, 0, sizeof(ad));
     if (!parse_btype(&type, &ad, 0)) cprime_error("qualified type expected after typename");
     unget_tok(template_exact_ctype_typedef_tok(&type));
     goto tok_next;
   }
-  if (tok >= TOK_UIDENT
-      && (!strcmp(get_tok_str(tok, NULL), "static_cast")
-          || !strcmp(get_tok_str(tok, NULL), "reinterpret_cast")
-          || !strcmp(get_tok_str(tok, NULL), "const_cast")
-          || !strcmp(get_tok_str(tok, NULL), "dynamic_cast")))
+  if (tok_name
+      && ((tok_name[0] == 's' && !strcmp(tok_name, "static_cast"))
+          || (tok_name[0] == 'r' && !strcmp(tok_name, "reinterpret_cast"))
+          || (tok_name[0] == 'c' && !strcmp(tok_name, "const_cast"))
+          || (tok_name[0] == 'd' && !strcmp(tok_name, "dynamic_cast"))))
   {
     CType cast_type;
     AttributeDef cast_ad;
@@ -18340,7 +18652,7 @@ tok_next:
    }
     goto unary_post;
   }
-  if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "delete"))
+  if (tok_name && tok_name[0] == 'd' && !strcmp(tok_name, "delete"))
   {
     int array_delete = 0;
     next();
@@ -18582,7 +18894,7 @@ str_init:
     type.t |= VT_ARRAY;
     memset(&ad, 0, sizeof(AttributeDef));
     ad.section = rodata_section;
-    decl_initializer_alloc(&type, &ad, VT_CONST, 2, 0, NULL, 0, 0, 0);
+    decl_initializer_alloc(&type, &ad, VT_CONST, 2, 0, NULL, 0, 0, 0, -1);
     if ((vtop->r & VT_SYM) && vtop->sym)
       vtop->sym->string_literal = 1;
     break;
@@ -18673,7 +18985,7 @@ str_init:
         if (!(type.t & VT_ARRAY))
           r |= VT_LVAL;
         memset(&ad, 0, sizeof(AttributeDef));
-        decl_initializer_alloc(&type, &ad, r, 1, 0, NULL, 0, 0, 1);
+        decl_initializer_alloc(&type, &ad, r, 1, 0, NULL, 0, 0, 1, -1);
       }
       else if (t == TOK_SOTYPE)     // From Sizeof/Alignof (...)
       {
@@ -18711,7 +19023,8 @@ str_init:
           indir();
           vtop->type.t |= category;
         }
-        else if (is_cpp_translation_unit() && (type.t & VT_BTYPE) == VT_STRUCT)
+        else if (is_cpp_translation_unit() && (type.t & VT_BTYPE) == VT_STRUCT
+                 && !vector_integer_bitcast_cast(&type))
         {
           if (!convert_cpp_member_pointer(&type, 1)
               && !try_materialize_constructor_conversion_mode(&type, 1)
@@ -19584,9 +19897,9 @@ tok_identifier:
       {
         const char *identifier = get_tok_str(t, NULL);
         if (!strcmp(identifier, "__builtin_operator_new"))
-          t = tok_alloc_const("operator new");
+          t = CPP_TOK_NEW_OP;
         else if (!strcmp(identifier, "__builtin_operator_delete"))
-          t = tok_alloc_const("operator delete");
+          t = CPP_TOK_DELETE_OP;
       }
       unqualified_call_tok = t;
       directive_call_plain = t;
@@ -20170,15 +20483,25 @@ tok_identifier:
           else if (tok != '(') {
             TemplateDef *candidate, *selected = NULL;
             TemplateArgList selected_arguments;
+            int needs_target_signature = 0;
             for (candidate = template_def_candidates(t); candidate;
                  candidate = candidate->lookup_bucket_next) {
               TemplateArgList bindings = explicit_args;
               int parameter, valid = 1;
               if (candidate->is_class || candidate->is_alias
                   || template_def_lookup_tok(candidate) != t
-                  || bindings.nb < candidate->nb_required_type_params
                   || (candidate->variadic_param_index < 0
                       && bindings.nb > candidate->nb_type_params)) continue;
+              if (bindings.nb < candidate->nb_required_type_params) {
+                /* The written arguments stop short of the declared parameter
+                   list, so only the destination signature can supply the
+                   rest. A sibling candidate that the arguments do bind
+                   completely must not win here: the whole overload set stays
+                   unresolved until a target function type selects one
+                   specialization (overload6.C). */
+                needs_target_signature = 1;
+                continue;
+              }
               for (parameter = bindings.nb; parameter < candidate->nb_type_params;
                    ++parameter) {
                 int argument = instantiate_default_template_arg(candidate, &bindings, parameter);
@@ -20190,7 +20513,8 @@ tok_identifier:
               selected = candidate;
               selected_arguments = bindings;
             }
-            if (selected) { td = selected; explicit_args = selected_arguments; }
+            if (selected && !needs_target_signature)
+              { td = selected; explicit_args = selected_arguments; }
             else {
               CType unresolved;
               unresolved.t = VT_FUNC;
@@ -20410,7 +20734,7 @@ tok_identifier:
             directive_qualified_global = 1;
           }
         }
-        if (!explicit_global_scope && lookup_tok == tok_alloc_const("this"))
+        if (!explicit_global_scope && lookup_tok == CPP_TOK_THIS)
           s = find_cpp_this_symbol();
         if (!explicit_global_scope && (!s || !s->sym_scope)) {
           Sym *lexical_static = find_lambda_static_symbol(lookup_tok);
@@ -20638,12 +20962,16 @@ tok_identifier:
         {
           CType *this_target = pointed_type(&this_sym->type);
           int this_class_tok = get_struct_type_name_tok(this_target);
-          if (class_has_static_member_func(this_class_tok, unqualified_call_tok)
-              && (!s || !s->sym_scope))
+          int static_ambiguous = 0;
+          int static_class_tok =
+            find_enclosing_static_member_func_class(this_class_tok,
+                                                    unqualified_call_tok,
+                                                    &static_ambiguous);
+          if (static_class_tok && (!s || !s->sym_scope))
           {
             /* Static members use class lookup but have no implicit receiver. */
-            t = make_static_member_tok(this_class_tok, unqualified_call_tok);
-            instantiate_static_template_member_for_call(this_class_tok,
+            t = make_static_member_tok(static_class_tok, unqualified_call_tok);
+            instantiate_static_template_member_for_call(static_class_tok,
                                                         unqualified_call_tok);
             s = sym_find(t);
             if (!s) s = global_symbol_find(t);
@@ -20714,14 +21042,14 @@ tok_identifier:
         break;
       }
       if (is_cpp_translation_unit() && !qualified_instance_class_tok
-          && tok == '(' && (t == tok_alloc_const("operator delete")
-                            || t == tok_alloc_const("operator delete[]"))) {
+          && tok == '(' && (t == CPP_TOK_DELETE_OP
+                            || t == CPP_TOK_DELETE_ARRAY_OP)) {
         Sym *implicit = cpp_implicit_deallocation_function(t);
         if (!s) s = implicit;
       }
       if (is_cpp_translation_unit() && !qualified_instance_class_tok
-          && tok == '(' && (t == tok_alloc_const("operator new")
-                            || t == tok_alloc_const("operator new[]"))) {
+          && tok == '(' && (t == CPP_TOK_NEW_OP
+                            || t == CPP_TOK_NEW_ARRAY_OP)) {
         Sym *implicit = cpp_implicit_allocation_function(t);
         if (!s) s = implicit;
       }
@@ -20953,6 +21281,22 @@ tok_identifier:
         vtop->sym = s->lexical_reference_target;
         maybe_indir_reference();
         break;
+      }
+      /* A using-declaration imports a function's identity, so a reference
+         that is not a call has to name the imported function itself.  A
+         resolved import would otherwise emit its own qualified label, which
+         no declaration defines.  An import that still has an unresolved
+         overload set keeps the binding and lets the destination signature
+         select the member. */
+      if ((s->type.t & VT_BTYPE) == VT_FUNC && s->cpp_using_target
+          && tok != '('
+          && !has_unresolved_free_func_overloads(s->v))
+      {
+        Sym *imported = global_symbol_find(s->cpp_using_target);
+        if (imported && imported != s
+            && (imported->type.t & VT_BTYPE) == VT_FUNC
+            && !(imported->type.t & VT_TYPEDEF))
+          s = imported;
       }
       r = s->r;
       /* A symbol that has a register is a local register variable,
@@ -21283,7 +21627,7 @@ cpp_object_member_destructor:
         next();
         call_arg_count = count_saved_call_args(call_args, CPC_MAX_CALL_ARGUMENTS);
         infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
-        if (v == tok_alloc_const("operator=") && call_arg_count == 1
+        if (v == CPP_TOK_ASSIGN && call_arg_count == 1
             && (vtop->type.t & VT_BTYPE) == VT_STRUCT)
         {
           CType assigned_type = call_arg_types[0];
@@ -21359,7 +21703,7 @@ cpp_object_member_destructor:
              name the implicit copy assignment operator.  That operator is
              not a declared overload, so resolve the call through the same
              memberwise assignment path used by `*this = rhs`. */
-          if (!func_sym && v == tok_alloc_const("operator=")
+          if (!func_sym && v == CPP_TOK_ASSIGN
               && call_arg_count == 1
               && (vtop->type.t & VT_BTYPE) == VT_STRUCT)
           {
@@ -22812,7 +23156,10 @@ static void expr_eq(void)
       CType member_type = vtop->type;
       int alignment;
       Sym *old_cleanup = cur_scope->cl.s;
+      Sym *flex_field = NULL;
       int old_cleanup_depth = cur_scope->cl.n;
+      int flex_extent = -1;
+      TokenString *member_init = NULL;
       initialization.local_offset = type_size(&member_type, &alignment);
       loc = (loc - PTR_SIZE) & -PTR_SIZE;
       initialization.indirect_base = loc;
@@ -22821,6 +23168,16 @@ static void expr_eq(void)
           && (vtop->r & VT_SYM)
           && (!vtop->sym->sym_scope || (vtop->sym->type.t & VT_STATIC)))
         initialization.extend_backing_array_lifetime = 2;
+      /* A braced initializer fixes the extent of a trailing flexible array
+         member; the surrounding object already reserved those elements. */
+      if (tok == '{' && flexible_array_member(&member_type)) {
+        skip_or_save_block(&member_init);
+        unget_tok(0);
+        flex_extent = flexible_array_element_count(&member_type, member_init,
+                                                   &flex_field);
+        prepare_flexible_array_initializer(&initialization, flex_field,
+                                           flex_extent);
+      }
       /* Keep the actual member address live while the ordinary initializer
          handles braces, arrays, strings and partial element construction. */
       vdup();
@@ -22829,7 +23186,18 @@ static void expr_eq(void)
       vtop->type = char_pointer_type;
       vset(&char_pointer_type, VT_LOCAL | VT_LVAL, initialization.indirect_base);
       vswap(); vstore(); vpop();
+      if (member_init) {
+        begin_macro(member_init, 1);
+        next();
+      }
       decl_initializer(&initialization, &member_type, 0, DIF_FIRST);
+      if (member_init) {
+        end_macro();
+        next();
+        tok_str_free(member_init);
+      }
+      if (flex_field)
+        flex_field->type.ref->c = -1;
       /* Array elements remain live if a later member or the constructor
          body throws. Their successful initializations already registered
          exception-only cleanups in declaration order. */
@@ -22903,6 +23271,27 @@ static void expr_eq(void)
         active_assignment_lvalues = assignment_guard.prev;
         return;
       }
+      if ((vtop[-1].type.t & VT_BTYPE) == VT_STRUCT)
+      {
+        /* No user-declared compound assignment applies, but a class operand
+           can still take the built-in operator through a conversion function
+           that yields a modifiable scalar lvalue (`operator int&`). Convert
+           the saved copy, then let the result store back through that
+           reference instead of the class object. */
+        vswap();
+        if (try_cpp_builtin_scalar_reference_conversion(TOK_ASSIGN_OP(t)))
+        {
+          /* [class lvalue, rhs, converted] -> [converted, converted, rhs]:
+             the first entry stores the result and the second is the left
+             operand of the built-in operation. */
+          vdup();
+          vrotb(3);
+          vrotb(4);
+          vpop();
+        }
+        else
+          vswap();
+      }
       gen_op(TOK_ASSIGN_OP(t));
     }
     if (t == TOK_INIT_MEMBER) vtop[-1].type.t &= ~VT_CONSTANT;
@@ -22929,11 +23318,16 @@ ST_FUNC void gexpr(void)
     {
       next();
       expr_eq();
-      if (!try_call_cpp_free_binary_operator(',')
-          && !(((vtop[-1].type.t & VT_BTYPE) == VT_STRUCT
-                || (is_reference_type(&vtop[-1].type)
-                    && (pointed_type(&vtop[-1].type)->t & VT_BTYPE) == VT_STRUCT))
-               && try_call_cpp_binary_operator(','))) {
+      /* A user-defined comma operator has to be declared through an
+         `operator<op>` spelling first; ordinary code reaches this for every
+         comma expression, so do not pay for two lookups that cannot succeed
+         in a translation unit that never declared one. */
+      if (!(cpp_operator_overload_seen
+            && (try_call_cpp_free_binary_operator(',')
+                || (((vtop[-1].type.t & VT_BTYPE) == VT_STRUCT
+                     || (is_reference_type(&vtop[-1].type)
+                         && (pointed_type(&vtop[-1].type)->t & VT_BTYPE) == VT_STRUCT))
+                    && try_call_cpp_binary_operator(','))))) {
         vswap();
         vpop();
       }
@@ -23103,6 +23497,23 @@ static int cpp_return_result_in_caller_slot;
 /* Set while this return statement owns a cleanup for that result object. */
 static int cpp_elided_return_result_active;
 
+/* Named return value optimization state.  A body whose last statement is
+   `return <local>;` can build that local straight into the caller's result
+   object instead of the frame, so members that name the object (and `this`
+   inside its constructors) keep the address the caller observes.  The body
+   is scanned before it is parsed: by the time the declaration runs, the token
+   stream already had to say which local the single return names. */
+static int cpp_nrvo_candidate_tok;
+static struct scope *cpp_nrvo_candidate_scope;
+static CType cpp_nrvo_candidate_type;
+/* Set once the candidate declaration claimed the caller's result object. */
+static int cpp_nrvo_result_object_declared;
+/* Set while the return statement in flight returns that object. */
+static int cpp_nrvo_return_operand;
+/* Set by gen_function_body() for the body gen_function() is about to parse. */
+static int cpp_nrvo_pending_tok;
+static CType cpp_nrvo_pending_type;
+
 static int cpp_cleanup_is_elided_return_object(Sym *cleanup)
 {
   Sym *object = cleanup->cleanup_sym;
@@ -23166,8 +23577,11 @@ static int try_gfunc_return_copy_construct(CType *func_type)
   if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_LLOCAL | VT_LVAL)
       && vtop->c.i == func_vc
       && is_compatible_unqualified_types(func_type, &vtop->type)) {
-    /* The prvalue was constructed in the caller-provided result object. */
+    /* The prvalue was constructed in the caller-provided result object.  The
+       same shape names the named-return object, whose declaration already
+       registered the destructor that unwinding needs. */
     cpp_return_result_in_caller_slot = 1;
+    cpp_nrvo_return_operand = cpp_nrvo_result_object_declared;
     vpop();
     return 1;
   }
@@ -23176,7 +23590,7 @@ static int try_gfunc_return_copy_construct(CType *func_type)
   source_value_type.t &= ~VT_RVALUE_REFERENCE;
   if (is_reference_type(&source_value_type))
     source_value_type = *pointed_type(&source_value_type);
-  if (getenv("CPC_TRACE_RETURN"))
+  if (cpp_trace_return())
     fprintf(stderr, "[ret] copy-construct return in %s\n",
         funcname ? funcname : "?");
   ctor_func = resolve_copy_constructor_func(func_type, &vtop->type);
@@ -23284,7 +23698,7 @@ static int try_gfunc_return_copy_construct(CType *func_type)
 
 static int virtual_vptr_field_tok(int root_tok)
 {
-  return make_joined_name_tok(tok_alloc_const("__cprime_vptr"), root_tok, "_", "");
+  return make_joined_name_tok(CPP_TOK_VPTR_NAME, root_tok, "_", "");
 }
 
 static int virtual_method_signatures_match(CType *left, CType *right)
@@ -23497,7 +23911,18 @@ static VirtualMethodInfo *find_virtual_impl(VirtualTableInfo *table, int slot,
     for (ancestor = i; ancestor >= 0; ancestor = nodes[ancestor].parent)
       for (method = virtual_method_infos; method; method = method->next)
         if (method->class_tok == nodes[ancestor].class_tok
-            && method->method_tok == declaration->method_tok
+            && (method->method_tok == declaration->method_tok
+                /* A conversion function's name is its conversion-type-id, so
+                   two spellings of the same type (a typedef and the type it
+                   names) override each other even though their method tokens
+                   differ.  Both occupy the declared slot already. */
+                || (method->root_tok == declaration->root_tok
+                    && method->slot == declaration->slot
+                    && method->func_type.ref && declaration->func_type.ref
+                    && method->func_type.ref->f.func_cpp_conversion
+                    && declaration->func_type.ref->f.func_cpp_conversion
+                    && is_compatible_types(&method->func_type.ref->type,
+                                           &declaration->func_type.ref->type)))
             && virtual_method_signatures_match(&method->func_type, &declaration->func_type)
             && (!best || class_has_base(method->class_tok, best->class_tok))) {
           best = method;
@@ -24272,6 +24697,103 @@ static void save_lvalues(void)
   }
 }
 
+/* Named return value optimization.  A body whose last statement is
+   `return <local>;` can build that local straight into the caller's result
+   object instead of the frame, so members that name the object (and `this`
+   inside its constructors) keep the address the caller observes.  The body
+   is scanned before it is parsed: by the time the declaration runs, the token
+   stream already had to say which local the single return names.  The state
+   itself lives next to the elided-return state above. */
+/* Index of the token after the one at 'i', skipping its value words and any
+   line-number markers. */
+static int cpp_nrvo_next_index(const int *str, int len, int i)
+{
+  if (i < len && TOK_HAS_VALUE(str[i]))
+    i += 1 + tok_str_value_extra_words(str, len, i);
+  else
+    ++i;
+  while (i < len && str[i] == TOK_LINENUM)
+    i += 1 + tok_str_value_extra_words(str, len, i);
+  return i;
+}
+
+/* Accept only the shape the caller-side result object can host: exactly one
+   return statement, spelled `return <identifier> ;`, and trailing so every
+   path through the body's declarations also reaches it. */
+static int cpp_nrvo_scan_body(TokenString *body, int *name)
+{
+  int i = 0, len = body->len, returns = 0;
+
+  while (i < len)
+  {
+    if (body->str[i] != TOK_RETURN)
+    {
+      i = cpp_nrvo_next_index(body->str, len, i);
+      continue;
+    }
+    if (++returns > 1)
+      return 0;
+    i = cpp_nrvo_next_index(body->str, len, i);
+    if (i >= len || body->str[i] < TOK_UIDENT)
+      return 0;
+    *name = body->str[i];
+    i = cpp_nrvo_next_index(body->str, len, i);
+    if (i >= len || body->str[i] != ';')
+      return 0;
+    i = cpp_nrvo_next_index(body->str, len, i);
+    if (i >= len || body->str[i] != '}')
+      return 0;
+  }
+  return returns == 1;
+}
+
+/* A named return only exists where the caller supplies the result storage. */
+static int cpp_nrvo_return_type(Sym *sym, CType *return_type)
+{
+  CType type = sym->type.ref->type;
+  CType register_type;
+  int align, regsize;
+
+  if (!is_cpp_translation_unit())
+    return 0;
+  while ((type.t & VT_BTYPE) == VT_FUNC && type.ref)
+    type = type.ref->type;
+  if (is_reference_type(&type))
+    return 0;
+  if ((type.t & VT_BTYPE) != VT_STRUCT || !type.ref)
+    return 0;
+  if (cpp_current_return_regs(&type, &register_type, &align, &regsize) != 0)
+    return 0;
+  *return_type = type;
+  return 1;
+}
+
+/* Decide whether this declaration is the object the single return names, and
+   only in the function-body block where that return lives. */
+static int cpp_nrvo_take_result_object(int v, CType *type, int has_init,
+                                       TokenString *copy_ctor_init)
+{
+  if (!cpp_nrvo_candidate_tok || v != cpp_nrvo_candidate_tok)
+    return 0;
+  if (cur_scope->prev != cpp_nrvo_candidate_scope)
+    return 0;
+  /* Only the constructor-shaped declarations reach the result object
+     directly; other initializer forms keep their existing elision. */
+  if (has_init || copy_ctor_init)
+    return 0;
+  if (type->t & (VT_ARRAY | VT_STATIC | VT_VOLATILE | VT_EXTERN))
+    return 0;
+  if (is_reference_type(type))
+    return 0;
+  if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref)
+    return 0;
+  if (!is_compatible_unqualified_types(&cpp_nrvo_candidate_type, type))
+    return 0;
+  cpp_nrvo_candidate_tok = 0;
+  cpp_nrvo_result_object_declared = 1;
+  return 1;
+}
+
 #include "cprimegen_exceptions.inc"
 #include "cprimegen_rtti.inc"
 #include "cprimegen_temporaries.inc"
@@ -24289,6 +24811,10 @@ static void gen_function(Sym *sym)
   int saved_unevaluated_depth = cpp_unevaluated_expression_depth;
   int saved_namespace_depth = nb_namespace_stack;
   int saved_member_class_tok = active_member_class_tok;
+  int saved_nrvo_candidate_tok = cpp_nrvo_candidate_tok;
+  int saved_nrvo_result_object_declared = cpp_nrvo_result_object_declared;
+  struct scope *saved_nrvo_candidate_scope = cpp_nrvo_candidate_scope;
+  CType saved_nrvo_candidate_type = cpp_nrvo_candidate_type;
   int saved_namespace_stack[16];
   /* Errors in an instantiated function body are outside substitution's
      immediate context, including bodies needed to deduce an auto return. */
@@ -24301,6 +24827,14 @@ static void gen_function(Sym *sym)
 
   cur_scope = root_scope = &f;
   nocode_wanted = 0;
+
+  /* gen_function_body() scanned the body before it was parsed; the candidate
+     it found belongs to this function and to no nested body. */
+  cpp_nrvo_candidate_tok = cpp_nrvo_pending_tok;
+  cpp_nrvo_candidate_scope = root_scope;
+  cpp_nrvo_candidate_type = cpp_nrvo_pending_type;
+  cpp_nrvo_result_object_declared = 0;
+  cpp_nrvo_pending_tok = 0;
 
   ind = cur_text_section->data_offset;
   if (sym->a.aligned)
@@ -24420,6 +24954,46 @@ static void gen_function(Sym *sym)
   cpp_unevaluated_expression_depth = saved_unevaluated_depth;
   local_type_owner_tok = saved_local_type_owner;
   local_type_declaration_index = saved_local_type_index;
+  cpp_nrvo_candidate_tok = saved_nrvo_candidate_tok;
+  cpp_nrvo_candidate_scope = saved_nrvo_candidate_scope;
+  cpp_nrvo_candidate_type = saved_nrvo_candidate_type;
+  cpp_nrvo_result_object_declared = saved_nrvo_result_object_declared;
+}
+
+/* Parse a function definition body.  When the caller supplies the result
+   object, the body is scanned first so a `return <local>;` can build that
+   local in the caller's storage.  The scan needs the body tokens, and the
+   replay that follows parses exactly those tokens, so the body is read once
+   either way. */
+static void gen_function_body(Sym *sym)
+{
+  CType return_type;
+  TokenString *body, *saved_macro_stack;
+  int candidate = 0, saved_tok;
+  CValue saved_tokc;
+
+  if (tok != '{' || !cpp_nrvo_return_type(sym, &return_type))
+  {
+    gen_function(sym);
+    return;
+  }
+  saved_macro_stack = macro_stack;
+  body = tok_str_alloc();
+  skip_or_save_block(&body);
+  saved_tok = tok;
+  saved_tokc = tokc;
+  if (cpp_nrvo_scan_body(body, &candidate))
+  {
+    cpp_nrvo_pending_tok = candidate;
+    cpp_nrvo_pending_type = return_type;
+  }
+  begin_macro(body, 1);
+  next();
+  gen_function(sym);
+  while (macro_stack && macro_stack != saved_macro_stack)
+    end_macro();
+  tok = saved_tok;
+  tokc = saved_tokc;
 }
 
 /* Make small C inline definitions available to the direct backend early.
@@ -24489,11 +25063,11 @@ static void gen_inline_functions(CPRIMEState *s)
            generate its code and convert it to a normal function */
         if ((sym->type.t & VT_BTYPE) == VT_FUNC && sym->type.ref
             && sym->type.ref->next
-            && sym->type.ref->next->v == tok_alloc_const("this"))
+            && sym->type.ref->next->v == CPP_TOK_THIS)
         {
           int synthetic_this_tok;
           synthetic_this_tok = make_joined_name_tok(
-            tok_alloc_const("__cprime_this"), sym->v, "_", "");
+            CPP_TOK_PRIVATE_THIS, sym->v, "_", "");
           if (token_string_contains_tok(fn->func_str, synthetic_this_tok))
             sym->type.ref->next->v = synthetic_this_tok;
         }
@@ -24764,7 +25338,7 @@ static int try_parse_using_alias_declaration(int decl_scope)
           note_cpp_using_lookup_target(binding_tok, target);
       }
       if (!binding->cpp_using_target)
-        binding->cpp_using_target = using_import_toks[0];
+        note_cpp_using_binding(binding, using_import_toks[0]);
       tok_str_free(replay);
       skip(';');
       return 1;
@@ -24806,7 +25380,7 @@ static int try_parse_using_alias_declaration(int decl_scope)
       Sym *binding = sym_push(binding_tok, &alias_sym->type, alias_sym->r, alias_sym->c);
       binding->a = alias_sym->a;
       binding->enum_val = alias_sym->enum_val;
-      binding->cpp_using_target = alias_sym->cpp_using_target ? alias_sym->cpp_using_target : qualified_tok;
+      note_cpp_using_binding(binding, alias_sym->cpp_using_target ? alias_sym->cpp_using_target : qualified_tok);
       tok_str_free(replay);
       skip(';');
       return 1;
@@ -24823,7 +25397,7 @@ static int try_parse_using_alias_declaration(int decl_scope)
            Redeclaring the name here would reject the overload set. */
       } else {
         binding = sym_push(binding_tok, &func_old_type, VT_CONST | VT_SYM, 0);
-        binding->cpp_using_target = qualified_tok;
+        note_cpp_using_binding(binding, qualified_tok);
       }
       /* A call through either spelling has to see every imported template,
          not just the one the binding happens to redirect to. */
@@ -24839,7 +25413,7 @@ static int try_parse_using_alias_declaration(int decl_scope)
       int binding_tok = decl_scope == VT_CONST
                           ? make_current_namespace_tok(alias_tok) : alias_tok;
       Sym *binding = sym_push(binding_tok, &marker, 0, 0);
-      binding->cpp_using_target = qualified_tok;
+      note_cpp_using_binding(binding, qualified_tok);
       tok_str_free(replay);
       skip(';');
       return 1;
@@ -24864,7 +25438,7 @@ static int try_parse_using_alias_declaration(int decl_scope)
       } else {
         binding = sym_push(binding_tok, &alias_sym->type, alias_sym->r, alias_sym->c);
         binding->a = alias_sym->a;
-        binding->cpp_using_target = target_tok;
+        note_cpp_using_binding(binding, target_tok);
       }
       /* `using N::f;` for a C-linkage `f` that the plain name already denotes
          imports the one function, not a second overload of it. */
@@ -25033,6 +25607,7 @@ static int decl_context(int l, int condition)
   int local_static_dynamic_init, declared_initializer;
   int r, oldint, btype_is_auto, btype_was_typedef;
   int scoped_static_data_definition;
+  int flex_extent;
   int friend_declaration, hidden_friend, function_source_tok;
   CType type, btype;
   Sym *sym, *sa;
@@ -25599,10 +26174,10 @@ static int decl_context(int l, int condition)
           // Compute Text Section
           cur_text_section = ad.section;
           if (!cur_text_section)
-            cur_text_section = text_section;
+          cur_text_section = text_section;
           else if (cur_text_section->sh_num > bss_section->sh_num)
             cur_text_section->sh_flags = text_section->sh_flags;
-          gen_function(sym);
+          gen_function_body(sym);
         }
         break;
       }
@@ -25615,6 +26190,7 @@ static int decl_context(int l, int condition)
         local_static_dynamic_init = 0;
         init_str = NULL;
         copy_ctor_init = NULL;
+        flex_extent = -1;
         if (l == VT_CMP)
         {
           // Find Parameter In Function Parameter List
@@ -25778,7 +26354,9 @@ found:
                 auto_init_str = NULL;
                 has_init = 0;
                 if (!ad.section) ad.section = bss_section;
-                decl_initializer_alloc(&type, &ad, r, 0, 0, NULL, v, l, 0);
+                flex_extent = flexible_array_element_count(&type, init_str, NULL);
+                decl_initializer_alloc(&type, &ad, r, 0, 0, NULL, v, l, 0,
+                                       flex_extent);
                 goto after_decl_initializer_alloc;
               }
               if (can_lower_local_static_dynamic_init(&type, l, 1))
@@ -25791,7 +26369,9 @@ found:
                   init_str = auto_init_str;
                   local_static_dynamic_init = 1;
                   if (!ad.section) ad.section = bss_section;
-                  decl_initializer_alloc(&type, &ad, r, 0, 0, NULL, v, l, 0);
+                  flex_extent = flexible_array_element_count(&type, init_str, NULL);
+                  decl_initializer_alloc(&type, &ad, r, 0, 0, NULL, v, l, 0,
+                                         flex_extent);
                   goto after_decl_initializer_alloc;
                 }
               }
@@ -25800,7 +26380,7 @@ found:
               begin_macro(auto_init_str, 1);
               auto_macro_stack = macro_stack;
               next();
-              decl_initializer_alloc(&type, &ad, r, 1, 0, NULL, v, l, 0);
+              decl_initializer_alloc(&type, &ad, r, 1, 0, NULL, v, l, 0, -1);
               while (macro_stack && macro_stack != auto_macro_stack
                      && macro_stack != auto_macro_parent)
                 end_macro();
@@ -25939,8 +26519,11 @@ found:
               // Uninitialized Global Variables May Be Overridden
               type.t |= VT_EXTERN;
             }
+            if (init_str && !has_init && !has_ctor_init)
+              flex_extent = flexible_array_element_count(&type, init_str, NULL);
             decl_initializer_alloc(&type, &ad, r, has_init, has_ctor_init,
-                                   copy_ctor_init, v, l, has_direct_init);
+                                   copy_ctor_init, v, l, has_direct_init,
+                                   flex_extent);
             if (has_paren_init)
               skip(')');
 after_decl_initializer_alloc:

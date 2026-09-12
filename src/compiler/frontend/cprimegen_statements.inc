@@ -816,7 +816,7 @@ again:
     alias_type.t = VT_VOID | VT_TYPEDEF;
     alias_type.ref = NULL;
     binding = sym_push(ns_tok, &alias_type, 0, 0);
-    binding->cpp_using_target = target;
+    note_cpp_using_binding(binding, target);
   }
   else if (t == TOK_TRY)
   {
@@ -1195,7 +1195,13 @@ if_chain:
           /* The result object now lives in the caller's storage, which this
              frame still owns until the return completes: a cleanup raised
              later in this statement must destroy it before the caller can. */
-          cpp_eh_register_result_object_cleanup(&func_vt, func_vc);
+          if (cpp_nrvo_return_operand)
+            /* A named return object's declaration already registered that
+               cleanup.  Deferring it below keeps it off the ordinary path
+               while leaving it in every exception state. */
+            cpp_elided_return_result_active = 1;
+          else
+            cpp_eh_register_result_object_cleanup(&func_vt, func_vc);
         }
         /* Keep packed results live on the value stack while temporary and
            local destructors run. Ordinary call spilling then preserves all
@@ -1216,6 +1222,7 @@ if_chain:
     leave_scope(root_scope);
     cpp_elided_return_active = 0;
     cpp_return_result_in_caller_slot = 0;
+    cpp_nrvo_return_operand = 0;
     cpp_elided_return_result_active = 0;
     cpp_eh_restore_deferred_cleanups();
     if (aggregate_return_registers > 0)
