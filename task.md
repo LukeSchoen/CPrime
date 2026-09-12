@@ -1,22 +1,21 @@
 # Remaining work
 
-Target: 100% of fast tests and the retained pedantic GCC checks, with no missing
-coverage, weakened expectations, compiler internal errors, or timeout retries.
+Target: 100% of the retained GCC language rows and the first-party pedantic
+corpus, with no missing coverage, weakened expectations, compiler internal
+errors or timeout retries.
 
-State (2026-09-12): 152 retained failures of 152 selected rows -- 146
-FAIL_COMPILE, 3 FAIL_RUN, 3 FAIL_RUN_CRASH -- on root `cpc.exe` SHA256
-`b6e16ca86ae7a6965b840c3f00dabec3f15c84f06ba5af4098e4a4e7e17ad489`. All fifteen
-selected fast language suites pass (`Tests/run-all.ps1 -Tier fast`, 0
-regressions); every promotion through cycle 53 passes; the pedantic GCC
-partition passes 546/546 and the language partition fails only the 16 known
-cases below; triage is current as of cycle 53
-(`build/compiler-bug-triage.txt`). Cycle 53 dropped a function template
-candidate whose declared parameter pattern never names one of its template
-parameters, so an explicit-argument call no longer substitutes the argument
-into that parameter and instantiates the class template it names
-(`dr1391-1.C`), and let a declaration-only conversion member template deduce
-against the written conversion target (`conv6.C`); earlier cycles are
-recorded in git history.
+State (2026-09-12, focus wave): 152 retained failures of 152 retained external
+rows -- 146 FAIL_COMPILE, 3 FAIL_RUN, 3 FAIL_RUN_CRASH -- on root `cpc.exe`
+SHA256 `b6e16ca86ae7a6965b840c3f00dabec3f15c84f06ba5af4098e4a4e7e17ad489`.
+The 546 passing external rows were deleted; `corpus.json` lists only unresolved
+rows (698 -> 152) and `-Tier pedantic` for the GCC adapter is now an empty no-op.
+Their coverage moved first-party: 41 near-duplicate internal tests were merged
+into 12 consolidated files and the new `features/GnuExtensions` suite carries
+the retired GNU-extension behaviors. `Tests/tiers.json` pedantic is 1567 entries
+(1561 internal established passes and 6 GnuExtensions). The fast tier passes
+with 0 regressions and the pedantic language partition fails only the 16 known
+cases below; triage is current as of this wave
+(`build/compiler-bug-triage.txt`).
 
 ## Cycle contract
 
@@ -26,12 +25,15 @@ cheaper than a long one that runs out of context.
 1. Pick the next cluster from the ordered work below, or the top cluster in the
    triage when that list is empty.
 2. Reproduce one row with
-   `Tests/pedantic/gcc/run.ps1 -Select <path> -Out build/<name>`, fix it, and
-   re-run that selection until it passes.
-3. Promote verified passes to pedantic in `Tests/tiers.json`.
-4. Re-run `Tests/run-all.ps1 -Tier fast` once (about 13 s) to confirm zero
-   regressions.
-5. Update the State line and the ordered work in this file, then stop.
+   `Tests/pedantic/gcc/run.ps1 -Select <path> -Out build/<name>`.
+3. Reduce it to a first-party regression in the nearest `Tests/features/...`
+   suite, fix the compiler, and re-run the selection plus the regression until
+   both pass.
+4. Retire the row: delete the corpus file, remove its `corpus.json` case entry
+   and drop any `Tests/tiers.json` entry for it. Repaired rows are deleted, not
+   promoted into a permanent external corpus.
+5. Re-run `Tests/run-all.ps1 -Tier fast` once (about 20 s) to confirm zero
+   regressions, update the State line and the ordered work, then stop.
 
 Do not start a second cluster. If a fix has not landed after roughly half the
 budget, revert it, record the narrowed lead in the ordered work, and stop.
@@ -39,23 +41,23 @@ Keep the session small: run focused selections rather than whole sweeps, print
 only the tail of a run, and never open whole test files or inventories when a
 path plus first diagnostic is enough. Do not paste inventories into this file.
 
-Create `done.x` and stop the moment all fast tests and retained pedantic checks
-pass.
+Create `done.x` and stop the moment every retained row and pedantic test passes.
 
 ## Ordered work
 
-1. Long tail: mostly one row per fix in template deduction, substitution,
-   dependent lookup and overload selection. Batch two or three small
-   independent fixes in a session instead of one deep defect.
-   Cycles 24-50 retired the clusters recorded in git history, most recently
-   `friend23.C`, `typedef15.C`, `crash53.C`, `local11.C`, `friend73.C`,
-   `inherit.C`, `friend49.C`, `qualttp16.C`, `member3.C`, `injected2.C` and
-   `sfinae27.C`; cycles 51-53 retired `spec20.C`, `sts_partial.C`, `dr408.C`,
-   `deduce8.C`, `typename1.C`, `dr1391-1.C` and `conv6.C`; current lead:
-   `conv1.C` (`First__D_operator` undeclared), then `conv20.C` (incomplete
-   base).
-2. Coroutines (~30 rows) and `_Complex` (~13 rows) are whole features with no
-   historical yield. Start them only after an explicit decision to fund them as
+1. Long tail: 113 singleton rows plus small shared clusters in template
+   deduction, substitution, dependent lookup, conversion and overload
+   selection. Batch two or three small independent fixes per session instead of
+   one deep defect. Cycles 24-50 retired the clusters recorded in git history,
+   most recently `friend23.C`, `typedef15.C`, `crash53.C`, `local11.C`,
+   `friend73.C`, `inherit.C`, `friend49.C`, `qualttp16.C`, `member3.C`,
+   `injected2.C` and `sfinae27.C`; cycles 51-53 retired `spec20.C`,
+   `sts_partial.C`, `dr408.C`, `deduce8.C`, `typename1.C`, `dr1391-1.C` and
+   `conv6.C`; current lead: `conv1.C` (`First__D_operator` undeclared), then
+   `conv20.C` (incomplete base).
+2. Coroutines: 30 rows in three header/feature clusters. `_Complex`: 5 immediate
+   rows plus the remaining `g++.dg/opt` rows. Both are whole features with no
+   historical yield; start only after an explicit decision to fund them as
    multi-cycle projects.
 
 Narrowed leads, each already reduced to one site:
@@ -91,7 +93,8 @@ Narrowed leads, each already reduced to one site:
 - Array decay: a static member array compared against a pointer where the
   comparison opens a statement or `?:` reports `invalid operand types for
   binary operation` (`return X::p == X::c ? 0 : 1;`); `if (!(...))` works.
-## Known pedantic language-suite failures (16)
+
+## Known first-party pedantic failures (16)
 
 Pre-existing, confirmed against earlier published compilers, so not regressions
 from the retained-corpus repairs. They count toward the target.

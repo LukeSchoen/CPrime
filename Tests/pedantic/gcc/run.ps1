@@ -50,7 +50,12 @@ foreach ($selection in $Select) {
         throw "Unknown checked selection: $selection"
     }
 }
-if (-not $files.Count) { throw 'No checked cases selected' }
+if (-not $files.Count) {
+    if (-not @($corpus.cases).Count) { throw 'Corpus has no checked cases' }
+    if ($List) { exit 0 }
+    Write-Host "No checked cases in tier $Tier"
+    exit 0
+}
 if ($Limit) { $files = @($files | Select-Object -First $Limit) }
 if ($List) { $files | ForEach-Object { Get-Relative $_ }; exit 0 }
 $counts = @{}

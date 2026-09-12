@@ -3,249 +3,14 @@
     "source":  "https://github.com/gcc-mirror/gcc",
     "cases":  [
                   {
-                      "path":  "g++.old-deja/g++.brendan/crash6.C",
-                      "role":  "case",
-                      "sha256":  "ff72438a158f15a1f0be70169b5436423fa51bf242c9fb727dd334395e349a23"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/crash53.C",
-                      "role":  "case",
-                      "sha256":  "9ed66a907c8dd41059405f3bca5041b3eb9605ac30e8bdb676ff672cac4d31ce"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/crash63.C",
-                      "role":  "case",
-                      "sha256":  "53d5ae8a36afeef20d3ef88325743736e0d5a9c20527b5c3bd501bc4eba730dd"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/label2.C",
-                      "role":  "case",
-                      "sha256":  "552c4b6b5203dc99e81ebc78818c8e96807d787825f5bcd4b2a52c38b790b853"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/ctors3.C",
-                      "role":  "case",
-                      "sha256":  "140c4683134e9564ae93db248ef8c399e965f0a161356deebbbdc9bd72da4238"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.benjamin/typedef03.C",
-                      "role":  "case",
-                      "sha256":  "767ffcf6d0030dc65ee8819f13a242981b9a78fe46c5777409a5e45618102613"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.benjamin/tem02.C",
-                      "role":  "case",
-                      "sha256":  "bc5424a1133f1f2b9e9e841fb8c4b60d3ed448c17f7855b501a87221c0590b34"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.brendan/complex1.C",
                       "role":  "case",
                       "sha256":  "d4fb284cb2d150354401c1765fda95537888e5d2b306f3d3b418b90c2b178a59"
                   },
                   {
-                      "path":  "g++.old-deja/g++.brendan/crash47.C",
-                      "role":  "case",
-                      "sha256":  "f5a65a1c8abf7b2c1f8eed8d54a0d642429a4e00426692e53d9c99843c7aa3b5"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/copy5.C",
-                      "role":  "case",
-                      "sha256":  "b8c1e451cbae3e66928f1640556c0378fbdeb77454355fec4efc707ba939866c"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/misc8.C",
-                      "role":  "case",
-                      "sha256":  "9ea7392a7ba1e79bf7c330815c12ff8eee768ecf494f55562b1814ebb109a699"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/template8.C",
-                      "role":  "case",
-                      "sha256":  "fccebefa83bd9797e43aa829657cad16ba9bb5333dd3596f7f0973f194618eec"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/scope4.C",
-                      "role":  "case",
-                      "sha256":  "83dd078b3a7da9d426c1ec363fb3cb4093e5eaa37e9b6cb54d171f8e3723f2c8"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/union3.C",
-                      "role":  "case",
-                      "sha256":  "ea22126242c6b7ad1cfa23addc2ae7669f488aceb0e5043c0b433e42cf487f25"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.eh/catch12.C",
-                      "role":  "case",
-                      "sha256":  "34f65cf2151df2c17cc69acdbb13330a361f950abdeb5c86f434aa643be59eff"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.eh/catch11.C",
-                      "role":  "case",
-                      "sha256":  "f5b00e476f43b6b0fd86ffb7bc921d212f48414a5c3b95466ba99cf8341f94a9"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/overload6.C",
-                      "role":  "case",
-                      "sha256":  "50c773617aa02af133b1816f3db1659987faf5102f5efe7991a81063a39ccf5d"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/operators5.C",
-                      "role":  "case",
-                      "sha256":  "3ad73614f27045cd6557f89b92587732dc56723ec7c90963ecb3b34c6bda31aa"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/parse4.C",
-                      "role":  "case",
-                      "sha256":  "9a9d8af8757e7edfc497ff94e433d79a7919a82400ba17f6817aa9eaaaa06aae"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/redecl2.C",
-                      "role":  "case",
-                      "sha256":  "1bb884cc1da0a97de61c0a517b5ac04e8ce5343bf691de30ccaeb13d1924e59f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.brendan/ptrmem2.C",
-                      "role":  "case",
-                      "sha256":  "543fd7be7da830c9ba746273ccb5a6b0dca9efd29616b61730b404d2b30adae5"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.benjamin/tem01.C",
-                      "role":  "case",
-                      "sha256":  "108638406d25b96722279c53e235ce8cfa75cc842d70904f9ac2d25ae7c6ca5f"
-                  },
-                  {
-                      "path":  "g++.dg/template/using8.C",
-                      "role":  "case",
-                      "sha256":  "c357043c11a72a91a09189ef34a938a2693d43ca2d0651c99b4219252714b60c"
-                  },
-                  {
-                      "path":  "g++.dg/template/using24.C",
-                      "role":  "case",
-                      "sha256":  "7466797fc11334554b8306964d4cbd2f36775d52171c984e7e1584c31ac10292"
-                  },
-                  {
-                      "path":  "g++.dg/template/virtual5.C",
-                      "role":  "case",
-                      "sha256":  "690bbfdc405ab1462ba4d8735c899ae599085dc89b0a09b261c5d540d41decb8"
-                  },
-                  {
-                      "path":  "g++.dg/tree-ssa/pr15791-2.C",
-                      "role":  "case",
-                      "sha256":  "0ee85ded2b2fd3e9a88149af429b7aa35c452b940a5e27e2a1da82e170590612"
-                  },
-                  {
-                      "path":  "g++.dg/template/vtable1.C",
-                      "role":  "case",
-                      "sha256":  "9ffaa24bb7ec57ee909b126df8476e4c712be872e985a07b909fac6f0157a835"
-                  },
-                  {
-                      "path":  "g++.dg/template/union2.C",
-                      "role":  "case",
-                      "sha256":  "d008a30e9cba6773b0615fc5c4dc3c93fcc3c844d8b21e390319c2067698c916"
-                  },
-                  {
-                      "path":  "g++.dg/template/unify8.C",
-                      "role":  "case",
-                      "sha256":  "6545b63246579d0869893e9a6aca762cf9c4c98c926c27cb2b1ff00eb9c01693"
-                  },
-                  {
-                      "path":  "g++.dg/template/using15.C",
-                      "role":  "case",
-                      "sha256":  "be022e0c808a58612853e29871e1aef1c823e34bc363d216d4362e65821db1d0"
-                  },
-                  {
-                      "path":  "g++.dg/template/using23.C",
-                      "role":  "case",
-                      "sha256":  "a962b54fda91e818eeb2a4447e65c66b5b7105854d3c4657bd01d970c1e8f7dc"
-                  },
-                  {
-                      "path":  "g++.dg/template/using17.C",
-                      "role":  "case",
-                      "sha256":  "86a7e70b38521200d4d77d717fcada8cb9f28f988a3598c148c57d60df84dac5"
-                  },
-                  {
-                      "path":  "g++.dg/tree-ssa/pr22615.C",
-                      "role":  "case",
-                      "sha256":  "bbb56ab36f381bb180463e0bc335f0bdae64b5a431363725e3b573725316f4bd"
-                  },
-                  {
-                      "path":  "g++.dg/warn/ctor-dtor-privacy-2.C",
-                      "role":  "case",
-                      "sha256":  "04b35c4628ae33f43cacdf53e8971975eb4994effff45ba0c5a4ec2172fd69ab"
-                  },
-                  {
-                      "path":  "g++.dg/tree-ssa/pr81702.C",
-                      "role":  "case",
-                      "sha256":  "b7c2668c503517c5c6d4a6ed71765fbb2f28eababf5dcbb15fcb4e1d174f5f71"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.benjamin/14687.C",
-                      "role":  "case",
-                      "sha256":  "f93ffd6cc618c5339b3fdb3f5596231e2579477d7c5c6975b3beddac0e747532"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.benjamin/scope02.C",
-                      "role":  "case",
-                      "sha256":  "4cb03aaff259c8a0672718f5ee2d671192a28e4088c294d346bfd5a004b23a47"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.benjamin/scope01.C",
-                      "role":  "case",
-                      "sha256":  "e49d6a1039fd2845df5311c6a6b7c97575023f79c11b9191e5de8c14dc37ba93"
-                  },
-                  {
-                      "path":  "g++.dg/tree-ssa/pr28003.C",
-                      "role":  "case",
-                      "sha256":  "9594b86f1683aa760799540d4a0d98c4fb586e8731c3f3aae058579703bb3ed5"
-                  },
-                  {
-                      "path":  "g++.dg/tree-ssa/pr24439.C",
-                      "role":  "case",
-                      "sha256":  "1585d6901a7c93c7539427f5efeffa5cdbf5b68985b2d07aadc501f84dc919f7"
-                  },
-                  {
-                      "path":  "g++.dg/tree-ssa/pr37337.C",
-                      "role":  "case",
-                      "sha256":  "3836b9e0408f21b0e89b9da1fd6a25abd9b6d1a2c769f94eeeb5ce8a2cf53bff"
-                  },
-                  {
                       "path":  "g++.dg/tree-ssa/pr50622.C",
                       "role":  "case",
                       "sha256":  "c558a09691c8a68aeaf7dc638d42df3f464e86881af4b7dc5869ac43214e5595"
-                  },
-                  {
-                      "path":  "g++.dg/tree-ssa/pr37393.C",
-                      "role":  "case",
-                      "sha256":  "58065dd53ded9740767d6b63803ec726e746626b6e901d2450607b17abd33ab9"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.eh/catchptr1.C",
-                      "role":  "case",
-                      "sha256":  "b2917ce48c54b626e564963c6f0ca4be3a44859adad9eb4c39ebdfc0ee203e3f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/bad-error3.C",
-                      "role":  "case",
-                      "sha256":  "6eb222982c885d7e0262e208b3948ca1b61e788dd3856d6dbcb38ff6321ce785"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/access1.C",
-                      "role":  "case",
-                      "sha256":  "ac81f840967acfa9a70d4207f959ab842eb1b0c2c6631c12f5aa0ca7a9eb2ab2"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/bad-error4.C",
-                      "role":  "case",
-                      "sha256":  "c820b4cc7d713229e1467ca5bcb980d2f96322cf97e01d9f0083a842736552f9"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/ctors2.C",
-                      "role":  "case",
-                      "sha256":  "59e858a223375938b13021b02832fe5032f554412a2d913290c0be57d6fece51"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/casts2.C",
-                      "role":  "case",
-                      "sha256":  "3b69bafa597d171af96dd46131fccd810a06a7d5f1d27bd252011816c52aaf7e"
                   },
                   {
                       "path":  "g++.old-deja/g++.jason/template26.C",
@@ -258,54 +23,9 @@
                       "sha256":  "5364d41b82276d664bedc18bf95884b19d98f6a9a87bd0a59869bb5985f9c6df"
                   },
                   {
-                      "path":  "g++.old-deja/g++.jason/template36.C",
-                      "role":  "case",
-                      "sha256":  "08242c209888efb9767a2f57cf7b75b8e690dacce56188e3e8b07cb74f6e778d"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/vecdel.C",
-                      "role":  "case",
-                      "sha256":  "ece3d99d70125c2ae7a671dba08e2bea6f5a7c209ad3c6f2ffeddcddae75c64b"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/thunk1.C",
-                      "role":  "case",
-                      "sha256":  "c0396ab366266aae5393a75d3e13c66ce8582254131f0177498d2860ff6e407b"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/cvt12.C",
-                      "role":  "case",
-                      "sha256":  "85b3279c87803906975e1bebcd03d991718c055eb70a0a818a0ae3cc097067d5"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/operators8.C",
-                      "role":  "case",
-                      "sha256":  "ccda4051eb5f069005f0fef0142972daaaa02edacdfe6b56f4884ff1aafb50fc"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.law/operators34.C",
                       "role":  "case",
                       "sha256":  "1038b9487e1001098baa4b541076c37f40498461af343d854aadf320a8a14660"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/parsing1.C",
-                      "role":  "case",
-                      "sha256":  "f35358b17ff747977f8880431fb722439a85b734104fc58e194432a2a8d77060"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/scope1.C",
-                      "role":  "case",
-                      "sha256":  "e0c2c6b657d9ac2610bb7694e87c5d1e38f54b0539e031e870b4de8c279f7bce"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/refs4.C",
-                      "role":  "case",
-                      "sha256":  "20a314b93592de5037a1481a5eddd3cc9b7b2c267e3e247ba844feb74208d39c"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/enum7.C",
-                      "role":  "case",
-                      "sha256":  "d69e577164764e5e0dccaede4845e816b8689fdf5e1d573a8d4256539c2a0424"
                   },
                   {
                       "path":  "g++.old-deja/g++.law/cvt21.C",
@@ -313,29 +33,9 @@
                       "sha256":  "4b513bcc21553b2a1956b2e16dd3f3be44e592451ce4808504e6d17bf8974eb7"
                   },
                   {
-                      "path":  "g++.old-deja/g++.law/operators16.C",
-                      "role":  "case",
-                      "sha256":  "a32de25f9cb5d8144268967d3d04aed667617d8a3674e320ef6ac1aba155c6ed"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/operators31.C",
-                      "role":  "case",
-                      "sha256":  "0f9fad2f28eefa135bd46bb9c9b1621753f8998af2ef12bcd2c26fb2332adbc2"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/operators29.C",
-                      "role":  "case",
-                      "sha256":  "9911cf8df5cac395d3ee7dcfd385ef1a26bc92acbe3b184eff660e20d66c25ee"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.jason/synth7.C",
                       "role":  "case",
                       "sha256":  "e352672b1d7b7267e42fcdfaeace2ec7d6af2e08f11c40668a67410a61e5b385"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ext/array3.C",
-                      "role":  "case",
-                      "sha256":  "369b502ff773544279d39e712d1c73678801ae1e7bcff33b2fdc3042bbf2fb74"
                   },
                   {
                       "path":  "g++.old-deja/g++.ext/anon3.C",
@@ -343,239 +43,9 @@
                       "sha256":  "ec72d231d1dce80fcacd2bc39d8f077a7a38c14be6f695970b135f4ae863e0b1"
                   },
                   {
-                      "path":  "g++.old-deja/g++.ext/pretty2.C",
-                      "role":  "case",
-                      "sha256":  "4d5bab796672c1ef72ca8f3c048fea4fb51e857e0df5a06c6436f49af1b06abc"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ext/restrict1.C",
-                      "role":  "case",
-                      "sha256":  "c3c9c5273c24a71c35d1ccbae52680c54ebf0a5ea12780e37e87e33bbc2a0431"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ext/pretty3.C",
-                      "role":  "case",
-                      "sha256":  "8e6980f30871f21d074b0890f4c6e5b6c889efd2ded5dc997306ad1c81a8f0fe"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.eh/fntry1.C",
-                      "role":  "case",
-                      "sha256":  "6513a3f17dc955ee299e77c43031eb4cbf816ff7d0d1d7c47e37729497df28c0"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.eh/cleanup1.C",
-                      "role":  "case",
-                      "sha256":  "c35bb55d11bb2603e0633a6c308266b1af591a5b573518047fe50dfbc28fda53"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.eh/pdel1.C",
-                      "role":  "case",
-                      "sha256":  "1d227aff2085060101e818e3bbddbbe44a5096402042c330a166f0233044f51d"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.eh/spec7.C",
-                      "role":  "case",
-                      "sha256":  "6740c59d740259f31a05b8d55b164d507d0f575f854ed08e6bcfb4f086a4728d"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.eh/pdel2.C",
-                      "role":  "case",
-                      "sha256":  "fcb5bee0544684b972b5480ad13cc71cdcdc865c1112c60ffbc0b10e605a30fb"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.ext/syshdr1.C",
                       "role":  "case",
                       "sha256":  "2bf8173b358e3ddcc04a2f22ad84e945005b1f31ef581625f3d50ab0b13925d4"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/parse10.C",
-                      "role":  "case",
-                      "sha256":  "b196147f99202eb666578c4d90d0e5447c8b4d7b7ddff54d0f02b10b8e70cf80"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/destruct.C",
-                      "role":  "case",
-                      "sha256":  "2e61c025c7033f162a6b41d90c8b54fbbd12ccee9852c1fd83553694f97b1cd1"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/pmf3.C",
-                      "role":  "case",
-                      "sha256":  "56ece12a5f2dab120604b17ecd04be9a76b23145787d983f3c29d6e377b82cc9"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/ref8.C",
-                      "role":  "case",
-                      "sha256":  "c0a372b5136d3d62bc482b9d46fa78888af26dc5d882f67eb176781ae526f882"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/pmf8.C",
-                      "role":  "case",
-                      "sha256":  "dee5b48029da445fb7e4377bfb8ec558b4ecb38998e88319afa7c9c892e1d977"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/anon.C",
-                      "role":  "case",
-                      "sha256":  "3bf2fd5bf2eb3bab7f38bcedf893f69d1923461a0eb295e9d3389e654f520c61"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ext/typename1.C",
-                      "role":  "case",
-                      "sha256":  "c661603efeb684c7b953298dda8b43b5a4b5778f583236bd10fdadb2f3073840"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/cond2.C",
-                      "role":  "case",
-                      "sha256":  "7d67ea6ca2513dbde38c2be5069571670fa011884c8219cd3059a1187b8aed09"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/dcast3.C",
-                      "role":  "case",
-                      "sha256":  "ac0421d85c0e67c65b1de4e6ceb041202a357529ce2005323b4891a60d47dacc"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/conversion10.C",
-                      "role":  "case",
-                      "sha256":  "630e88abcc790d9a637e013df2e2353637ad3fdd173885c8a3c5d11c7deba92c"
-                  },
-                  {
-                      "path":  "g++.dg/template/memclass5.C",
-                      "role":  "case",
-                      "sha256":  "2637740a8f73d516c4e2590a29db9bee99c531a8725e5286283a1573d2056e8f"
-                  },
-                  {
-                      "path":  "g++.dg/template/member3.C",
-                      "role":  "case",
-                      "sha256":  "75289a6d58bded9bf46cec0e23abf00bcf12ff67386281b6454a2ec0c9f3f881"
-                  },
-                  {
-                      "path":  "g++.dg/template/memfriend1.C",
-                      "role":  "case",
-                      "sha256":  "8eb0ef6724a98a63529737e45685aa56f8431fca7f69e5795a598a1af9d14a77"
-                  },
-                  {
-                      "path":  "g++.dg/template/memfriend3.C",
-                      "role":  "case",
-                      "sha256":  "0bf676600443ad51dd36b945f3088761ad2885324a4d4f89291c29d587cb8814"
-                  },
-                  {
-                      "path":  "g++.dg/template/memfriend12.C",
-                      "role":  "case",
-                      "sha256":  "9cc17ac6257411e62f1fb09d5a3fede525f85143fb156441588bf3c0bd5eb23c"
-                  },
-                  {
-                      "path":  "g++.dg/template/lookup6.C",
-                      "role":  "case",
-                      "sha256":  "f71fc5df2ed27447741692a6188220c8a53238b586440b9a8d2a3c789f9cc466"
-                  },
-                  {
-                      "path":  "g++.dg/template/local8.C",
-                      "role":  "case",
-                      "sha256":  "a0e2c8b229b9fbbed713b522763710bf5b4b7be80259d15ce964702e55f06125"
-                  },
-                  {
-                      "path":  "g++.dg/template/lookup8.C",
-                      "role":  "case",
-                      "sha256":  "2a9892874e1f92513572e26de4efd917f8a06983f9b327db00e7d6fb9a66bb1b"
-                  },
-                  {
-                      "path":  "g++.dg/template/mem_func_ptr.C",
-                      "role":  "case",
-                      "sha256":  "9c6e5377217326985ab39a2ac555322b77bf0b8674f59b2e9aa925e17ef35c67"
-                  },
-                  {
-                      "path":  "g++.dg/template/mem-partial1.C",
-                      "role":  "case",
-                      "sha256":  "07d7bf9c5ad3e838ddc5a9706010c2854a0cbb69c648a92ea2d4f62fe99e39bc"
-                  },
-                  {
-                      "path":  "g++.dg/template/memfriend8.C",
-                      "role":  "case",
-                      "sha256":  "acc08b43c2acb6053fc53ae6e571ccc0f80587c88eefcf104c2ba57df754e0f7"
-                  },
-                  {
-                      "path":  "g++.dg/template/nontype23.C",
-                      "role":  "case",
-                      "sha256":  "74a24d01a72b99d85d2aeb5d914d1443c5631e956f20eef194dfe75df2a5f7a7"
-                  },
-                  {
-                      "path":  "g++.dg/template/non-type1.C",
-                      "role":  "case",
-                      "sha256":  "61cd28b1879c398c6c274dbd00fdff45c7ff82ef42d768589513e4a8d280ea6d"
-                  },
-                  {
-                      "path":  "g++.dg/template/operator11.C",
-                      "role":  "case",
-                      "sha256":  "f4f97246483deea7d6814c05e41bb52acc73a69fd09df20fe7b6fba95c156df8"
-                  },
-                  {
-                      "path":  "g++.dg/template/parm-cv3.C",
-                      "role":  "case",
-                      "sha256":  "03d99196268554a9fef45a97f085e4aabbd0389d0948559e322152bdeea4199a"
-                  },
-                  {
-                      "path":  "g++.dg/template/overload14.C",
-                      "role":  "case",
-                      "sha256":  "cf7c1f98c18e333b79c6e9bdfef84e67dd2752ae572f0bcb232caf09653db184"
-                  },
-                  {
-                      "path":  "g++.dg/template/memtmpl3.C",
-                      "role":  "case",
-                      "sha256":  "a6fa1d888db3c3e21e37afd89f80757f9eb7c9a8c7318413a855063776bac3e0"
-                  },
-                  {
-                      "path":  "g++.dg/template/memfriend9.C",
-                      "role":  "case",
-                      "sha256":  "009886c18d9ebb9b5f5411b8d83b932dfc1008864494de7d3f789a2133082931"
-                  },
-                  {
-                      "path":  "g++.dg/template/memtmpl5.C",
-                      "role":  "case",
-                      "sha256":  "9ddbb46bb2597f3dcab3b3e34785d9138e7b19a0b5d5d775ccccd29e0bf79a21"
-                  },
-                  {
-                      "path":  "g++.dg/template/nested5.C",
-                      "role":  "case",
-                      "sha256":  "cb52f7fff6af3f370b694e80bc692f8b4d75bd76eed392e96efbd3b4b29df5c3"
-                  },
-                  {
-                      "path":  "g++.dg/template/memtmpl6.C",
-                      "role":  "case",
-                      "sha256":  "eec8940fe34f11bc855e7420a526f0fae0a5dbf76d39e54bca875031978296d6"
-                  },
-                  {
-                      "path":  "g++.dg/template/local11.C",
-                      "role":  "case",
-                      "sha256":  "72db4a5cd75313a49a9155aa908427fe2c48977986410ce418afafd419a8f3c0"
-                  },
-                  {
-                      "path":  "g++.dg/template/enum7.C",
-                      "role":  "case",
-                      "sha256":  "e5efacc49b6c3adebaf1419efd149adfb4d80806a1f14c6dc39fca78f753797c"
-                  },
-                  {
-                      "path":  "g++.dg/template/dr408.C",
-                      "role":  "case",
-                      "sha256":  "53efed78444072efd9d73eeaa5a5f540a272f08bcf2ab20cfe155dcc4764f0af"
-                  },
-                  {
-                      "path":  "g++.dg/template/explicit-instantiation.C",
-                      "role":  "case",
-                      "sha256":  "ad62eeae9acae569f3a2695a589cd7c7ea2a3990959c7240af12e0120f797687"
-                  },
-                  {
-                      "path":  "g++.dg/template/explicit3.C",
-                      "role":  "case",
-                      "sha256":  "f8088838569057df8296c0ae4e6b83876d4371b2a7ed3fac2cd1b8eff20001c9"
-                  },
-                  {
-                      "path":  "g++.dg/template/explicit-instantiation3.C",
-                      "role":  "case",
-                      "sha256":  "3b007e0aea6bf134aa7f268363aee8c49298e72abf2cedc6df9fbbdaf471f623"
-                  },
-                  {
-                      "path":  "g++.dg/template/deduce8.C",
-                      "role":  "case",
-                      "sha256":  "b724616b4756b69ede5611d3908ae3bdb62079a325b76bdd9ba1940fda51da30"
                   },
                   {
                       "path":  "g++.dg/template/deduce1.C",
@@ -583,384 +53,9 @@
                       "sha256":  "d0b0c37e3271e1f53577ace8807b1d5278bef655fd6882999dd3f5c46aacbfbf"
                   },
                   {
-                      "path":  "g++.dg/template/defarg20.C",
-                      "role":  "case",
-                      "sha256":  "e624d27152b4cc6b8b226390445f874dc0d2716c7bb3302924a9bb41537d9d1a"
-                  },
-                  {
-                      "path":  "g++.dg/template/dr1391-1.C",
-                      "role":  "case",
-                      "sha256":  "4d75869e70c4ba81d5feb252a9fd46be82e3652fb5bf10642cbbf2f6e0339213"
-                  },
-                  {
-                      "path":  "g++.dg/template/dependent-base6.C",
-                      "role":  "case",
-                      "sha256":  "1cba2b8415dd3dfc969dd3d5ef1015cd4d3fab0ec2e5f4e36c03f573319528b4"
-                  },
-                  {
-                      "path":  "g++.dg/template/friend23.C",
-                      "role":  "case",
-                      "sha256":  "6118c65d6c580cd281d1915741db89001384d18f65338602ac5af8ec4598025d"
-                  },
-                  {
-                      "path":  "g++.dg/template/init2.C",
-                      "role":  "case",
-                      "sha256":  "18366abd9e6151dc9e3cc5e8cd14eb2f9b6639b415ad118fc7b79022975a84f8"
-                  },
-                  {
-                      "path":  "g++.dg/template/inherit.C",
-                      "role":  "case",
-                      "sha256":  "7203b7cf4d13fcd2bec238eace368b8d80230830aaf91c7b7d05b50f44e95699"
-                  },
-                  {
-                      "path":  "g++.dg/template/init8.C",
-                      "role":  "case",
-                      "sha256":  "34a98e7532dbd8f22ecdf0708d1803194b73c6f7b05ecaced4c84405c6606283"
-                  },
-                  {
-                      "path":  "g++.dg/template/koenig3.C",
-                      "role":  "case",
-                      "sha256":  "de9808ea9c17f352f4458b67668538c8f13c86012e0a506b6ee4721dee57ec79"
-                  },
-                  {
-                      "path":  "g++.dg/template/injected2.C",
-                      "role":  "case",
-                      "sha256":  "07115bc6dde37d118318883e1a3b0a83e206654701cf740dd3101c4c7afa1adf"
-                  },
-                  {
-                      "path":  "g++.dg/template/friend4.C",
-                      "role":  "case",
-                      "sha256":  "5c858249af8f04507759b77086816c945c9f347e7211811139389a602cded553"
-                  },
-                  {
-                      "path":  "g++.dg/template/friend33.C",
-                      "role":  "case",
-                      "sha256":  "bf4bae36da73587fa336000241b0ad41cb58cb6e2283031e1c7858145ec0eb54"
-                  },
-                  {
-                      "path":  "g++.dg/template/friend49.C",
-                      "role":  "case",
-                      "sha256":  "048729187875e1545e0b4698ec58bd0166ba394f1c60957866e9b728e09ca1ea"
-                  },
-                  {
-                      "path":  "g++.dg/template/incomplete6.C",
-                      "role":  "case",
-                      "sha256":  "72253c5e07c609cce62ba50d6158f19079a19a988def2002d11a1e35ffe17880"
-                  },
-                  {
-                      "path":  "g++.dg/template/friend73.C",
-                      "role":  "case",
-                      "sha256":  "76a4c465cb94a98b3f698ef67b46258fbc8076a1a4a3b39cdc7e7d32ead6413c"
-                  },
-                  {
-                      "path":  "g++.dg/template/partial-specialization4.C",
-                      "role":  "case",
-                      "sha256":  "17defe38f27cffa00028718ab962273c5433643ddf1e48ec60bb9e4a085ba4e6"
-                  },
-                  {
-                      "path":  "g++.dg/template/spec24.C",
-                      "role":  "case",
-                      "sha256":  "ea328f6b240b888b227a22d66723fe3836429e0a600100434fafbae77496087a"
-                  },
-                  {
-                      "path":  "g++.dg/template/spec20.C",
-                      "role":  "case",
-                      "sha256":  "c0dd2e6a9432fab4e5b6ea1735158e165a8a4c0ff62fcbbfd5b621f72f7f8153"
-                  },
-                  {
-                      "path":  "g++.dg/template/spec34.C",
-                      "role":  "case",
-                      "sha256":  "dc423106aff2739e4a45d9e7803ce16b9bcfe4eca541d290bf1c544a4db04151"
-                  },
-                  {
-                      "path":  "g++.dg/template/static19.C",
-                      "role":  "case",
-                      "sha256":  "5b2e617c02034738fae557931c404e67e2a4bddc22e8e495e398f8d7e5d42d73"
-                  },
-                  {
-                      "path":  "g++.dg/template/spec7.C",
-                      "role":  "case",
-                      "sha256":  "e5df7a01704ed6dfdc50bfc90538af0c40a2a0de3e0032bfaaea555efae93448"
-                  },
-                  {
-                      "path":  "g++.dg/template/sfinae27.C",
-                      "role":  "case",
-                      "sha256":  "5be3de19a7034170a50ef344549928c4bce4bc37e44226a47f512b3f785686fc"
-                  },
-                  {
-                      "path":  "g++.dg/template/sfinae26.C",
-                      "role":  "case",
-                      "sha256":  "76872588bf35bd05ef597852056d4afd330f890b82b2c17f039569e68d95d758"
-                  },
-                  {
-                      "path":  "g++.dg/template/sizeof13.C",
-                      "role":  "case",
-                      "sha256":  "7db0483a918fdf3f833f2f9603c289ea79340502f6c5642dc623dba88f1463e2"
-                  },
-                  {
-                      "path":  "g++.dg/template/spec10.C",
-                      "role":  "case",
-                      "sha256":  "139a26f455d33f49086d6493232dba88085f2a8898afb0d7c796a52605a17769"
-                  },
-                  {
-                      "path":  "g++.dg/template/sizeof19.C",
-                      "role":  "case",
-                      "sha256":  "9d6b9de408de6c84205f10e06c26a172faaa0b2f552e84e4aee2a137815be4c7"
-                  },
-                  {
-                      "path":  "g++.dg/template/static21-a.cc",
-                      "role":  "case",
-                      "sha256":  "05ef4d96a11afa0e84cafa95ac79279b0b8b78baf44123de6eb380c9e371c87a"
-                  },
-                  {
-                      "path":  "g++.dg/template/typedef30.C",
-                      "role":  "case",
-                      "sha256":  "3dcdd1ff08e71ef4ad6ccbcb64ef1948fc825d310a2e1945f15d8ca595ea8306"
-                  },
-                  {
-                      "path":  "g++.dg/template/typedef15.C",
-                      "role":  "case",
-                      "sha256":  "d5117bf77f5115c7e9e45f99454a84b7522ece54ddb75c0f694849cc2efe9fa5"
-                  },
-                  {
-                      "path":  "g++.dg/template/typename27.C",
-                      "role":  "case",
-                      "sha256":  "4d9e7e587196a3cd27fac28e34d5b24dc7d97a28b083bbc886f15839370fea6b"
-                  },
-                  {
-                      "path":  "g++.dg/template/unify13.C",
-                      "role":  "case",
-                      "sha256":  "ed518f10d880d7f89d840e87d71244a4568e1fdce655d8320b519de40787b1e7"
-                  },
-                  {
-                      "path":  "g++.dg/template/unify1.C",
-                      "role":  "case",
-                      "sha256":  "ebd3957417b7eaf396374716316a7acca738ba2610da26ae59fe54ec5f6b3972"
-                  },
-                  {
-                      "path":  "g++.dg/template/template-id-4.C",
-                      "role":  "case",
-                      "sha256":  "ceb179ae1930a51958b7f5d4c7c4ea6eac2cd28ecfeeaff6d1bce8d1ebc8c6c7"
-                  },
-                  {
-                      "path":  "g++.dg/template/subst1.C",
-                      "role":  "case",
-                      "sha256":  "4782bfba3b8ce839c4ac947edd43a3a3934604639ad0a5ba59b11b4416e8b05c"
-                  },
-                  {
-                      "path":  "g++.dg/template/ttp18.C",
-                      "role":  "case",
-                      "sha256":  "6b244b9dc79c6a61e62d5143047f7d7a42603a251de46150f8a414808ad87480"
-                  },
-                  {
-                      "path":  "g++.dg/template/ttp9.C",
-                      "role":  "case",
-                      "sha256":  "8b061d76b489003f60109353649e8b6e38634745d5fea367615dcfb56813bc37"
-                  },
-                  {
-                      "path":  "g++.dg/template/ttp41.C",
-                      "role":  "case",
-                      "sha256":  "8e25937a4b212e80c942f9af8a78b7a5d82da0a818b4b39a72142be1342a4f90"
-                  },
-                  {
-                      "path":  "g++.dg/template/sfinae24.C",
-                      "role":  "case",
-                      "sha256":  "a48e5bdbba65cdb43186b97447323c5dfb173186b01d48cb92ce4f127de12eec"
-                  },
-                  {
-                      "path":  "g++.dg/template/pretty1.C",
-                      "role":  "case",
-                      "sha256":  "215765910305f32e444a14ed69688268ed93aa4a7a247b50d86597419692d7c3"
-                  },
-                  {
-                      "path":  "g++.dg/template/pr81899.C",
-                      "role":  "case",
-                      "sha256":  "9ec69e6dcbdabec3ad7b88f915ffcf012cb738488d15d1c8a06c5b60cec9a650"
-                  },
-                  {
-                      "path":  "g++.dg/template/ptrmem12.C",
-                      "role":  "case",
-                      "sha256":  "9a1de8610766d165167f44883a6eb0efc6d06ea6fec156ba118632a97dc7013c"
-                  },
-                  {
-                      "path":  "g++.dg/template/ptrmem21.C",
-                      "role":  "case",
-                      "sha256":  "c348173fa5327b780508f18b12312d68cc24d335e7e490f69d1e8474bb6ac3e9"
-                  },
-                  {
-                      "path":  "g++.dg/template/ptrmem19.C",
-                      "role":  "case",
-                      "sha256":  "ebc4b8f50af34b359ba2cb97501291aa6f98542c1c560c897468fdc303b1d43d"
-                  },
-                  {
-                      "path":  "g++.dg/template/partial9.C",
-                      "role":  "case",
-                      "sha256":  "662812a29f2956554dd8b9993c601137bee6b0d9c0afd4445e8f0e01b331798d"
-                  },
-                  {
-                      "path":  "g++.dg/template/partial14.C",
-                      "role":  "case",
-                      "sha256":  "c46405a255a1c2328da5a0b22a3637b9787dc894e7f9ccd7730827bce32b2af2"
-                  },
-                  {
-                      "path":  "g++.dg/template/pr51385.C",
-                      "role":  "case",
-                      "sha256":  "05a4c51208f73ec9631e6ebdb25fcbff286133f992e444d26892cea9e3ad4411"
-                  },
-                  {
-                      "path":  "g++.dg/template/pr70610.C",
-                      "role":  "case",
-                      "sha256":  "0443334bd8e8328a4653b4a432a1812303569d2042999bf6b19965ad24b1907a"
-                  },
-                  {
-                      "path":  "g++.dg/template/pr70466-2.C",
-                      "role":  "case",
-                      "sha256":  "d8dfd154b03fc2ef7ecbc273bea4a6808ddfa863eedad5a248b9b676f03b09bc"
-                  },
-                  {
-                      "path":  "g++.dg/template/ptrmem22.C",
-                      "role":  "case",
-                      "sha256":  "42dfb2a7ea42f2d6e26b486b6332726bd8db192d3907ba6aced09e4656e1cfa6"
-                  },
-                  {
-                      "path":  "g++.dg/template/recurse4.C",
-                      "role":  "case",
-                      "sha256":  "305a45e4ad6e1e27567ef343b2d3a168df47a24e69c56377c6b3fd6656a509f5"
-                  },
-                  {
-                      "path":  "g++.dg/template/qualttp16.C",
-                      "role":  "case",
-                      "sha256":  "e7bb39b2032d1f7b8fc107ffd74df34a36c69e6a746b91e51d6457171b65b43c"
-                  },
-                  {
-                      "path":  "g++.dg/template/ref2.C",
-                      "role":  "case",
-                      "sha256":  "33a64c37a8667e94df9a5480a05fdc7aba18f324aa287b3a1a08842882f30d1d"
-                  },
-                  {
-                      "path":  "g++.dg/template/sfinae21.C",
-                      "role":  "case",
-                      "sha256":  "c0a1d86bd3b2e4e817e2d696e45b673a9e5e798945523409ae5c2a0be8408f45"
-                  },
-                  {
-                      "path":  "g++.dg/template/sfinae19.C",
-                      "role":  "case",
-                      "sha256":  "bc6787f6881b481617ce683ddc7d275ad2b650dfb85580774a5d77885b868ffb"
-                  },
-                  {
-                      "path":  "g++.dg/template/ptrmem5.C",
-                      "role":  "case",
-                      "sha256":  "a997c2ce5f256bbb325ff3216c945518a8b3d7fd67509891f99ab805d2464bce"
-                  },
-                  {
-                      "path":  "g++.dg/template/ptrmem3.C",
-                      "role":  "case",
-                      "sha256":  "7acc4c87a26eeedc5bce6e4249f1dda59c34a2e154d75986ba0564aa77001b92"
-                  },
-                  {
-                      "path":  "g++.dg/template/qualified-id2.C",
-                      "role":  "case",
-                      "sha256":  "1761e2ce2cc2e72b7c60b21eaccbf9b036d23ae8792556925c3c74afcecaa8cd"
-                  },
-                  {
-                      "path":  "g++.dg/template/qualttp13.C",
-                      "role":  "case",
-                      "sha256":  "6cd647f971d6c1c69f418c2807a0de835d94687b4115134f9fc3007869970ddd"
-                  },
-                  {
-                      "path":  "g++.dg/template/qualified-id4.C",
-                      "role":  "case",
-                      "sha256":  "a196b1ac1b3c6cf6b798f0bf3af924359e91a303b3892162f2b5f1f809823684"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/scope5.C",
-                      "role":  "case",
-                      "sha256":  "e5bdd39907d016c7a60e828ee045b56806d03ae588fd25b170ac137a6e154898"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/explicit3.C",
-                      "role":  "case",
-                      "sha256":  "64e1aef69cf9f673d75a409de1baf4b5fb78919e7cf6d70d879ae60f768ecb52"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/enum7.C",
-                      "role":  "case",
-                      "sha256":  "4ee0be7a99423c92c1b47ed64843368ddbc4c8664203bcf7352f7465cc8d0fc0"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/explicit40.C",
-                      "role":  "case",
-                      "sha256":  "8c98471b0aeb983e942304a0c1c149012bdbc1749784d267c088aeef8521c2af"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/explicit74.C",
-                      "role":  "case",
-                      "sha256":  "fd16a3bee5d35962fcb5d48c16a4492716288f51a233500754fa5b8da8f6aa7c"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/explicit42.C",
-                      "role":  "case",
-                      "sha256":  "9cb21f658bc813c0c743aca1fab1685831cc5b2e9d1e8c61b0a66008f15c7dc5"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/deduct1.C",
-                      "role":  "case",
-                      "sha256":  "968be86c4ef9dcea41397e9a3a6e79a6222b745929c4680751781c05b02ae7d5"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/crash57.C",
-                      "role":  "case",
-                      "sha256":  "8eb96d1e12f4ca78df0665f74938b26c30b8df1f2da30d10b29a22cefa35b9c7"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/defarg.C",
-                      "role":  "case",
-                      "sha256":  "57310e143bcab7c2d5a91c3060ac21c984e760373c3da401a9e810551dd5b40a"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/defarg4.C",
-                      "role":  "case",
-                      "sha256":  "88062c0940131eb5fecf65537212bd66deeff3caffe975657415c6978be7b921"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/defarg3.C",
-                      "role":  "case",
-                      "sha256":  "a75e777b7f276ead1146f2a8d54e7c3b46439ea89dfa8f0cd499fc82758f8a41"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/explicit75.C",
-                      "role":  "case",
-                      "sha256":  "49ffa998aaadf2481965a0ffca0590ab505f9f5e33a5a8e5cb96868c6bab363c"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.pt/instantiate11.C",
                       "role":  "case",
                       "sha256":  "bce40dc96bb3ca78125d59d1bb4e556fb67b2b563d61de7903c78b15d06ec811"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/friend46.C",
-                      "role":  "case",
-                      "sha256":  "5c65552ff0d69f95b8dd32733b4c11f29b666ce85b7532563fb1a106f95280e1"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/instantiate12.C",
-                      "role":  "case",
-                      "sha256":  "0ac57b4522bb3ca456f0597837b2882e0a035c72c39845aaf4c0edb651a580d4"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/local4.C",
-                      "role":  "case",
-                      "sha256":  "10105a2a7656eaa14f8c4a9bdf9058c283678206a25f2315c300ac24142c35ec"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/local1.C",
-                      "role":  "case",
-                      "sha256":  "b003efc396be5068da00dd7426e56c4d87dc1606ff67f2cf47f6a72dd2f5b048"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/expr3.C",
-                      "role":  "case",
-                      "sha256":  "fca6cd7b4d9c29b48000edced8dbc4b4d8b2af19cb14e68323858f6d05280327"
                   },
                   {
                       "path":  "g++.old-deja/g++.pt/explicit81.C",
@@ -968,34 +63,9 @@
                       "sha256":  "fcfa6f156072a833e136a7b68509bd1c5e5076e57310f42c5b83184647df144b"
                   },
                   {
-                      "path":  "g++.old-deja/g++.pt/expr7.C",
-                      "role":  "case",
-                      "sha256":  "fab17f3e7bbaff4f651f799fb03e8fa5b51a26d51a2d6df1a47bdaac36e669b3"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.pt/friend28.C",
                       "role":  "case",
                       "sha256":  "a84ab02b56a772d5cdeb4262bbbe107402054d0adca96fb998c262b2d14af023"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/fntry1.C",
-                      "role":  "case",
-                      "sha256":  "1f2f4e7776711ab5e9b908de7ac194468669caa4786680bada0f9f0dc18c3f4f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/crash54.C",
-                      "role":  "case",
-                      "sha256":  "8bc0a9ab293085285fecc420802e9b160f70bc7b1acc48999dc14194c58e5047"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/parse1.C",
-                      "role":  "case",
-                      "sha256":  "93258bd3ad92cbf313d2b4449c4b92a5d47ed990f22b33e278379d01f5043bb9"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/overload8.C",
-                      "role":  "case",
-                      "sha256":  "5fc78b2e61b7c6c21a920fe340c7c3f1bc6db0da9a6dbd3bf6cb8d2f2f324a0d"
                   },
                   {
                       "path":  "g++.old-deja/g++.other/pmf4.C",
@@ -1003,114 +73,9 @@
                       "sha256":  "8badf8211810d88125cc7b4b2b22696fddac0800d352ec6674f2d230274d1306"
                   },
                   {
-                      "path":  "g++.old-deja/g++.other/signed.C",
-                      "role":  "case",
-                      "sha256":  "d2102bb4df9872d6516b55f6580b4826206d3536041a2d45ccd295306a751ddf"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/pmf5.C",
-                      "role":  "case",
-                      "sha256":  "a95891c363f78b8250c4e9b407e3543513cffa6efbc4e52001b1edba442470c1"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/overload3.C",
-                      "role":  "case",
-                      "sha256":  "0354cc8bbe304808148ff918c356fa079b7de5e5b93bc964618760b9dd37f6cd"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.other/overload12.C",
                       "role":  "case",
                       "sha256":  "3cbb9c9aaa29f0de6dc362535d7d022fe10e41ffc6f208c7408131fea452f971"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/overload4.C",
-                      "role":  "case",
-                      "sha256":  "c09b642568f62d3e70114c0196542de41d0eea076c3d4022c2305f44669abc64"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/overload7.C",
-                      "role":  "case",
-                      "sha256":  "b140ad1bffb7c5a261db6a65322a41c00c729c6a82190aba485bc07ff4651330"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/overload5.C",
-                      "role":  "case",
-                      "sha256":  "f0f9a04fe033dd7c89ac3b41bed90c473cc86e4bc0d8fb561693510e99338fcb"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/static16.C",
-                      "role":  "case",
-                      "sha256":  "e567d0012813dfea84ebe9ecf72f2b104e0d809b9545959cd658c1ed15145b00"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/cond2.C",
-                      "role":  "case",
-                      "sha256":  "df3db493886f195a450e14b6ea21ee5d80c77ccc5b7a1a50c337c1852e26e02b"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/virtual8.C",
-                      "role":  "case",
-                      "sha256":  "0e3515655a667d98bedeb401b64b9551c1c0ff5c424930c015ecb95572056821"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/crash18.C",
-                      "role":  "case",
-                      "sha256":  "0152251c0c2773a4e3264327a6eee6d462a332e48c2559f8cc96b90608f0fe90"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/crash27.C",
-                      "role":  "case",
-                      "sha256":  "79f4a9877866658b5aa7ec53634d8466a43c4f0d7b08a0315a3a13d8d1844ca4"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/crash19.C",
-                      "role":  "case",
-                      "sha256":  "3ae858c6e919d82ab81ca95833254b8e1855e027854ed1469ee51ee79a88316f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/typedef2.C",
-                      "role":  "case",
-                      "sha256":  "887fa91bbf07274cee31ead4be5e502b58b6f5da3b5c3d7875a4d06a50efd73f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/static2.C",
-                      "role":  "case",
-                      "sha256":  "c63ad87826344fe0275c6126f919d554395f447d7bcfe006e2fe2e958675cd94"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/typedef4.C",
-                      "role":  "case",
-                      "sha256":  "af103eaebcaf2eb883ad8485e9ebd73d9677f21bd74b5dd0eae174a34976cb80"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/vbase5.C",
-                      "role":  "case",
-                      "sha256":  "4c7a7c6ee1f89422bb1d1e0ba56d23d5af014fa6c3ee545a6bbee631dc650852"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/union3.C",
-                      "role":  "case",
-                      "sha256":  "7c2e2d4fcd9b05a09f5e77bbad17f44d96b56e7dc1be184aae68930c698996a0"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/local7.C",
-                      "role":  "case",
-                      "sha256":  "e70dc5169ec7bc55a30ed6be249645fe5a87f7d54da174be3c52094be0a70f29"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/spec8.C",
-                      "role":  "case",
-                      "sha256":  "5714769c8bab78bff434cd01ca8cd14ee32f92a5c001876a53992ff9789e6f59"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/spec37.C",
-                      "role":  "case",
-                      "sha256":  "e0cd7c15aafc810867a8d8101cf5f4471996c46c6b3592a78802168f16669aca"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/static1.C",
-                      "role":  "case",
-                      "sha256":  "8797df0d2ed066dc31c6ce166a16ea77b03ff5ea9d39546c97979bb8c50c1cf9"
                   },
                   {
                       "path":  "g++.old-deja/g++.pt/ttp23.C",
@@ -1118,24 +83,9 @@
                       "sha256":  "a14e3e791e33bb625dc4e983284a66e395296a7acc664585f8dc55dbd59acaf0"
                   },
                   {
-                      "path":  "g++.old-deja/g++.pt/t28.C",
-                      "role":  "case",
-                      "sha256":  "1155f1bea2d4c03d8c07509bcbdab93e63b863bda0f07444ff64566630bf239b"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/spec29.C",
-                      "role":  "case",
-                      "sha256":  "0cf627472d4f754751f0f352fa1d4d40726d16ce0cdf992376f8e798d446c8ce"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.pt/spec28.C",
                       "role":  "case",
                       "sha256":  "75a183e4a5ebba99b56c7759be36a182e22f194d1815f5aec7da37a8c81d414f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/spec30.C",
-                      "role":  "case",
-                      "sha256":  "8b05db2b0dd3b5f0c895def7f76230bf9c93aa657e8a829642a3b8a43b90929d"
                   },
                   {
                       "path":  "g++.old-deja/g++.pt/spec36.C",
@@ -1143,44 +93,9 @@
                       "sha256":  "5afb042aff1263a1ca0b0cc350ccae5dd16c406de8c8aa0c40162ad5ee0b0c58"
                   },
                   {
-                      "path":  "g++.old-deja/g++.pt/spec33.C",
-                      "role":  "case",
-                      "sha256":  "019dd7f776d6532a3ada44e40ad7b70be82f46a77cced97147cdb58d3fe4ba12"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/ttp34.C",
-                      "role":  "case",
-                      "sha256":  "d68b947e8f73db70b7e42bcbaa6860873e7cf7c03de51f5757a19c8f9321193b"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.robertl/eb48.C",
-                      "role":  "case",
-                      "sha256":  "251e8f37f22db218011ce897d155a37894d036bede44b806ca6d3ccc8965e118"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.robertl/980310-1.C",
                       "role":  "case",
                       "sha256":  "ffc079aba21be2b66d4b8142b220d3aeb17fb52371e74a403f138092f53ccd31"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.robertl/eb51.C",
-                      "role":  "case",
-                      "sha256":  "2968d630f127c11bb72ac3e888b473c06c7cbc69aeaa274b84eb27363bb03ebb"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.robertl/eh990323-2.C",
-                      "role":  "case",
-                      "sha256":  "43dbe4aa117e89657d394475cd40360474e38b413346cedd8ee6b72b65de2ef2"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.robertl/eb75.C",
-                      "role":  "case",
-                      "sha256":  "4b512be56bb266477f1f0a0eecaf892cd5ed4986af2a4da23cc3ba427ad22b50"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/ttp57.C",
-                      "role":  "case",
-                      "sha256":  "dd8aec502fec74144792d154a6714a28898e96b4498433a923ccd03f0c7bf9cd"
                   },
                   {
                       "path":  "g++.old-deja/g++.pt/ttp53.C",
@@ -1193,79 +108,9 @@
                       "sha256":  "666fc68fea04480bebb4d783e2739470aceb779b5ce9eccfff821964e802c197"
                   },
                   {
-                      "path":  "g++.old-deja/g++.pt/vbase1.C",
-                      "role":  "case",
-                      "sha256":  "2dbb0ff2fafd7c072ca2192125410c562399328ce7e66ac043e5e1ca5983e6b1"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/typename2.C",
-                      "role":  "case",
-                      "sha256":  "c9eb4a4879039e549c2f6f347e22ab4519eead80d98b3e4db5df2b74be618964"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.pt/spec18.C",
                       "role":  "case",
                       "sha256":  "080e2e3d4633c291062b43abb6f490ab39d614fcaf9cce00e0b07e746c26f7e0"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/memtemp9.C",
-                      "role":  "case",
-                      "sha256":  "5e225afd2acfd1291128229c46b396d131014d87553542dbf59778b2ed1179b2"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/memtemp77.C",
-                      "role":  "case",
-                      "sha256":  "4e050f4c87e24af12725db256888e99438c2ffa417bb68a18425558552016b4b"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/memtemp93.C",
-                      "role":  "case",
-                      "sha256":  "f743e65f3d532746a41bc83ef734b5b2dbddc32e10b5f95ab0b1b13cae8a4450"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/memtemp97.C",
-                      "role":  "case",
-                      "sha256":  "76b90f4c1831a58b13bf018a138d025975ab32cc843d67b074f11f5a893f0261"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/memtemp96.C",
-                      "role":  "case",
-                      "sha256":  "cdb81c8acab0acc0d45ee2f316a78a650f71b242710fe8f6918da7d49462b0ce"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/memclass5.C",
-                      "role":  "case",
-                      "sha256":  "bddd4d80ec5aad096a5611ccf493e32417987f72f317457e8aba7d3612dc396f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/memclass16.C",
-                      "role":  "case",
-                      "sha256":  "96b3a669ac04e0645981de9bee50d078622653ad927a355dbcc8441990f39a2b"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/memtemp10.C",
-                      "role":  "case",
-                      "sha256":  "b515a319adf28c4a8ca48808c889762cf84d775ee1ac4e12cbeae51dc5d42634"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/memtemp67.C",
-                      "role":  "case",
-                      "sha256":  "41ce9487ebf90d3493087f1c51de587969488fe2b879a08559c42e434bf5c65c"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/memtemp19.C",
-                      "role":  "case",
-                      "sha256":  "84e960c8749b4e6a4b4cb2695cd8c5cd7fe0171f61361ae4e2bed6e8725a0db4"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/nested2.C",
-                      "role":  "case",
-                      "sha256":  "94cee7ab94c2d58199d689927e19916a3248ec8d9d5be84287b6ef909151cf24"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/redecl2.C",
-                      "role":  "case",
-                      "sha256":  "44dc36235612de7dcb408639d8d25a605fd5a14b24397979529ecdff2c9e220b"
                   },
                   {
                       "path":  "g++.old-deja/g++.pt/ptrmem5.C",
@@ -1273,39 +118,9 @@
                       "sha256":  "a165c676509c1152786fa6a16d8efeef1ae3466729e414a26a65fe0562e7ac65"
                   },
                   {
-                      "path":  "g++.old-deja/g++.pt/sizeof2.C",
-                      "role":  "case",
-                      "sha256":  "810dcbb6fb543a1f631dde7d10b41b4e2e0535c6f9aabbc94e9f674a8497c060"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/spec15.C",
-                      "role":  "case",
-                      "sha256":  "47e297861d20bb5c2a6b1c1c6e59c6cc3af96531f3f4dbe27e17cfa52fa54786"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/sizeof3.C",
-                      "role":  "case",
-                      "sha256":  "03a56b2085f8c50180409f5c0596ed22b471b02d6f730d83bf0d3f6cb66f234c"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.pt/overload6.C",
                       "role":  "case",
                       "sha256":  "adcbae460a0ee9a6f1140d27cee707a6402ed09e9607695b15bb1f7687d11204"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/operator1.C",
-                      "role":  "case",
-                      "sha256":  "e245e329a59dfaa2ba73bba9f37801bc171582de3d76aa3b813d554fd2919d61"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/partial5.C",
-                      "role":  "case",
-                      "sha256":  "f9d8153a7e26df0492127c01bf1bced196335807759620d52f14b4985fbc2f6e"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/ptrmem4.C",
-                      "role":  "case",
-                      "sha256":  "ef63be267be9454e8534ff33cad6c7d4e5437f7bb4ff34ebaeb9eac9813e45cb"
                   },
                   {
                       "path":  "g++.old-deja/g++.pt/ptrmem2.C",
@@ -1313,159 +128,14 @@
                       "sha256":  "b567e69597517b1c4ddc5e359e5eca964d0ee3fefdf1862657ad133edfacedc3"
                   },
                   {
-                      "path":  "g++.old-deja/g++.mike/p5571.C",
-                      "role":  "case",
-                      "sha256":  "a38ca89780d2b99acb350f0bd4e4f58b3c427e4636c31a486fe04241d20afd82"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p4736c.C",
-                      "role":  "case",
-                      "sha256":  "abb771ba52cf7de165f3c6627d4cf3961b2d66fad9f607a624fe68fdee0eddf4"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p6004.C",
-                      "role":  "case",
-                      "sha256":  "f98d768f24a5da16acd79d4cf16a0128f124a0d8792cf795106d497707d72d09"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p8018.C",
-                      "role":  "case",
-                      "sha256":  "d1b10a5251f570f5b04983f84ca9055fce3a7c5c65c501926d22b6d7e0636b82"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p6610b.C",
-                      "role":  "case",
-                      "sha256":  "795908f1c8967a2b9ea1b2451ae74b08ad325cd748337a9e416ca3dc4361d678"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p2846b.C",
-                      "role":  "case",
-                      "sha256":  "b03dca8c372617f8d83cbbc2c36404e0556fa58150ee985938ca733fcc2f24bc"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p2846.C",
-                      "role":  "case",
-                      "sha256":  "910aef1a1ee2f7f65f8340201a8104a520ef33de4b0d258191aa9b21652ca47c"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.mike/p3041.C",
                       "role":  "case",
                       "sha256":  "4929a6b20228e7e3aab37b380b949f00deab183121552ca8270fe37d714dd05d"
                   },
                   {
-                      "path":  "g++.old-deja/g++.mike/p4736b.C",
-                      "role":  "case",
-                      "sha256":  "06b443d3a06f96e3cb52a67875343b8410a57ce1f64b4e7f16f0d00cb6aea51e"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p3524b.C",
-                      "role":  "case",
-                      "sha256":  "a7e25be94d7a8f180df954240f480242c1c003ae4cee4ba6c7d2ee7e1289f8a8"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p9206.C",
-                      "role":  "case",
-                      "sha256":  "47cdaaf045a075e62523f3eaedb81411570c68c0f478adafb664e7e2a58f875c"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/koenig7.C",
-                      "role":  "case",
-                      "sha256":  "0ba89a37146799265f1db9690b55a9d5804617a95b5fce588a4fe17013d13926"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/koenig3.C",
-                      "role":  "case",
-                      "sha256":  "40fbcf57f2493be190b464a05269c567db89f0a3b199e0ae4815498c52748374"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/lookup4.C",
-                      "role":  "case",
-                      "sha256":  "4e3d00d7d6c7783de26d3008594413f34354fd350b79822c9928f5ffe9c2db6b"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/overload1.C",
-                      "role":  "case",
-                      "sha256":  "1866fc3c1360f00da091f0b9dd8edb6f394d262f8619a09d0ecaad1da5215a77"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/ns7.C",
-                      "role":  "case",
-                      "sha256":  "844553e96a621304c0ffc0df3cf1b16a19c178b93e05b1a19f286c85e94bdc9e"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/pmf9.C",
-                      "role":  "case",
-                      "sha256":  "2d42f1467b746126811687ed9abf4517635d07adcae8a6afff9b678160f0b968"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/pmf1.C",
-                      "role":  "case",
-                      "sha256":  "4bcfd9f0959908402fc09d8bd700f87acf0abcf1cf3953d87f37b15aecf4210f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/ref1.C",
-                      "role":  "case",
-                      "sha256":  "bc5408d449c41154a8aad07c2beb4007a40849223a270fda9ab43b5c1897b9a4"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/alias7.C",
-                      "role":  "case",
-                      "sha256":  "af67436160cc5e182cbff387ad8b76de5ebe82c99fe0f703d8152f7562f5611f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/alias6.C",
-                      "role":  "case",
-                      "sha256":  "635bef08f7b0f198983c1cc2a61c43bdb9a9a2845de4a26d16fb964a462477f0"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p16146.C",
-                      "role":  "case",
-                      "sha256":  "6113bb0f0ea7a52e2b73aa6359f1ae512db85fd84d069d677ab6a7c73d1498d2"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.martin/lookup1.C",
-                      "role":  "case",
-                      "sha256":  "bcbb97f2518f002b6f2d969f23a91a16cc4b830f8923095c51abc8dfc466b098"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.martin/eval1.C",
-                      "role":  "case",
-                      "sha256":  "dcfcb6f92689f80c60de314d2887781fe853f1d4347f98abbe5cb131a2472736"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.martin/sts_iarr.C",
                       "role":  "case",
                       "sha256":  "7f0c8d06eeff5c10456684819a2638a46f8c3c01dfa4308e3f0414deb3fc19b9"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/asm1.C",
-                      "role":  "case",
-                      "sha256":  "045742816eda0223c824abd83b5094264f96222db5bfaf8b4dfeed8a60d182a8"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.martin/sts_partial.C",
-                      "role":  "case",
-                      "sha256":  "9b41c4ea1e5bb49d920319dc4a5bc9cd8636e94dec3097b115b6ff136703952f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/temps7.C",
-                      "role":  "case",
-                      "sha256":  "820c26eecd974632aa7e3919cc2d72c630f02f6e8b4fa159c727fa4a06183c70"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/static-mem2.C",
-                      "role":  "case",
-                      "sha256":  "4814778a33f35670233b4aaaef9e99e290646f46a53e37de3e0341d2651cf498"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.law/visibility14.C",
-                      "role":  "case",
-                      "sha256":  "f4c6c303580babbd3c7ece6428867255a92efec10576acf665a2ea586c249e34"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.martin/conv1.C",
-                      "role":  "case",
-                      "sha256":  "6a7650a6c3e06c1cde1868529ea097445aa8117753fabd1a6d6a374bdbfac001"
                   },
                   {
                       "path":  "g++.old-deja/g++.martin/bitset1.C",
@@ -1478,94 +148,9 @@
                       "sha256":  "99a695fe3f98cc1485d05020492748077eb3081bc2b3aa5f7033f6c2a34422b4"
                   },
                   {
-                      "path":  "g++.old-deja/g++.mike/ns14.C",
-                      "role":  "case",
-                      "sha256":  "ad6b5a59fdbc5fa8691e78efad6412f28fb37e93170640e7b7a97576106607f9"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/net37.C",
-                      "role":  "case",
-                      "sha256":  "4b44d765217442607fb5ed46cea9fdd64094bc1ef06ee9db3a30351190709bef"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/ns6.C",
-                      "role":  "case",
-                      "sha256":  "f9a46b461316dcb3e4922c522a4bd60d5d630db422f206009d795bb3c91d3999"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p1567.C",
-                      "role":  "case",
-                      "sha256":  "262c8e76c25d76c7b0ec732bad3b39abb48d71d5d2f99acf3e41029af2475c27"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/p12306a.C",
-                      "role":  "case",
-                      "sha256":  "f69ee1aacb013694d4f7d7276f1a4793c2649910bbbf5b8359d86833b70560dd"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/misc13.C",
-                      "role":  "case",
-                      "sha256":  "b2c3d4a965787d92d728ffefec830479d30ca26f3ee8da59e08d5282ee2af705"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.mike/hog1.C",
                       "role":  "case",
                       "sha256":  "3c7958dd515195b492942774680843c076244484672bf688c3ca0fa7c4400e32"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/net15.C",
-                      "role":  "case",
-                      "sha256":  "613850a92270f040ae3e5a523d763923e1e484f313102ed6291a2118b36e1e88"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/net35.C",
-                      "role":  "case",
-                      "sha256":  "3cfb6222900359b856c801b7b7694cd90273985f24f25b5118adbd9f2ade54bf"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/net17.C",
-                      "role":  "case",
-                      "sha256":  "929bec91486c0dc63222d584d2b99a73e75b01c39f7f172e9c2607eaf0c8d6cd"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/overload3.C",
-                      "role":  "case",
-                      "sha256":  "7c1a6427a6bf054149a05322f6235b064baea2c8a522049905c9da92ee3f84b5"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/init14.C",
-                      "role":  "case",
-                      "sha256":  "265cd1a1621757931810259ef4fb432e6812901f66eb9c06caa434104e819c4b"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/init11.C",
-                      "role":  "case",
-                      "sha256":  "752bc83d302d87d8b538f2738d1a6921a03e6da0424fd617a6b394c58f2a0e73"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/inline12.C",
-                      "role":  "case",
-                      "sha256":  "83031e5234d17fccd9310eae1feec4b9f122e2654d67a7ca0b5660ffa819e0cd"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/lookup10.C",
-                      "role":  "case",
-                      "sha256":  "73b0f5b2590bc651e5fac69b635fa8f5c9adbcb38b75d37e99161e98570bd408"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/lookup1.C",
-                      "role":  "case",
-                      "sha256":  "2bf7b86682e6737be007780ca184eba6a7b570d6d37fecb7f2e3002341083f0f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/dyncast1.C",
-                      "role":  "case",
-                      "sha256":  "ec6d9dbc223bb136f84384a669cc62a60eefecb8f641dc1143f74883c8079e62"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/dtor6.C",
-                      "role":  "case",
-                      "sha256":  "7b6596efef8de31497f48bed03843b2d0afce511bbac366c36337d937adf73e5"
                   },
                   {
                       "path":  "g++.old-deja/g++.other/empty1.C",
@@ -1573,129 +158,9 @@
                       "sha256":  "857e31ccf119cd34e87a5f9e989b1f7443f60d2ba613a83883b0d5aba85d3528"
                   },
                   {
-                      "path":  "g++.old-deja/g++.other/friend2.C",
-                      "role":  "case",
-                      "sha256":  "9c713e39da8b592306b30d92997f7a9647897b23f91d2ebb8bb3ace49090e527"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/enum5.C",
-                      "role":  "case",
-                      "sha256":  "56cf8ab6507087b61578fa6ceae74b38ea8955e6d422b915beeaa9760034ccb4"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/lookup12.C",
-                      "role":  "case",
-                      "sha256":  "01ac3a3d106c1947c3d4740add641d9803387203b01e258c9f9b608a8e76b503"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/new.C",
-                      "role":  "case",
-                      "sha256":  "c296bede477b428286b61336f39b41ba4d1e56a79d387946cf10a46dd50b822f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/mangle3.C",
-                      "role":  "case",
-                      "sha256":  "00b98ee0e7a8c556756c4bd3cb3f696f43bfcd98bf66b2481e69f0b75d73bc92"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.other/op2.C",
                       "role":  "case",
                       "sha256":  "32db9c1dd1075db5d542835bed7801408d1a7d7f42e2f9394e22e1faab4374af"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/overcnv1.C",
-                      "role":  "case",
-                      "sha256":  "840d1296e2dd7cf1020a8511a91ea0cb1568814ccf28a99e9af520cccdf20cf2"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/op3.C",
-                      "role":  "case",
-                      "sha256":  "f963e75b00f14296bfe2273c9f621ec6ea552a0fd5a01bdcd6e9ef0092b1fdbd"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/lookup14.C",
-                      "role":  "case",
-                      "sha256":  "165c3a9381255c398fda451f28e44286bb10913ed8eb85cf7b36a8cabbc8a3e9"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/lookup13.C",
-                      "role":  "case",
-                      "sha256":  "8c471f7156424e66572e57714d152701109fd17f0ee00e4f1b09bd4d107fbbdd"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/lookup21.C",
-                      "role":  "case",
-                      "sha256":  "0aa0490ed6268f3767bf3642e9bf5337bc5ad212d5022f57dba938d9d99e6b69"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/lookup6.C",
-                      "role":  "case",
-                      "sha256":  "01a6fcbf0a8d55efb5de77634cc938d02e1e9131e6908ae7455bc52ab4180cd8"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/lookup4.C",
-                      "role":  "case",
-                      "sha256":  "f4d5c1a3d319c8bf0c590f40c46eb9291eeec1d1786de809ba27815c6fb11c56"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/dtor5.C",
-                      "role":  "case",
-                      "sha256":  "7c2d36fff93be5a77e04f298f26562e5493fbb79c99660c75aa6db29c2e13bb6"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/anon2.C",
-                      "role":  "case",
-                      "sha256":  "d88f607bc2e639a75449cf1e509b3c043f945e1bd20f4fce4d7a229f5c78ae07"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/access8.C",
-                      "role":  "case",
-                      "sha256":  "04e45c071b1fbfec8d839b0a08431694747ab45e7854798d456d48f984e83741"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/anon6.C",
-                      "role":  "case",
-                      "sha256":  "ac772e5ce80aeef51794036380ef8f18c4634085d9167d9a2f6e3fd199e937ec"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/builtins7.C",
-                      "role":  "case",
-                      "sha256":  "e4eb16bca2aac7d76847019766b3b9d8a78d62c6cfbe8baf001fd62711697f7a"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/builtins6.C",
-                      "role":  "case",
-                      "sha256":  "8b777f43a875637e3691ff45415a52814219081526128ba6300aee10556cfdda"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/using13.C",
-                      "role":  "case",
-                      "sha256":  "addb883ba424479ecd9180f85187b73c5e3719a7b0adf159d75a6fb45e2808d8"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/template3.C",
-                      "role":  "case",
-                      "sha256":  "759c45d9a1c83f31d5b8fbe2fa975eae57698b22604b602b780e7b9c4ec0f899"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ns/using14.C",
-                      "role":  "case",
-                      "sha256":  "8c083e53c8c795fa0344d8313336f1c241d691564605a0453e8e4f9c60f82525"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/access10.C",
-                      "role":  "case",
-                      "sha256":  "5d5618e68f43b78291a8727cc538f9f61718e5fd00028c1158a458d5c0fa4acd"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.oliva/linkage1-main.cc",
-                      "role":  "case",
-                      "sha256":  "88db9d3b91a9422006803f483a8c78f65bf17bacdd1bdbdf4ccc6be24f1ed49d"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/builtins8.C",
-                      "role":  "case",
-                      "sha256":  "64ff249b3cf7d32b6947162e7e80fd63de947d44558f1ef12e5ff686c9643942"
                   },
                   {
                       "path":  "g++.old-deja/g++.other/debug1.C",
@@ -1713,94 +178,14 @@
                       "sha256":  "c4fba3f76e2d88d480bdb366f614735e9265201181e2f21aa4fa7ca187cdc508"
                   },
                   {
-                      "path":  "g++.old-deja/g++.other/delete7.C",
-                      "role":  "case",
-                      "sha256":  "c9a9bd4b7b32b63a249c347b436c88bc3988284b76c71e6675ee08595ae85a61"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/delete3.C",
-                      "role":  "case",
-                      "sha256":  "fc85bea96d5a26d1e6755f3560fc3a2f66048bea4deea27782c8920c47154a9f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/cast7.C",
-                      "role":  "case",
-                      "sha256":  "ae6f73374545545a515d28257b1a9556028470f4211b0a0cd0b6c8e7e023bc4d"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/call1.C",
-                      "role":  "case",
-                      "sha256":  "7a852b601f2b2c0b163676452aa7a270b621e753194bbd22252c255597ebade2"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/conv4.C",
-                      "role":  "case",
-                      "sha256":  "f7604634dc7cabd7eb424ce34afdbbd340485270aa31d4e64c750fdfe203b89b"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.other/crash20.C",
                       "role":  "case",
                       "sha256":  "0e7ff5f199a44f6b1e5625259e90a8e03621d70276c7647e2035938d2c1f65d0"
                   },
                   {
-                      "path":  "g++.old-deja/g++.other/copy2.C",
-                      "role":  "case",
-                      "sha256":  "e211a9b14f3dc67274bf4567b84da0cc32df38ddf5d838864c34f5edb3a84a5d"
-                  },
-                  {
-                      "path":  "g++.dg/ext/builtin-arith-overflow-2.C",
-                      "role":  "case",
-                      "sha256":  "cf61dfbcb2c0f4293a24414d646309a296f6f6af808d84665a2f023a2e6366f6"
-                  },
-                  {
-                      "path":  "g++.dg/ext/builtin-arith-overflow-1.C",
-                      "role":  "case",
-                      "sha256":  "849c4272673e65a8ca75730b44321d4be6aabeb1fbf64241b89c1ce23c6c1b8b"
-                  },
-                  {
-                      "path":  "g++.dg/ext/builtin-convertvector-1.C",
-                      "role":  "case",
-                      "sha256":  "a29d4afc298d1b4a2a5bff9298d0d15dc4e999bdbaed1c602349e3d66fb93082"
-                  },
-                  {
-                      "path":  "g++.dg/ext/builtin-dynamic-object-size2.C",
-                      "role":  "case",
-                      "sha256":  "77812572d9c62d0d006b65854ae14f740ecc9a395fe84d85396134c53d44ac0a"
-                  },
-                  {
-                      "path":  "g++.dg/ext/builtin-dynamic-object-size1.C",
-                      "role":  "case",
-                      "sha256":  "7d89bad30fe288f861d3ac3e9468441c4b58f39433bfd5641f2d9ad5d7766a8b"
-                  },
-                  {
-                      "path":  "g++.dg/ext/attrib19.C",
-                      "role":  "case",
-                      "sha256":  "0ca01a537125cf86baa52b7284cc95291db2436e12d8d14243c60c97431e0527"
-                  },
-                  {
-                      "path":  "g++.dg/ext/attr-format1.C",
-                      "role":  "case",
-                      "sha256":  "3cf3aff5bea1295cb22797993a81838d5d272df7dab7c11293b44e034c53f6c0"
-                  },
-                  {
-                      "path":  "g++.dg/ext/attrib31.C",
-                      "role":  "case",
-                      "sha256":  "35e1c429743af799e1e573e23e91137e12eaf1cc69940b3b94938681fde1b919"
-                  },
-                  {
-                      "path":  "g++.dg/ext/attrib61.C",
-                      "role":  "case",
-                      "sha256":  "b09f68a969f9afb10c828daaa35b6b249ff7af8e59babbbf48bb08e7584b60f8"
-                  },
-                  {
                       "path":  "g++.dg/ext/attrib6.C",
                       "role":  "case",
                       "sha256":  "28e1e34708b315f92aecff30d285a0d81f287ab6ca3441602c65a3309a5f7044"
-                  },
-                  {
-                      "path":  "g++.dg/ext/builtin-object-size1.C",
-                      "role":  "case",
-                      "sha256":  "06356fb291fb9fd73b303aa8a169590c67463f4bf1e02c406e447ce362cfbed3"
                   },
                   {
                       "path":  "g++.dg/ext/complex3.C",
@@ -1828,39 +213,9 @@
                       "sha256":  "09f58293b9556142c3bf51039f0ea4215d8b54f36b8379a1edeaa92c8bb43335"
                   },
                   {
-                      "path":  "g++.dg/ext/builtin-operator-new-3.C",
-                      "role":  "case",
-                      "sha256":  "b9ac1b5419d89dfd43a825d0f4b867d6c430d8375d8d764c6c1dc740d04d7bbb"
-                  },
-                  {
-                      "path":  "g++.dg/ext/builtin-object-size2.C",
-                      "role":  "case",
-                      "sha256":  "0a82ac820bacf383c8bb39a6e7850c776b5fb0b0b4bb3ec6ac4955d120798b25"
-                  },
-                  {
-                      "path":  "g++.dg/ext/builtin-shufflevector-4.C",
-                      "role":  "case",
-                      "sha256":  "d56ade3946c1b7019542386cd993f252a81d68e2e35cf47991875a30fdf8e14f"
-                  },
-                  {
                       "path":  "g++.dg/ext/complex1.C",
                       "role":  "case",
                       "sha256":  "e2345aa483bcfd55df9c645734d6f3a4284adf32304acd08a56aff53a9e07165"
-                  },
-                  {
-                      "path":  "g++.dg/ext/cleanup-dtor.C",
-                      "role":  "case",
-                      "sha256":  "4ab72ad5e04d7217bd7ecab69bb98d1ffd1586ee649bbeb664889d28bc47ee7f"
-                  },
-                  {
-                      "path":  "g++.dg/ext/atomic-4.C",
-                      "role":  "case",
-                      "sha256":  "07c703b4242d7bb722b5f94574b1775f3b109e707496028473642d48c7054167"
-                  },
-                  {
-                      "path":  "g++.dg/eh/ctor1.C",
-                      "role":  "case",
-                      "sha256":  "6dc44ddb07e996963b84a3f91748d4465269db7abe5bfba7f70de8d048e9a9fe"
                   },
                   {
                       "path":  "g++.dg/eh/comdat1.C",
@@ -1873,69 +228,9 @@
                       "sha256":  "86ed41fcc10a1231be3b6bf18a6120ef3c80889f0a1b12d86c10cbfd13425ea0"
                   },
                   {
-                      "path":  "g++.dg/eh/new2.C",
-                      "role":  "case",
-                      "sha256":  "6abdd93916b0caaa53d6a71f822bc7628ca46dbd1a64bd927bab876bffff6de5"
-                  },
-                  {
-                      "path":  "g++.dg/eh/init-temp1.C",
-                      "role":  "case",
-                      "sha256":  "35da7f94e89bee920814e254887e95ce932cccc2369eb3b11d35b4476f4f4429"
-                  },
-                  {
-                      "path":  "g++.dg/eh/array2.C",
-                      "role":  "case",
-                      "sha256":  "30845813015f31faeed53287540be205d1d3285d5b731d91ea55ff59614f452d"
-                  },
-                  {
-                      "path":  "g++.dg/eh/aggregate1.C",
-                      "role":  "case",
-                      "sha256":  "470823d015bf753a51ef3c6ab2a54c6a1009af9d1cdcc37b6727efda3c8c20ce"
-                  },
-                  {
-                      "path":  "g++.dg/eh/array3.C",
-                      "role":  "case",
-                      "sha256":  "d74b950695299e4d4c049c1b9d20ec7efbcff46ab0187e5c079c12b84da581f2"
-                  },
-                  {
-                      "path":  "g++.dg/eh/cast1.C",
-                      "role":  "case",
-                      "sha256":  "a3103803ba24dabde74b1675af59d3678c752bc48c96709a511fd34c309f96c1"
-                  },
-                  {
-                      "path":  "g++.dg/eh/builtin8.C",
-                      "role":  "case",
-                      "sha256":  "387857f81da9a939c7f4a1084086e6ab07792f74dfdc1b2f571b480645aff7ca"
-                  },
-                  {
-                      "path":  "g++.dg/eh/partial1.C",
-                      "role":  "case",
-                      "sha256":  "68ecda69967fe12aa78e8fae42c593289b8cbf0a1fcc2b818b437bd8a946a6c1"
-                  },
-                  {
-                      "path":  "g++.dg/ext/alias-canon3.C",
-                      "role":  "case",
-                      "sha256":  "3e42eb0a2eb76b77ad4edcef49cc45328edc4a3f7b4e7719114bdf611aa1d788"
-                  },
-                  {
                       "path":  "g++.dg/expr/stdarg2.C",
                       "role":  "case",
                       "sha256":  "0d2e1bf3a991d32aad4b2865e70f4160db8822e8a742355da78370809188f0f8"
-                  },
-                  {
-                      "path":  "g++.dg/ext/asm12.C",
-                      "role":  "case",
-                      "sha256":  "12ff32e3ac9fd6c4bdcb1e09985c66af84b64dc6bbe8585632e81f2cdfdea8a8"
-                  },
-                  {
-                      "path":  "g++.dg/ext/asm5.C",
-                      "role":  "case",
-                      "sha256":  "e68cab6e425d274abb37476d121bcacc1cdaa73b5d56c2583e2a0b29c75098c4"
-                  },
-                  {
-                      "path":  "g++.dg/ext/asm14.C",
-                      "role":  "case",
-                      "sha256":  "aafded8de3bb13d135945ecc1787b5cc3f62bb8ec83bda0b273a95c8d625f56d"
                   },
                   {
                       "path":  "g++.dg/eh/spec4.C",
@@ -1943,99 +238,14 @@
                       "sha256":  "4acb20e06ace84efd4d22334f34bf99a7e8fe4b3fa9cbb8676bf2738d362935e"
                   },
                   {
-                      "path":  "g++.dg/eh/return1.C",
-                      "role":  "case",
-                      "sha256":  "00fb609305ae83c4ddbb304a0edadb5609c984d4449cb1ad03f0692724ba6814"
-                  },
-                  {
-                      "path":  "g++.dg/eh/terminate2.C",
-                      "role":  "case",
-                      "sha256":  "ad8f8dc300b3068cb082e5fc14a989665b98e7fe6bc5fd5b4ac1d667984b391e"
-                  },
-                  {
-                      "path":  "g++.dg/expr/cond6.C",
-                      "role":  "case",
-                      "sha256":  "a1cf6c6ae3e64bb932832015393c5b11f1eff669cba22f1f7154aae83d3bebae"
-                  },
-                  {
-                      "path":  "g++.dg/expr/cond4.C",
-                      "role":  "case",
-                      "sha256":  "66b6629ce9a308b78965d06380dd2c6342e1bfa1545b486115d2588e5e82794b"
-                  },
-                  {
                       "path":  "g++.dg/ext/complit12.C",
                       "role":  "case",
                       "sha256":  "9ad696b48f0dcbc553f1a9f2fbb4675d6238a6b4e935c5361cc9a10af4193fd0"
                   },
                   {
-                      "path":  "g++.dg/ext/underlying_type2.C",
-                      "role":  "case",
-                      "sha256":  "a3fa663bebe64845cf0e97c7cbaa282748440528df991feb95edf5e4428284e3"
-                  },
-                  {
-                      "path":  "g++.dg/ext/traits1.C",
-                      "role":  "case",
-                      "sha256":  "cee972d5b68d191eadcaf63469964df62b18dcc80940d0677f332af19dbe9d47"
-                  },
-                  {
-                      "path":  "g++.dg/ext/va-arg-pack-1.C",
-                      "role":  "case",
-                      "sha256":  "bbc4ce436e9a0f0e34b3e52546c6747de6cb54b2b5955fda8b63e00d8b8d7a1a"
-                  },
-                  {
-                      "path":  "g++.dg/ext/va-arg-pack-len-1.C",
-                      "role":  "case",
-                      "sha256":  "c1419cfcc89300f3e70d3757dbd6e63326806533bf5c1cf6c41f3791f26ab16b"
-                  },
-                  {
-                      "path":  "g++.dg/ext/va-arg-pack-3.C",
-                      "role":  "case",
-                      "sha256":  "babe7a82f656f060eee442894943bdb499ffb574a1ce488e98d6b7f8afd1b8ea"
-                  },
-                  {
-                      "path":  "g++.dg/ext/stmtexpr7.C",
-                      "role":  "case",
-                      "sha256":  "86c264bfa237b6bece4f25b9b88a14cb890c35b1506d98f71e3909f0f059efcc"
-                  },
-                  {
-                      "path":  "g++.dg/ext/stmtexpr6.C",
-                      "role":  "case",
-                      "sha256":  "6416e9482a55096a10262406172e466841a41ffd18a89cff148e292bdc1b47e0"
-                  },
-                  {
-                      "path":  "g++.dg/ext/stmtexpr8.C",
-                      "role":  "case",
-                      "sha256":  "0ef7248c5dd3e1d483cad7fda8204926fbab7e188e539acd8edbdc482fa654bc"
-                  },
-                  {
                       "path":  "g++.dg/ext/tmplattr2.C",
                       "role":  "case",
                       "sha256":  "0693977498e2ff6c0f06da20ecf33b021fe5fc51a899a163f515f2d9e1b6cc25"
-                  },
-                  {
-                      "path":  "g++.dg/ext/sync-3.C",
-                      "role":  "case",
-                      "sha256":  "b034923e78c1063d5045513b0e1bd6a9ee1ab12c7c149c5e6894ae41ec5aaeb0"
-                  },
-                  {
-                      "path":  "g++.dg/ext/vector1.C",
-                      "role":  "case",
-                      "sha256":  "9c7b01af66617bc50fdc0abb01e1b28e8f7794dc86bf772f931b9510f8998a11"
-                  },
-                  {
-                      "path":  "g++.dg/ext/visibility/anon5.C",
-                      "role":  "case",
-                      "sha256":  "8e7dc35ec21961dfe948308d7f614f71951a07c3394be1841cd2e93736b2d2f7"
-                  },
-                  {
-                      "path":  "g++.dg/ext/vector38.C",
-                      "role":  "case",
-                      "sha256":  "d99c26da308c2ebbf216559d3fe7c7594bc8825eaf2df11709cab53e9bb314ef"
-                  },
-                  {
-                      "path":  "g++.dg/ext/vla7.C",
-                      "role":  "case",
-                      "sha256":  "ed1fcba722dc4240615e9015834f62e62d67779cc06254b0a8d488157733133f"
                   },
                   {
                       "path":  "g++.dg/inherit/access7.C",
@@ -2048,64 +258,9 @@
                       "sha256":  "fcaaea16d1f8ebe75284fa2a0caae522aed4c08602e974bd74c86ff75452f9e7"
                   },
                   {
-                      "path":  "g++.dg/ext/vector30.C",
-                      "role":  "case",
-                      "sha256":  "b0d767b260368033b2fda7dd539eac33e79749ffa487132bdced594debb80e47"
-                  },
-                  {
                       "path":  "g++.dg/ext/vector29.C",
                       "role":  "case",
                       "sha256":  "fbe67ac9edfe139e733be7da5fc39351189edaa21290617646841f406d637ba2"
-                  },
-                  {
-                      "path":  "g++.dg/ext/vector32.C",
-                      "role":  "case",
-                      "sha256":  "9bec29ef23236b90328e63d0ec0a7b50a5bd543f2984b1a841aba4a3d4b08364"
-                  },
-                  {
-                      "path":  "g++.dg/ext/vector37.C",
-                      "role":  "case",
-                      "sha256":  "733414bd35f08871575d7f3d995200f4898f48746905b2f66d4a932ff904f8f0"
-                  },
-                  {
-                      "path":  "g++.dg/ext/vector32a.C",
-                      "role":  "case",
-                      "sha256":  "9bec29ef23236b90328e63d0ec0a7b50a5bd543f2984b1a841aba4a3d4b08364"
-                  },
-                  {
-                      "path":  "g++.dg/ext/stmtexpr27.C",
-                      "role":  "case",
-                      "sha256":  "a85e76778f6a9d8ac57aa362f6ad77009e49f08dfc8d5b94211c13179d1a83e1"
-                  },
-                  {
-                      "path":  "g++.dg/ext/has-feature2.C",
-                      "role":  "case",
-                      "sha256":  "ef7a31bacdd2737bb6e87821f34f331d543ef9e9e50104b7c9c92c102efeb62e"
-                  },
-                  {
-                      "path":  "g++.dg/ext/has-feature.C",
-                      "role":  "case",
-                      "sha256":  "2b4134c655100f39c7f4c4715997db8998ec6212af803f019fb61478a97908cb"
-                  },
-                  {
-                      "path":  "g++.dg/ext/has_trivial_destructor-2.C",
-                      "role":  "case",
-                      "sha256":  "44416a87fdce6a3ebcdb0c913fbcf9f09d44bb5428a5b6197a1f363bed32a061"
-                  },
-                  {
-                      "path":  "g++.dg/ext/is_base_of_incomplete.C",
-                      "role":  "case",
-                      "sha256":  "a49effdb0a72cb1ee2c65176d3b9ffa47ed0ca2fb260ccc2cd78ac57d1650a3e"
-                  },
-                  {
-                      "path":  "g++.dg/ext/is_base_of_incomplete-2.C",
-                      "role":  "case",
-                      "sha256":  "955a9756d956aa4d319591168985237a6cfc6d3af34e1e22418e03593ef3097d"
-                  },
-                  {
-                      "path":  "g++.dg/ext/flexary2.C",
-                      "role":  "case",
-                      "sha256":  "fb834c1259ec4e861983bf656e1907d43c0d5925d3a5af756bd599548caa7151"
                   },
                   {
                       "path":  "g++.dg/ext/desig11.C",
@@ -2118,19 +273,9 @@
                       "sha256":  "ddb10e9a91e6646ee71181967fc92af8ef4b7afd05057a19f20b00ab74aba67b"
                   },
                   {
-                      "path":  "g++.dg/ext/has-builtin-1.C",
-                      "role":  "case",
-                      "sha256":  "1dc7ebe160cf289cecc697bca40e43be244ad820d0bea667ce62d0ae286eb384"
-                  },
-                  {
                       "path":  "g++.dg/ext/flexary40.C",
                       "role":  "case",
                       "sha256":  "be00206a3303a934dd4cb3d1674430df3d084db3d5dca317093d9defb9b7d9d1"
-                  },
-                  {
-                      "path":  "g++.dg/ext/is_constructible6.C",
-                      "role":  "case",
-                      "sha256":  "34944b985f768b56e82a89fa2c3c8095dc872987b45bfd234bafb7aab3231afe"
                   },
                   {
                       "path":  "g++.dg/ext/pr99508.C",
@@ -2138,99 +283,14 @@
                       "sha256":  "2f1e2e6c7262218307a8e2a00b43ca3b8a885533823337b3ca5bda8d47a486a8"
                   },
                   {
-                      "path":  "g++.dg/ext/pr59378.C",
-                      "role":  "case",
-                      "sha256":  "2b00fd19eda8d5295b3f8ac44233aaff65119d1d38e1ed9dc53983b495b525b2"
-                  },
-                  {
-                      "path":  "g++.dg/ext/static1.C",
-                      "role":  "case",
-                      "sha256":  "426fe306b6ffec90bdeacbac93ca4af4f7b0151aab4d0be3edecc7d2d4b4ccc0"
-                  },
-                  {
-                      "path":  "g++.dg/ext/stmtexpr2.C",
-                      "role":  "case",
-                      "sha256":  "82e28c185a2dab04c85c3f8ae21f08b9db6211f4addcc896124d60e8979465c5"
-                  },
-                  {
-                      "path":  "g++.dg/ext/stmtexpr1.C",
-                      "role":  "case",
-                      "sha256":  "a04cc0e0d71622e102631392e6e9fc424b36cf026fab1328de30882137497aea"
-                  },
-                  {
-                      "path":  "g++.dg/ext/is_trivially_constructible6.C",
-                      "role":  "case",
-                      "sha256":  "6ce81a920bd610a97b16b5257c008bf4d43bff118d7193e8aca6a2bddfd43c93"
-                  },
-                  {
-                      "path":  "g++.dg/ext/is_pod_incomplete.C",
-                      "role":  "case",
-                      "sha256":  "5bc141b622162e9c52b61157f08a7b1e0ad83984fcedc825404544ba272e7bfc"
-                  },
-                  {
-                      "path":  "g++.dg/ext/is_trivially_constructible7.C",
-                      "role":  "case",
-                      "sha256":  "b57a6c704d5773599529d302adac54dc134881e0c17747af8ebe3b6d3cf6fa33"
-                  },
-                  {
-                      "path":  "g++.dg/ext/pr53605.C",
-                      "role":  "case",
-                      "sha256":  "68e5010230c987214d76ffd8dd916099899338dcdd4ffda0bd2ba99a31d4aa46"
-                  },
-                  {
-                      "path":  "g++.dg/ext/packed7.C",
-                      "role":  "case",
-                      "sha256":  "f463807004619067fcb04691b013d04f749162d42fc04a30f7fefff5af4dac63"
-                  },
-                  {
-                      "path":  "g++.dg/abi/covariant3.C",
-                      "role":  "case",
-                      "sha256":  "0c699ef906b60f03af8ea8fb115c7de6cfa168e1c787fa90c1ddc28cc08cca7b"
-                  },
-                  {
                       "path":  "g++.dg/DRs/dr2387-aux.cc",
                       "role":  "case",
                       "sha256":  "19a6743fc61150adbf5a8a8ff85a507db9540f24209190ef70026a1872c40e75"
                   },
                   {
-                      "path":  "g++.dg/abi/covariant4.C",
-                      "role":  "case",
-                      "sha256":  "30f7aab29920508a8c706b5cbdeea75876ecc8dc0655b1a345516fc5e5ec6e9d"
-                  },
-                  {
-                      "path":  "g++.dg/abi/empty30.C",
-                      "role":  "case",
-                      "sha256":  "7c2ce72bef6f8a68ba6e1cb6827afb709ffd8d556d205e62cb4d8dcdae643e55"
-                  },
-                  {
-                      "path":  "g++.dg/abi/covariant5.C",
-                      "role":  "case",
-                      "sha256":  "d698fb66f5bd504a19ea3542ede48d5b544f92ea9fb897dbc759f20172c27e77"
-                  },
-                  {
-                      "path":  "c-c++-common/toplevel-asm-4.c",
-                      "role":  "case",
-                      "sha256":  "1c99bc28d066f2279e0a4e6134439e062c4c09be7f5a557b41319d8cc7979cc5"
-                  },
-                  {
                       "path":  "c-c++-common/pr71654.c",
                       "role":  "case",
                       "sha256":  "3b8754dafda7954726f120f03e70a98abc3037859a350a6a68e8feb5cf28c96d"
-                  },
-                  {
-                      "path":  "c-c++-common/toplevel-asm-9.c",
-                      "role":  "case",
-                      "sha256":  "040e1ab745b1646103036768396fdf254e6ceecdee978122335cbbee84ff8190"
-                  },
-                  {
-                      "path":  "c-c++-common/vector-subscript-5.c",
-                      "role":  "case",
-                      "sha256":  "36b518e3a82f15edd76a25b25570449f4458794d8e94249acf379123ddf350be"
-                  },
-                  {
-                      "path":  "c-c++-common/vector-init-2.c",
-                      "role":  "case",
-                      "sha256":  "4e3cca3afffb33f6ed320f407b7146caa728b736f0d6ad16c999ec873825f9c9"
                   },
                   {
                       "path":  "g++.dg/abi/rtti2.C",
@@ -2268,11 +328,6 @@
                       "sha256":  "5b8d5231891e6d721d71115afa05f9c0e2747c9f0a42265c2485ebe5750d5f62"
                   },
                   {
-                      "path":  "g++.dg/conversion/cast1.C",
-                      "role":  "case",
-                      "sha256":  "2d473264ee4390b2c6ad1f7f49c93b1f2898c827b7f4f01bd473b97848436a3d"
-                  },
-                  {
                       "path":  "g++.dg/coroutines/coro-function-decl.C",
                       "role":  "case",
                       "sha256":  "525f693b357e6c5e79341cccb877406951d688f292381974777d55acff23e9f9"
@@ -2288,114 +343,14 @@
                       "sha256":  "d08aa3e0cf126db71922d13ecdc8f19376424d56467c47463d67ab3af1f9850a"
                   },
                   {
-                      "path":  "c-c++-common/pr70144-2.c",
-                      "role":  "case",
-                      "sha256":  "d15c1e2c6fcf7278d40c5d16445a95921effb7720b00b91e7909445ff5854a05"
-                  },
-                  {
-                      "path":  "c-c++-common/cpp/pr63831-1.c",
-                      "role":  "case",
-                      "sha256":  "8012c8f136e58ea573dde8f0d076ba6a811d380f05e5a138ea8e7753defb6e7a"
-                  },
-                  {
-                      "path":  "c-c++-common/cpp/has-builtin-4.c",
-                      "role":  "case",
-                      "sha256":  "886620f56aedc6e442fd004c18029e16064a187104fc64efb6849cea6df1be78"
-                  },
-                  {
-                      "path":  "c-c++-common/cpp/pr65238-1.c",
-                      "role":  "case",
-                      "sha256":  "b0fb2d7c107049f9411f877bb3aa72ca95762aef2e63a76d4c378a397f59d496"
-                  },
-                  {
-                      "path":  "c-c++-common/fam-in-union-alone-in-struct-2.c",
-                      "role":  "case",
-                      "sha256":  "e5af99c57da387e29228dd568970dd058f1222b9a8590b800a015899e9b1462d"
-                  },
-                  {
-                      "path":  "c-c++-common/cpp/wide-narrow-predef-macros.c",
-                      "role":  "case",
-                      "sha256":  "7cf01365360f3816492d4fb1a07d05b0be66f71818d37dc122d0726734dcefd6"
-                  },
-                  {
-                      "path":  "c-c++-common/builtin-convertvector-2.c",
-                      "role":  "case",
-                      "sha256":  "4225e830dd22f3a7fbd3eecc662b28e150107b7fdf3e990cb69a551c65c1fded"
-                  },
-                  {
-                      "path":  "c-c++-common/asmgoto-1.c",
-                      "role":  "case",
-                      "sha256":  "5121dbb326b6ef23893bfa87d5f37737ac39086f7c1e34ead68de853f96e1304"
-                  },
-                  {
-                      "path":  "c-c++-common/builtin-convertvector-3.c",
-                      "role":  "case",
-                      "sha256":  "79da4f6c4cc0f0e72bf06ad3fb8af3403c462e4d16018c596acd75bcaee7598d"
-                  },
-                  {
-                      "path":  "c-c++-common/cpp/has-builtin-2.c",
-                      "role":  "case",
-                      "sha256":  "df8275fb30139691e7d57c9b406956ad0d3b4e9f05ea01a1de0de82c5a01ad28"
-                  },
-                  {
-                      "path":  "c-c++-common/builtin_location.c",
-                      "role":  "case",
-                      "sha256":  "51cf9503bc18472c84e199e49a90417e4749656bceb7cf1e695e00273caae7bf"
-                  },
-                  {
-                      "path":  "c-c++-common/fam-in-union-alone-in-struct-bos-1.c",
-                      "role":  "case",
-                      "sha256":  "b9bfac46620ed2f8d8d6fe36848eb3ff2255bfcfd4194295d5da62d2c5930f43"
-                  },
-                  {
-                      "path":  "c-c++-common/pr56302.c",
-                      "role":  "case",
-                      "sha256":  "8a1c55ab83db2d07a98431e64978d955fbe6730fec2949e3f7841e419ad64376"
-                  },
-                  {
-                      "path":  "c-c++-common/pr111309-1.c",
-                      "role":  "case",
-                      "sha256":  "61e54c352e1bdd9ccd86f87060933a9b805fdbfc36ed70b70a33a5aa9a298524"
-                  },
-                  {
-                      "path":  "c-c++-common/pr59037.c",
-                      "role":  "case",
-                      "sha256":  "4c8a424e19e80d6ff3850243c292ac157467a724728491c256871bd7687e0f17"
-                  },
-                  {
-                      "path":  "c-c++-common/pr63764-2.c",
-                      "role":  "case",
-                      "sha256":  "bbd7c80eab12132ba5112a0acf3e8b2cc1362293bf9df4ad6fac4e3bb6817a23"
-                  },
-                  {
                       "path":  "c-c++-common/pr60689.c",
                       "role":  "case",
                       "sha256":  "12953485ef4235010b89249210ef56442677b4c35f6a56abe6927fe1f8d77e41"
                   },
                   {
-                      "path":  "c-c++-common/has-feature-common.c",
-                      "role":  "case",
-                      "sha256":  "f29d8a1a61757b0b366b6d2ccc3f5555dfd207f02b3ded2fc0014037dfa8a5bd"
-                  },
-                  {
-                      "path":  "c-c++-common/fam-in-union-alone-in-struct-bos.c",
-                      "role":  "case",
-                      "sha256":  "563f599f6dd9c2e8dd627d98f060563b54d7575bbde2cca422467b5dd6582937"
-                  },
-                  {
-                      "path":  "c-c++-common/init-5.c",
-                      "role":  "case",
-                      "sha256":  "5f4064004017dd155c4294e4c566567deb64cbcb08be288d3613be96cffacb63"
-                  },
-                  {
                       "path":  "c-c++-common/pr105998.c",
                       "role":  "case",
                       "sha256":  "d49ddcf0ed9927871faf0de6a037f51e64a15770bcf2460a6644f5bbf18c8a41"
-                  },
-                  {
-                      "path":  "c-c++-common/musttail24.c",
-                      "role":  "case",
-                      "sha256":  "918847f71042a6fa14831cbfb2aa6c549f17956cfca5d714c744ae5982730a7b"
                   },
                   {
                       "path":  "g++.dg/coroutines/pr109682.C",
@@ -2416,11 +371,6 @@
                       "path":  "g++.dg/coroutines/pr99575.C",
                       "role":  "case",
                       "sha256":  "28c73756e21259eafaaa02cdc154459e4d6f7b0b70c2598b47e19d762188cad4"
-                  },
-                  {
-                      "path":  "g++.dg/cpp0x/extern_template-7.C",
-                      "role":  "case",
-                      "sha256":  "8dee5477e2045fc2d5f684b968d25371106bf9904b70e5848d0dc550cd538059"
                   },
                   {
                       "path":  "g++.dg/cpp0x/alignas5.C",
@@ -2458,49 +408,9 @@
                       "sha256":  "57a96b28659fd18f8bad81dd59a90f1954a73bec753142e617256151ff3bc3c3"
                   },
                   {
-                      "path":  "g++.dg/cpp/elifdef-4.C",
-                      "role":  "case",
-                      "sha256":  "9cc2d36d96fb9f031c49d85a1a8ebc5648d69c29d006135f992bac6335d239a6"
-                  },
-                  {
-                      "path":  "g++.dg/cpp2a/constexpr-dynamic19.C",
-                      "role":  "case",
-                      "sha256":  "80ac26c21f0d3970065b7948a8c734c5b17b1365558e886f75baa582948b3335"
-                  },
-                  {
-                      "path":  "g++.dg/cpp/ucn-2.C",
-                      "role":  "case",
-                      "sha256":  "d238b82a605becddae98c45dcacf6de530d4ba0a410c7e2864ae4282b13454c1"
-                  },
-                  {
-                      "path":  "g++.dg/diagnostic/bindings1.C",
-                      "role":  "case",
-                      "sha256":  "9f1925a384b526da4288f8e37550c01b1cb632d9fe250450f3e9fae1fba4c2c1"
-                  },
-                  {
-                      "path":  "g++.dg/cpp/ucnid-3.C",
-                      "role":  "case",
-                      "sha256":  "8c1a26d24b27a4c5e47dd2d34bb9df122935ca6ca27c66dc2f019233dcdb3770"
-                  },
-                  {
-                      "path":  "g++.dg/cpp1y/vla10.C",
-                      "role":  "case",
-                      "sha256":  "bf2f3a5a60d3f895a78ae76199fd5ec8b81a654634f2061b95f3fc23ab198ff0"
-                  },
-                  {
-                      "path":  "g++.dg/cpp1y/sized-dealloc1.C",
-                      "role":  "case",
-                      "sha256":  "2cb184c23735ba73cd540a625cbdf5d174c0d9fc7f755cd653fb183bfd35345a"
-                  },
-                  {
                       "path":  "g++.dg/cpp1z/eval-order14.C",
                       "role":  "case",
                       "sha256":  "1d7decd7fe88e70fe39d8e1af986e58736fb33ffbd0b5b3d622da528787e53d4"
-                  },
-                  {
-                      "path":  "g++.dg/cpp2a/concepts-nondep6.C",
-                      "role":  "case",
-                      "sha256":  "6212628535c27c7724f50a357532c7361272e8490502b0ac840bb7033300247f"
                   },
                   {
                       "path":  "g++.dg/cpp26/aggr-init1.C",
@@ -2618,29 +528,9 @@
                       "sha256":  "b6bab8fcae42826b93d99a5f59f4fb38d8d54da6deeef3ef5c921ad569017edd"
                   },
                   {
-                      "path":  "g++.dg/inherit/conv1.C",
-                      "role":  "case",
-                      "sha256":  "2d9e940e9434b7dc31a3b26aaf365b71acc3896390d846c000902da37bd01e95"
-                  },
-                  {
-                      "path":  "g++.dg/overload/defarg7.C",
-                      "role":  "case",
-                      "sha256":  "5d4870f5e8bbfef00487cca448bce498a500cdd2a4e1a2801a6812443f49f701"
-                  },
-                  {
                       "path":  "g++.dg/overload/defarg4.C",
                       "role":  "case",
                       "sha256":  "411edf481772b6ad2ce87dc3cab277faa35f823b48f754111cf9c49672cf6d0a"
-                  },
-                  {
-                      "path":  "g++.dg/overload/member1.C",
-                      "role":  "case",
-                      "sha256":  "f236e22fcbcdbf76076fea0cd3ad64419cf020fc09d0c82e77da18c77da2c424"
-                  },
-                  {
-                      "path":  "g++.dg/overload/scope1.C",
-                      "role":  "case",
-                      "sha256":  "0f9b38da7ec3720514b2fc7eeab769094486385ec15d0f2c00848154fb10c18f"
                   },
                   {
                       "path":  "g++.dg/overload/member2.C",
@@ -2648,119 +538,14 @@
                       "sha256":  "e1d89f8158c45795a1d67b396f1901c0fa4281b0ca1300dac20634fc38945a6d"
                   },
                   {
-                      "path":  "g++.dg/overload/arg5.C",
-                      "role":  "case",
-                      "sha256":  "7fc9073e5425afba69451708bd11c0c4f3f41d958e046459a3b39d24b46da059"
-                  },
-                  {
-                      "path":  "g++.dg/overload/addr1.C",
-                      "role":  "case",
-                      "sha256":  "8e0d6a2dfd7aad55f66d055b510efebcd31209dde715df5e13b93524494dfb00"
-                  },
-                  {
-                      "path":  "g++.dg/overload/builtin2.C",
-                      "role":  "case",
-                      "sha256":  "a69701d38bc49710c8bdac88eb64c8cabae3d6569878d4e311f44c819d2f039d"
-                  },
-                  {
-                      "path":  "g++.dg/overload/defarg12.C",
-                      "role":  "case",
-                      "sha256":  "ea5db92d8069d864b1b7176a0ea156c2661b733843540e30172b65146b6f4473"
-                  },
-                  {
-                      "path":  "g++.dg/overload/cond2.C",
-                      "role":  "case",
-                      "sha256":  "b921c38d7e9cce7f6c46cc7f726481e8e49a926892fb9b1bfb5a0005bd15bde4"
-                  },
-                  {
-                      "path":  "g++.dg/overload/using6.C",
-                      "role":  "case",
-                      "sha256":  "4187f371faaa3ba50857dc7b8da08b19c4cf0b7fbf111a055ccdb11a2a7998a8"
-                  },
-                  {
-                      "path":  "g++.dg/parse/conv_op1.C",
-                      "role":  "case",
-                      "sha256":  "f77f44f8b3e21c55512e83a660dc5d8f73f28794f3c1f27eec85a2a9cdca1960"
-                  },
-                  {
-                      "path":  "g++.dg/parse/cond7.C",
-                      "role":  "case",
-                      "sha256":  "aebac93b997ae96d4cd40befb2cf632a4ef3b53de8f4a72ae4f5253573ac5b00"
-                  },
-                  {
-                      "path":  "g++.dg/parse/defarg22.C",
-                      "role":  "case",
-                      "sha256":  "f3cb22c26224ef40898ee39c0eca3fcbc60b77607e6916a5590f5810dfc652ca"
-                  },
-                  {
-                      "path":  "g++.dg/parse/funptr1.C",
-                      "role":  "case",
-                      "sha256":  "8389794c2806b2648c66ecb7e78512d227db6a599e51d9c8849a554257e06fad"
-                  },
-                  {
-                      "path":  "g++.dg/parse/functor1.C",
-                      "role":  "case",
-                      "sha256":  "6ccbaf652c084ccc04cd8829ea738bdddce61a75f7f83897e6b7224840cc4668"
-                  },
-                  {
                       "path":  "g++.dg/parse/access1.C",
                       "role":  "case",
                       "sha256":  "aa2f0b91fb41d33f88f44f9a2e79e07b2d2e77207ebe7963ee4ccabb50802588"
                   },
                   {
-                      "path":  "g++.dg/overload/virtual2.C",
-                      "role":  "case",
-                      "sha256":  "f8a43b271e219c2c84dde1ebf948325a4117b90eac6d6cc192123eb653df4446"
-                  },
-                  {
-                      "path":  "g++.dg/parse/ambig2.C",
-                      "role":  "case",
-                      "sha256":  "832736aa26f3d851a03a653bfeefcff78c433e76419ebbd00a5e3e7b92a9f3d5"
-                  },
-                  {
-                      "path":  "g++.dg/parse/attr2.C",
-                      "role":  "case",
-                      "sha256":  "d3e758adb819a43888e70fe57d29ba51debed678d2f61b65dcae1ed4031fd455"
-                  },
-                  {
-                      "path":  "g++.dg/parse/ambig8.C",
-                      "role":  "case",
-                      "sha256":  "bd676aceb70998cfdd9698075a321f4a421720514a80d180f266e607fe2d2bf1"
-                  },
-                  {
                       "path":  "g++.dg/other/vararg-5.C",
                       "role":  "case",
                       "sha256":  "1005339074edfb2949d27bcc6b2975f2df86d489a0d709930c036fca04569546"
-                  },
-                  {
-                      "path":  "g++.dg/opt/thunk3.C",
-                      "role":  "case",
-                      "sha256":  "ec6d8fb0ca6bac73e553209923e5624345a1f65e10b9dfcc0207daa1f21d842f"
-                  },
-                  {
-                      "path":  "g++.dg/opt/ptrmem6.C",
-                      "role":  "case",
-                      "sha256":  "bad9a8231cc34d1c958da97072171c694f5e56697c26cbdac7b8127962be2a52"
-                  },
-                  {
-                      "path":  "g++.dg/opt/thunk4.C",
-                      "role":  "case",
-                      "sha256":  "7c44002ab77fe14aea709186f10b0eacfd9ba40cc48b991558abd846f091a631"
-                  },
-                  {
-                      "path":  "g++.dg/other/anon7.C",
-                      "role":  "case",
-                      "sha256":  "1fd2a866bb6e75c99bd8f88c978145f85d36140ff53ecaa799dcb19fe5338014"
-                  },
-                  {
-                      "path":  "g++.dg/other/anon-union6.C",
-                      "role":  "case",
-                      "sha256":  "efd90be55174a1f50f4adc27733bebb743957c1078eaefe92394b8d95407f237"
-                  },
-                  {
-                      "path":  "g++.dg/opt/pr82159.C",
-                      "role":  "case",
-                      "sha256":  "a1857d3b8f0489c8621743ba6a4f333c53ff6974e481074af365809644cb73ab"
                   },
                   {
                       "path":  "g++.dg/opt/pr79267.C",
@@ -2773,44 +558,9 @@
                       "sha256":  "fc97c4bef7220b7827712ba9bc9b918385ba069badcd698a26c1b3b7f9f45c11"
                   },
                   {
-                      "path":  "g++.dg/opt/ptrmem4.C",
-                      "role":  "case",
-                      "sha256":  "9621f4e316d4caf6e7833bfa6f1ca395e32d18fc9a4817bbb15f7646d6ba1d98"
-                  },
-                  {
-                      "path":  "g++.dg/opt/pr99034.C",
-                      "role":  "case",
-                      "sha256":  "7ffe839db5f7bdab9fac8428c1fd4673d1f915d3beb6e694b61c850deab0e43b"
-                  },
-                  {
-                      "path":  "g++.dg/other/canon-33194.C",
-                      "role":  "case",
-                      "sha256":  "b6e933ad50885d49b1ae349918895d5dd435e1def11180f9651f5f0079ffc566"
-                  },
-                  {
-                      "path":  "g++.dg/other/ptrmem1.C",
-                      "role":  "case",
-                      "sha256":  "0352c555dba056dff19a2d9acadf61d06fd2c0d92cfc573c26853b0243dc1a2a"
-                  },
-                  {
                       "path":  "g++.dg/other/pr24623.C",
                       "role":  "case",
                       "sha256":  "340eeaea614a1884d0ff76e8c9b526a40b9760a53d7afe2a1e783a2a0801dd30"
-                  },
-                  {
-                      "path":  "g++.dg/other/ptrmem3.C",
-                      "role":  "case",
-                      "sha256":  "22d1f25be78d22c5cedca254265b3665d14171dedfd9527045f4dded05472d4b"
-                  },
-                  {
-                      "path":  "g++.dg/other/vararg-2.C",
-                      "role":  "case",
-                      "sha256":  "ca2349c1008bbe822077972cb73204f145281e585b1cd820a0928ef6df3e78ee"
-                  },
-                  {
-                      "path":  "g++.dg/other/scope1.C",
-                      "role":  "case",
-                      "sha256":  "08623768a4ce5d69417f421a9b3d208b2a097b5db6f565b8ae948919f7d869b7"
                   },
                   {
                       "path":  "g++.dg/other/copy1.C",
@@ -2823,26 +573,6 @@
                       "sha256":  "f7d99d2a6cb896f0ea3efef34edcc35c37f36d0e162c46acbe994b23d4dca7f8"
                   },
                   {
-                      "path":  "g++.dg/other/default6.C",
-                      "role":  "case",
-                      "sha256":  "d313ddbe473e83b9c8ca542c0fffa39cd0bfe3f5e85596275a94b48e9114f03d"
-                  },
-                  {
-                      "path":  "g++.dg/other/linkage1.C",
-                      "role":  "case",
-                      "sha256":  "4fc681698727dce83f07c7b57f2e1a656a39d790b2bd2294bc04f9376fd51b26"
-                  },
-                  {
-                      "path":  "g++.dg/other/error6.C",
-                      "role":  "case",
-                      "sha256":  "1c255ce51ec6107830a69768a0dc370e5767b9dcd238cf57f484fd0674958cc2"
-                  },
-                  {
-                      "path":  "g++.dg/parse/operator1.C",
-                      "role":  "case",
-                      "sha256":  "f8d0646aa0e76f5bbcfb4c40240d52effc645d82e9d66df6595b026f0e8a8594"
-                  },
-                  {
                       "path":  "g++.dg/template/arg6.C",
                       "role":  "case",
                       "sha256":  "deb22871af5db3625d190c2c157409d029f6a53168462ac0cb39f9d8da753dde"
@@ -2851,11 +581,6 @@
                       "path":  "g++.dg/template/anonunion1.C",
                       "role":  "case",
                       "sha256":  "140d0570c56d3801fadb70899f6fc2852c0e16369152c901d20103fd7c202aa0"
-                  },
-                  {
-                      "path":  "g++.dg/template/array11.C",
-                      "role":  "case",
-                      "sha256":  "c9d02215ea4c9ca86ae576dc53de7725ced387fdd0cedd2be381e1f36df006d6"
                   },
                   {
                       "path":  "g++.dg/template/asm1.C",
@@ -2873,11 +598,6 @@
                       "sha256":  "45d8d94f2efb42b72fb956ad08e639bfe1be7e1c7a48e6be97c4f0144f655e60"
                   },
                   {
-                      "path":  "g++.dg/template/access27.C",
-                      "role":  "case",
-                      "sha256":  "3d7d75e22e252e481f7333b1dffd1df771a36dfdc1362986b6008ccbf1b253dc"
-                  },
-                  {
                       "path":  "g++.dg/template/access37.C",
                       "role":  "case",
                       "sha256":  "f0f0e3e81431a212704d140dc033b7dd62bd1b54bfb0f3a93c0fde9b6e205eaf"
@@ -2891,36 +611,6 @@
                       "path":  "g++.dg/template/access39.C",
                       "role":  "case",
                       "sha256":  "115afbba4caa03e02a913dfa66ab8c2434c0e1b1a0f28f20428dc8fe4456fd13"
-                  },
-                  {
-                      "path":  "g++.dg/template/call5.C",
-                      "role":  "case",
-                      "sha256":  "028c97e1fb370ca49cb2538332459225d300c065193cd066ed3e66bab1b6e9eb"
-                  },
-                  {
-                      "path":  "g++.dg/template/crash21.C",
-                      "role":  "case",
-                      "sha256":  "bee9352cca0e9d0ede8abc5c29f99b16ddeb46b37b57737c9e24deea3baaead5"
-                  },
-                  {
-                      "path":  "g++.dg/template/conv6.C",
-                      "role":  "case",
-                      "sha256":  "f85fcaee2810466e7591410e02ddf8590e530669aec0f896d14a5007991c2cb6"
-                  },
-                  {
-                      "path":  "g++.dg/template/crash22.C",
-                      "role":  "case",
-                      "sha256":  "d14c9d32fddc0bf8a7b520672111029ee50d58a22eb12a861e7536dda772ecd0"
-                  },
-                  {
-                      "path":  "g++.dg/template/current-inst1.C",
-                      "role":  "case",
-                      "sha256":  "cf3d9d164870c51f994eb72013d5f16d16403585c230ea97cdf77e72ae41d884"
-                  },
-                  {
-                      "path":  "g++.dg/template/ctor9.C",
-                      "role":  "case",
-                      "sha256":  "ce304531e928a4b59ad9f43431a23466d97969fce842ce04adfe9cf5aaf0ad03"
                   },
                   {
                       "path":  "g++.dg/template/canon-type-3.C",
@@ -2943,29 +633,14 @@
                       "sha256":  "32ac418c46d8aa3d239fe87a5c7079b3ab7d6820be468c969c23ed6121c3d9f6"
                   },
                   {
-                      "path":  "g++.dg/template/conv17.C",
-                      "role":  "case",
-                      "sha256":  "b47642b7010f4b05d8cf672bc6cfa7fa57cf1974472801e2605622c701ea451b"
-                  },
-                  {
                       "path":  "g++.dg/template/access10.C",
                       "role":  "case",
                       "sha256":  "14654943462dfec4cbdf53710f8a46b0063c839bdf3804371e807f79ddd7e5b3"
                   },
                   {
-                      "path":  "g++.dg/parse/using4.C",
-                      "role":  "case",
-                      "sha256":  "2407acb660f246a0d0e3647d5f00aa3b9da3440c92c56011a0853ba06bf8a465"
-                  },
-                  {
                       "path":  "g++.dg/parse/using3.C",
                       "role":  "case",
                       "sha256":  "9dc83ae2b9d520ad3359cb949f34122de8c51385839b4045b7ec6cadf9b563fe"
-                  },
-                  {
-                      "path":  "g++.dg/pr45049-1.C",
-                      "role":  "case",
-                      "sha256":  "0ddc53f9c19ed9288918c9cd236ca87f29b705ec276e140ce676d001434d68e0"
                   },
                   {
                       "path":  "g++.dg/pr96818.C",
@@ -2978,119 +653,14 @@
                       "sha256":  "b82c18e921e5840d881718c77f24a1446179b72d0f9f75eaad697482d91e4c05"
                   },
                   {
-                      "path":  "g++.dg/parse/parens1.C",
-                      "role":  "case",
-                      "sha256":  "4cf5f839423b003d0e6958f3234094eb5a35530051a2d74476b0e6a71fcd07e8"
-                  },
-                  {
-                      "path":  "g++.dg/parse/operator2.C",
-                      "role":  "case",
-                      "sha256":  "50db09ed83257ca0a4637cbea09bfd05d32152b928cb36b695dcd9ca1e30cabe"
-                  },
-                  {
-                      "path":  "g++.dg/parse/pr37862.C",
-                      "role":  "case",
-                      "sha256":  "113a56da8619f11553883f60389f22a1b7370070ce64c1481a2caa8cdf1d005a"
-                  },
-                  {
-                      "path":  "g++.dg/parse/union1.C",
-                      "role":  "case",
-                      "sha256":  "6e57d915d2ee4d45915e547ceee5c11551d557364f233205636e764b1de9ff82"
-                  },
-                  {
                       "path":  "g++.dg/parse/redef1.C",
                       "role":  "case",
                       "sha256":  "74890dd6bf645e85e2444e7537d743ba246f6dc6b3c3185a9f329f4545acca46"
                   },
                   {
-                      "path":  "g++.dg/pr98499.C",
-                      "role":  "case",
-                      "sha256":  "8550a4d4775ac28a87669413db2645fb6336719099444cd51780fc7b9dadf186"
-                  },
-                  {
-                      "path":  "g++.dg/rtti/typeid5.C",
-                      "role":  "case",
-                      "sha256":  "ae67ce40511c2d595c15ac70200afac55616124646a035ad8dc9d5fef382a7bd"
-                  },
-                  {
-                      "path":  "g++.dg/rtti/typeid13.C",
-                      "role":  "case",
-                      "sha256":  "267254766865da14cffa76ae10fd985f76badf0c9a6001cfe7c54518e9fc0cfd"
-                  },
-                  {
-                      "path":  "g++.dg/rtti/typeid9.C",
-                      "role":  "case",
-                      "sha256":  "f5d10cffa1bfd9e09134f7d2d49e1c0c7d4e84b8829d06fdd434ce649c0f1c53"
-                  },
-                  {
-                      "path":  "g++.dg/tc1/dr68.C",
-                      "role":  "case",
-                      "sha256":  "7fae646d47f01b2e425084c4627b8f9e253a0db212e8ffb0b963c5f02447ac0a"
-                  },
-                  {
-                      "path":  "g++.dg/tc1/dr20.C",
-                      "role":  "case",
-                      "sha256":  "0bd5be113dc30463e9d8ee799b700c8cc86921401c0f74fb7aea05fd5976c7d6"
-                  },
-                  {
-                      "path":  "g++.dg/rtti/dyncast2.C",
-                      "role":  "case",
-                      "sha256":  "17bde66bf173bfa13c9b6639f8b2e2c4666e049e169fa08edfd0ec734a7b0d9d"
-                  },
-                  {
-                      "path":  "g++.dg/rtti/cv1.C",
-                      "role":  "case",
-                      "sha256":  "ef319333d27e12972438dada4c35b08ffa71e9a5582719b0ad6cb46e5a703aa8"
-                  },
-                  {
-                      "path":  "g++.dg/rtti/dyncast4.C",
-                      "role":  "case",
-                      "sha256":  "6854946d740df3d32cd40b9790066c407a14c8331e7d5bfc4ed25b77e1180643"
-                  },
-                  {
-                      "path":  "g++.dg/rtti/predefined-rtti-macro-1.C",
-                      "role":  "case",
-                      "sha256":  "c696a6f4cffd93740191188c4ae5e91c4e639b6db9d8a986ee21fee6eee2e829"
-                  },
-                  {
-                      "path":  "g++.dg/rtti/pr109042.C",
-                      "role":  "case",
-                      "sha256":  "1af9aa08d3df7f14291eeed0e57816a5da18b84f0036c19e4ac1d414f3bd3f18"
-                  },
-                  {
                       "path":  "g++.dg/init/pr25811-3.C",
                       "role":  "case",
                       "sha256":  "a2ec23370f97ff54bb18566b4924f564794b1b19bf2e9cb392aba826691b0428"
-                  },
-                  {
-                      "path":  "g++.dg/init/placement2.C",
-                      "role":  "case",
-                      "sha256":  "47a4f18736e5653842fc2f1e2e294b23d2f8cfdf2ce03ef728dd6942f59e699e"
-                  },
-                  {
-                      "path":  "g++.dg/init/ptrfn1.C",
-                      "role":  "case",
-                      "sha256":  "8f3d661d7855850879de778da56a496cef6f7833390f96f083c13d79abc0ddd6"
-                  },
-                  {
-                      "path":  "g++.dg/init/ref23.C",
-                      "role":  "case",
-                      "sha256":  "74ece19203d67728302747e3fe4dbbd481c6402f73da4827312b16324a9a7a06"
-                  },
-                  {
-                      "path":  "g++.dg/init/ptrmem3.C",
-                      "role":  "case",
-                      "sha256":  "e0e783247934028d2e832b9d1d117b2ca47637d820283278f871a38fab614c93"
-                  },
-                  {
-                      "path":  "g++.dg/init/float1.C",
-                      "role":  "case",
-                      "sha256":  "62e1bb820e2a327e4306b61118f123298740802cf6aa369795898de4b2c67ca4"
-                  },
-                  {
-                      "path":  "g++.dg/init/elide2.C",
-                      "role":  "case",
-                      "sha256":  "14be2fa9765ad8956d642b5bf9826c58d94a8b30c624d60c7c9970077f4857fa"
                   },
                   {
                       "path":  "g++.dg/init/lifetime2.C",
@@ -3108,64 +678,14 @@
                       "sha256":  "3fb5f0b751fed27c3aa8a80cf42275796c1a4f6a79d4b80ca14b3486b046c591"
                   },
                   {
-                      "path":  "g++.dg/init/static3.C",
-                      "role":  "case",
-                      "sha256":  "d1e42cf508d3e35459599c457e57a2b077ad5c5980ed3bfce3d2c7f59f6f15a9"
-                  },
-                  {
-                      "path":  "g++.dg/ipa/pr61160-3.C",
-                      "role":  "case",
-                      "sha256":  "27836b7253d7910d418f75593db5b8b1bf6b8cf44923def809facecf161f208d"
-                  },
-                  {
                       "path":  "g++.dg/ipa/pr60640-3.C",
                       "role":  "case",
                       "sha256":  "03f07e335fb4b16fadfebe9cb24f91925219104ad508e56429ae22ab619cc55c"
                   },
                   {
-                      "path":  "g++.dg/ipa/pr69649.C",
-                      "role":  "case",
-                      "sha256":  "ad67d021c179928cc4c4aa97ecac393a8684bc94138cd016771a8c02dd0156db"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/builtin3.C",
-                      "role":  "case",
-                      "sha256":  "8fd970abcb113253b114a1f89b2d0cdce5af39b165d2d951bbfe11f2bcbbb269"
-                  },
-                  {
                       "path":  "g++.dg/ipa/pr98075.C",
                       "role":  "case",
                       "sha256":  "c1927f789b4a60902c5f5e35456a32713feb427d35d1c781dc930214db976e61"
-                  },
-                  {
-                      "path":  "g++.dg/ipa/devirt-c-4.C",
-                      "role":  "case",
-                      "sha256":  "7d7d55b5b438a7b2d68ff44ff51803e49750de9206dca704ed1d2ff02ec73423"
-                  },
-                  {
-                      "path":  "g++.dg/ipa/devirt-c-3.C",
-                      "role":  "case",
-                      "sha256":  "d2516ed151979f94a8a1ff22c637d28b3f9eb06ef1b9781189bf0d41dca00d0c"
-                  },
-                  {
-                      "path":  "g++.dg/ipa/devirt-c-6.C",
-                      "role":  "case",
-                      "sha256":  "3ed0386ed820e76473d6ae35083bf1a24f94c43c1bc31817411f024209f8971c"
-                  },
-                  {
-                      "path":  "g++.dg/ipa/pr59737.C",
-                      "role":  "case",
-                      "sha256":  "2f6e8dd5ab0007a9145810b03b9893b8ad61336c63fbee88c1380f33d2118381"
-                  },
-                  {
-                      "path":  "g++.dg/ipa/pr103099.C",
-                      "role":  "case",
-                      "sha256":  "0ecffd09529a21685474130a92eedd3cd7a1b40cee9e3180be5b108a715af7af"
-                  },
-                  {
-                      "path":  "g++.dg/init/elide1.C",
-                      "role":  "case",
-                      "sha256":  "fd13ed264185c4bd080f9055f19b7c3c574e799e0ec14d1accb213efc30de3db"
                   },
                   {
                       "path":  "g++.dg/inherit/ptrmem2.C",
@@ -3178,104 +698,9 @@
                       "sha256":  "bf692ec7b062f6c8512708ea5e665b9cce189fd1c40d82ec704fa4d1d4aae1bf"
                   },
                   {
-                      "path":  "g++.dg/inherit/thunk7.C",
-                      "role":  "case",
-                      "sha256":  "e39aa010e7acba6f83f3211919a745c021e9a9c18ebe326b341caba6b537904a"
-                  },
-                  {
-                      "path":  "g++.dg/inherit/using8.C",
-                      "role":  "case",
-                      "sha256":  "f2f179ed16048b141e743ecffd2aef01443a9a8aa273a3697237a831c8badb9d"
-                  },
-                  {
-                      "path":  "g++.dg/inherit/typedef1.C",
-                      "role":  "case",
-                      "sha256":  "a47183c67c973bd629160534b6ff068e04a84b8c991a1b65a859c12d075338f9"
-                  },
-                  {
-                      "path":  "g++.dg/inherit/covariant2.C",
-                      "role":  "case",
-                      "sha256":  "7de48539057cd28e052375f377326a7f5a8372603763b630504679d072465eb9"
-                  },
-                  {
-                      "path":  "g++.dg/inherit/covariant1.C",
-                      "role":  "case",
-                      "sha256":  "79dc14c6301ef55f0efeed84826a1fc38ddfd5f6904450852a5311b24ace4aea"
-                  },
-                  {
-                      "path":  "g++.dg/inherit/covariant3.C",
-                      "role":  "case",
-                      "sha256":  "566704f6798d042d22cba640a116e9ac1d944db59a8395dd10c6ed30f4dd0948"
-                  },
-                  {
-                      "path":  "g++.dg/inherit/operator1.C",
-                      "role":  "case",
-                      "sha256":  "c2e880c42991181be4828d0fadb97fee0234170218d156331e24cfe33c0f71f7"
-                  },
-                  {
-                      "path":  "g++.dg/inherit/covariant4.C",
-                      "role":  "case",
-                      "sha256":  "dc58a652e3750b9bbaf64f53ff5faa63950fb399abf46b55d0dabf01b24c2d34"
-                  },
-                  {
-                      "path":  "g++.dg/inherit/virtual5.C",
-                      "role":  "case",
-                      "sha256":  "8526c56022032f931cd476224989b067df0bb923123a1759b45003817130ac9c"
-                  },
-                  {
-                      "path":  "g++.dg/init/array31.C",
-                      "role":  "case",
-                      "sha256":  "3c2b5f512935c8d4fe2e1415722b5140925c6fa530ac44153e98de688e662a42"
-                  },
-                  {
-                      "path":  "g++.dg/init/array12.C",
-                      "role":  "case",
-                      "sha256":  "08a288614d484ef0ada3388b825c0066de68188dbf0025dfc33883c6b6f978e3"
-                  },
-                  {
-                      "path":  "g++.dg/init/assign1.C",
-                      "role":  "case",
-                      "sha256":  "c86a51d57d5eb1ef3124a1af759e2be73cc95165110e2536205e393883776be2"
-                  },
-                  {
-                      "path":  "g++.dg/init/dtor1.C",
-                      "role":  "case",
-                      "sha256":  "c878a549725ea43ab6a6208e78be63d6f4bad237303e33a5aefee7e9bbd8abf0"
-                  },
-                  {
                       "path":  "g++.dg/init/complex1.C",
                       "role":  "case",
                       "sha256":  "04563dc8a60f294a5251b0274b05c4bf53bfa0d71e84516b86caa7233183b16a"
-                  },
-                  {
-                      "path":  "g++.dg/init/aggr7-eh.C",
-                      "role":  "case",
-                      "sha256":  "289057167d315b2eef2ab78d77b59f81e9818065543214c71c24c18106bbdac6"
-                  },
-                  {
-                      "path":  "g++.dg/inherit/virtual9.C",
-                      "role":  "case",
-                      "sha256":  "ea2c44e4194410d88758200dfb0775d2befe7f0754ff722835e6f76d7d23a519"
-                  },
-                  {
-                      "path":  "g++.dg/init/aggr7-eh2.C",
-                      "role":  "case",
-                      "sha256":  "33cfb10a065f26a3dab39899162e473d95613c0ddce5432ae54c18c2f4a08faa"
-                  },
-                  {
-                      "path":  "g++.dg/init/array10.C",
-                      "role":  "case",
-                      "sha256":  "819cb4ab1909217ca9475d64eeb9754eff473c0b636391016d292509dd5d9f90"
-                  },
-                  {
-                      "path":  "g++.dg/init/aggr7-eh3.C",
-                      "role":  "case",
-                      "sha256":  "8fd9753d82f67b449cf1cb1022940ebfd51f675251b475842db2e8b03e1e40f6"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/class-member-2.C",
-                      "role":  "case",
-                      "sha256":  "70ab336857494b23b8d31f6e8aaebf1f32fbea1285135713c8b010e275483042"
                   },
                   {
                       "path":  "g++.dg/opt/complex3.C",
@@ -3303,29 +728,9 @@
                       "sha256":  "949945bad2fd78deabd23127699372f71bec9503f00563cd1f5176464fb781a9"
                   },
                   {
-                      "path":  "g++.dg/lookup/using65.C",
-                      "role":  "case",
-                      "sha256":  "973afeddfff91070c62b4be8da5ddac1102b05537c85938fd3474462ea7261b9"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/using64.C",
-                      "role":  "case",
-                      "sha256":  "06569844857b631b128542c91a9d20201d2cbb7b05172c29e349d63d86cf07f5"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/using69.C",
-                      "role":  "case",
-                      "sha256":  "942bcd9296046252d38ae46d08aa57270b412eafb597226e5170b3fa0762e29d"
-                  },
-                  {
                       "path":  "g++.dg/opt/complex1.C",
                       "role":  "case",
                       "sha256":  "0af39d95b5f0cdc53556811f212b789fb031d0df41914a7bc392ed5bf156c553"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/using8.C",
-                      "role":  "case",
-                      "sha256":  "e713fc5a4f17d52fdc43465a26b7d13bbf0e6c2eaa3a02ad946fd2bde187b2f5"
                   },
                   {
                       "path":  "g++.dg/opt/conj1.C",
@@ -3333,24 +738,9 @@
                       "sha256":  "4cf918b77c9f6f77486d28030360f761d71e96e9859f18237711ed377e1325e4"
                   },
                   {
-                      "path":  "g++.dg/opt/nrv24.C",
-                      "role":  "case",
-                      "sha256":  "8a537cdb3348c555909da3b11a027122badb643121cc8789b3af9f34aaf7e593"
-                  },
-                  {
-                      "path":  "g++.dg/opt/nrv23.C",
-                      "role":  "case",
-                      "sha256":  "06392a26209fc8f6e15f733fdb6e557f73e228af42ddd60c8e241ce6e12a50f1"
-                  },
-                  {
                       "path":  "g++.dg/opt/pr48967.C",
                       "role":  "case",
                       "sha256":  "4c1912a63fe988ba8f580fca8f3892f114fcdda017be15faf083191a66c9b294"
-                  },
-                  {
-                      "path":  "g++.dg/opt/pr78201.C",
-                      "role":  "case",
-                      "sha256":  "a75388d33b52c01fdb04010d3b8d81a7d549acd05d18ddcbbf70043322ecb887"
                   },
                   {
                       "path":  "g++.dg/opt/pr6713.C",
@@ -3368,129 +758,9 @@
                       "sha256":  "05969e568b36aaaf02f64aa227fbe76a9573c9f20f7fddaa590bbfe601cb2678"
                   },
                   {
-                      "path":  "g++.dg/opt/empty1.C",
-                      "role":  "case",
-                      "sha256":  "746757d3e58043d304ddc79a1a68b5ab8fbb981db0c9ccd4e9e53c11e1d82b72"
-                  },
-                  {
-                      "path":  "g++.dg/opt/inline3.C",
-                      "role":  "case",
-                      "sha256":  "eda1b2568fbf6b7114fb4b38366ca1da9d98e478dd9ff54e5e5c34f28fe48113"
-                  },
-                  {
                       "path":  "g++.dg/opt/inline11.C",
                       "role":  "case",
                       "sha256":  "043dac0918a22f6b79372a02875c9b0e4361360cd20815ec633cd73f2f4659fc"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/using63.C",
-                      "role":  "case",
-                      "sha256":  "8f838d85ff54109effba849a43c238fc14ccf05a06c1a351a293a410025b8077"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/pr87531-2.C",
-                      "role":  "case",
-                      "sha256":  "11eeaf6becd968d5f309dced382ee052f55ecbb6d1f579997717c07525eda3e3"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/pr80979.C",
-                      "role":  "case",
-                      "sha256":  "be9c3c43f5b7d2645020deda76acb198b91e8597ec142b749fa04a99463e5022"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/pr87531.C",
-                      "role":  "case",
-                      "sha256":  "289fd6518f358cfd808eea03881a04e8476382ae060721f9381e0907a99f11f6"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/scoped10.C",
-                      "role":  "case",
-                      "sha256":  "800a5f55335a2e4659e9ef1608d22debfb83e61fb87652c591608dd5913531f5"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/pr87904.C",
-                      "role":  "case",
-                      "sha256":  "47ab908160575590a2e3afe96f0e17d52a7582be953137ce0fb8f9070e2363ee"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/hidden-class12.C",
-                      "role":  "case",
-                      "sha256":  "b42752f92c4d04fa2d18dbd216dd7783b5a60c5da1491c7a4b3ec2768412d8a0"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/friend8.C",
-                      "role":  "case",
-                      "sha256":  "55aac592b837f3e8f74b9555c3d54d9c4d6e0890bdf6b6849ad40e05e4f9f0ba"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/hidden-class14.C",
-                      "role":  "case",
-                      "sha256":  "1170d99a7d4927ac947e923781d0423b8ef77cff6dd3e87fa62e5782ac23042f"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/pr80891-3.C",
-                      "role":  "case",
-                      "sha256":  "de42074f25ff2b09b5091551d809f995f699abe1f0d43589c7ad45a4a2336236"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/name-clash15.C",
-                      "role":  "case",
-                      "sha256":  "894b95db80b16ae8770272fb919af1d1b2f97723c48178f0e9fa54863836fd27"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/template1.C",
-                      "role":  "case",
-                      "sha256":  "e1ca5b1215f5629eba70f4f83b37e51ff74b0a03a708d6ac424ae0e472ae7619"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/using19.C",
-                      "role":  "case",
-                      "sha256":  "8a4e2557bdfdde664c4c3ed4e577abf06adb7694706d40d7522fd7c955c78f7c"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/using11.C",
-                      "role":  "case",
-                      "sha256":  "1e9b6e0a40f1697b0317e323a094f1420eaf49f152f524914822549308358a5e"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/using22.C",
-                      "role":  "case",
-                      "sha256":  "1b1959b98f9eb405871a5e3484ddd4453f57962c076818985fffea89d963eeb0"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/using62.C",
-                      "role":  "case",
-                      "sha256":  "82d79d29ddb193919bcef18a54691f1ef67bd79e861d8f757e6de69fbd0a5b0d"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/using39.C",
-                      "role":  "case",
-                      "sha256":  "113a4d29f420595f254025307a64c3d5b2237e8f5a3eccdc0865be8026bad041"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/two-stage1.C",
-                      "role":  "case",
-                      "sha256":  "57d0e4f8b70e507826520d72e47743fb9ebd665aa6766c7b861dbe73ca581af7"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/template3.C",
-                      "role":  "case",
-                      "sha256":  "35472039d51130adfb8dd5a6322718a19c75ae1990b641db5b6af48708e641bb"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/two-stage3.C",
-                      "role":  "case",
-                      "sha256":  "3a888919fe48d09a9c4781a2c1ba5ee32391422a42ea7c5036aafea47e2b49c8"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/using-10.C",
-                      "role":  "case",
-                      "sha256":  "65400b1e378fa6247f0d2a10377043a4b60c0edd7412c5c00e430d488ce847ad"
-                  },
-                  {
-                      "path":  "g++.dg/lookup/two-stage5.C",
-                      "role":  "case",
-                      "sha256":  "295af832d5f5ec67db6fafef5a2362c4cfc9da7916a331d6d816b4d5a8aa9ca5"
                   }
               ],
     "support":  [

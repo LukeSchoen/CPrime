@@ -47,9 +47,14 @@ See [test commands and layout](Tests/README.md) and the
 [development loop](Tests/DEVELOPMENT.md). Bug reports should include a standalone
 reproducer, the command, and expected versus actual behavior.
 
+The retained GCC corpus under `Tests/pedantic/gcc/` holds only unresolved rows:
+a repaired row becomes a first-party regression and is then deleted from the
+corpus. See [remaining work](task.md) for the current state and ordered work.
+
 `tests.cmd` includes cross-compiler ABI gates and requires explicit authorization
 for their external compiler invocations. Use `tests_pedantic.cmd` only
-after a large change that warrants deeper GCC, packaging, or self-host testing.
+after a large change that warrants deeper language, packaging, or self-host
+testing.
 
 Implementation lives in `src/`, headers in `include/`, test and benchmark inputs
 in `Tests/`, and build scripts in `scripts/windows/`.
