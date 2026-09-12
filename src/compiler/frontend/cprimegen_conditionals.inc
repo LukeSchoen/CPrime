@@ -136,6 +136,52 @@ static void cpp_conditional_adjust_class_lvalue(CType *target)
   }
 }
 
+/* The right operand of `(cond ? a : b) op= rhs` is evaluated before the left
+   operand (C++17 [expr.ass]) and is reused by whichever arm the conditional
+   selects.  The saved operand waits on the value stack while the conditional
+   generates its arms, so the store happens in the selected arm instead of
+   through a joined address: a bit-field arm has no address, and two arms may
+   describe different bit layouts.  The token is zero when no such left
+   operand is being replayed. */
+static int cpp_pending_conditional_assignment;
+static int cpp_conditional_assignment_applied;
+
+/* Store the saved right operand in the arm the conditional is generating.
+   vtop holds the arm; the saved operand is the value stack slot below it. */
+static void cpp_store_conditional_assignment_arm(int op)
+{
+  SValue right = vtop[-1];
+
+  test_lvalue();
+  if (op == '=')
+  {
+    vpushv(&right);
+    if (!try_call_cpp_assignment_operator())
+      vstore();
+  }
+  else
+  {
+    vdup();
+    vpushv(&right);
+    if (try_call_cpp_compound_assign_operator(op))
+    {
+      vswap();
+      vpop();
+    }
+    else
+    {
+      gen_op(TOK_ASSIGN_OP(op));
+      vstore();
+    }
+  }
+  /* A bit-field store leaves its destination as the expression result; the
+     arms have to join as ordinary values because their bit layouts differ.
+     Loading the arm also drops the bit-field description. */
+  if (vtop->type.t & VT_BITFIELD)
+    gv(RC_TYPE(vtop->type.t & VT_BTYPE));
+  cpp_conditional_assignment_applied = 1;
+}
+
 static int cpp_is_conditional_marker(int token)
 {
   return token >= TOK_UIDENT && token < SYM_FIRST_ANOM
@@ -190,7 +236,7 @@ static int cpp_expression_top_level_comma(TokenString *expression)
     }
     if ((token == TOK_LT || token == '<')
         && (angle || (previous >= TOK_UIDENT
-            && (find_template_def(previous)
+            && (cpp_saved_angle_opener_tok(previous)
                 || is_template_keyword_tok(before_previous)))))
       ++angle;
     else if ((token == TOK_SAR || token == TOK_SHR) && angle)
@@ -206,6 +252,57 @@ static int cpp_expression_top_level_comma(TokenString *expression)
     }
   }
   return last;
+}
+
+/* Index of the first operator the conditional-expression grammar can place at
+   the top level of a saved expression: the '?' of a conditional expression, an
+   assignment operator, or a comma operator.  A top-level assignment or comma
+   operator means the expression is not itself a conditional expression, which
+   is how `(a = b ? c : d)` stays on the ordinary path.  Returns -1 when the
+   expression has no such operator. */
+static int cpp_expression_top_level_operator(TokenString *expression)
+{
+  int first, end, i, level = 0, angle = 0;
+  int previous = 0, before_previous = 0;
+  if (!expression || !expression->str) return -1;
+  first = tok_str_next_non_linenum_index(expression->str, expression->len, 0);
+  end = tok_str_prev_token_index(expression->str, expression->len,
+                                 expression->len);
+  if (end >= 0 && expression->str[end] == TOK_EOF)
+    end = tok_str_prev_token_index(expression->str, expression->len, end);
+  while (first < end && expression->str[first] == '('
+         && saved_initializer_close(expression, first, '(', ')') == end) {
+    first = tok_str_next_non_linenum_index(expression->str, expression->len,
+                                           first + 1);
+    end = tok_str_prev_token_index(expression->str, expression->len, end);
+  }
+  for (i = first; i <= end; ++i) {
+    int token = expression->str[i];
+    if (TOK_HAS_VALUE(token)) {
+      i += tok_str_value_extra_words(expression->str, expression->len, i);
+      continue;
+    }
+    if ((token == TOK_LT || token == '<')
+        && (angle || (previous >= TOK_UIDENT
+            && (cpp_saved_angle_opener_tok(previous)
+                || is_template_keyword_tok(before_previous)))))
+      ++angle;
+    else if ((token == TOK_SAR || token == TOK_SHR) && angle)
+      angle = angle > 1 ? angle - 2 : 0;
+    else if (token == TOK_GT && angle) --angle;
+    else if (token == '(' || token == '[' || token == '{'
+             || is_cpp_lambda_marker(token)) ++level;
+    else if (token == ')' || token == ']' || token == '}') --level;
+    else if (!level && !angle
+             && (token == '?' || cpp_is_conditional_marker(token)
+                 || token == ',' || token == '=' || TOK_ASSIGN(token)))
+      return i;
+    if (token != TOK_LINENUM) {
+      before_previous = previous;
+      previous = token;
+    }
+  }
+  return -1;
 }
 
 /* A comma expression's result object is its final operand's, so the result
@@ -364,7 +461,7 @@ static TokenString *cpp_save_conditional_arm(int first_arm)
     tok_str_add_tok(arm); next();
     if ((token == TOK_LT || token == '<')
         && (angle || (previous >= TOK_UIDENT
-            && (find_template_def(previous) || is_template_keyword_tok(before_previous))))) ++angle;
+            && (cpp_saved_angle_opener_tok(previous) || is_template_keyword_tok(before_previous))))) ++angle;
     else if ((token == TOK_SAR || token == TOK_SHR) && angle) angle = angle > 1 ? angle - 2 : 0;
     else if (token == TOK_GT && angle) --angle;
     else if (token == '(' || token == '[' || token == '{' || is_cpp_lambda_marker(token)) ++level;

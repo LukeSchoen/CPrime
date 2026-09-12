@@ -230,6 +230,73 @@ static int template_def_first_param_pointer_pattern(TemplateDef *td)
   return 0;
 }
 
+static int template_def_first_param_array_reference_pattern(TemplateDef *td)
+{
+  int i, n, paren_index = -1, depth = 0;
+
+  if (!td || !td->def_str)
+    return 0;
+  n = td->def_str->len;
+  for (i = 0; i + 1 < n; ++i)
+    if (td->def_str->str[i] == td->name_tok
+        && td->def_str->str[i + 1] == '(')
+    {
+      paren_index = i + 1;
+      break;
+    }
+  if (paren_index < 0)
+    return 0;
+  for (i = paren_index + 1; i < n; ++i)
+  {
+    int t = td->def_str->str[i];
+    if (TOK_HAS_VALUE(t))
+    {
+      i += tok_str_value_extra_words(td->def_str->str, n, i);
+      continue;
+    }
+    if (t == '(')
+      ++depth;
+    else if (t == ')')
+    {
+      if (depth == 0)
+        break;
+      --depth;
+    }
+    else if (t == '[')
+      ++depth;
+    else if (t == ']' && depth > 0)
+      --depth;
+    else if (t == ',' && depth == 0)
+      break;
+    else if ((t == '&' || t == TOK_LAND) && depth == 1)
+    {
+      int j, close_depth = 1;
+      for (j = i + 1; j < n; ++j)
+      {
+        int u = td->def_str->str[j];
+        if (TOK_HAS_VALUE(u))
+        {
+          j += tok_str_value_extra_words(td->def_str->str, n, j);
+          continue;
+        }
+        if (u == '(')
+          ++close_depth;
+        else if (u == ')' && --close_depth == 0)
+          break;
+      }
+      if (j < n)
+      {
+        int next = j + 1;
+        while (next < n && TOK_HAS_VALUE(td->def_str->str[next]))
+          next += 1 + tok_str_value_extra_words(td->def_str->str, n, next);
+        if (next < n && td->def_str->str[next] == '[')
+          return 1;
+      }
+    }
+  }
+  return 0;
+}
+
 static int template_def_first_param_class_tok(TemplateDef *td)
 {
   int i, n, name_index = -1, paren_index = -1, depth = 0;
@@ -341,6 +408,9 @@ static int parse_template_non_type_parameter_tok(int parameter_index, int *has_d
 static int template_return_substitution_matches_bound(TemplateDef *, TemplateArgList *);
 static int template_call_signature_rank_bound(TemplateDef *, CType *, int, TemplateArgList *, int);
 static int compare_free_function_template_order(TemplateDef *, TemplateDef *);
+static int compare_reference_binding_preference(TemplateDef *, TemplateArgList *,
+                                                TemplateDef *, TemplateArgList *,
+                                                CType *, int);
 static void complete_instantiated_static_data_member_bounds(TemplateDef *, int,
                                                             TemplateArgList *);
 
@@ -438,6 +508,7 @@ static TemplateDef *find_function_template_for_call(int name_tok,
       if (first_matches)
       {
         int specificity = template_def_first_param_class_tok(td) ? 2
+                          : template_def_first_param_array_reference_pattern(td) ? 2
                           : template_def_first_param_pointer_pattern(td) ? 1
                           : 0;
         if (template_count > 1) {
@@ -445,13 +516,26 @@ static TemplateDef *find_function_template_for_call(int name_tok,
           if (rank == -1) continue;
           if (rank >= 0) specificity -= (rank - arg_count) * 16;
         }
-        if (!exact_unpreferred || specificity > exact_specificity
-            || (specificity == exact_specificity
-                && compare_free_function_template_order(td, exact_unpreferred) > 0))
+        if (!exact_unpreferred || specificity > exact_specificity)
         {
           exact_unpreferred = td;
           fixed_args = deduced;
           exact_specificity = specificity;
+        }
+        else if (specificity == exact_specificity)
+        {
+          /* Equal conversion sequences and equal shape specificity: prefer a
+             reference binding to the less cv-qualified referent before
+             falling back to partial ordering. */
+          int preference = compare_reference_binding_preference(
+            td, &deduced, exact_unpreferred, &fixed_args, arg_types, arg_count);
+          if (preference > 0
+              || (preference == 0
+                  && compare_free_function_template_order(td, exact_unpreferred) > 0))
+          {
+            exact_unpreferred = td;
+            fixed_args = deduced;
+          }
         }
       }
       continue;
@@ -1033,6 +1117,14 @@ static int find_template_member_class_in_str(TokenString *str, int type_param_to
 
   for (i = 0; i + 6 < n; ++i)
   {
+    /* A line-number record stores its line as the next word.  The value is
+       an ordinary integer, so it can collide with a punctuation token id
+       (`:` is 58) or an identifier id and derail the scan; skip it. */
+    if (TOK_HAS_VALUE(str->str[i]))
+    {
+      i += tok_str_value_extra_words(str->str, n, i);
+      continue;
+    }
     if (str->str[i] == '{')
     {
       if (brace == 0)
@@ -3912,6 +4004,37 @@ static int template_member_def_pack_param_index(TemplateMemberDef *md,
   return -1;
 }
 
+/* parse_template_decl consumes the `template<...>` header of an out-of-class
+   member-template definition, so only the stripped parameter names remain to
+   identify the member's own template parameters.  A function parameter pack
+   must name its template parameter pack in the declared pattern, so the pack
+   parameter is the stripped parameter the parameter pattern mentions.
+   Returns its index, or -1 when no pack parameter can be recovered. */
+static int template_member_stripped_pack_param_index(TemplateMemberDef *md,
+                                                     int method_tok)
+{
+  int at, parameter, pattern_start = 0, pattern_end = 0;
+
+  if (!md || !md->def_str || !md->nb_stripped_member_params)
+    return -1;
+  if (template_member_def_pack_param_index(md, method_tok,
+                                           &pattern_start, &pattern_end) < 0)
+    return -1;
+  for (at = pattern_start; at < pattern_end; ++at)
+  {
+    int token = md->def_str->str[at];
+    if (TOK_HAS_VALUE(token))
+    {
+      at += tok_str_value_extra_words(md->def_str->str, md->def_str->len, at);
+      continue;
+    }
+    for (parameter = 0; parameter < md->nb_stripped_member_params; ++parameter)
+      if (md->stripped_member_param_toks[parameter] == token)
+        return parameter;
+  }
+  return -1;
+}
+
 static int token_string_has_array_brackets(TokenString *str)
 {
   int i;
@@ -4649,8 +4772,14 @@ static TokenString *expand_template_expression_packs(TokenString *source,
     if (token == TOK_DOTS)
     {
       int last = tok_str_prev_token_index(result->str, result->len, result->len);
+      int fold_separator = -1;
       int begin = result->len, position = last;
       int parens = 0, brackets = 0, braces = 0, angles = 0, uses_pack = 0;
+      if (last >= 0 && result->str[last] == ',')
+      {
+        fold_separator = last;
+        position = tok_str_prev_token_index(result->str, result->len, last);
+      }
       if (last >= 0 && result->str[last] == TOK_SIZEOF) {
         int j = i + 1;
         CValue size;
@@ -4702,9 +4831,10 @@ static TokenString *expand_template_expression_packs(TokenString *source,
       if (uses_pack)
       {
         TokenString *pattern = tok_str_alloc();
-        int element, j;
+        int element, j, pattern_end = fold_separator >= 0
+                                      ? fold_separator : result->len;
         char parameter[256];
-        for (j = begin; j < result->len; ++j)
+        for (j = begin; j < pattern_end; ++j)
           tok_str_add_record(pattern, result->str, result->len, &j);
         /* In a class definition, a function parameter pack includes the
            identifier after the ellipsis. Expand that declarator and retain
@@ -4728,8 +4858,21 @@ static TokenString *expand_template_expression_packs(TokenString *source,
             int t = pattern->str[j];
             if (t == type_pack) tok_str_add(result, types[element]);
             else if (declared_value_pack && t == declared_value_pack)
-              tok_str_add(result, element == 0 && first_value_tok
-                                    ? first_value_tok : tok_alloc_const(parameter));
+            {
+              int previous = tok_str_prev_token_index(pattern->str,
+                                                       pattern->len, j);
+              int next = tok_str_next_non_linenum_index(pattern->str,
+                                                         pattern->len, j + 1);
+              int qualified = previous >= 0
+                  && (pattern->str[previous] == '.'
+                      || pattern->str[previous] == TOK_ARROW
+                      || pattern->str[previous] == ':');
+              if (next < pattern->len && pattern->str[next] == ':')
+                qualified = 1;
+              tok_str_add(result, qualified ? t
+                    : element == 0 && first_value_tok
+                      ? first_value_tok : tok_alloc_const(parameter));
+            }
             else tok_str_add_record(result, pattern->str, pattern->len, &j);
           }
         }
@@ -5162,6 +5305,19 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
         template_member_extra_arg_toks[extra] = inferred_arg_tok;
       }
     }
+  }
+
+  /* An out-of-class definition has no header left to parse, so recover the
+     declared pack parameter from the stripped names before expanding the
+     call's pack arguments. */
+  if (!pack_type_param_tok && pack_arg_start >= 0
+      && template_member_has_variadic_pack(md))
+  {
+    int stripped_pack = template_member_stripped_pack_param_index(md, method_tok);
+    if (stripped_pack >= 0)
+      pack_type_param_index = stripped_pack;
+    if (stripped_pack >= 0 && stripped_pack < md->nb_stripped_member_params)
+      pack_type_param_tok = md->stripped_member_param_toks[stripped_pack];
   }
 
   if (pack_arg_start >= 0 && pack_arg_start < replay_nb_call_arg_types
@@ -5861,6 +6017,10 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
   }
 
   if (materialize_body && token_string_is_auto_type(ret_str) && !has_inferred_auto_ret && tok == '{') {
+    if (getenv("CPRIME_DUMP_AUTORET"))
+      fprintf(stderr, "[memautoret] enter method=%s materialize=%d has=%d tok=%d\n",
+              get_tok_str(method_tok, NULL), materialize_body,
+              has_inferred_auto_ret, tok);
     TokenString *probe = tok_str_alloc();
     TokenString *stack = macro_stack;
     const int *ptr = macro_ptr;
@@ -7269,10 +7429,22 @@ static int deduce_member_template_argument_key(TemplateMemberDef *md,
   while (macro_stack && macro_stack != saved_stack) end_macro();
   macro_ptr = saved_ptr; tok = saved_tok; tokc = saved_tokc;
   if (!count && md->nb_stripped_member_params) {
-    count = required = md->nb_stripped_member_params;
+    count = md->nb_stripped_member_params;
+    required = count;
     memcpy(names, md->stripped_member_param_toks, count * sizeof(int));
     for (i = 0; i < count; ++i)
       value_parameters[i] = (md->stripped_member_value_mask >> i) & 1;
+    if (template_member_has_variadic_pack(md)) {
+      int stripped_pack = template_member_stripped_pack_param_index(md,
+                              template_member_def_method_tok(md));
+      if (stripped_pack >= 0) {
+        pack_index = stripped_pack;
+        has_pack = 1;
+        /* Parameters before the pack are required; the pack itself is
+           supplied by the call arguments, not by the declared count. */
+        required = pack_index;
+      }
+    }
   }
   if (!count && md->nb_stripped_member_type_params)
   {
@@ -7452,7 +7624,10 @@ static int resolve_qualified_static_template_call(int class_tok, int method_tok)
   selected = address
     ? (candidate_count == 1 ? global_symbol_find(candidates[0]) : NULL)
     : resolve_free_func_by_arg_types_filtered(base_tok, argument_types,
-                     argument_count, 0, candidates, candidate_count, NULL);
+                     argument_count, 0, candidates, candidate_count, NULL,
+                     /* A qualified dependent member call is not bound by the
+                        unqualified name's definition-time overload set. */
+                     1);
   for (i = 0; i < argument_count; ++i) tok_str_free(saved_arguments[i]);
   if (!selected) cprime_error("no matching static member-template call '%s'",
                               get_tok_str(base_tok, NULL));
@@ -8354,7 +8529,7 @@ static int save_template_parameter_default(TokenString **default_str, int type_d
     else if (tok == ']' && bracket > 0)
       --bracket;
     else if (tok == TOK_LT && !paren && !bracket
-             && (type_default || angle || find_template_def(previous)
+             && (type_default || angle || cpp_saved_angle_opener_tok(previous)
                  || find_template_def(find_current_namespace_tok(previous))))
       ++angle;
     else if (tok == TOK_GT && angle > 0 && !paren && !bracket)
@@ -8478,6 +8653,67 @@ static int parse_template_non_type_parameter_tok(int parameter_index,
   return param_tok;
 }
 
+static int template_non_type_parameter_is_variadic(TokenString *declaration)
+{
+  int i, paren = 0, bracket = 0, angle = 0;
+  if (!declaration)
+    return 0;
+  for (i = 0; i < declaration->len; ++i)
+  {
+    int token = declaration->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      i += tok_str_value_extra_words(declaration->str, declaration->len, i);
+      continue;
+    }
+    if (!paren && !bracket && !angle && token == '=')
+      break;
+    if (!paren && !bracket && !angle && token == TOK_DOTS)
+      return 1;
+    if (token == '(') ++paren;
+    else if (token == ')' && paren) --paren;
+    else if (token == '[') ++bracket;
+    else if (token == ']' && bracket) --bracket;
+    else if (token == TOK_LT && !paren && !bracket) ++angle;
+    else if ((token == TOK_GT || token == '>') && angle) --angle;
+    else if (token == TOK_SAR && angle)
+      angle = angle > 1 ? angle - 2 : 0;
+  }
+  return 0;
+}
+
+static void strip_template_value_pack_ellipsis(TokenString *declaration)
+{
+  int i, out = 0, paren = 0, bracket = 0, angle = 0;
+  if (!declaration)
+    return;
+  for (i = 0; i < declaration->len; ++i)
+  {
+    int token = declaration->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      int end = i + tok_str_value_extra_words(declaration->str,
+                                              declaration->len, i);
+      for (; i <= end; ++i)
+        declaration->str[out++] = declaration->str[i];
+      --i;
+      continue;
+    }
+    if (!paren && !bracket && !angle && token == TOK_DOTS)
+      continue;
+    declaration->str[out++] = token;
+    if (token == '(') ++paren;
+    else if (token == ')' && paren) --paren;
+    else if (token == '[') ++bracket;
+    else if (token == ']' && bracket) --bracket;
+    else if (token == TOK_LT && !paren && !bracket) ++angle;
+    else if ((token == TOK_GT || token == '>') && angle) --angle;
+    else if (token == TOK_SAR && angle)
+      angle = angle > 1 ? angle - 2 : 0;
+  }
+  declaration->len = out;
+}
+
 typedef struct TemplateParameterDefault {
   int start, end;
 } TemplateParameterDefault;
@@ -8562,6 +8798,10 @@ static int template_declares_static_data(TemplateDef *owner, int member_tok)
   int i, braces = 0, parens = 0, is_static = 0;
   TokenString *body = owner->def_str;
   if (!body) return 0;
+  /* A member with the class's own name is a constructor, never static data.
+     The return type of a static factory (`static C<T> make()`) repeats that
+     name, which otherwise looks like a static data declarator. */
+  if (member_tok == owner->name_tok) return 0;
   for (i = 0; i < body->len; ++i) {
     int token = body->str[i];
     if (TOK_HAS_VALUE(token)) {
@@ -9014,6 +9254,8 @@ static void parse_template_decl(void)
   const char *kw;
   TemplateDef *td;
   TokenString *str;
+  int class_keyword_pending = 0, class_attribute_brackets = 0;
+  int class_keyword_tok = 0;
 
   friend_template_declaration_owner = 0;
   next();
@@ -9247,13 +9489,21 @@ static void parse_template_decl(void)
   else
   {
     int param_index = nb_type_params;
+    int value_variadic;
     int has_default, param_tok = parse_template_non_type_parameter_tok(
                                    param_index, &has_default,
                                    &default_arg_strs[param_index], &value_type_strs[param_index]);
     if (!param_tok)
       cprime_error("template parameter");
     type_param_toks[nb_type_params++] = param_tok;
-    if (!has_default)
+    value_variadic =
+      template_non_type_parameter_is_variadic(value_type_strs[param_index]);
+    if (value_variadic)
+    {
+      strip_template_value_pack_ellipsis(value_type_strs[param_index]);
+      variadic_param_index = param_index;
+    }
+    else if (!has_default)
       nb_required_type_params = nb_type_params;
   }
   while (tok == ',')
@@ -9277,13 +9527,21 @@ static void parse_template_decl(void)
     else
     {
       int param_index = nb_type_params;
+      int value_variadic;
       int has_default, param_tok = parse_template_non_type_parameter_tok(
                                      param_index, &has_default,
                                      &default_arg_strs[param_index], &value_type_strs[param_index]);
       if (!param_tok)
         cprime_error("template parameter");
       type_param_toks[nb_type_params++] = param_tok;
-      if (!has_default)
+      value_variadic =
+        template_non_type_parameter_is_variadic(value_type_strs[param_index]);
+      if (value_variadic)
+      {
+        strip_template_value_pack_ellipsis(value_type_strs[param_index]);
+        variadic_param_index = param_index;
+      }
+      else if (!has_default)
         nb_required_type_params = nb_type_params;
     }
   }
@@ -9314,13 +9572,16 @@ static void parse_template_decl(void)
     else if (tok == ')') --parentheses;
     else if (tok == '[') ++brackets;
     else if (tok == ']') --brackets;
-    if (!name_tok && (prev_tok == TOK_CLASS || prev_tok == TOK_STRUCT
-                      || prev_tok == TOK_UNION)
+    if (class_keyword_pending && tok == '[')
+      ++class_attribute_brackets;
+    else if (class_attribute_brackets && tok == ']')
+      --class_attribute_brackets;
+    if (!name_tok && class_keyword_pending && !class_attribute_brackets
         && tok >= TOK_UIDENT)
     {
       name_tok = tok;
       is_class = 1;
-      is_union = prev_tok == TOK_UNION;
+      is_union = class_keyword_tok == TOK_UNION;
     }
     if (!name_tok && prev_tok >= TOK_UIDENT
         && !strcmp(get_tok_str(prev_tok, NULL), "using")
@@ -9360,6 +9621,8 @@ static void parse_template_decl(void)
       }
     }
     prev_tok = tok;
+    if (tok == TOK_CLASS || tok == TOK_STRUCT || tok == TOK_UNION)
+      class_keyword_pending = 1, class_keyword_tok = tok;
     if (tok >= TOK_UIDENT)
       prev_ident = tok;
     next();
@@ -13478,6 +13741,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
   int pack_start = -1;
   int pack_name_tok = 0;
   int class_arg_incomplete = 0;
+  int class_arg_dependency_tok = 0;
   int incomplete_dependency_tok = 0;
   int existing_class_inst_tok = 0;
   int preparing_class_index = -1;
@@ -13485,6 +13749,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
   int materialize_function_body = 0;
   unsigned hidden_parameter_mask = 0;
   TokenString definition_replay;
+  TokenString *expanded_function_definition = NULL;
   TokenString *expanded_pack_body = NULL;
   TokenString *expanded_class_definition = NULL;
 
@@ -13517,6 +13782,15 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
     class_arg_incomplete = arg_layout_incomplete
                            || (arg_sym && arg_sym->c < 0)
                            || is_currently_defining_class(defining_arg_tok);
+    if (class_arg_incomplete)
+      class_arg_dependency_tok = defining_arg_tok;
+    if (getenv("CPRIME_TRACE_INCOMPLETE"))
+      fprintf(stderr, "[ti] %s arg=%s incomplete=%d defining=%d layout=%d\n",
+              get_tok_str(td->name_tok, NULL),
+              args->nb ? get_tok_str(args->toks[0], NULL) : "",
+              class_arg_incomplete,
+              is_currently_defining_class(defining_arg_tok),
+              arg_layout_incomplete);
     if (class_arg_incomplete && !is_currently_defining_class(defining_arg_tok))
       incomplete_dependency_tok = defining_arg_tok;
   }
@@ -13769,7 +14043,77 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
     expanded_class_definition = expand_template_expression_packs(td->def_str,
       td->type_param_toks[pack], 0, 0, &args->toks[pack], args->nb - pack);
   }
-  definition_replay = *(expanded_class_definition ? expanded_class_definition : td->def_str);
+  else if (!td->is_class && td->variadic_param_index >= 0) {
+    int pack = td->variadic_param_index;
+    if (td->value_param_mask & (1u << pack))
+    {
+      int at, body_start = -1, depth = 0, in_parameters = 0;
+      TokenString source = *td->def_str, body;
+      for (at = 0; at < source.len; ++at)
+      {
+        int token = source.str[at];
+        if (TOK_HAS_VALUE(token))
+        {
+          at += tok_str_value_extra_words(source.str, source.len, at);
+          continue;
+        }
+        if (token == '(')
+        {
+          if (!in_parameters && at > 0
+              && source.str[at - 1] == td->name_tok)
+            in_parameters = 1;
+          ++depth;
+        }
+        else if (in_parameters && token == ')')
+        {
+          --depth;
+          if (!depth)
+          {
+            int next = at + 1;
+            while (next < source.len && source.str[next] == TOK_LINENUM)
+              next += 1 + tok_str_value_extra_words(source.str, source.len,
+                                                    next);
+            if (next < source.len && source.str[next] == '{')
+            {
+              body_start = next;
+              break;
+            }
+            in_parameters = 0;
+          }
+        }
+      }
+      if (body_start >= 0)
+      {
+        TokenString *expanded_body;
+        expanded_function_definition = tok_str_alloc();
+        for (at = 0; at < body_start; ++at)
+          tok_str_add_record(expanded_function_definition, source.str,
+                             source.len, &at);
+        body = source;
+        body.str += body_start;
+        body.len -= body_start;
+        expanded_body = expand_template_expression_packs(
+            &body, td->type_param_toks[pack], 0, 0,
+            &args->toks[pack], args->nb - pack);
+        for (at = 0; at < expanded_body->len; ++at)
+        {
+          int token = expanded_body->str[at];
+          if (token == TOK_EOF)
+            break;
+          tok_str_add_record(expanded_function_definition,
+                             expanded_body->str, expanded_body->len, &at);
+        }
+        tok_str_add(expanded_function_definition, TOK_EOF);
+        tok_str_free(expanded_body);
+      }
+    }
+    else
+      expanded_function_definition = NULL;
+  }
+  definition_replay = *(expanded_function_definition
+                        ? expanded_function_definition
+                        : expanded_class_definition
+                          ? expanded_class_definition : td->def_str);
   begin_macro(&definition_replay, 3);
   next();
   while (tok != TOK_EOF)
@@ -14985,6 +15329,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
     tok_str_free(expanded_pack_body);
   }
   end_macro();
+  if (expanded_function_definition) tok_str_free(expanded_function_definition);
   if (expanded_class_definition) tok_str_free(expanded_class_definition);
   tok = saved_tok;
   tokc = saved_tokc;
@@ -15020,8 +15365,9 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
                               td->friend_class_tok ? td->friend_class_tok :
                               incomplete_dependency_tok ? incomplete_dependency_tok :
                               td->is_class && args->nb > 0
-                                && !class_arg_incomplete
-                                ? args->toks[0] : 0, td->namespace_tok,
+                                ? (class_arg_incomplete
+                                     ? class_arg_dependency_tok : args->toks[0])
+                                : 0, td->namespace_tok,
                               td->func_bound, td->is_class ? td->name_tok : 0);
   if (preparing_class_index >= 0)
     td->inst_states[preparing_class_index] = 0;
@@ -15029,6 +15375,12 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
   {
     if (incomplete_dependency_tok)
       publish_template_forward_type(mangled_tok, td->is_union);
+    if (getenv("CPRIME_TRACE_INCOMPLETE"))
+      fprintf(stderr, "[qp] %s dep=%s incomplete=%d\n",
+              get_tok_str(mangled_tok, NULL),
+              class_arg_dependency_tok
+                ? get_tok_str(class_arg_dependency_tok, NULL) : "",
+              class_arg_incomplete);
     compile_pending_template_specs_without_member_flush();
     if (!class_arg_incomplete && struct_find(mangled_tok))
       instantiate_template_members_for_class(td, args->toks[0], mangled_tok);
@@ -15051,6 +15403,11 @@ static int materialize_incomplete_template_type(CType *type)
     return 0;
   struct_tok = get_struct_type_name_tok(type);
   class_sym = struct_tok ? struct_find(struct_tok) : NULL;
+  if (getenv("CPRIME_TRACE_INCOMPLETE"))
+    fprintf(stderr, "[mi] %s c=%d depth=%d\n",
+            struct_tok ? get_tok_str(struct_tok, NULL) : "",
+            class_sym ? class_sym->c : -999,
+            materialize_incomplete_template_depth);
   if (!class_sym || class_sym->c >= 0)
     return class_sym != NULL;
   owner = find_template_inst_owner_entry(struct_tok);
@@ -15336,6 +15693,17 @@ static int infer_saved_template_body_return(TemplateDef *td, TemplateArgList *ar
   valid = template_probe_type_ex(probe, deduction_kind == 2 ? 5 : 4,
                                   td->namespace_tok, 0, specialization_tok, result);
   --recursion;
+  if (getenv("CPRIME_DUMP_AUTORET")) {
+    int at;
+    fprintf(stderr, "[autoret] td=%s valid=%d probe:", get_tok_str(td->name_tok, NULL), valid);
+    for (at = 0; at < probe->len; ++at) {
+      int t = probe->str[at];
+      if (t >= TOK_IDENT) fprintf(stderr, " %s", get_tok_str(t, NULL));
+      else if (t > 32 && t < 127) fprintf(stderr, " %c", t);
+      else fprintf(stderr, " #%d", t);
+    }
+    fprintf(stderr, "\n");
+  }
   tok_str_free(probe);
   if (valid)
   {
@@ -16368,31 +16736,23 @@ static int template_deduced_inst_for_call(TemplateDef *definition,
   return template_lookup_inst(definition, &bindings);
 }
 
-/* Compare instantiated parameter types before committing to one template
-   body. Parameter declaration replay uses the same reference and pointer
-   types as concrete overload resolution, preserving every cv level. */
-static int template_call_signature_rank_bound(TemplateDef *td, CType *arguments,
-                                        int argument_count,
-                                        TemplateArgList *explicit_bindings, int compare_categories)
+/* Locate the declared parameter list of a function template definition. */
+static int template_function_parameter_range(TemplateDef *td, int *begin, int *end)
 {
-  TemplateArgList bindings;
-  TokenString *parameters;
-  CType function;
-  Sym *parameter;
-  int i, begin = -1, end = -1, depth = 0, rank = 0;
-  static int active;
-  if (active || !td->def_str) return -2;
+  int i, depth = 0;
+  *begin = *end = -1;
+  if (!td || !td->def_str) return 0;
   for (i = 0; i + 1 < td->def_str->len; ++i)
     if (td->def_str->str[i] == td->name_tok && td->def_str->str[i + 1] == '(')
-    { begin = i + 2; break; }
+    { *begin = i + 2; break; }
     else if (td->def_str->str[i] == TOK_OPERATOR
              && i + 2 < td->def_str->len
              && get_cpp_binary_operator_method_tok(td->def_str->str[i + 1])
                   == td->name_tok
              && td->def_str->str[i + 2] == '(')
-    { begin = i + 3; break; }
-  if (begin < 0) return -2;
-  for (i = begin; i < td->def_str->len; ++i) {
+    { *begin = i + 3; break; }
+  if (*begin < 0) return 0;
+  for (i = *begin; i < td->def_str->len; ++i) {
     int token = td->def_str->str[i];
     if (TOK_HAS_VALUE(token)) {
       i += tok_str_value_extra_words(td->def_str->str, td->def_str->len, i);
@@ -16400,19 +16760,22 @@ static int template_call_signature_rank_bound(TemplateDef *td, CType *arguments,
     }
     if (token == '(') ++depth;
     else if (token == ')') {
-      if (!depth) { end = i; break; }
+      if (!depth) { *end = i; break; }
       --depth;
     }
   }
-  if (end < 0) return -2;
-  active = 1;
-  if (explicit_bindings)
-    bindings = *explicit_bindings;
-  else if (!infer_template_args_from_call(td, arguments, argument_count, &bindings)) {
-    active = 0;
-    return -1;
-  }
-  parameters = tok_str_alloc();
+  return *end >= 0;
+}
+
+/* Replay a substituted parameter list as a function type. Parameter
+   declaration replay uses the same reference and pointer types as concrete
+   overload resolution, preserving every cv level. */
+static int template_substituted_function_type(TemplateDef *td, int begin, int end,
+                                              TemplateArgList *bindings, CType *function)
+{
+  TokenString *parameters = tok_str_alloc();
+  TokenString *signature;
+  int i, valid;
   for (i = begin; i < end; ++i) {
     int token = td->def_str->str[i];
     if (TOK_HAS_VALUE(token))
@@ -16421,14 +16784,14 @@ static int template_call_signature_rank_bound(TemplateDef *td, CType *arguments,
              && token == td->type_param_toks[td->variadic_param_index])
       tok_str_add(parameters, token);
     else
-      tok_str_add(parameters, template_subst_token(td, &bindings, 0,
+      tok_str_add(parameters, template_subst_token(td, bindings, 0,
                                                   NULL, NULL, 0, token));
   }
   tok_str_add(parameters, TOK_EOF);
   if (td->variadic_param_index >= 0) {
     int pack = td->variadic_param_index;
     TokenString *expanded = expand_template_expression_packs(parameters,
-      td->type_param_toks[pack], 0, 0, &bindings.toks[pack], bindings.nb - pack);
+      td->type_param_toks[pack], 0, 0, &bindings->toks[pack], bindings->nb - pack);
     tok_str_free(parameters);
     parameters = expanded;
   }
@@ -16437,28 +16800,62 @@ static int template_call_signature_rank_bound(TemplateDef *td, CType *arguments,
      class template whose defaulted argument is ill-formed for this binding),
      and inside overload or partial-ordering deduction that has to drop the
      candidate instead of aborting the translation unit. */
-  {
-    TokenString *signature = tok_str_alloc();
-    int valid;
-    tok_str_add(signature, TOK_VOID);
-    tok_str_add(signature, '(');
-    tok_str_append_without_eof(signature, parameters);
-    tok_str_add(signature, ')');
-    tok_str_add(signature, TOK_EOF);
-    valid = template_probe_type_ex(signature, 0, td->namespace_tok,
-                                   td->member_class_tok, 0, &function);
-    tok_str_free(signature);
-    if (!valid) { tok_str_free(parameters); active = 0; return -1; }
-  }
+  signature = tok_str_alloc();
+  tok_str_add(signature, TOK_VOID);
+  tok_str_add(signature, '(');
+  tok_str_append_without_eof(signature, parameters);
+  tok_str_add(signature, ')');
+  tok_str_add(signature, TOK_EOF);
+  valid = template_probe_type_ex(signature, 0, td->namespace_tok,
+                                 td->member_class_tok, 0, function);
+  tok_str_free(signature);
   tok_str_free(parameters);
+  return valid;
+}
+
+/* True while a substituted signature is being replayed. Nested probes have to
+   decline rather than recurse through the same template. */
+static int template_signature_probe_active;
+
+/* Compare instantiated parameter types before committing to one template
+   body.  `ranks` optionally receives the per-argument conversion rank, which
+   overload resolution needs to rank a specialization against a concrete
+   overload argument by argument. */
+static int template_call_argument_ranks(TemplateDef *td, CType *arguments,
+                                        int argument_count,
+                                        TemplateArgList *explicit_bindings,
+                                        int *ranks, int rank_capacity,
+                                        int compare_categories)
+{
+  TemplateArgList bindings;
+  CType function;
+  Sym *parameter;
+  int i, begin, end, rank = 0;
+  if (template_signature_probe_active || !td->def_str) return -2;
+  if (!template_function_parameter_range(td, &begin, &end)) return -2;
+  template_signature_probe_active = 1;
+  if (explicit_bindings)
+    bindings = *explicit_bindings;
+  else if (!infer_template_args_from_call(td, arguments, argument_count, &bindings)) {
+    template_signature_probe_active = 0;
+    return -1;
+  }
+  if (!template_substituted_function_type(td, begin, end, &bindings, &function)) {
+    template_signature_probe_active = 0;
+    return -1;
+  }
   /* Member deduction also serves explicit specialization declarations,
      whose parameter types do not carry expression value categories. */
-  if (compare_categories == 2) { active = 0; return 0; }
+  if (compare_categories == 2) { template_signature_probe_active = 0; return 0; }
   parameter = function.ref->next;
   for (i = 0; i < argument_count; ++i) {
     int conversion;
     if (!parameter) {
-      if (function.ref->f.func_type == FUNC_ELLIPSIS) { rank += 16; continue; }
+      if (function.ref->f.func_type == FUNC_ELLIPSIS) {
+        if (ranks && i < rank_capacity) ranks[i] = 16;
+        rank += 16;
+        continue;
+      }
       rank = -1; break;
     }
     conversion = call_arg_match_rank(&parameter->type, &arguments[i]);
@@ -16470,11 +16867,73 @@ static int template_call_signature_rank_bound(TemplateDef *td, CType *arguments,
       if (is_compatible_unqualified_types(pointed_type(&parameter->type), &source))
         conversion = 1;
     }
+    if (ranks && i < rank_capacity) ranks[i] = conversion;
     rank += conversion;
     parameter = parameter->next;
   }
-  active = 0;
+  template_signature_probe_active = 0;
   return rank;
+}
+
+static int template_call_signature_rank_bound(TemplateDef *td, CType *arguments,
+                                        int argument_count,
+                                        TemplateArgList *explicit_bindings, int compare_categories)
+{
+  return template_call_argument_ranks(td, arguments, argument_count,
+                                      explicit_bindings, NULL, 0,
+                                      compare_categories);
+}
+
+/* [over.ics.rank] Two candidates whose parameter conversions otherwise agree
+   prefer the reference binding to the less cv-qualified referent when the
+   referent types are the same except for top-level cv-qualifiers. Identical
+   referents stay tied so partial ordering can decide between independently
+   specialized templates. */
+static int compare_reference_binding_preference(TemplateDef *first,
+                                                TemplateArgList *first_bindings,
+                                                TemplateDef *second,
+                                                TemplateArgList *second_bindings,
+                                                CType *arguments, int argument_count)
+{
+  CType first_type, second_type;
+  Sym *left, *right;
+  int i, begin, end, preference = 0;
+  if (template_signature_probe_active) return 0;
+  if (!template_function_parameter_range(first, &begin, &end)) return 0;
+  template_signature_probe_active = 1;
+  if (!template_substituted_function_type(first, begin, end, first_bindings, &first_type)
+      || !template_function_parameter_range(second, &begin, &end)
+      || !template_substituted_function_type(second, begin, end, second_bindings, &second_type)
+      || !first_type.ref || !second_type.ref)
+  {
+    template_signature_probe_active = 0;
+    return 0;
+  }
+  template_signature_probe_active = 0;
+  left = first_type.ref->next;
+  right = second_type.ref->next;
+  for (i = 0; i < argument_count && left && right;
+       ++i, left = left->next, right = right->next)
+  {
+    int current = 0;
+    if (call_arg_match_rank(&left->type, &arguments[i])
+        != call_arg_match_rank(&right->type, &arguments[i]))
+      return 0;
+    if (is_reference_type(&left->type) && is_reference_type(&right->type)
+        && is_compatible_unqualified_types(pointed_type(&left->type),
+                                           pointed_type(&right->type)))
+    {
+      int added = pointed_type(&right->type)->t & ~pointed_type(&left->type)->t
+                  & (VT_CONSTANT | VT_VOLATILE);
+      int removed = pointed_type(&left->type)->t & ~pointed_type(&right->type)->t
+                    & (VT_CONSTANT | VT_VOLATILE);
+      if (added && !removed) current = 1;
+      else if (removed && !added) current = -1;
+    }
+    if (current && preference && current != preference) return 0;
+    if (current) preference = current;
+  }
+  return preference;
 }
 
 static TemplateDef *find_explicit_function_template_for_call(int name,

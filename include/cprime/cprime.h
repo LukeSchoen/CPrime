@@ -675,6 +675,7 @@ struct CPRIMEState {
     unsigned char optimize;
     unsigned char no_builtin;
     unsigned char no_inline;
+    unsigned char coroutines;
     unsigned char option_pthread;
     unsigned char enable_new_dtags;
     unsigned int  cversion;

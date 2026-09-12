@@ -1593,7 +1593,35 @@ static Sym *push_default_arg_parameter_scope(Sym *func_type, Sym *arg,
 
 static void pop_default_arg_parameter_scope(Sym *saved_locals, int saved_scope)
 {
-  sym_pop(&local_stack, NULL, 0);
+  /* The parameter bindings go away, but the anonymous nodes built while the
+     default argument was parsed must outlive this scope: the expression's
+     value is still on the stack and reads them, as when a string literal
+     keeps its array node and the caller converts that argument to a class
+     type.  Freeing the nodes here hands them to the next allocation while
+     the live value still points at them.  Move them to the enclosing stack
+     so they die with the scope the call itself belongs to. */
+  Sym *s = local_stack, *next;
+  Sym **tail;
+
+  for (tail = saved_locals ? &saved_locals : &global_stack; *tail;)
+    tail = &(*tail)->prev;
+  while (s)
+  {
+    next = s->prev;
+    if ((s->v & ~SYM_STRUCT) >= TOK_IDENT
+        && (s->v & ~SYM_STRUCT) < SYM_FIRST_ANOM)
+    {
+      sym_link(s, 0);
+      sym_free(s);
+    }
+    else
+    {
+      *tail = s;
+      tail = &s->prev;
+    }
+    s = next;
+  }
+  *tail = NULL;
   local_stack = saved_locals;
   local_scope = saved_scope;
 }
@@ -2638,7 +2666,11 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
           && (pointed_type(param_type)->t & VT_CONSTANT))
         return 2;
     }
-    return qualification ? 2 : 1;
+    /* A direct reference binding is an exact match. Adding top-level
+       cv-qualification to the referent keeps both bindings exact
+       conversions; the more cv-qualified reference is only worse than
+       another reference, which is decided in the conversion tie-break. */
+    return 1;
   }
   if (IS_ENUM(param_value_type.t) || IS_ENUM_VAL(param_value_type.t))
     return -1;
@@ -2691,7 +2723,7 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
       if ((arg_type->t & VT_RVALUE_REFERENCE)
           && (param_pointed->t & VT_CONSTANT))
         return 2;
-      return qualification ? 2 : 1;
+      return 1;
     }
     if (class_value_is_derived_from(&arg_value_type, param_pointed))
       return 3;
@@ -2964,7 +2996,19 @@ static int cpp_compare_argument_conversion_overloads(Sym *left, Sym *right,
       if (!temporary && !is_compatible_unqualified_types(&source, pointed_type(&l->type))
           && !class_value_is_derived_from(&source, pointed_type(&l->type)))
         temporary = 1;
-      if (temporary) current = left_rvalue - right_rvalue;
+      /* Two reference bindings whose referent types agree modulo top-level
+         cv-qualifiers prefer the less cv-qualified referent. Identical
+         referents stay tied so partial ordering can pick between
+         independently specialized templates. */
+      if (current == 0) {
+        CType *left_target = pointed_type(&l->type);
+        CType *right_target = pointed_type(&r->type);
+        int added = right_target->t & ~left_target->t & (VT_CONSTANT | VT_VOLATILE);
+        int removed = left_target->t & ~right_target->t & (VT_CONSTANT | VT_VOLATILE);
+        if (added && !removed) current = 1;
+        else if (removed && !added) current = -1;
+      }
+      if (current == 0 && temporary) current = left_rvalue - right_rvalue;
     }
     if (current && preference && current != preference) return 0;
     if (current) preference = current;
@@ -3011,7 +3055,8 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
                                            int explicit_arg_count,
                                            int template_deduction_failed,
                                            int *candidates, int candidate_count,
-                                           TokenString **saved_arguments)
+                                           TokenString **saved_arguments,
+                                           int associated_lookup)
 {
   FreeFuncOverload *o;
   struct TemplateCandidate { TemplateDef *definition; int instance; };
@@ -3044,7 +3089,11 @@ static Sym *resolve_free_func_by_arg_types_filtered(int name_tok, CType *arg_typ
     int candidate_is_template;
     if ((o->name_tok != name_tok && !candidates) || !free_func_accepts_argument_count(o, explicit_arg_count))
       continue;
-    if (hide_later_overloads && o->name_tok == name_tok
+    /* Candidates argument dependent lookup collected at the point of
+       instantiation are exactly the declarations the definition bound is
+       meant to keep out of ordinary lookup; hiding them here would drop the
+       associated namespace's own overloads. */
+    if (!associated_lookup && hide_later_overloads && o->name_tok == name_tok
         && !free_func_visible_at_bound(o))
       continue;
     if (template_deduction_failed
@@ -3194,7 +3243,7 @@ static Sym *resolve_free_func_by_arg_types(int name_tok, CType *arg_types,
                                            int template_deduction_failed)
 {
   return resolve_free_func_by_arg_types_filtered(name_tok, arg_types,
-                   explicit_arg_count, template_deduction_failed, NULL, 0, NULL);
+                   explicit_arg_count, template_deduction_failed, NULL, 0, NULL, 0);
 }
 
 static int call_arg_exact_param_type(CType *param_type, CType *arg_type)
@@ -3247,6 +3296,12 @@ static int call_arg_exact_param_type(CType *param_type, CType *arg_type)
     param.t &= ~VT_DEFSIGN;
     arg.t &= ~VT_DEFSIGN;
   }
+  /* Array-to-pointer is a conversion sequence, not an identity match.  Keep
+     the two forms distinct so the conversion tie-break can prefer a direct
+     array-reference binding over the decayed pointer parameter. */
+  if (((param.t & VT_ARRAY) != 0) != ((arg.t & VT_ARRAY) != 0)
+      && ((param.t & VT_BTYPE) == VT_PTR || (arg.t & VT_BTYPE) == VT_PTR))
+    return 0;
   return is_compatible_unqualified_types(&param, &arg)
          || same_concrete_template_instantiation(&param, &arg);
 }
@@ -3311,9 +3366,144 @@ static int free_func_has_exact_concrete_match(int name_tok,
   return 0;
 }
 
+/* C++ prefers a concrete overload to a function-template specialization unless
+   the specialization's conversion sequences are better for every argument
+   ([over.match.best]); when the two are incomparable the non-template tie-break
+   settles it the same way.  Deciding this before instantiation keeps a generic
+   fallback template (such as stream read/write) from compiling its body - and
+   firing its body-level static_assert - for a call a concrete overload already
+   handles.
+
+   `associated_lookup` marks a call whose candidates come from the namespaces
+   associated with the arguments at the point of instantiation.  Those
+   declarations are what argument dependent lookup is defined to add, so a
+   concrete overload declared after the template definition still owns the call
+   and must be seen here. */
+/* Per-argument conversion ranks of one concrete function declaration.  A
+   negative result means the declaration cannot accept this call, either
+   because an argument does not convert or because a parameter without a
+   default argument is left unfilled. */
+static int concrete_func_call_ranks(Sym *s, CType *arg_types, int arg_count,
+                                    int *ranks)
+{
+  Sym *arg;
+  int i;
+
+  if (!s || (s->type.t & VT_BTYPE) != VT_FUNC || !s->type.ref)
+    return -1;
+  arg = s->type.ref->next;
+  for (i = 0; i < arg_count; ++i)
+  {
+    int rank;
+    if (!arg)
+    {
+      if (s->type.ref->f.func_type != FUNC_ELLIPSIS)
+        return -1;
+      ranks[i] = 16;
+      continue;
+    }
+    rank = call_arg_match_rank(&arg->type, &arg_types[i]);
+    if (rank < 0)
+      return -1;
+    ranks[i] = rank;
+    arg = arg->next;
+  }
+  for (; arg; arg = arg->next)
+    if (!arg->default_arg)
+      return -1;
+  return 0;
+}
+
+/* True when the substituted template signature improves on this concrete
+   overload for at least one argument and worsens it for none. */
+static int template_ranks_beat_concrete(int *template_ranks,
+                                        int *concrete_ranks, int arg_count)
+{
+  int i, better = 0;
+
+  for (i = 0; i < arg_count; ++i)
+    if (template_ranks[i] > concrete_ranks[i])
+      return 0;
+    else if (template_ranks[i] < concrete_ranks[i])
+      better = 1;
+  return better;
+}
+
+static int free_func_concrete_overload_beats_template(int name_tok,
+                                                      CType *arg_types,
+                                                      int arg_count,
+                                                      TemplateDef *td,
+                                                      TemplateArgList *bindings,
+                                                      int associated_lookup)
+{
+  int template_ranks[CPC_MAX_CALL_ARGUMENTS];
+  int concrete_ranks[CPC_MAX_CALL_ARGUMENTS];
+  FreeFuncOverload *o;
+  int hide_later_overloads = free_func_bound_hides_later_overloads(name_tok);
+  int have_template_ranks = 0;
+
+  if (arg_count <= 0 || arg_count > CPC_MAX_CALL_ARGUMENTS)
+    return 0;
+
+  /* The first declaration of a name keeps the plain token, so the registry
+     holds it only after a later overload needs a mangled one.  It is a
+     concrete candidate all the same. */
+  if ((associated_lookup || !hide_later_overloads
+       || free_func_tok_visible_at_bound(name_tok))
+      && concrete_func_call_ranks(find_global_symbol(name_tok), arg_types,
+                                  arg_count, concrete_ranks) == 0)
+  {
+    if (template_call_argument_ranks(td, arg_types, arg_count, bindings,
+                                     template_ranks, CPC_MAX_CALL_ARGUMENTS,
+                                     0) < 0)
+      return 0;
+    have_template_ranks = 1;
+    if (!template_ranks_beat_concrete(template_ranks, concrete_ranks,
+                                      arg_count))
+      return 1;
+  }
+
+  for (o = free_func_candidates(name_tok); o; o = o->name_next)
+  {
+    Sym *s;
+
+    if (o->name_tok != name_tok || arg_count < o->min_arg_count
+        || arg_count > o->explicit_arg_count)
+      continue;
+    if (!associated_lookup && hide_later_overloads
+        && !free_func_visible_at_bound(o))
+      continue;
+    /* A specialization of some function template is not a concrete overload;
+       only a declaration that precedes every template can win this tie-break. */
+    if (find_template_inst_owner_entry(o->mangled_tok))
+      continue;
+    s = find_global_symbol(o->mangled_tok);
+    if (!s || (s->type.t & VT_BTYPE) != VT_FUNC || !s->type.ref)
+      continue;
+    use_overload_func_type(s, &o->func_type);
+    if (concrete_func_call_ranks(s, arg_types, arg_count, concrete_ranks) < 0)
+      continue;
+    if (!have_template_ranks)
+    {
+      if (template_call_argument_ranks(td, arg_types, arg_count, bindings,
+                                       template_ranks, CPC_MAX_CALL_ARGUMENTS,
+                                       0) < 0)
+        return 0;
+      have_template_ranks = 1;
+    }
+    /* Only a specialization that improves on every argument and worsens none
+       displaces this concrete overload. */
+    if (!template_ranks_beat_concrete(template_ranks, concrete_ranks,
+                                      arg_count))
+      return 1;
+  }
+  return 0;
+}
+
 static int instantiate_function_templates_for_call(int name_tok,
                                                    CType *arg_types,
-                                                   int arg_count)
+                                                   int arg_count,
+                                                   int associated_lookup)
 {
   TemplateDef *td;
   TemplateArgList args;
@@ -3331,6 +3521,15 @@ static int instantiate_function_templates_for_call(int name_tok,
   td = find_function_template_for_call(name_tok, arg_types, arg_count, &args);
 
   if (!td)
+    return 0;
+  /* A concrete overload that is not strictly worse for any argument already
+     owns the call - C++ prefers it to the specialization when the conversion
+     sequences are equal and when they are incomparable - so the template body
+     stays uninstantiated.  Only a specialization whose substituted signature
+     beats every concrete overload argument by argument needs its body. */
+  if (free_func_concrete_overload_beats_template(name_tok, arg_types, arg_count,
+                                                 td, &args,
+                                                 associated_lookup))
     return 0;
   inst_tok = instantiate_template_if_needed(td, &args);
   compile_pending_template_specs_without_member_flush();
@@ -3970,6 +4169,40 @@ static void cpp_operator_lookup_name(CppOperatorLookup *lookup, int name)
   lookup->names[lookup->name_count++] = name;
 }
 
+/* A call reaches argument dependent lookup only when one of its arguments has
+   an associated namespace: a class, an enumeration, or a pointer, reference,
+   array, member pointer or function type built from one.  A call whose
+   arguments are all fundamental has that part of the lookup empty, so the
+   definition-time binding of the name settles it alone. */
+static int cpp_type_has_associated_namespace(CType *type, int depth)
+{
+  int bt;
+  if (!type || depth > 4) return 0;
+  if (IS_ENUM(type->t) || IS_ENUM_VAL(type->t)) return 1;
+  if (find_cpp_member_pointer_type(type)) return 1;
+  bt = type->t & VT_BTYPE;
+  if (bt == VT_STRUCT) return 1;
+  if (bt == VT_PTR || (type->t & VT_ARRAY)) {
+    if (!type->ref) return 0;
+    return cpp_type_has_associated_namespace(&type->ref->type, depth + 1);
+  }
+  if (bt == VT_FUNC && type->ref) {
+    Sym *parameter = type->ref->next;
+    if (cpp_type_has_associated_namespace(&type->ref->type, depth + 1)) return 1;
+    for (; parameter; parameter = parameter->next)
+      if (cpp_type_has_associated_namespace(&parameter->type, depth + 1)) return 1;
+  }
+  return 0;
+}
+
+static int cpp_call_has_associated_argument(CType *arg_types, int arg_count)
+{
+  int i;
+  for (i = 0; i < arg_count; ++i)
+    if (cpp_type_has_associated_namespace(&arg_types[i], 0)) return 1;
+  return 0;
+}
+
 static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type, int complete)
 {
   int i, name = 0, namespace_tok;
@@ -4088,6 +4321,7 @@ static Sym *cpp_resolve_associated_function(int method_tok, int ordinary_tok,
   CppOperatorLookup lookup;
   FreeFuncOverload *overload;
   int i, j, name_index, *candidates = NULL, candidate_count = 0, has_class_operand = 0;
+  int associated = cpp_call_has_associated_argument(arguments, count);
   Sym *function;
   memset(&lookup, 0, sizeof lookup);
   lookup.method_tok = method_tok;
@@ -4114,7 +4348,8 @@ static Sym *cpp_resolve_associated_function(int method_tok, int ordinary_tok,
     int saved_adl_count = template_adl_class_count;
     template_adl_classes = lookup.visited;
     template_adl_class_count = operator_call >= 0 ? lookup.visited_count : 0;
-    instantiate_function_templates_for_call(lookup.names[i], arguments, count);
+    instantiate_function_templates_for_call(lookup.names[i], arguments, count,
+                                            associated);
     template_adl_classes = saved_adl_classes;
     template_adl_class_count = saved_adl_count;
     function = find_global_symbol(lookup.names[i]);
@@ -4160,7 +4395,8 @@ static Sym *cpp_resolve_associated_function(int method_tok, int ordinary_tok,
     ? resolve_free_func_by_arg_types_filtered(operator_call == 0 && ordinary_tok
                                                 ? ordinary_tok : method_tok,
                                               arguments, count,
-                                              0, candidates, candidate_count, call_args)
+                                              0, candidates, candidate_count,
+                                              call_args, associated)
     : NULL;
   cprime_free(candidates);
   cprime_free(lookup.names);

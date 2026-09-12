@@ -1119,11 +1119,11 @@ static int initializer_integral_constant_value(SValue *value, int64_t *result)
     *result = value->c.i;
     return 1;
   }
+  if (kind != (VT_CONST | VT_SYM) && kind != (VT_LOCAL | VT_LVAL))
+    return 0;
   if (!symbol || !symbol->a.integral_constexpr
       || !(symbol->type.t & VT_CONSTANT)
       || !is_integer_btype(symbol->type.t & VT_BTYPE))
-    return 0;
-  if (kind != (VT_CONST | VT_SYM) && kind != (VT_LOCAL | VT_LVAL))
     return 0;
   *result = symbol->const_value;
   return 1;

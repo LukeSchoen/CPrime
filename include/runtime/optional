@@ -1,0 +1,72 @@
+#ifndef _CPC_OPTIONAL
+#define _CPC_OPTIONAL
+
+#include <utility>
+
+namespace std
+{
+  struct nullopt_t
+  {
+    explicit constexpr nullopt_t(int) {}
+  };
+
+  constexpr nullopt_t nullopt(0);
+
+  template<class T>
+  class optional
+  {
+  public:
+    typedef T value_type;
+
+    optional() : m_value(), m_engaged(false) {}
+    optional(nullopt_t) : m_value(), m_engaged(false) {}
+    optional(const T &value) : m_value(value), m_engaged(true) {}
+    optional(T &&value) : m_value(static_cast<T &&>(value)), m_engaged(true) {}
+
+    optional &operator=(nullopt_t)
+    {
+      reset();
+      return *this;
+    }
+
+    optional &operator=(const T &value)
+    {
+      m_value = value;
+      m_engaged = true;
+      return *this;
+    }
+
+    optional &operator=(T &&value)
+    {
+      m_value = static_cast<T &&>(value);
+      m_engaged = true;
+      return *this;
+    }
+
+    constexpr bool has_value() const { return m_engaged; }
+    constexpr explicit operator bool() const { return m_engaged; }
+
+    T &value() { return m_value; }
+    const T &value() const { return m_value; }
+    T &operator*() { return m_value; }
+    const T &operator*() const { return m_value; }
+    T *operator->() { return &m_value; }
+    const T *operator->() const { return &m_value; }
+
+    void reset() { m_engaged = false; }
+
+    template<class... Args>
+    T &emplace(Args &&...args)
+    {
+      m_value = T(static_cast<Args &&>(args)...);
+      m_engaged = true;
+      return m_value;
+    }
+
+  private:
+    T m_value;
+    bool m_engaged;
+  };
+}
+
+#endif

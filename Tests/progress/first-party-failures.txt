@@ -1,0 +1,20 @@
+# First-party pedantic cases that currently fail and count against the 100% target.
+# One suite-relative path per line, matching the Tests/tiers.json key form.
+# Delete the line when the case is repaired; keep this list in step with the
+# "Known first-party pedantic failures" section of task.md.
+# Re-verified 2026-09-12 against the cycle-4 compiler plus the CL integration
+# fixes: the six Constructors braced-initializer cases and
+# test_member_template_binary_operator_same_type_fallback already passed and
+# were dropped, and test_variadic_static_member_definition_across_inputs was
+# repaired. Every remaining line below was re-run and still fails.
+features/Classes/pass/test_constructor_call_with_braced_middle_argument.cpp
+features/Classes/pass/test_out_of_class_member_nested_range_for.cpp
+features/Constructors/pass/test_implicit_return_move_and_cv_rvalue_binding.cpp
+features/Declarations/pass/test_coroutine_syntax.cpp
+features/Exceptions/pass/test_value_parameter_destruction.cpp
+features/Expressions/pass/test_conditional_class_conversions.cpp
+features/Expressions/pass/test_functional_conversion_operator.cpp
+features/Expressions/pass/test_lambda_captured_object_direct_construction.cpp
+features/Includes/pass/test_cstdio_function_identity.cpp
+features/Templates/pass/test_member_pointer_cv_deduction.cpp
+features/Templates/pass/test_template_member_index_operator_reference.cpp

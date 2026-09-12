@@ -13,7 +13,8 @@ ceilings; record timeouts as failures and never retry with a relaxed budget.
 
 ## One session, one cluster
 
-Pick the next cluster from `task.md`, or the top cluster in
+Pick the next item from the wave plan in `task.md` (Wave A while the language
+long tail lasts; Waves B and C need a funding decision), or the top cluster in
 `build/compiler-bug-triage.txt` when the ordered list is empty. Reproduce,
 repair and verify that cluster only. If a fix has not landed after roughly half
 the session budget, revert it, record the narrowed lead in `task.md`, and stop.
@@ -57,6 +58,30 @@ the session budget, revert it, record the narrowed lead in `task.md`, and stop.
 `Tests/run-checks.ps1` adds fast CPC-only native/integration gates.
 `tests.cmd`, `-IncludeChecks` and `tests_pedantic.cmd` can invoke cross-compiler
 ABI gates and need explicit authorization for those invocations.
+
+## Progress log
+
+`worker.cmd` prints test completion: cases left, the rate in real hours and
+days, and the time that rate implies. One sample per finished cycle is appended
+to `Tests/progress/log.tsv`, a tab-separated, append-only file that git commits
+together with the work the sample describes, so stopping and restarting the
+worker needs no recovery step. The baseline is the consolidation commit that
+created the retained failure corpus; earlier rows are not comparable.
+
+`build/worker-status.exe` (from `src/tools/worker_status.c`) owns the format and
+the arithmetic:
+
+```powershell
+./cpc.exe -o build/worker-status.exe src/tools/worker_status.c
+./build/worker-status.exe --root .                    # completion report
+./build/worker-status.exe --root . --last-cycle       # resume the cycle counter
+```
+
+Remaining work is the retained `corpus.json` cases plus the paths listed in
+`Tests/progress/first-party-failures.txt`. Retiring a first-party failure means
+deleting its line there as well as in `task.md`; the worker reports 100% and
+stops only when both lists are empty. `test_WorkerProgress.ps1` covers the log
+format, the rate arithmetic and the failure exits.
 
 ## Consolidation policy
 

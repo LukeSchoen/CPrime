@@ -4678,6 +4678,8 @@ static void cprime_predefs(CPRIMEState *s1, CString *cs, int is_asm)
       cstr_cat(cs, "#define __GXX_EXPERIMENTAL_CXX0X__ 1\n", -1);
       cstr_cat(cs, "#define __STDC_LIMIT_MACROS 1\n", -1);
       cstr_cat(cs, "#define __STDC_CONSTANT_MACROS 1\n", -1);
+      if (s1->coroutines)
+        cstr_cat(cs, "#define __cpp_impl_coroutine 201902L\n", -1);
     }
     cstr_printf(cs, "#define __STDC_HOSTED__ %d\n", s1->nostdlib ? 0 : 1);
     cstr_printf(cs, "#define __STDC_VERSION__ %dL\n", s1->cversion);

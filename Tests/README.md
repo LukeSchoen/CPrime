@@ -41,6 +41,7 @@ explicit authorization for those invocations.
 | `integration/multi_source/`, `abi/`, `native_runtime/`, `runtime/` | Integration/native fixtures |
 | `pedantic/gcc/` | Retained unresolved GCC failure corpus and assessment tools |
 | `pedantic/performance/`, `benchmarks/` | Stress and profiling workloads |
+| `progress/` | Machine-readable worker progress log and outstanding first-party list |
 | `tools/` | Shared test helpers |
 | `checks.json` | Fast/pedantic standalone gate catalog |
 
@@ -74,4 +75,5 @@ files.
 
 Retained GCC rows are repaired, not promoted: after a fix lands, its first-party
 regression stays and the external row is deleted. See
-[retained GCC checks](pedantic/gcc/README.md).
+[retained GCC checks](pedantic/gcc/README.md); the ordered wave plan and row
+buckets live in [remaining work](../task.md).

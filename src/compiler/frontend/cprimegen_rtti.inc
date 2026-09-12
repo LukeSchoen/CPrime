@@ -7,6 +7,8 @@ typedef struct CppTypeInfoRecord {
 } CppTypeInfoRecord;
 static CppTypeInfoRecord *cpp_type_info_records;
 
+static Sym *cpp_type_info_for_type(CType *type);
+
 static int cpp_class_is_polymorphic(int class_tok)
 {
   VirtualMethodInfo *method;
@@ -29,6 +31,55 @@ static int cpp_type_info_class(CType *type)
 {
   int parts[2] = { tok_alloc_const("std"), tok_alloc_const("type_info") };
   return make_class_type_from_tok(type, make_namespace_tok_from_parts(parts, 2));
+}
+
+/* Itanium describes a pointer type_info through __pbase_type_info: the
+   top-level qualifiers of the pointed-to type live in __flags and __pointee
+   names the pointee's own type_info. When the translation unit declares that
+   ABI class, the emitted descriptor takes its shape so the pointer
+   information can be read through it. */
+static int cpp_type_info_abi_pointer_class(CType *type, CType *info_type)
+{
+  CType abi_type;
+  int parts[2], offset;
+  if ((type->t & VT_BTYPE) != VT_PTR)
+    return 0;
+  parts[0] = tok_alloc_const("__cxxabiv1");
+  parts[1] = tok_alloc_const("__pointer_type_info");
+  if (!make_class_type_from_tok(&abi_type, make_namespace_tok_from_parts(parts, 2)))
+    return 0;
+  if (type_size(&abi_type, &offset) < 0)
+    return 0;
+  /* The ABI class has to inherit the runtime's name field; otherwise the
+     emitted object would not be readable through the declared layout. */
+  if (!find_field_try(&abi_type, tok_alloc_const("_M_name"), &offset))
+    return 0;
+  *info_type = abi_type;
+  return 1;
+}
+
+static void cpp_type_info_abi_pointer_fields(CType *type, CType *info_type, Sym *owner)
+{
+  CType *pointee;
+  CType element;
+  Sym *field;
+  int field_offset;
+  unsigned flags = 0;
+  pointee = pointed_type(type);
+  /* Array qualification belongs to its element type, as in the Itanium
+     encoding of the pointee. */
+  element = *pointee;
+  while (element.t & VT_ARRAY)
+    element = *pointed_type(&element);
+  if (element.t & VT_CONSTANT) flags |= 0x1;
+  if (element.t & VT_VOLATILE) flags |= 0x2;
+  field = find_field_try(info_type, tok_alloc_const("__flags"), &field_offset);
+  if (field && flags)
+    memcpy(data_section->data + elfsym(owner)->st_value + field_offset,
+           &flags, sizeof flags);
+  field = find_field_try(info_type, tok_alloc_const("__pointee"), &field_offset);
+  if (field)
+    cpp_eh_data_pointer(owner, field_offset, cpp_type_info_for_type(pointee));
 }
 
 static void cpp_type_info_append_length_name(CString *name, int tok)
@@ -204,18 +255,22 @@ static void cpp_type_info_name_ex(CString *name, CType *original, int strip_cv)
 static Sym *cpp_type_info_for_type(CType *type)
 {
   CType info_type;
+  CType base_info_type;
   CString name;
   CppTypeInfoRecord *record;
   VirtualTableInfo *table;
   Sym *name_symbol, *field;
   int name_tok, size, alignment, field_offset;
+  int abi_pointer = 0;
   if (!cpp_type_info_class(&info_type)) return NULL;
+  base_info_type = info_type;
   cstr_new(&name);
   cpp_type_info_name_ex(&name, type, 1);
   cstr_ccat(&name, 0);
   name_tok = tok_alloc_const(name.data);
   for (record = cpp_type_info_records; record; record = record->next)
     if (record->name_tok == name_tok) { cstr_free(&name); return record->symbol; }
+  abi_pointer = cpp_type_info_abi_pointer_class(type, &info_type);
   size = type_size(&info_type, &alignment);
   if (size < 0) cprime_error("typeid requires a complete std::type_info");
   record = cprime_mallocz(sizeof(*record));
@@ -230,11 +285,15 @@ static Sym *cpp_type_info_for_type(CType *type)
   if (field)
     cpp_eh_data_pointer(record->symbol, field_offset, name_symbol);
   for (table = virtual_table_infos; table; table = table->next)
-    if (table->class_tok == get_struct_type_name_tok(&info_type)) {
+    /* The runtime owns std::type_info's representation, so the object keeps
+       the runtime table even when the ABI spelling widens the layout. */
+    if (table->class_tok == get_struct_type_name_tok(&base_info_type)) {
       int offset = table->vptr_offset;
       table->referenced = 1;
       cpp_eh_data_pointer(record->symbol, offset, table->sym);
     }
+  if (abi_pointer)
+    cpp_type_info_abi_pointer_fields(type, &info_type, record->symbol);
   return record->symbol;
 }
 

@@ -112,7 +112,11 @@ try {
             if (Test-Path -LiteralPath $artifact) { Remove-Item -LiteralPath $artifact }
             $runtimeOptions = @()
             if ($RuntimeRoot) { $runtimeOptions = @('-B' + $RuntimeRoot) }
-            $command = @($Compiler) + $runtimeOptions + @('-x', 'c++') + $assessment.Options + @($path, '-o', $artifact)
+            $featureOptions = @()
+            if ($relative.StartsWith('g++.dg/coroutines/', [StringComparison]::Ordinal)) {
+                $featureOptions = @('-fcoroutines')
+            }
+            $command = @($Compiler) + $runtimeOptions + @('-x', 'c++') + $featureOptions + $assessment.Options + @($path, '-o', $artifact)
             if ($action -eq 'preprocess') { $command += '-E' }
             elseif ($action -notin @('run', 'link')) { $command += '-c' }
             $row.command = @($command)

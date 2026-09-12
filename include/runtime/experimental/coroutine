@@ -1,0 +1,21 @@
+#ifndef _CPC_EXPERIMENTAL_COROUTINE
+#define _CPC_EXPERIMENTAL_COROUTINE
+
+#include <coroutine>
+
+namespace std
+{
+  namespace experimental
+  {
+    template<class Promise = void>
+    using coroutine_handle = std::coroutine_handle<Promise>;
+
+    template<class Result, class... Arguments>
+    using coroutine_traits = std::coroutine_traits<Result, Arguments...>;
+
+    using std::suspend_always;
+    using std::suspend_never;
+  }
+}
+
+#endif

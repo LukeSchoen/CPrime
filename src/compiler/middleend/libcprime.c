@@ -1065,6 +1065,12 @@ static void error1(int mode, const char *fmt, va_list ap)
   {
     while (nb_stk_data)
       cprime_free(*(void * *)stk_data[--nb_stk_data]);
+    /* A saved-token replay frame is usually a stack object owned by the
+       function that called begin_macro(); the longjmp unwinds past that
+       owner, so pop the frames while they are still valid.  Leaving them
+       for preprocess_end() would dereference dead stack memory. */
+    while (macro_stack)
+      end_macro();
     longjmp(s1->error_jmp_buf, 1);
   }
 }
@@ -2208,6 +2214,7 @@ static const FlagDef options_f[] =
 {
   { offsetof(CPRIMEState, no_builtin), FD_INVERT, "builtin" },
   { offsetof(CPRIMEState, no_inline), FD_INVERT, "inline" },
+  { offsetof(CPRIMEState, coroutines), 0, "coroutines" },
   { offsetof(CPRIMEState, char_is_unsigned), 0, "unsigned-char" },
   { offsetof(CPRIMEState, char_is_unsigned), FD_INVERT, "signed-char" },
   { offsetof(CPRIMEState, nocommon), FD_INVERT, "common" },
@@ -2775,6 +2782,5 @@ PUB_FUNC void cprime_print_stats(CPRIMEState *s1, unsigned total_time)
   fprintf(stderr, " %d max (bytes)\n", mem_max_size);
 #endif
 }
-
 
 

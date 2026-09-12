@@ -354,6 +354,7 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
   CType call_arg_types[CPC_MAX_CALL_ARGUMENTS];
   int nb_args, call_arg_count, ai;
   int implicit_copy = 0;
+  int same_type_argument = 0;
 
   skip('(');
   skip_line_markers();
@@ -369,6 +370,7 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
       source.t &= ~VT_RVALUE_REFERENCE;
       if (is_compatible_unqualified_types(type, &source))
       {
+        same_type_argument = 1;
         copy_constructor = resolve_copy_constructor_func(type, &call_arg_types[0]);
         if (copy_constructor) overload = copy_constructor;
         else implicit_copy = 1;
@@ -390,6 +392,19 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
   if (!implicit_copy
       && (!ctor_func || (ctor_func->type.t & VT_BTYPE) != VT_FUNC || !ctor_func->type.ref))
     cprime_error("constructor target is not declared as function");
+
+  if (call_arg_count == 1 && same_type_argument
+      && saved_initializer_is_direct_constructor(call_args[0], type))
+  {
+    /* A single class prvalue argument to the implicit or user-declared copy
+       constructor is eligible for copy elision. Construct it directly in
+       this object's storage instead of making a temporary for init_putv. */
+    init_params p = {0};
+    emit_class_initializer_expression(call_args[0], type, addr);
+    init_putv(&p, type, addr);
+    next();
+    return;
+  }
 
   if (call_arg_count == 1
       && (implicit_copy || is_defaulted_lifecycle_constructor(type, ctor_func)))
@@ -4731,7 +4746,7 @@ static int split_saved_array_initializer(TokenString *initializer,
     else if (token == ')' || token == ']' || token == '}')
       --level;
     else if ((token == TOK_LT || token == '<')
-             && (angle || (previous >= TOK_UIDENT && find_template_def(previous))))
+             && (angle || (previous >= TOK_UIDENT && cpp_saved_angle_opener_tok(previous))))
       ++angle;
     else if (token == TOK_GT && angle) --angle;
     else if ((token == TOK_SAR || token == TOK_SHR) && angle)
@@ -5499,6 +5514,14 @@ static void append_omitted_constructor_member_initializer(TokenString *dst,
 {
   int field_tok = field->v & ~SYM_FIELD;
   int field_struct_tok = get_struct_type_name_tok(&field->type);
+  int default_is_braced = 0;
+  if (field->default_arg)
+  {
+    int first = tok_str_next_non_linenum_index(field->default_arg->str,
+                                               field->default_arg->len, 0);
+    default_is_braced = first < field->default_arg->len
+                        && field->default_arg->str[first] == '{';
+  }
 
   if ((field->type.t & VT_ARRAY) && field->default_arg)
   {
@@ -5524,9 +5547,13 @@ static void append_omitted_constructor_member_initializer(TokenString *dst,
     tok_str_add(dst, ')');
     tok_str_add(dst, cpp_class_tag_keyword_tok(&field->type));
     tok_str_add(dst, field_struct_tok);
-    tok_str_add(dst, '(');
-    append_saved_initializer_tokens(dst, field->default_arg);
-    tok_str_add(dst, ')');
+    if (default_is_braced)
+      append_saved_initializer_tokens(dst, field->default_arg);
+    else {
+      tok_str_add(dst, '(');
+      append_saved_initializer_tokens(dst, field->default_arg);
+      tok_str_add(dst, ')');
+    }
     tok_str_add(dst, ';');
     return;
   }
@@ -6327,10 +6354,25 @@ static void parse_namespace_decl(int is_inline)
   }
   else
   {
+    int parts[17], nb_parts = 0;
     if (tok < TOK_UIDENT)
       cprime_error("namespace name");
     ns_tok = tok;
+    parts[nb_parts++] = ns_tok;
     next();
+    while (tok == ':')
+    {
+      next();
+      skip(':');
+      if (tok < TOK_UIDENT)
+        cprime_error("qualified namespace name");
+      if (nb_parts >= (int)(sizeof(parts) / sizeof(parts[0])))
+        cprime_error("namespace name too deep");
+      parts[nb_parts++] = tok;
+      next();
+    }
+    if (nb_parts > 1)
+      ns_tok = make_namespace_tok_from_parts(parts, nb_parts);
   }
   /* A namespace definition may carry GNU attribute specifiers after its
      name (`namespace std __attribute__((__visibility__("default"))) {`),

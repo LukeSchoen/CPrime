@@ -1,0 +1,95 @@
+#ifndef _CPC_COROUTINE
+#define _CPC_COROUTINE
+
+#define __cpp_lib_coroutine 201902L
+
+namespace std
+{
+  template<class Result, class... Arguments>
+  struct coroutine_traits
+  {
+    typedef typename Result::promise_type promise_type;
+  };
+
+  template<class Promise = void>
+  struct coroutine_handle;
+
+  template<>
+  struct coroutine_handle<void>
+  {
+    void *frame;
+
+    coroutine_handle() noexcept : frame(0) {}
+    coroutine_handle(decltype(nullptr)) noexcept : frame(0) {}
+    coroutine_handle &operator=(decltype(nullptr)) noexcept
+    {
+      frame = 0;
+      return *this;
+    }
+
+    void *address() const noexcept { return frame; }
+
+    static coroutine_handle from_address(void *address) noexcept
+    {
+      coroutine_handle result;
+      result.frame = address;
+      return result;
+    }
+
+    explicit operator bool() const noexcept { return frame != 0; }
+    bool done() const noexcept { return false; }
+    void operator()() const { resume(); }
+    void resume() const {}
+    void destroy() const {}
+  };
+
+  template<class Promise>
+  struct coroutine_handle : coroutine_handle<void>
+  {
+    coroutine_handle() noexcept : coroutine_handle<void>() {}
+    coroutine_handle(decltype(nullptr)) noexcept : coroutine_handle<void>(nullptr) {}
+
+    coroutine_handle &operator=(decltype(nullptr)) noexcept
+    {
+      coroutine_handle<void>::operator=(nullptr);
+      return *this;
+    }
+
+    static coroutine_handle from_promise(Promise &promise)
+    {
+      coroutine_handle result;
+      result.frame = &promise;
+      return result;
+    }
+
+    static coroutine_handle from_address(void *address) noexcept
+    {
+      coroutine_handle result;
+      result.frame = address;
+      return result;
+    }
+
+    Promise &promise() const { return *static_cast<Promise *>(this->frame); }
+  };
+
+  struct suspend_always
+  {
+    bool await_ready() noexcept { return false; }
+    void await_suspend(coroutine_handle<>) noexcept {}
+    void await_resume() noexcept {}
+  };
+
+  struct suspend_never
+  {
+    bool await_ready() noexcept { return true; }
+    void await_suspend(coroutine_handle<>) noexcept {}
+    void await_resume() noexcept {}
+  };
+
+  inline coroutine_handle<> noop_coroutine() noexcept
+  {
+    return coroutine_handle<>();
+  }
+}
+
+#endif

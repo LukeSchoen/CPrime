@@ -3,7 +3,15 @@ param(
     [string]$Configuration = 'Release',
     [string]$Platform = 'x64',
     [Parameter(Mandatory = $true)][string]$SolutionPath,
-    [string]$OutputDirectory = ''
+    [string]$OutputDirectory = '',
+    # Restrict the manifest to one application and its ProjectReference
+    # closure. Solutions that also contain tests or tools export a manifest
+    # the native driver can consume without extra solution files.
+    [string]$OnlyTarget = '',
+    # Extra include directories prepended to every exported project. CPC
+    # builds use this for the compiler's own SDK tree, which is not part of
+    # the project being exported.
+    [string[]]$ExtraIncludeDirectory = @()
 )
 
 $ErrorActionPreference = 'Stop'
@@ -11,17 +19,194 @@ $ProjectRoot = [IO.Path]::GetFullPath($ProjectRoot)
 $solution = if ([IO.Path]::IsPathRooted($SolutionPath)) { [IO.Path]::GetFullPath($SolutionPath) } else { [IO.Path]::GetFullPath((Join-Path $ProjectRoot $SolutionPath)) }
 $selection = "$Configuration|$Platform"
 
+# Conditions are evaluated with MSBuild semantics: properties expand first,
+# unknown properties become the empty string, and comparisons are
+# case-insensitive. Anything outside the supported grammar is rejected so an
+# unfamiliar project cannot silently export a different build graph.
+$script:conditionProperties = @{}
+$script:conditionDirectory = $ProjectRoot
+
+function Expand-ConditionText([string]$Text, [hashtable]$Properties) {
+    if (-not $Text.Contains('$(')) { return $Text }
+    return [regex]::Replace($Text, '\$\(([^)]+)\)', {
+        param($match)
+        $key = $match.Groups[1].Value
+        if ($Properties.ContainsKey($key)) { return [string]$Properties[$key] }
+        return ''
+    })
+}
+
+function Get-ConditionTokens([string]$Text) {
+    $tokens = New-Object System.Collections.ArrayList
+    $i = 0
+    $length = $Text.Length
+    while ($i -lt $length) {
+        $ch = $Text[$i]
+        if ([char]::IsWhiteSpace($ch)) { $i++; continue }
+        if ($ch -eq "'" -or $ch -eq '"') {
+            $quote = $ch
+            $j = $i + 1
+            $builder = New-Object System.Text.StringBuilder
+            $closed = $false
+            while ($j -lt $length) {
+                if ($Text[$j] -eq $quote) {
+                    if ($j + 1 -lt $length -and $Text[$j + 1] -eq $quote) {
+                        [void]$builder.Append($quote)
+                        $j += 2
+                        continue
+                    }
+                    $closed = $true
+                    break
+                }
+                [void]$builder.Append($Text[$j])
+                $j++
+            }
+            if (-not $closed) { throw "Unterminated string in condition: $Text" }
+            [void]$tokens.Add([pscustomobject]@{ Kind = 'string'; Text = $builder.ToString() })
+            $i = $j + 1
+            continue
+        }
+        if ($ch -eq '=' -and $i + 1 -lt $length -and $Text[$i + 1] -eq '=') {
+            [void]$tokens.Add([pscustomobject]@{ Kind = 'operator'; Text = '==' })
+            $i += 2
+            continue
+        }
+        if ($ch -eq '!' -and $i + 1 -lt $length -and $Text[$i + 1] -eq '=') {
+            [void]$tokens.Add([pscustomobject]@{ Kind = 'operator'; Text = '!=' })
+            $i += 2
+            continue
+        }
+        if ($ch -eq '(') { [void]$tokens.Add([pscustomobject]@{ Kind = 'lparen' }); $i++; continue }
+        if ($ch -eq ')') { [void]$tokens.Add([pscustomobject]@{ Kind = 'rparen' }); $i++; continue }
+        if ($ch -eq ',') { [void]$tokens.Add([pscustomobject]@{ Kind = 'comma' }); $i++; continue }
+        if ($ch -eq '!') { [void]$tokens.Add([pscustomobject]@{ Kind = 'bang' }); $i++; continue }
+        $j = $i
+        while ($j -lt $length) {
+            $c = $Text[$j]
+            if ([char]::IsWhiteSpace($c)) { break }
+            if ($c -eq "'" -or $c -eq '"' -or $c -eq '(' -or $c -eq ')' -or $c -eq ',' -or $c -eq '!' -or $c -eq '=') { break }
+            $j++
+        }
+        if ($j -eq $i) { throw "Unexpected character '$ch' in condition: $Text" }
+        [void]$tokens.Add([pscustomobject]@{ Kind = 'bare'; Text = $Text.Substring($i, $j - $i) })
+        $i = $j
+    }
+    return $tokens
+}
+
+function ConvertTo-ConditionText($Value) {
+    if ($Value -is [bool]) { if ($Value) { return 'true' } else { return 'false' } }
+    return [string]$Value
+}
+
+function ConvertTo-ConditionBool($Value, [string]$Text) {
+    if ($Value -is [bool]) { return $Value }
+    $string = [string]$Value
+    if ($string -ieq 'true') { return $true }
+    if ($string -ieq 'false') { return $false }
+    throw "Condition value '$string' is not boolean: $Text"
+}
+
+function Read-ConditionOperand($Tokens, [ref]$Index, [string]$Text, [string]$Directory) {
+    if ($Index.Value -ge $Tokens.Count) { throw "Unexpected end of condition: $Text" }
+    $token = $Tokens[$Index.Value]
+    if ($token.Kind -eq 'bare' -and $Index.Value + 1 -lt $Tokens.Count -and $Tokens[$Index.Value + 1].Kind -eq 'lparen') {
+        $name = $token.Text
+        $Index.Value += 2
+        $arguments = New-Object System.Collections.ArrayList
+        if ($Tokens[$Index.Value].Kind -ne 'rparen') {
+            while ($true) {
+                $argument = Read-ConditionOperand $Tokens $Index $Text $Directory
+                if ($argument -is [bool]) { throw "Condition function argument must be a string: $Text" }
+                [void]$arguments.Add([string]$argument)
+                if ($Tokens[$Index.Value].Kind -eq 'comma') { $Index.Value++; continue }
+                break
+            }
+        }
+        if ($Tokens[$Index.Value].Kind -ne 'rparen') { throw "Expected ')' in condition: $Text" }
+        $Index.Value++
+        if ($arguments.Count -ne 1) { throw "Condition function $name expects one argument: $Text" }
+        $path = [string]$arguments[0]
+        if ($name -ieq 'Exists') {
+            if (-not [IO.Path]::IsPathRooted($path)) { $path = [IO.Path]::GetFullPath([IO.Path]::Combine($Directory, $path)) }
+            return ([IO.File]::Exists($path) -or [IO.Directory]::Exists($path))
+        }
+        if ($name -ieq 'HasTrailingSlash') { return ($path.EndsWith('\') -or $path.EndsWith('/')) }
+        throw "Unsupported condition function: $name"
+    }
+    $Index.Value++
+    if ($token.Kind -eq 'string') { return $token.Text }
+    if ($token.Kind -eq 'bare') {
+        if ($token.Text -ieq 'true') { return $true }
+        if ($token.Text -ieq 'false') { return $false }
+        throw "Unsupported condition token '$($token.Text)': $Text"
+    }
+    throw "Unexpected token in condition: $Text"
+}
+
+function Test-ConditionFactor($Tokens, [ref]$Index, [string]$Text, [string]$Directory) {
+    if ($Index.Value -ge $Tokens.Count) { throw "Unexpected end of condition: $Text" }
+    $token = $Tokens[$Index.Value]
+    if ($token.Kind -eq 'bang') {
+        $Index.Value++
+        return -not (ConvertTo-ConditionBool (Test-ConditionFactor $Tokens $Index $Text $Directory) $Text)
+    }
+    if ($token.Kind -eq 'lparen') {
+        $Index.Value++
+        $value = Test-ConditionOr $Tokens $Index $Text $Directory
+        if ($Index.Value -ge $Tokens.Count -or $Tokens[$Index.Value].Kind -ne 'rparen') { throw "Expected ')' in condition: $Text" }
+        $Index.Value++
+        return $value
+    }
+    $left = Read-ConditionOperand $Tokens $Index $Text $Directory
+    if ($Index.Value -lt $Tokens.Count -and $Tokens[$Index.Value].Kind -eq 'operator') {
+        $operator = $Tokens[$Index.Value].Text
+        $Index.Value++
+        $right = Read-ConditionOperand $Tokens $Index $Text $Directory
+        $equal = (ConvertTo-ConditionText $left) -ieq (ConvertTo-ConditionText $right)
+        if ($operator -eq '==') { return $equal }
+        return (-not $equal)
+    }
+    return $left
+}
+
+function Test-ConditionAnd($Tokens, [ref]$Index, [string]$Text, [string]$Directory) {
+    $value = Test-ConditionFactor $Tokens $Index $Text $Directory
+    while ($Index.Value -lt $Tokens.Count -and $Tokens[$Index.Value].Kind -eq 'bare' -and $Tokens[$Index.Value].Text -ieq 'and') {
+        $Index.Value++
+        $next = Test-ConditionFactor $Tokens $Index $Text $Directory
+        $value = ((ConvertTo-ConditionBool $value $Text) -and (ConvertTo-ConditionBool $next $Text))
+    }
+    return $value
+}
+
+function Test-ConditionOr($Tokens, [ref]$Index, [string]$Text, [string]$Directory) {
+    $value = Test-ConditionAnd $Tokens $Index $Text $Directory
+    while ($Index.Value -lt $Tokens.Count -and $Tokens[$Index.Value].Kind -eq 'bare' -and $Tokens[$Index.Value].Text -ieq 'or') {
+        $Index.Value++
+        $next = Test-ConditionAnd $Tokens $Index $Text $Directory
+        $value = ((ConvertTo-ConditionBool $value $Text) -or (ConvertTo-ConditionBool $next $Text))
+    }
+    return $value
+}
+
+function Test-Condition([string]$Condition, [hashtable]$Properties, [string]$Directory) {
+    $expanded = Expand-ConditionText $Condition $Properties
+    $tokens = Get-ConditionTokens $expanded
+    if (-not $tokens.Count) { throw "Empty condition: $Condition" }
+    $index = 0
+    $value = Test-ConditionOr $tokens ([ref]$index) $expanded $Directory
+    if ($index -ne $tokens.Count) { throw "Unsupported condition expression: $Condition" }
+    return ConvertTo-ConditionBool $value $expanded
+}
+
 function Test-Selection($Node) {
     # XPath returns these nodes in document order, so excluded parents still
     # suppress their children before any child condition is interpreted.
     foreach ($ancestor in $Node.SelectNodes('ancestor-or-self::*[@Condition]')) {
         $condition = $ancestor.GetAttribute('Condition')
         if (-not $condition) { continue }
-        # Premake emits these exact configuration conditions. Reject unfamiliar
-        # expressions rather than silently exporting a different build graph.
-        if ($condition -match "^'\`$\(Configuration\)\|\`$\(Platform\)'\s*==\s*'([^']+)'$") {
-            if ($Matches[1] -ne $selection) { return $false }
-        } else { throw "Unsupported generated project condition: $condition" }
+        if (-not (Test-Condition $condition $script:conditionProperties $script:conditionDirectory)) { return $false }
     }
     return $true
 }
@@ -95,6 +280,7 @@ function Get-SourceEntries([string]$ItemType, [hashtable]$Defaults, $Document, [
 }
 
 $projects = @()
+$skippedProjects = @{}
 foreach ($line in Get-Content -LiteralPath $solution) {
     if ($line -notmatch '^Project\("[^"]+"\) = "([^"]+)", "([^"]+\.vcxproj)"') { continue }
     $name = $Matches[1]
@@ -105,9 +291,17 @@ foreach ($line in Get-Content -LiteralPath $solution) {
         Configuration = $Configuration; Platform = $Platform; ProjectName = $name
         ProjectDir = $directory + '\'; SolutionDir = $ProjectRoot + '\'; BuildTag = ''
     }
+    $script:conditionProperties = $properties
+    $script:conditionDirectory = $directory
     $available = @($document.SelectNodes("//*[local-name()='ProjectConfiguration']") |
         ForEach-Object { $_.GetAttribute('Include') })
-    if ($available -notcontains $selection) { throw "$name has no $selection configuration" }
+    if ($available -notcontains $selection) {
+        # With a named target the solution may carry projects (tests, tools)
+        # outside the requested configuration. They are only an error if the
+        # target actually references them.
+        if ($OnlyTarget) { $skippedProjects[$projectPath] = $name; continue }
+        throw "$name has no $selection configuration"
+    }
     foreach ($group in $document.SelectNodes("/*[local-name()='Project']/*[local-name()='PropertyGroup']")) {
         if (-not (Test-Selection $group)) { continue }
         foreach ($property in $group.ChildNodes) {
@@ -134,7 +328,9 @@ foreach ($line in Get-Content -LiteralPath $solution) {
         }
     }
     $includes = @(Get-Items ([string]$compile.AdditionalIncludeDirectories) $properties |
-        ForEach-Object { Resolve-ProjectPath $_ $directory } | Select-Object -Unique)
+        ForEach-Object { Resolve-ProjectPath $_ $directory }) +
+        @($ExtraIncludeDirectory | ForEach-Object { [IO.Path]::GetFullPath($_) })
+    $includes = @($includes | Select-Object -Unique)
     $defines = @(Get-Items ([string]$compile.PreprocessorDefinitions) $properties)
     if ($properties.CharacterSet -eq 'Unicode') { $defines += 'UNICODE', '_UNICODE' }
     $sources = @(Get-SourceEntries 'ClCompile' $compile $document $properties $directory)
@@ -174,7 +370,8 @@ foreach ($line in Get-Content -LiteralPath $solution) {
         compileSettings = $compileSettings; projectReferences = $references
         resources = $resources; resourceDefines = @($resourceDefines | Select-Object -Unique)
         resourceIncludeDirectories = @(Get-Items ([string]$resource.AdditionalIncludeDirectories) $properties |
-            ForEach-Object { Resolve-ProjectPath $_ $directory })
+            ForEach-Object { Resolve-ProjectPath $_ $directory }) +
+            @($ExtraIncludeDirectory | ForEach-Object { [IO.Path]::GetFullPath($_) })
         resourceSettings = @{ Culture = $resource.Culture; CodePage = $resource.CodePage }
         subsystem = $link.SubSystem; entryPoint = $link.EntryPointSymbol
         linkLibraries = @(Get-Items ([string]$link.AdditionalDependencies) $properties |
@@ -184,6 +381,25 @@ foreach ($line in Get-Content -LiteralPath $solution) {
     }
 }
 if (-not $projects.Count) { throw "No C++ projects in $solution" }
+if ($OnlyTarget) {
+    $byName = @{}
+    $byFile = @{}
+    foreach ($project in $projects) { $byName[$project['name']] = $project; $byFile[$project['projectFile']] = $project }
+    if (-not $byName.ContainsKey($OnlyTarget)) { throw "Target project '$OnlyTarget' is not in $solution" }
+    $keep = New-Object 'System.Collections.Generic.HashSet[string]'
+    $pending = New-Object 'System.Collections.Generic.Queue[object]'
+    $pending.Enqueue($byName[$OnlyTarget])
+    while ($pending.Count -gt 0) {
+        $project = $pending.Dequeue()
+        if (-not $keep.Add([string]$project['projectFile'])) { continue }
+        foreach ($reference in $project['projectReferences']) {
+            $referenced = [string]$reference['projectFile']
+            if ($byFile.ContainsKey($referenced)) { $pending.Enqueue($byFile[$referenced]) }
+            elseif ($skippedProjects.ContainsKey($referenced)) { throw "$($skippedProjects[$referenced]) has no $selection configuration but is required by $OnlyTarget" }
+        }
+    }
+    $projects = @($projects | Where-Object { $keep.Contains([string]$_['projectFile']) })
+}
 $manifest = [ordered]@{
     schemaVersion = 2; generator = 'CPrime'; projectRoot = $ProjectRoot
     configuration = $Configuration; platform = $Platform; projects = $projects

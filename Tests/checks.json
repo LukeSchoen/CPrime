@@ -206,5 +206,13 @@
         "seconds":  5,
         "compiler":  true,
         "runtime":  false
+    },
+    {
+        "name":  "test_WorkerProgress",
+        "path":  "test_WorkerProgress.ps1",
+        "tier":  "fast",
+        "seconds":  5,
+        "compiler":  true,
+        "runtime":  false
     }
 ]

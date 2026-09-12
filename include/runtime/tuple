@@ -1,0 +1,75 @@
+#ifndef _CPC_TUPLE
+#define _CPC_TUPLE
+
+#include <stddef.h>
+#include <utility>
+
+namespace std
+{
+  template<class... Types>
+  class tuple;
+
+  template<class T>
+  class tuple<T>
+  {
+  public:
+    T value;
+
+    tuple() : value() {}
+    tuple(const T &other) : value(other) {}
+    tuple(T &&other) : value(static_cast<T &&>(other)) {}
+  };
+
+  template<class T>
+  class tuple<T &>
+  {
+  public:
+    T &value;
+
+    tuple(T &other) : value(other) {}
+  };
+
+  template<size_t Index, class T>
+  auto get(tuple<T> &value) -> decltype((value.value))
+  {
+    return value.value;
+  }
+
+  template<size_t Index, class T>
+  auto get(const tuple<T> &value) -> decltype((value.value))
+  {
+    return value.value;
+  }
+
+  template<size_t Index, class T>
+  auto get(tuple<T> &&value) -> decltype(static_cast<T &&>(value.value))
+  {
+    return static_cast<T &&>(value.value);
+  }
+
+  template<class T>
+  struct tuple_size;
+
+  template<class T>
+  struct tuple_size<tuple<T> >
+  {
+    static const size_t value = 1;
+  };
+
+  template<size_t Index, class T>
+  struct tuple_element;
+
+  template<class T>
+  struct tuple_element<0, tuple<T> >
+  {
+    typedef T type;
+  };
+
+  template<class T>
+  struct tuple_element<0, tuple<T &> >
+  {
+    typedef T &type;
+  };
+}
+
+#endif

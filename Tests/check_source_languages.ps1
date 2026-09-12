@@ -3,7 +3,7 @@ $root = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $files = @(& git -C $root ls-files --cached --others --exclude-standard)
 if ($LASTEXITCODE -ne 0) { throw 'Cannot enumerate repository files' }
 $source = @('.c', '.cpp', '.cc', '.cxx', '.h', '.hpp', '.hh', '.hxx', '.s', '.asm', '.inc', '.inl', '.cmd', '.bat', '.ps1')
-$data = @('.md', '.txt', '.expect', '.def', '.json', '.jsonl', '.csv', '.png', '.jpg', '.svg', '.mtl', '.exe', '.dll', '.a', '.lib')
+$data = @('.md', '.txt', '.expect', '.def', '.json', '.jsonl', '.csv', '.tsv', '.png', '.jpg', '.svg', '.mtl', '.exe', '.dll', '.a', '.lib')
 $violations = @()
 foreach ($file in ($files | Sort-Object -Unique)) {
     if ($file.StartsWith('third-party/') -or $file.StartsWith('build/') -or

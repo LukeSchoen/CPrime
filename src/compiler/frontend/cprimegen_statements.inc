@@ -822,6 +822,34 @@ again:
   {
     cpp_eh_parse_try();
   }
+  else if (t == TOK_CO_RETURN)
+  {
+    TokenString *operand = NULL;
+    TokenString *replay = tok_str_alloc();
+    int returns_value = tok != ';';
+
+    (void)cpp_coroutine_promise_symbol();
+    if (returns_value)
+      skip_or_save_block(&operand);
+    tok_str_add(replay, TOK_CPC_COROUTINE_PROMISE);
+    tok_str_add(replay, '.');
+    tok_str_add(replay, tok_alloc_const(returns_value
+                                          ? "return_value" : "return_void"));
+    tok_str_add(replay, '(');
+    if (returns_value)
+      tok_str_append_without_eof(replay, operand);
+    tok_str_add(replay, ')');
+    tok_str_add_tok(replay);
+    tok_str_add(replay, 0);
+    if (operand)
+      tok_str_free(operand);
+    begin_macro(replay, 1);
+    next();
+    gexpr();
+    vpop();
+    skip(';');
+    cpp_temp_end(temporary_mark);
+  }
   else if (t == TOK_CXX_EH_CONSTRUCTED)
     cpp_eh_constructed_member();
   else if (t == TOK_CXX_BASE_SUBOBJECT)
@@ -938,6 +966,50 @@ if_chain:
     b = (func_vt.t &VT_BTYPE) != VT_VOID;
     a = 0;
     e = 0;
+    if (tok >= TOK_UIDENT)
+    {
+      int result_tok = tok;
+      int is_defining_record = 0;
+      int defining_i;
+      for (defining_i = 0; defining_i < nb_defining_class_stack; ++defining_i)
+        if (defining_class_stack[defining_i] == result_tok)
+        {
+          is_defining_record = 1;
+          break;
+        }
+      if (!is_defining_record)
+      {
+        Sym *record = struct_find(result_tok);
+        if (!record)
+        {
+          Sym *binding = sym_find(result_tok);
+          if (binding && (binding->type.t & VT_TYPEDEF)
+              && (binding->type.t & VT_BTYPE) == VT_STRUCT)
+            record = binding->type.ref;
+        }
+        if (record && record->c < 0)
+          is_defining_record = 1;
+      }
+      next();
+      if (tok == '{' && is_defining_record)
+      {
+        int depth = 1;
+        next();
+        while (tok != TOK_EOF && depth > 0)
+        {
+          if (tok == '{')
+            ++depth;
+          else if (tok == '}')
+            --depth;
+          next();
+        }
+        /* The enclosing record is still incomplete here.  Its synthetic
+           return value has no observable code in this frontend pass. */
+        tok = ';';
+      }
+      else
+        unget_tok(result_tok);
+    }
     if (tok != ';')
     {
       if (tok == '{' && (func_vt.t & VT_BTYPE) != VT_STRUCT

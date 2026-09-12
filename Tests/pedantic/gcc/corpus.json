@@ -48,11 +48,6 @@
                       "sha256":  "2bf8173b358e3ddcc04a2f22ad84e945005b1f31ef581625f3d50ab0b13925d4"
                   },
                   {
-                      "path":  "g++.dg/template/deduce1.C",
-                      "role":  "case",
-                      "sha256":  "d0b0c37e3271e1f53577ace8807b1d5278bef655fd6882999dd3f5c46aacbfbf"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.pt/instantiate11.C",
                       "role":  "case",
                       "sha256":  "bce40dc96bb3ca78125d59d1bb4e556fb67b2b563d61de7903c78b15d06ec811"
@@ -86,11 +81,6 @@
                       "path":  "g++.old-deja/g++.pt/spec28.C",
                       "role":  "case",
                       "sha256":  "75a183e4a5ebba99b56c7759be36a182e22f194d1815f5aec7da37a8c81d414f"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.pt/spec36.C",
-                      "role":  "case",
-                      "sha256":  "5afb042aff1263a1ca0b0cc350ccae5dd16c406de8c8aa0c40162ad5ee0b0c58"
                   },
                   {
                       "path":  "g++.old-deja/g++.robertl/980310-1.C",
@@ -151,16 +141,6 @@
                       "path":  "g++.old-deja/g++.mike/hog1.C",
                       "role":  "case",
                       "sha256":  "3c7958dd515195b492942774680843c076244484672bf688c3ca0fa7c4400e32"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/empty1.C",
-                      "role":  "case",
-                      "sha256":  "857e31ccf119cd34e87a5f9e989b1f7443f60d2ba613a83883b0d5aba85d3528"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.other/op2.C",
-                      "role":  "case",
-                      "sha256":  "32db9c1dd1075db5d542835bed7801408d1a7d7f42e2f9394e22e1faab4374af"
                   },
                   {
                       "path":  "g++.old-deja/g++.other/debug1.C",
@@ -293,11 +273,6 @@
                       "sha256":  "3b8754dafda7954726f120f03e70a98abc3037859a350a6a68e8feb5cf28c96d"
                   },
                   {
-                      "path":  "g++.dg/abi/rtti2.C",
-                      "role":  "case",
-                      "sha256":  "aaf4708f27c0f277266a103ca8f90e9523d8c575c722f939bad0bec65bbe852b"
-                  },
-                  {
                       "path":  "g++.dg/coroutines/pr102051.C",
                       "role":  "case",
                       "sha256":  "da1e8ea00bd68e2f24db881f62cba57fcf3a4ea428dbe509ef218444b20c2a18"
@@ -406,11 +381,6 @@
                       "path":  "g++.dg/cpp0x/nolinkage1a.cc",
                       "role":  "case",
                       "sha256":  "57a96b28659fd18f8bad81dd59a90f1954a73bec753142e617256151ff3bc3c3"
-                  },
-                  {
-                      "path":  "g++.dg/cpp1z/eval-order14.C",
-                      "role":  "case",
-                      "sha256":  "1d7decd7fe88e70fe39d8e1af986e58736fb33ffbd0b5b3d622da528787e53d4"
                   },
                   {
                       "path":  "g++.dg/cpp26/aggr-init1.C",
@@ -661,11 +631,6 @@
                       "path":  "g++.dg/init/pr25811-3.C",
                       "role":  "case",
                       "sha256":  "a2ec23370f97ff54bb18566b4924f564794b1b19bf2e9cb392aba826691b0428"
-                  },
-                  {
-                      "path":  "g++.dg/init/lifetime2.C",
-                      "role":  "case",
-                      "sha256":  "0ad3e30ab60ab7a158b1ae342e1bddc2e4ed6174c9faa9e569c58c29c00b710b"
                   },
                   {
                       "path":  "g++.dg/init/new5.C",

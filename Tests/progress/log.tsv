@@ -1,0 +1,11 @@
+# cprime worker progress log v1
+# tab separated: utc epoch cycle event gcc_left fp_left total_left head
+# Appended by worker.cmd through build/worker-status.exe (src/tools/worker_status.c).
+# target = gcc_left + fp_left; baseline is the consolidation commit that replaced the
+# external corpus with the 152 retained failures plus the 16 first-party failures.
+# Rows before that commit are not comparable and are not recorded here.
+2026-09-12T00:30:52Z	1789173052	0	baseline	152	16	168	44717cb
+2026-09-12T00:56:44Z	1789174604	1	cycle	149	16	165	025f897
+2026-09-12T01:19:20Z	1789175960	2	cycle	146	16	162	ff83688
+2026-09-12T01:38:36Z	1789177116	3	cycle	145	16	161	69e5aa0
+2026-09-12T10:57:15Z	1789210635	4	cycle	145	11	156	3b60992

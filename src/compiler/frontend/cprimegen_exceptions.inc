@@ -140,7 +140,7 @@ static TokenString *cpp_eh_save_throw_operand(void)
     next();
     if ((current == TOK_LT || current == '<')
         && (angles || (previous >= TOK_UIDENT
-            && (find_template_def(previous) || is_template_keyword_tok(before_previous))))) ++angles;
+            && (cpp_saved_angle_opener_tok(previous) || is_template_keyword_tok(before_previous))))) ++angles;
     else if ((current == TOK_SAR || current == TOK_SHR) && angles) {
       if (--angles) --angles;
     } else if (current == TOK_GT && angles) --angles;

@@ -388,6 +388,19 @@ static int batch_done,batch_started,batch_count;
 static Job **batch_jobs;
 static double batch_deadline;
 static Buf diagnostics;
+static void cache_job(Job *j) {
+    List inputs={
+        0
+    },dirs={
+        0
+    };
+    int k;
+    dependencies(&inputs,j->dep,j->project->directory);
+    extend(&inputs,&j->inputs);
+    for(k=0;k<j->flags.n;k++)if(!strncmp(j->flags.v[k],"-I",2))distinct(&dirs,absolute(j->project->directory,j->flags.v[k]+2));
+    for(k=0;k<inputs.n;k++)distinct(&dirs,directory(inputs.v[k]));
+    cache_save(j->object,j->key,&inputs,&dirs);
+}
 static void diagnostic_line(const char *line) {
     unsigned idx,ms;
     int code;
@@ -410,6 +423,8 @@ static void diagnostic_line(const char *line) {
             if(diagnostics.s)fputs(diagnostics.s,stderr);
             die("Compiler did not produce a successful object");
         }
+        /* Keep completed units cached even if a later unit is cancelled. */
+        cache_job(j);
         diagnostics.n=0;
         if(diagnostics.s)diagnostics.s[0]=0;
         batch_done++;
@@ -774,19 +789,6 @@ static void compile_jobs(void) {
         i=k-1;
     }
     printf("Compile elapsed: %.3fs; %d source files\n",seconds()-begin,source_count);
-    for(i=0;i<job_count;i++)if(jobs[i].dirty){
-        Job *j=&jobs[i];
-        List inputs={
-            0
-        },dirs={
-            0
-        };
-        dependencies(&inputs,j->dep,j->project->directory);
-        extend(&inputs,&j->inputs);
-        for(k=0;k<j->flags.n;k++)if(!strncmp(j->flags.v[k],"-I",2))distinct(&dirs,absolute(j->project->directory,j->flags.v[k]+2));
-        for(k=0;k<inputs.n;k++)distinct(&dirs,directory(inputs.v[k]));
-        cache_save(j->object,j->key,&inputs,&dirs);
-    }
 }
 static int newer_version(const char *a,const char *b) {
     unsigned av[4]={

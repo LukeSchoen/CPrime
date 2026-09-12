@@ -33,6 +33,14 @@ namespace std
     return static_cast<typename remove_reference<T>::type&&>(value);
   }
 
+  template<class T, class U>
+  constexpr T exchange(T &object, U &&replacement)
+  {
+    T previous = static_cast<T &&>(object);
+    object = static_cast<U &&>(replacement);
+    return previous;
+  }
+
   template<class T>
   void swap(T &lhs, T &rhs)
   {
