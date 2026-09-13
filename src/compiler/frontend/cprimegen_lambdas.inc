@@ -155,6 +155,56 @@ static int lambda_is_enclosing_member(int class_tok, int name)
   }
 }
 
+/* `close` indexes the `]` that ends a bracketed list a saved body may spell as
+   a lambda introducer.  The same bracket is a GNU array designator when the
+   initializer clause continues with further designators and then `=`, as in
+   `{ [e] = 0 }` or `{ [1][2] = 0 }`.  Direct parses apply that rule in the
+   initializer code; a replayed template body only knows the lambda marker, so
+   the shape has to be recognized here as well. */
+static int saved_cpp_bracket_opens_designator(const TokenString *expression,
+                                              int close)
+{
+  int len = expression->len;
+  int index = close + 1;
+
+  for (;;)
+  {
+    index = tok_str_next_non_linenum_index(expression->str, len, index);
+    if (index >= len)
+      return 0;
+    if (expression->str[index] == '.')
+    {
+      index = tok_str_next_non_linenum_index(expression->str, len, index + 1);
+      if (index >= len || expression->str[index] < TOK_UIDENT)
+        return 0;
+      ++index;
+      continue;
+    }
+    if (expression->str[index] == '[')
+    {
+      int depth = 1;
+      for (++index; index < len;)
+      {
+        int t = expression->str[index];
+        if (TOK_HAS_VALUE(t))
+        {
+          index += 1 + tok_str_value_extra_words(expression->str, len, index);
+          continue;
+        }
+        ++index;
+        if (t == '[')
+          ++depth;
+        else if (t == ']' && --depth == 0)
+          break;
+      }
+      if (depth)
+        return 0;
+      continue;
+    }
+    return expression->str[index] == '=';
+  }
+}
+
 static void prepare_saved_cpp_lambdas(TokenString *expression)
 {
   int i, previous = 0;
@@ -187,7 +237,8 @@ static void prepare_saved_cpp_lambdas(TokenString *expression)
         if (capture < TOK_UIDENT && capture != '&' && capture != '='
             && capture != ',') break;
       }
-      if (j < expression->len && expression->str[j] == ']')
+      if (j < expression->len && expression->str[j] == ']'
+          && !saved_cpp_bracket_opens_designator(expression, j))
         expression->str[i] = new_lambda_marker();
     }
     previous = t;

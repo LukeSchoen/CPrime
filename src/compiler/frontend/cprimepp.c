@@ -736,6 +736,16 @@ ST_FUNC const char *get_tok_str(int v, CValue *cv)
     return strcpy(p, "<double>");
   case TOK_CLDOUBLE:
     return strcpy(p, "<long double>");
+  case TOK_CIMAGI:
+    return strcpy(p, "<imaginary int>");
+  case TOK_CIMAGLL:
+    return strcpy(p, "<imaginary long long>");
+  case TOK_CIMAGF:
+    return strcpy(p, "<imaginary float>");
+  case TOK_CIMAGD:
+    return strcpy(p, "<imaginary double>");
+  case TOK_CIMAGL:
+    return strcpy(p, "<imaginary long double>");
   case TOK_LINENUM:
     return strcpy(p, "<linenumber>");
 
@@ -1339,6 +1349,7 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
   case TOK_CLONG:
   case TOK_CULONG:
 #endif
+  case TOK_CIMAGI:
     str[len++] = cv->tab[0];
     break;
   case TOK_PPNUM:
@@ -1362,6 +1373,8 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
   case TOK_CDOUBLE:
   case TOK_CLLONG:
   case TOK_CULLONG:
+  case TOK_CIMAGLL:
+  case TOK_CIMAGD:
 #if LONG_SIZE == 8
   case TOK_CLONG:
   case TOK_CULONG:
@@ -1370,6 +1383,7 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
     str[len++] = cv->tab[1];
     break;
   case TOK_CLDOUBLE:
+  case TOK_CIMAGL:
 #if LDOUBLE_SIZE == 8 || defined CPRIME_USING_DOUBLE_FOR_LDOUBLE
     str[len++] = cv->tab[0];
     str[len++] = cv->tab[1];
@@ -1432,6 +1446,7 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
   case TOK_CCHAR:
   case TOK_LCHAR:
   case TOK_LINENUM:
+  case TOK_CIMAGI:
     cv->i = *p++;
     break;
 #if LONG_SIZE == 4
@@ -1441,6 +1456,7 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
     cv->i = (unsigned) * p++;
     break;
   case TOK_CFLOAT:
+  case TOK_CIMAGF:
     tab[0] = *p++;
     break;
   case TOK_STR:
@@ -1454,6 +1470,8 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
   case TOK_CDOUBLE:
   case TOK_CLLONG:
   case TOK_CULLONG:
+  case TOK_CIMAGLL:
+  case TOK_CIMAGD:
 #if LONG_SIZE == 8
   case TOK_CLONG:
   case TOK_CULONG:
@@ -1461,6 +1479,7 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
     n = 2;
     goto copy;
   case TOK_CLDOUBLE:
+  case TOK_CIMAGL:
 #if LDOUBLE_SIZE == 8 || defined CPRIME_USING_DOUBLE_FOR_LDOUBLE
     n = 2;
 #elif LDOUBLE_SIZE == 12
@@ -2236,7 +2255,8 @@ static int expr_preprocess(CPRIMEState *s1)
     {
       if (tok == TOK_LINEFEED || tok == TOK_EOF)
         break;
-      if (tok >= TOK_STR && tok <= TOK_CLDOUBLE)
+      if ((tok >= TOK_STR && tok <= TOK_CLDOUBLE)
+          || (tok >= TOK_CIMAGI && tok <= TOK_CIMAGL))
         cprime_error("invalid constant in preprocessor expression");
 
     }
@@ -3167,6 +3187,31 @@ static void bn_zero(unsigned int *bn)
     bn[i] = 0;
 }
 
+/* Numeric-constant suffix letters: an optional f/F or l/L conversion and
+   the imaginary unit i/j, in either order ([GNU] Imaginary Constants).
+   'CH' is the first candidate byte and *PP points just past it, the same
+   lookahead convention parse_number() keeps elsewhere.  The suffix is
+   consumed and the first byte that is not part of it is returned.  *CVT
+   receives 'F', 'L' or 0 and *IMAG receives 'I', 'J' or 0. */
+static int scan_number_suffix(const char **pp, int ch, int *cvt, int *imag)
+{
+  int i, c;
+  *cvt = 0;
+  *imag = 0;
+  for (i = 0; i < 2; ++i)
+  {
+    c = toup(ch);
+    if ((c == 'F' || c == 'L') && !*cvt)
+      *cvt = c;
+    else if ((c == 'I' || c == 'J') && !*imag)
+      *imag = c;
+    else
+      break;
+    ch = *(*pp)++;
+  }
+  return ch;
+}
+
 /* parse number in null terminated string 'p' and return it in the
    current token */
 static void parse_number(const char *p)
@@ -3314,28 +3359,29 @@ num_too_long:
           (long double)bn[0];
       d = ldexpl(d, exp_val - frac_bits);
 #endif
-      t = toup(ch);
-      if (t == 'F')
       {
-        ch = *p++;
-        tok = TOK_CFLOAT;
-        // Float : Should Handle Overflow
-        tokc.f = (float)d;
-      }
-      else if (t == 'L')
-      {
-        ch = *p++;
-        tok = TOK_CLDOUBLE;
+        int cvt, imag;
+        ch = scan_number_suffix((const char **)&p, ch, &cvt, &imag);
+        if (cvt == 'F')
+        {
+          tok = imag ? TOK_CIMAGF : TOK_CFLOAT;
+          // Float : Should Handle Overflow
+          tokc.f = (float)d;
+        }
+        else if (cvt == 'L')
+        {
+          tok = imag ? TOK_CIMAGL : TOK_CLDOUBLE;
 #ifdef CPRIME_USING_DOUBLE_FOR_LDOUBLE
-        tokc.d = d;
+          tokc.d = d;
 #else
-        tokc.ld = d;
+          tokc.ld = d;
 #endif
-      }
-      else
-      {
-        tok = TOK_CDOUBLE;
-        tokc.d = (double)d;
+        }
+        else
+        {
+          tok = imag ? TOK_CIMAGD : TOK_CDOUBLE;
+          tokc.d = (double)d;
+        }
       }
     }
     else
@@ -3380,28 +3426,29 @@ float_frac_parse:
         }
       }
       *q = '\0';
-      t = toup(ch);
-      errno = 0;
-      if (t == 'F')
       {
-        ch = *p++;
-        tok = TOK_CFLOAT;
-        tokc.f = strtof(token_buf, NULL);
-      }
-      else if (t == 'L')
-      {
-        ch = *p++;
-        tok = TOK_CLDOUBLE;
+        int cvt, imag;
+        errno = 0;
+        ch = scan_number_suffix((const char **)&p, ch, &cvt, &imag);
+        if (cvt == 'F')
+        {
+          tok = imag ? TOK_CIMAGF : TOK_CFLOAT;
+          tokc.f = strtof(token_buf, NULL);
+        }
+        else if (cvt == 'L')
+        {
+          tok = imag ? TOK_CIMAGL : TOK_CLDOUBLE;
 #ifdef CPRIME_USING_DOUBLE_FOR_LDOUBLE
-        tokc.d = strtod(token_buf, NULL);
+          tokc.d = strtod(token_buf, NULL);
 #else
-        tokc.ld = strtold(token_buf, NULL);
+          tokc.ld = strtold(token_buf, NULL);
 #endif
-      }
-      else
-      {
-        tok = TOK_CDOUBLE;
-        tokc.d = strtod(token_buf, NULL);
+        }
+        else
+        {
+          tok = imag ? TOK_CIMAGD : TOK_CDOUBLE;
+          tokc.d = strtod(token_buf, NULL);
+        }
       }
     }
   }
@@ -3469,6 +3516,21 @@ float_frac_parse:
       }
       else
         break;
+    }
+
+    /* An integer constant may end in the imaginary unit ([GNU] Imaginary
+       Constants).  The constant then has a complex type whose element type
+       follows the integer suffix; the unsigned suffix is not allowed there. */
+    if (ch == 'i' || ch == 'j')
+    {
+      if (ucount)
+        cprime_error("invalid suffix on imaginary constant");
+      ch = *p++;
+      tok = lcount ? TOK_CIMAGLL : TOK_CIMAGI;
+      tokc.i = n;
+      if (ch)
+        cprime_error("invalid number");
+      return;
     }
 
     // In #If/#Elif Expressions, All Numbers Have Type (U)Intmax_T Anyway

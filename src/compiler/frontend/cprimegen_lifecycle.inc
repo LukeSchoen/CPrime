@@ -1661,6 +1661,58 @@ static void free_saved_placement_args(TokenString *placement,
   tok_str_free(placement);
 }
 
+/* memset(BASE_PTR + OFFSET, 0, LENGTH) for one region of a new object. */
+static void emit_object_zero_fill(SValue *base_ptr, int offset, int length)
+{
+  if (length <= 0)
+    return;
+  vpush_helper_func(TOK_memset);
+  vpushv(base_ptr);
+  if (offset)
+  {
+    /* Walk the object by bytes, not by elements of its own type. */
+    vtop->type = char_pointer_type;
+    vpushi(offset);
+    gen_op('+');
+  }
+  vpushi(0);
+  vpushi(length);
+  gfunc_call(3);
+}
+
+/* Value-initialize a placement-new destination.  A base subobject zeroes only
+   its own non-virtual subobjects: the virtual base subobjects are established
+   by the complete-object constructor that is running above it. */
+static void emit_value_initialization_zero_fill(CType *type, SValue *base_ptr,
+                                                int base_subobject)
+{
+  int offsets[CPC_MAX_VIRTUAL_BASES], sizes[CPC_MAX_VIRTUAL_BASES];
+  int align, size = type_size(type, &align);
+  int count = 0, cursor = 0, i;
+  int class_tok = get_struct_type_name_tok(type);
+  SValue stable;
+
+  if (base_subobject && class_tok && class_has_virtual_base(class_tok))
+    count = collect_virtual_base_regions(class_tok, 0, offsets, sizes, &count,
+                                         0);
+  if (count <= 0)
+  {
+    emit_object_zero_fill(base_ptr, 0, size);
+    return;
+  }
+  /* Each region is a separate call, and a call clobbers the registers that can
+     hold the destination, so keep it in a slot no call can reach. */
+  stable = *base_ptr;
+  spill_pointer_svalue_to_local(&stable);
+  for (i = 0; i < count; ++i)
+  {
+    emit_object_zero_fill(&stable, cursor, offsets[i] - cursor);
+    cursor = offsets[i] + sizes[i];
+  }
+  emit_object_zero_fill(&stable, cursor, size - cursor);
+  *vtop = stable;
+}
+
 static void call_placement_constructor(CType *type, TokenString *placement,
                                        TokenString **call_args,
                                        int call_arg_count, int value_initialize,
@@ -1846,11 +1898,8 @@ static void call_placement_constructor(CType *type, TokenString *placement,
       cprime_error("no matching constructor for placement new of '%s' with %d arguments",
                    get_tok_str(get_struct_type_name_tok(type), NULL), call_arg_count);
     if (value_initialize) {
-      int align, size = type_size(type, &align);
       base_ptr = *vtop;
-      vpush_helper_func(TOK_memset);
-      vpushv(&base_ptr); vpushi(0); vpushi(size);
-      gfunc_call(3);
+      emit_value_initialization_zero_fill(type, &base_ptr, base_subobject);
     }
     base_ptr = *vtop;
     call_lifecycle_constructor_members_base_ptr(type, &base_ptr, 0);

@@ -401,7 +401,12 @@ struct SymAttr {
     cpp_trivial_construction : 1,
     cpp_trivial_destruction : 1,
     cpp_lexical_constant : 1,
-    vector : 1;
+    /* A tag or enumerator an initializer probe of the current declaration
+       already registered; the emitting replay reuses it. */
+    probe_defined : 1,
+    vector : 1,
+    /* A synthetic aggregate holding a complex value's two parts. */
+    complex : 1;
 };
 
 struct FuncAttr {
@@ -1110,8 +1115,16 @@ struct filespec {
 #define TOK_INIT_MEMBER 0xd0
 /* A lowered explicit array clause shares its declaration's full-expression. */
 #define TOK_INIT_CLAUSE 0xd1
+/* Imaginary constants carry the magnitude of a numeric literal whose value
+   has zero real part, as `2.0i` does ([GNU] Imaginary Constants). */
+#define TOK_CIMAGI  0xd2
+#define TOK_CIMAGLL 0xd3
+#define TOK_CIMAGF  0xd4
+#define TOK_CIMAGD  0xd5
+#define TOK_CIMAGL  0xd6
 
-#define TOK_HAS_VALUE(t) (t >= TOK_CCHAR && t <= TOK_LINENUM)
+#define TOK_HAS_VALUE(t) ((t >= TOK_CCHAR && t <= TOK_LINENUM) \
+                          || (t >= TOK_CIMAGI && t <= TOK_CIMAGL))
 
 #define TOK_EOF       (-1)
 #define TOK_LINEFEED  10

@@ -155,6 +155,13 @@ static void gen_vector_binop(int op);
 static void gen_vector_logical(int op);
 static int gen_vector_scalar_bitcast(CType *type);
 static int vector_integer_bitcast_cast(CType *target);
+static int is_complex_type(const CType *type);
+static CType complex_element_type(const CType *type);
+static void make_complex_type(CType *type);
+static void gen_complex_binop(int op);
+static int gen_cast_complex(CType *type);
+static void complex_part_operand(int imag);
+static void push_complex_imaginary_constant(CType *elem, CValue *value);
 static int is_compatible_types(CType *type1, CType *type2);
 static int parse_btype(CType *type, AttributeDef *ad, int ignore_label);
 static CType *type_decl(CType *type, AttributeDef *ad, int *v, int td);
@@ -203,6 +210,19 @@ static void struct_decl(CType *type, int u, int is_class_tag);
 static void init_putv(init_params *p, CType *type, unsigned long c);
 static void decl_initializer(init_params *p, CType *type, unsigned long c, int flags);
 static void probe_static_aggregate_initializer(CType *type);
+/* A saved initializer is probed with the real parser before the emitting
+   replay runs.  A tag or enumerator the probe meets for the first time would
+   stay registered in the enclosing scope, and the replay of those same tokens
+   would then report it as already defined.  Mark what the probe defines so
+   the replay reuses that same definition instead of declaring it twice. */
+typedef struct ProbeTagBinding {
+  Sym *binding;
+  struct ProbeTagBinding *next;
+} ProbeTagBinding;
+static ProbeTagBinding *probe_tag_bindings;
+static int probe_tag_journal;
+static void note_probe_tag_binding(Sym *binding);
+static void discard_probe_tag_bindings(ProbeTagBinding *mark);
 static void emit_placement_aggregate_initializer(CType *type, TokenString *placement,
                                                  TokenString *initializer);
 static int flexible_array_element_count(CType *type, TokenString *initializer,
@@ -372,6 +392,14 @@ static int class_has_direct_virtual_base(int class_tok);
 static int class_has_virtual_base(int class_tok);
 static int collect_class_virtual_bases(int class_tok, int *list, int *count,
                                        int depth);
+static int class_virtual_base_token_for_name(int class_tok, int name_tok);
+static int collect_virtual_base_regions(int class_tok, int base_offset,
+                                        int *offsets, int *sizes, int *count,
+                                        int depth);
+static void append_inherited_virtual_base_init(TokenString *prefix,
+                                               int vbase_tok, int this_tok,
+                                               TokenString *args,
+                                               int brace_init, int saw_arg);
 static int make_base_object_variant_tok(int mangled_tok);
 static Sym *base_object_variant_symbol(Sym *func);
 static int microsoft_virtual_this_offset(Sym *function);
@@ -497,6 +525,10 @@ typedef struct TemplateDef
   int is_class;
   int is_union;
   int is_alias;
+  /* A deduction guide is registered under its class template's name but is
+     not a function template: it only supplies class template argument
+     deduction for the functional spelling `Class(args)`. */
+  int is_guide;
   /* Namespace-scope declaration order visible when this definition was
      written; unqualified names in its body bind at this point. */
   unsigned func_bound;
@@ -1641,6 +1673,8 @@ static int tok_str_value_extra_words(const int *str, int len, int i)
   case TOK_LCHAR:
   case TOK_CFLOAT:
   case TOK_LINENUM:
+  case TOK_CIMAGI:
+  case TOK_CIMAGF:
 #if LONG_SIZE == 4
   case TOK_CLONG:
   case TOK_CULONG:
@@ -1649,12 +1683,15 @@ static int tok_str_value_extra_words(const int *str, int len, int i)
   case TOK_CDOUBLE:
   case TOK_CLLONG:
   case TOK_CULLONG:
+  case TOK_CIMAGLL:
+  case TOK_CIMAGD:
 #if LONG_SIZE == 8
   case TOK_CLONG:
   case TOK_CULONG:
 #endif
     return i + 2 < len ? 2 : 0;
   case TOK_CLDOUBLE:
+  case TOK_CIMAGL:
 #if LDOUBLE_SIZE == 8 || defined CPRIME_USING_DOUBLE_FOR_LDOUBLE
     return i + 2 < len ? 2 : 0;
 #elif LDOUBLE_SIZE == 12
@@ -2954,6 +2991,50 @@ ST_FUNC void sym_pop(Sym **ptop, Sym *b, int keep)
   }
   if (!keep)
     *ptop = b;
+}
+
+static void note_probe_tag_binding(Sym *binding)
+{
+  ProbeTagBinding *entry = cprime_malloc(sizeof(*entry));
+  entry->binding = binding;
+  entry->next = probe_tag_bindings;
+  probe_tag_bindings = entry;
+  binding->a.probe_defined = 1;
+}
+
+/* Forget one declaration's probe bindings.  Only the mark is dropped: the
+   probe's tags and enumerators stay in the enclosing scope, exactly as a
+   single parse of the same definition would leave them. */
+static void discard_probe_tag_bindings(ProbeTagBinding *mark)
+{
+  while (probe_tag_bindings != mark)
+  {
+    ProbeTagBinding *entry = probe_tag_bindings;
+    probe_tag_bindings = entry->next;
+    entry->binding->a.probe_defined = 0;
+    cprime_free(entry);
+  }
+}
+
+/* An enumerator the probe of the current declaration already registered is
+   reused: the emitting replay of the same definition would otherwise report a
+   redeclaration of a name the probe introduced. */
+static Sym *push_enumerator_binding(int name_tok, CType *type)
+{
+  Sym *existing = sym_find(name_tok);
+  if (existing && existing->a.probe_defined && existing->type.ref
+      && IS_ENUM_VAL(existing->type.t)
+      && sym_scope_ex(existing) == local_scope)
+  {
+    existing->type = *type;
+    existing->r = VT_CONST;
+    existing->c = 0;
+    return existing;
+  }
+  existing = sym_push(name_tok, type, VT_CONST, 0);
+  if (probe_tag_journal)
+    note_probe_tag_binding(existing);
+  return existing;
 }
 
 // Label Lookup
@@ -5754,6 +5835,12 @@ ST_FUNC void gen_op(int op)
     return;
   }
 
+  if (is_complex_type(&vtop[-1].type) || is_complex_type(&vtop->type))
+  {
+    gen_complex_binop(op);
+    return;
+  }
+
   if (op == TOK_SHR || op == TOK_SAR || op == TOK_SHL)
     op_class = SHIFT_OP;
   else if (TOK_ISCOND(op)) // == != > ...
@@ -6138,6 +6225,11 @@ static void gen_cast(CType *type)
   /* A GNU vector and an integer scalar of the same size convert by
      reinterpreting the same bytes ([GCC] Vector Extensions). */
   if (gen_vector_scalar_bitcast(type))
+    return;
+
+  /* Complex values convert to and from their element type on the value
+     stack, never by reinterpreting the aggregate's bytes. */
+  if (gen_cast_complex(type))
     return;
 
 again:
@@ -6716,6 +6808,11 @@ static void verify_assign_cast(CType *dt)
     break;
   case VT_STRUCT:
 case_VT_STRUCT:
+    /* An arithmetic value converts to the corresponding complex type
+       ([C11] 6.3.1.5); the imaginary part becomes zero. */
+    if (is_complex_type(dt)
+        && (is_complex_type(st) || btype_is_arithmetic_scalar(sbt)))
+      break;
     if (!is_compatible_unqualified_types(dt, st))
     {
       if (same_template_family_compatible_elements(dt, st))
@@ -6799,6 +6896,12 @@ ST_FUNC void vstore(void)
   int sbt, dbt, ft, r, size, align, bit_size, bit_pos, delayed_cast;
   int move_source = (vtop->type.t & (VT_RVALUE_REFERENCE | VT_CONSTANT)) == VT_RVALUE_REFERENCE;
 
+  /* A value assigned to a complex object, or a complex value assigned to
+     another complex type, is converted first, so the store below is the
+     ordinary aggregate copy. */
+  if ((is_complex_type(&vtop[-1].type) || is_complex_type(&vtop->type))
+      && !is_compatible_unqualified_types(&vtop[-1].type, &vtop->type))
+    gen_cast(&vtop[-1].type);
   ft = vtop[-1].type.t;
   sbt = vtop->type.t &VT_BTYPE;
   dbt = ft &VT_BTYPE;
@@ -8709,6 +8812,10 @@ static TokenString *parse_explicit_constructor_member_initializers(
     int piece_start = prefix->len;
     int field_tok, storage_field_tok, dummy_ofs, skip_initializer_emit = 0;
     int is_delegating_initializer = 0;
+    /* The base class token of a virtual base this class reaches only through
+       another base.  The initializer is replayed by the virtual-base section of
+       the most-derived constructor, not by an ordinary field emission. */
+    int virtual_base_init_tok = 0;
     Sym *field;
     CType field_type;
     ClassBaseInfo *base_info;
@@ -8769,13 +8876,28 @@ static TokenString *parse_explicit_constructor_member_initializers(
         is_delegating_initializer = 1;
       else if (class_has_base(get_struct_type_name_tok(struct_type), field_tok)
           || find_class_template_def(find_current_namespace_tok(field_tok)))
-        skip_initializer_emit = 1;
+      {
+        /* A virtual base reached only through an intermediate base has no base
+           field of its own here, but the most-derived constructor still owns
+           its subobject.  Keep the written initializer so the constructor's
+           virtual-base section can establish the base with these arguments
+           instead of default-initializing it. */
+        virtual_base_init_tok = class_virtual_base_token_for_name(
+          get_struct_type_name_tok(struct_type), field_tok);
+        if (!virtual_base_init_tok)
+          skip_initializer_emit = 1;
+      }
     }
     if (tok == TOK_LT || tok == '<')
     {
       int angle = 1;
       if (!field)
+      {
+        /* A specialization spelling cannot be replayed through the base class
+           token, so it keeps the previous drop-the-initializer rule. */
+        virtual_base_init_tok = 0;
         skip_initializer_emit = 1;
+      }
       next();
       while (tok != TOK_EOF && angle > 0)
       {
@@ -8866,6 +8988,14 @@ static TokenString *parse_explicit_constructor_member_initializers(
     }
     if (is_delegating_initializer && is_delegating_constructor)
       *is_delegating_constructor = 1;
+    else if (virtual_base_init_tok)
+    {
+      /* Replayed between the complete-object split markers, so only the
+         most-derived constructor establishes this subobject. */
+      storage_field_tok = virtual_base_init_tok;
+      append_inherited_virtual_base_init(prefix, virtual_base_init_tok, this_tok,
+                                         args, brace_init, saw_arg);
+    }
     else if (skip_initializer_emit)
     {
     }
@@ -9100,11 +9230,15 @@ static void append_constructor_implicit_field_init(TokenString **prefixp,
 }
 
 /* Append the establishment of an inherited virtual base subobject that has no
-   base field of its own in the most-derived class. */
+   base field of its own in the most-derived class.  ARGS carries the written
+   mem-initializer arguments; a NULL or empty list default-initializes the
+   base. */
 static void append_inherited_virtual_base_init(TokenString *prefix,
-                                               int vbase_tok, int this_tok)
+                                               int vbase_tok, int this_tok,
+                                               TokenString *args,
+                                               int brace_init, int saw_arg)
 {
-  /* ::new (&(*(V*)this)) V(); */
+  /* ::new (&(*(V*)this)) V(args); */
   tok_str_add(prefix, TOK_CXX_BASE_SUBOBJECT);
   tok_str_add(prefix, ':'); tok_str_add(prefix, ':');
   tok_str_add(prefix, tok_alloc_const("new"));
@@ -9122,8 +9256,15 @@ static void append_inherited_virtual_base_init(TokenString *prefix,
   tok_str_add(prefix, ')');
   tok_str_add(prefix, ')');
   tok_str_add(prefix, vbase_tok);
-  tok_str_add(prefix, '(');
-  tok_str_add(prefix, ')');
+  if (args && saw_arg && (brace_init || token_string_starts_with_brace(args)))
+    tok_str_append(prefix, args);
+  else
+  {
+    tok_str_add(prefix, '(');
+    if (args && saw_arg)
+      tok_str_append(prefix, args);
+    tok_str_add(prefix, ')');
+  }
   tok_str_add(prefix, ';');
   /* The subobject becomes live only after its constructor succeeds. */
   tok_str_add(prefix, TOK_CXX_EH_CONSTRUCTED);
@@ -9212,8 +9353,24 @@ static TokenString *parse_constructor_member_initializers(CType *struct_type)
           emitted = 1;
         }
       }
+      /* A virtual base the class reaches only through another base has no base
+         field of its own, so its written mem-initializer is keyed by the base
+         class token. */
       if (!emitted)
-        append_inherited_virtual_base_init(vbase_prefix, vbase_tok, this_tok);
+        for (piece_index = 0; piece_index < initialized_fields->len;
+             ++piece_index)
+          if (initialized_fields->str[piece_index] == vbase_tok
+              && pieces[piece_index])
+          {
+            tok_str_append(vbase_prefix, pieces[piece_index]);
+            tok_str_free(pieces[piece_index]);
+            pieces[piece_index] = NULL;
+            emitted = 1;
+            break;
+          }
+      if (!emitted)
+        append_inherited_virtual_base_init(vbase_prefix, vbase_tok, this_tok,
+                                           NULL, 0, 0);
     }
   }
 
@@ -11027,6 +11184,9 @@ static int token_can_start_parameter_declaration(int t)
   case TOK_BOOL2:
   case TOK_FLOAT:
   case TOK_DOUBLE:
+  case TOK_COMPLEX:
+  case TOK_COMPLEX2:
+  case TOK_COMPLEX3:
   case TOK_ENUM:
   case TOK_STRUCT:
   case TOK_CLASS:
@@ -11429,6 +11589,80 @@ static int collect_class_virtual_bases(int class_tok, int *list, int *count,
       }
     if (!seen && *count < CPC_MAX_VIRTUAL_BASES)
       list[(*count)++] = base->base_tok;
+  }
+  return *count;
+}
+
+/* The virtual base a mem-initializer name reaches from CLASS_TOK.  The name is
+   written where a direct base or a member could stand, so it is matched the
+   same way a base-specifier name is: by token, by a typedef of the base, or as
+   an unqualified spelling of it. */
+static int class_virtual_base_token_for_name(int class_tok, int name_tok)
+{
+  int list[CPC_MAX_VIRTUAL_BASES];
+  int count = 0, i, alias_tok = 0;
+  Sym *alias;
+
+  if (!class_tok || !name_tok)
+    return 0;
+  alias = sym_find(find_current_namespace_tok(name_tok));
+  if (alias && (alias->type.t & VT_TYPEDEF))
+    alias_tok = get_struct_type_name_tok(&alias->type);
+  collect_class_virtual_bases(class_tok, list, &count, 0);
+  for (i = 0; i < count; ++i)
+    if (list[i] == name_tok || (alias_tok && list[i] == alias_tok)
+        || class_tok_matches_unqualified_name(list[i], name_tok))
+      return list[i];
+  return 0;
+}
+
+/* The storage CLASS_TOK gives its own virtual base subobjects, as offsets
+   relative to the class start.  A virtual base is stored with the base that
+   declares the virtual edge, so its region covers any virtual base of its own,
+   while a base reached through a non-virtual edge stores its virtual bases
+   inside its own region.  Zero-initializing a base subobject must skip these
+   regions: a virtual base subobject belongs to the complete object being
+   constructed, not to the base subobject ([dcl.init]). */
+static int collect_virtual_base_regions(int class_tok, int base_offset,
+                                        int *offsets, int *sizes, int *count,
+                                        int depth)
+{
+  ClassBaseInfo *base;
+
+  if (!class_tok || depth > 64)
+    return *count;
+  for (base = class_base_candidates(class_tok); base; base = base->bucket_next)
+  {
+    int offset, align, size, at;
+    CType base_type;
+
+    if (base->class_tok != class_tok || !base->field)
+      continue;
+    offset = base_offset + base->field->c;
+    if (!base->is_virtual)
+    {
+      collect_virtual_base_regions(base->base_tok, offset, offsets, sizes,
+                                   count, depth + 1);
+      continue;
+    }
+    if (*count >= CPC_MAX_VIRTUAL_BASES || offset < 0
+        || !make_class_type_from_tok(&base_type, base->base_tok))
+      continue;
+    size = type_size(&base_type, &align);
+    if (size <= 0)
+      continue;
+    /* Base metadata is prepended; keep the regions in layout order so the
+       caller can walk the gaps between them. */
+    at = *count;
+    while (at > 0 && offsets[at - 1] > offset)
+    {
+      offsets[at] = offsets[at - 1];
+      sizes[at] = sizes[at - 1];
+      --at;
+    }
+    offsets[at] = offset;
+    sizes[at] = size;
+    ++*count;
   }
   return *count;
 }
@@ -12852,6 +13086,15 @@ do_decl:
   if (is_cpp_translation_unit() && local_stack && !s->sym_scope
       && (u == VT_STRUCT || u == VT_UNION))
     local_class_boundary = local_stack;
+  if (s->a.probe_defined && s->c != -1 && (tok == ':' || tok == '{'))
+  {
+    /* A probe of an initializer in this declaration already parsed this
+       definition.  The emitting replay reads the same tokens, so keep the
+       definition the probe built instead of declaring the tag twice. */
+    if (tok == ':') while (tok != '{' && tok != TOK_EOF) next();
+    if (tok == '{') skip_or_save_block(NULL);
+    return;
+  }
 
   if (u == VT_STRUCT && tok == ':')
   {
@@ -12915,6 +13158,8 @@ do_decl:
       cprime_error("struct/union/enum '%s' already defined",
                    get_tok_str(s->v & ~SYM_STRUCT, NULL));
     s->c = -2;
+    if (probe_tag_journal)
+      note_probe_tag_binding(s);
     if ((u == VT_STRUCT || (u == VT_UNION && is_cpp_translation_unit()))
         && nb_defining_class_stack
         < (int)(sizeof(defining_class_stack) / sizeof(defining_class_stack[0])))
@@ -12995,17 +13240,17 @@ do_decl:
         if (is_scoped_enum || s->a.scoped_enum)
         {
           int static_tok = make_static_member_tok(s->v & ~SYM_STRUCT, v);
-          ss = sym_push(static_tok, &t, VT_CONST, 0);
+          ss = push_enumerator_binding(static_tok, &t);
         }
         else if (nb_defining_class_stack > 0)
         {
           int class_tok = defining_class_stack[nb_defining_class_stack - 1];
           int static_tok = make_static_member_tok(class_tok, v);
-          ss = sym_push(static_tok, &t, VT_CONST, 0);
+          ss = push_enumerator_binding(static_tok, &t);
         }
         else
-          ss = sym_push(local_stack ? v : make_current_namespace_tok(v),
-                        &t, VT_CONST, 0);
+          ss = push_enumerator_binding(local_stack ? v : make_current_namespace_tok(v),
+                                       &t);
         ss->enum_val = ll;
         *ps = ss, ps = &ss->next;
         if (ll < nl)
@@ -14285,6 +14530,8 @@ static void make_vector_type(CType *type, int size)
   vector_type_registry = entry;
 }
 
+#include "cprimegen_complex.inc"
+
 /* return 0 if no type declaration. otherwise, return the basic type
    and skip it.
  */
@@ -14311,6 +14558,8 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
   int t, u, bt, st, type_found, typespec_found, g, n;
   int explicit_global_scope = 0;
   int linkage_extern_only = 0;
+  int complex_specifier = 0;
+  int basic_specifier = 0;
   Sym *s;
   CType type1;
 
@@ -14389,6 +14638,7 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
 basic_type:
       next();
 basic_type1:
+      basic_specifier = 1;
       if (u == VT_SHORT || u == VT_LONG)
       {
         if (st != -1 || (bt != -1 && bt != VT_INT))
@@ -14461,7 +14711,12 @@ tmbt: cprime_error("too many basic types");
       u = VT_BOOL;
       goto basic_type;
     case TOK_COMPLEX:
-      cprime_error("_Complex is not yet supported");
+    case TOK_COMPLEX2:
+    case TOK_COMPLEX3:
+      complex_specifier = 1;
+      typespec_found = 1;
+      next();
+      break;
     case TOK_FLOAT:
       u = VT_FLOAT;
       goto basic_type;
@@ -15323,6 +15578,7 @@ storage:
       // Get Attributes From Typedef
       sym_to_attr(ad, s);
       typespec_found = 1;
+      basic_specifier = 1;
       st = bt = -2;
       break;
     }
@@ -15350,7 +15606,19 @@ the_end:
     t = (t & ~(VT_BTYPE | VT_LONG)) | (VT_DOUBLE | VT_LONG);
 #endif
   type->t = t;
-  if (type_found && ad->vector_size)
+  if (type_found && complex_specifier)
+  {
+    /* `_Complex` alone names the complex type corresponding to double; with a
+       basic type it combines with that type ([C11] 6.7.2.2). */
+    if (!basic_specifier)
+      t = (t & ~(VT_BTYPE | VT_LONG)) | VT_DOUBLE;
+    if (!btype_is_arithmetic_scalar(t & VT_BTYPE))
+      cprime_error("_Complex requires an arithmetic type");
+    type->t = t;
+    make_complex_type(type);
+    t = type->t;
+  }
+  else if (type_found && ad->vector_size)
     make_vector_type(type, ad->vector_size);
   return type_found;
 }
@@ -18998,6 +19266,15 @@ push_tokc:
     {
       if ((cast_type.t & VT_BTYPE) == VT_STRUCT)
       {
+        if (is_complex_type(&cast_type))
+        {
+          next();
+          if (tok == ')') vpushi(0);
+          else expr_eq();
+          skip(')');
+          gen_cast(&cast_type);
+          break;
+        }
         int class_tok = get_struct_type_name_tok(&cast_type);
         if (class_tok && try_parse_cpp_functional_constructor(class_tok))
           break;
@@ -19036,6 +19313,33 @@ push_tokc:
   case TOK_CDOUBLE:
     t = VT_DOUBLE;
     goto push_tokc;
+  case TOK_CIMAGI:
+  case TOK_CIMAGLL:
+  case TOK_CIMAGF:
+  case TOK_CIMAGD:
+  case TOK_CIMAGL:
+  {
+    /* An imaginary constant is a complex value with a zero real part. */
+    CType elem;
+    elem.ref = NULL;
+    switch (tok)
+    {
+    case TOK_CIMAGI: elem.t = VT_INT; break;
+    case TOK_CIMAGLL: elem.t = VT_LLONG; break;
+    case TOK_CIMAGF: elem.t = VT_FLOAT; break;
+    case TOK_CIMAGD: elem.t = VT_DOUBLE; break;
+    default:
+#ifdef CPRIME_USING_DOUBLE_FOR_LDOUBLE
+      elem.t = VT_DOUBLE | VT_LONG;
+#else
+      elem.t = VT_LDOUBLE;
+#endif
+      break;
+    }
+    push_complex_imaginary_constant(&elem, &tokc);
+    next();
+    break;
+  }
   case TOK_CLDOUBLE:
 #ifdef CPRIME_USING_DOUBLE_FOR_LDOUBLE
     t = VT_DOUBLE | VT_LONG;
@@ -19370,6 +19674,75 @@ str_init:
     gen_test_zero(TOK_EQ);
     if (is_cpp_translation_unit()) vtop->type.t = VT_BOOL;
     break;
+  case TOK_REALPART:
+  case TOK_IMAGPART:
+  {
+    int imag = tok == TOK_IMAGPART;
+    next();
+    unary();
+    if (is_complex_type(&vtop->type))
+    {
+      complex_part_operand(imag);
+      break;
+    }
+    /* __real__ of a non-complex value is the value itself; __imag__ of a
+       real value is zero ([GNU] Complex Numbers). */
+    if (is_cpp_translation_unit()
+        && try_call_cpp_conversion_operator(&int_type, 0))
+      break;
+    if (imag)
+    {
+      CType operand_type = vtop->type;
+      if (!btype_is_arithmetic_scalar(vtop->type.t & VT_BTYPE))
+        cprime_error("__imag__ requires an arithmetic operand");
+      vpop();
+      vpushi(0);
+      gen_cast(&operand_type);
+    }
+    else if (!btype_is_arithmetic_scalar(vtop->type.t & VT_BTYPE))
+      cprime_error("__real__ requires an arithmetic operand");
+    break;
+  }
+  case TOK_builtin_creal:
+  case TOK_builtin_crealf:
+  case TOK_builtin_creall:
+  case TOK_builtin_cimag:
+  case TOK_builtin_cimagf:
+  case TOK_builtin_cimagl:
+  case TOK_builtin_conj:
+  case TOK_builtin_conjf:
+  case TOK_builtin_conjl:
+  {
+    int name = tok;
+    int imag = name == TOK_builtin_cimag || name == TOK_builtin_cimagf
+               || name == TOK_builtin_cimagl;
+    int conjugate = name == TOK_builtin_conj || name == TOK_builtin_conjf
+                    || name == TOK_builtin_conjl;
+    next();
+    skip('(');
+    if (tok == ')')
+      cprime_error("%s requires an argument", get_tok_str(name, NULL));
+    expr_eq();
+    skip(')');
+    if (is_complex_type(&vtop->type))
+    {
+      if (conjugate)
+        gen_complex_conj();
+      else
+        complex_part_operand(imag);
+    }
+    else if (!btype_is_arithmetic_scalar(vtop->type.t & VT_BTYPE))
+      cprime_error("%s requires an arithmetic operand",
+                   get_tok_str(name, NULL));
+    else if (imag)
+    {
+      CType operand_type = vtop->type;
+      vpop();
+      vpushi(0);
+      gen_cast(&operand_type);
+    }
+    break;
+  }
   case '~':
     next();
     unary();
@@ -19996,6 +20369,11 @@ str_init:
     unary();
     if (try_call_cpp_unary_minus_operator())
       break;
+    if (is_complex_type(&vtop->type))
+    {
+      gen_complex_neg();
+      break;
+    }
     if (is_float(vtop->type.t))
       gen_opif(TOK_NEG);
     else
@@ -20317,6 +20695,21 @@ tok_identifier:
           class_alias_sym = global_symbol_find(t);
         if (!class_alias_sym)
           class_alias_sym = struct_find(t);
+        if (!class_alias_sym && qualified_instance_class_tok
+            && qualified_instance_member_tok
+            && t == make_static_member_tok(qualified_instance_class_tok,
+                                           qualified_instance_member_tok))
+        {
+          /* A member typedef of an instantiated class template is published
+             under its scoped alias token, not under the joined static-member
+             spelling this loop starts from, so `Class<args>::Alias::member`
+             would fall into the namespace path and lose the member the alias
+             names.  Resolve the member through the class to continue the
+             chain at the aliased class. */
+          class_alias_sym = find_inherited_class_alias(
+                              qualified_instance_class_tok,
+                              qualified_instance_member_tok);
+        }
         if (class_alias_sym
             && (class_alias_sym->type.t & VT_TYPEDEF)
             && ((class_alias_sym->type.t & VT_BTYPE) == VT_STRUCT))
@@ -20630,6 +21023,9 @@ tok_identifier:
           t = instantiate_template_if_needed(td, &args);
           compile_pending_template_specs_without_member_flush();
         }
+        else if (td && td->is_class && tok == '('
+                 && try_parse_cpp_template_ctad_construction(t, td))
+          break;
       }
       if (tok == '{')
       {
@@ -21279,6 +21675,8 @@ tok_identifier:
           && !find_cpp_member_pointer_type(&s->type)
           && tok == '(')
       {
+        if (try_parse_cpp_functional_complex_cast(t))
+          break;
         int alias_struct_tok = get_struct_type_name_tok(&s->type);
         if (alias_struct_tok && try_parse_cpp_functional_constructor(alias_struct_tok))
           break;
@@ -23225,6 +23623,29 @@ static void expr_cond(void)
     else if (is_cpp_translation_unit()
              && cpp_conditional_member_pointer_type(&sv, vtop, &type))
     {
+    }
+    else if (is_complex_type(&sv.type) || is_complex_type(&vtop->type))
+    {
+      /* A complex arm combines with a real arithmetic arm by the usual
+         arithmetic conversions ([C11] 6.5.15). */
+      if ((is_complex_type(&sv.type)
+           && !is_complex_type(&vtop->type)
+           && !btype_is_arithmetic_scalar(vtop->type.t & VT_BTYPE))
+          || (is_complex_type(&vtop->type)
+              && !is_complex_type(&sv.type)
+              && !btype_is_arithmetic_scalar(sv.type.t & VT_BTYPE)))
+        type_incompatibility_error(&sv.type, &vtop->type,
+                                   "type mismatch in conditional expression (have '%s' and '%s')");
+      else if (is_complex_type(&sv.type) && is_complex_type(&vtop->type))
+      {
+        CType lelem = complex_element_type(&sv.type);
+        CType relem = complex_element_type(&vtop->type);
+        type = complex_arithmetic_element(&lelem, &relem);
+        make_complex_type(&type);
+      }
+      else
+        type = is_complex_type(&sv.type) ? sv.type : vtop->type;
+      type.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_STORAGE);
     }
     else if (!cpp_conditional_scalar_type(&sv, vtop, &type)
              && !combine_types(&type, &sv, vtop, '?'))
@@ -25861,9 +26282,16 @@ static int probe_static_initializer(TokenString *tokens, int mode,
                                     int namespace_tok, CType *type)
 {
   int saved = static_initializer_constant_fold, valid;
+  ProbeTagBinding *mark = probe_tag_bindings;
   if (!is_reference_type(type)) ++static_initializer_constant_fold;
+  ++probe_tag_journal;
   valid = template_probe_type_ex(tokens, mode, namespace_tok,
                                  active_member_class_tok, 0, type);
+  --probe_tag_journal;
+  /* A probe that failed leaves its definitions to the dynamic initialization
+     replay; only the mark that a later replay may reuse them is provisional. */
+  if (!valid)
+    discard_probe_tag_bindings(mark);
   static_initializer_constant_fold = saved;
   return valid;
 }
@@ -26325,7 +26753,10 @@ static int decl_context(int l, int condition)
         if (l != VT_CONST)
           cprime_error("cannot use local functions");
 
-        if (is_cpp_translation_unit() && btype_is_auto)
+        /* A trailing return type supersedes the leading placeholder, and the
+           declarator cleared last_decl_was_auto for it, so the body must not
+           be probed for a deduced result. */
+        if (is_cpp_translation_unit() && btype_is_auto && last_decl_was_auto)
         {
           TokenString *body = NULL, *probe = tok_str_alloc();
           Sym *parameter;
@@ -26520,6 +26951,7 @@ found:
         else
         {
           int saved_initializer_owner = active_member_class_tok;
+          ProbeTagBinding *probe_mark = probe_tag_bindings;
           if (l == VT_CONST && ad.static_member_owner)
             active_member_class_tok = ad.static_member_owner;
           r = 0;
@@ -26836,6 +27268,9 @@ after_decl_initializer_alloc:
                             esym->st_value, esym->st_size, 1);
           }
           active_member_class_tok = saved_initializer_owner;
+          /* A tag the probe of this declarator defined has been re-established
+             (or deliberately kept) by now; its mark must not outlive it. */
+          discard_probe_tag_bindings(probe_mark);
         }
         if (tok != ',')
         {

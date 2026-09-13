@@ -115,7 +115,7 @@ static int bind_qualified_friend_template(int name, CType *function)
     TemplateArgList arguments;
     Sym *symbol;
     int instantiated;
-    if (candidate->is_class || candidate->is_alias
+    if (candidate->is_class || candidate->is_alias || candidate->is_guide
         || template_def_lookup_tok(candidate) != name
         || candidate->func_max_args != count) continue;
     if (!infer_template_args_from_call_with_explicit(candidate, actual, count,
@@ -738,7 +738,7 @@ static void parse_explicit_specialization_body(int instantiation)
          candidate = candidate->lookup_bucket_next) {
       TemplateArgList arguments;
       int candidate_tok;
-      if (candidate->is_class || candidate->is_alias
+      if (candidate->is_class || candidate->is_alias || candidate->is_guide
           || template_def_lookup_tok(candidate) != qualified
           || candidate->func_max_args != count) continue;
       if (from_result) {

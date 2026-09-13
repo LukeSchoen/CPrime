@@ -915,3 +915,235 @@ Retained-row work (2026-09-13, cycle 50)
   73/73 evaluated, 0 PASS_COMPILE + 73 FAIL_COMPILE) and
   Tests/run-all.ps1 -Tier pedantic (26 suites passed; the language group ran
   577 passed, 0 failed).  No compiler-speed change was attempted.
+
+Retained-row work (2026-09-13, cycle 51)
+- Retired g++.dg/ext/desig11.C.  A function or member body saved for template
+  replay is rewritten with a lambda introducer marker for every `[` that
+  follows `{`, `,`, `(` or `=`, because the replay cannot re-read the original
+  spelling.  A GNU array designator in a braced initializer has exactly that
+  shape, so `const int x[] = { [e] = 0 };` inside a function template was
+  replayed as a capture list and reported `lambda capture 'e' must name an
+  automatic variable` (`__cpc_template_const_0` for the non-type template
+  parameter form `[I] = 0`); the same statement outside a template parsed
+  fine.
+- Change (src/compiler/frontend/cprimegen_lambdas.inc): the new
+  saved_cpp_bracket_opens_designator() leaves the bracket alone when the
+  designator list it opens continues through further `[index]`/`.field`
+  designators and then `=`, which is the one shape a lambda introducer cannot
+  take.  Every other `[` keeps its marker, so lambda captures, init-captures
+  and default captures are unchanged.
+- Coverage: Tests/features/GnuExtensions/pass/
+  test_array_designator_in_template_body.cpp checks a template function's
+  designated values and untouched slots, a class-template member function's
+  designated slot and two-dimensional `[e][1] = 5` chain, and that a capture
+  in the same template body still works.  The test fails on the cycle-50
+  published compiler with the row's diagnostic and passes on the new one.
+- Codegen-neutrality sweep, previous published compiler (the cycle-50 cpc.exe
+  taken from HEAD, packed, so it resolves its own include set) against the new
+  one, one process per source with the same arguments over all 1630 first-party
+  pass sources under Tests/ (features, c_compat, integration, payload, debug
+  and the pedantic performance case): the 1627 that both accepted produced
+  byte-identical objects, two failed for both with the same diagnostics modulo
+  the compiler's own name (test_coroutine_headers.cpp needs the coroutine flag,
+  test_heap_list_push_clear_perf.cpp lacks the GetTickCount64 prototype), and
+  the only status difference is the new regression test.  272 s wall.
+- Validation: Tests/run-all.ps1 -Tier fast (63 first-party cases passed in the
+  features suites, 0 failed, 0 regressions; the retained corpus is 72 rows,
+  72/72 evaluated, 0 PASS_COMPILE + 72 FAIL_COMPILE) and
+  Tests/run-all.ps1 -Tier pedantic (26 suites passed; the language group ran
+  577 passed, 0 failed).  The corpus adapter checks passed (72 checked cases)
+  on the reduced manifest.  No compiler-speed change was attempted.
+
+Retained-row work (2026-09-13, cycle 52)
+- Closed the constant probe's new declarations, the last narrowed Wave A item 3
+  lead (it had no retained row: it was narrowed out of the retired anon3.C).
+  A saved initializer is probed with the real parser before the emitting
+  replay runs; the probe kept every tag and enumerator it met for the first
+  time, so the replay of the same tokens reported `struct/union/enum 'S'
+  already defined` (`const int ns = sizeof (struct S { int x; });`, and the
+  static-member form `const int D::s = ...`) or `redeclaration of 'a'` (the
+  anonymous `enum { a, b }` form).  The same statements inside a function body,
+  whose initializers are never probed, already worked.
+- Change (include/cprime/cprime.h, src/compiler/frontend/cprimegen.c): the
+  SymAttr `probe_defined` flag marks a tag or enumerator an initializer probe
+  of the current declaration registered, tracked per declaration (the probe
+  records each binding it creates while a probe is active and the declaration
+  drops the marks when it ends).  The emitting replay reuses the definition:
+  struct_decl returns the probe's tag (skipping its `: bases` clause and body),
+  and push_enumerator_binding adopts a marked enumerator at the same scope
+  instead of pushing a second binding.  A probe that fails discards its marks,
+  so its definitions stay visible exactly as before.
+- Coverage: Tests/features/Declarations/pass/
+  test_constant_initializer_defines_named_type.cpp pins the namespace-scope
+  named struct and enum sizes and enumerator values, the anonymous-enum form,
+  both out-of-class static-member shapes, and an aggregate initializer's nested
+  type, each still visible and usable after its definition.  The test fails on
+  the cycle-51 published compiler with the lead's diagnostic and passes on the
+  new one.
+- Codegen-neutrality sweep, previous published compiler against the new one,
+  one process per source with the same arguments over all 1630 first-party pass
+  sources under Tests/: the 1628 that both accepted produced byte-identical
+  objects, the other 2 failed for both (test_coroutine_headers.cpp needs the
+  coroutine flag, test_heap_list_push_clear_perf.cpp lacks the GetTickCount64
+  prototype), and no status or diagnostic differs.
+- Validation: Tests/run-all.ps1 -Tier fast (63 first-party cases passed in the
+  features suites, 0 failed, 0 regressions; the retained corpus is 72 rows,
+  72/72 evaluated, 0 PASS_COMPILE + 72 FAIL_COMPILE) and
+  Tests/run-all.ps1 -Tier pedantic (26 suites passed; the language group ran
+  577 passed, 0 failed).  No compiler-speed change was attempted.
+
+Retained-row work (2026-09-13, cycle 54)
+- Closed the array-decay narrowed Wave A item 3 lead, which had no retained row
+  of its own: it is what was left of the retired `qualified-id2.C` after cycle
+  33.  A qualified id that reaches a static data member through a member
+  typedef of a class-template instantiation (`template <class T> struct B {
+  typedef A<B<T>::c> C; }; ... B<int>::C::p`) enters the `::`-chain loop with
+  the joined static-member spelling `B__int_C`.  The typedef of an instantiation
+  is published under its scoped alias token (`B__int__C`) instead, so the
+  ordinary symbol lookups miss and the loop takes the namespace fallback for
+  the following segment, while the alias substitution after the loop maps the
+  member to its alias token and replaces the whole name: `B<int>::C::p` became
+  the typedef `C`, a class value.  A comparison that opened a statement or a
+  `?:` condition therefore compared that class value with the array
+  (`return X::p == X::c ? 0 : 1;` -> `invalid operand types for binary
+  operation`), while the same comparison behind a `!` or inside parentheses
+  worked, because those spellings reach the alias through a different path.
+- Change (src/compiler/frontend/cprimegen.c): when the loop's ordinary lookups
+  for the current qualifier all fail and that qualifier is exactly the joined
+  name of the recorded `Class<args>::member` pair, resolve the member through
+  `find_inherited_class_alias()` (the scoped alias token, a nested class or a
+  base class) instead of falling through to the namespace path.  A typedef that
+  names a class then sets `class_tok` to the aliased class, so the loop
+  consumes the next `::member` segment at the class the alias names and the
+  terminal lookup finds that member under its own joined name.  Genuine
+  redefinitions and the discarded-statement path are unchanged.
+- Coverage: Tests/features/Templates/pass/
+  test_template_member_typedef_qualified_static_member.cpp pins the true and
+  the false comparison of two instantiations, the comparison opening a `?:`
+  condition, an initializer and an `if` condition, the discarded statement
+  form, the array element reached through the stored pointer, and the
+  unqualified alias form (`typedef A<c> C`).  The test fails on the cycle-51
+  published compiler with the lead's diagnostic and passes on the new one.
+- Codegen-neutrality sweep, previous published compiler (saved before Build.cmd
+  published) against the new one, one process per source with the same
+  arguments over all 1632 first-party pass sources under Tests/ (features,
+  c_compat, integration, payload, debug and the pedantic performance case): the
+  1629 that both accepted produced byte-identical objects and byte-identical
+  diagnostics, the other 2 failed for both (test_coroutine_headers.cpp needs
+  the coroutine flag, test_heap_list_push_clear_perf.cpp lacks the
+  GetTickCount64 prototype), and the only status difference is the new
+  regression test.  293 s wall.
+- Validation: Build.cmd self-host and publish (the publication gate's
+  regression sentinels passed), Tests/run-all.ps1 -Tier fast (64 first-party
+  cases passed across the features suites, 0 failed, 0 regressions; the
+  retained corpus is 72 rows, 72/72 evaluated, 0 PASS_COMPILE + 72
+  FAIL_COMPILE) and Tests/run-all.ps1 -Tier pedantic (26 suites passed; the
+  language group ran 577 passed, 0 failed).  No compiler-speed change was
+  attempted.
+
+Retained-row work (2026-09-13, cycle 55)
+- Closed the `spec7.C` narrowed Wave A item 3 lead.  The row itself was
+  removed by the consolidation commit, but the defect it recorded survived:
+  `template<> template<> template<class V> void A<int>::B<char>::g(V) { }`
+  was still registered as a namespace-scope function template, so a linked
+  call on `A<int>::B<char>` reported the member's symbol undefined.  The
+  qualifier is fully concrete; only the member function template's own `V`
+  remains dependent.
+- Change (src/compiler/frontend/cprimegen_templates.inc):
+  `canonicalize_template_signature_types()` now remembers the concrete class
+  token it emits immediately before `::` and uses it as the owner when the
+  next class-template-id is not visible as a namespace name.  A member class
+  template found under that owner is instantiated from the written argument
+  list, and the whole `owner::member<args>` prefix is replaced by the one
+  instantiated class token.  `find_template_member_class_in_str()` then sees
+  the ordinary concrete `B<char>::g` shape and attaches the out-of-class
+  definition to that specialization, so `g` is no longer a namespace-scope
+  template.  A later member in a longer concrete qualifier chain updates the
+  same state, while non-member template declarations keep the previous path.
+- Coverage: Tests/features/Templates/pass/
+  test_member_class_template_of_explicit_specialization.cpp now declares an
+  out-of-class-defined member function template on the explicit member class
+  specialization and calls it with an integer and a double.  The cycle-54
+  published compiler fails the test with
+  `undefined symbol '??$combine@H@?$B@D@?$A@H@@QEBAHH@Z'` and its
+  `double` specialization; the new compiler links and exits 0.
+- Codegen-neutrality sweep, previous published compiler (checked out of the
+  index before Build.cmd published) against the new one, one process per
+  source with the same arguments over all 1632 first-party pass sources under
+  Tests/ (features, c_compat, integration, payload, debug and the pedantic
+  performance case): 1629 produced byte-identical objects, the new regression
+  test is the only object difference, 2 failed identically for both
+  (test_coroutine_headers.cpp needs the coroutine flag and
+  test_heap_list_push_clear_perf.cpp lacks the GetTickCount64 prototype), and
+  no diagnostic or status differs.  The sweep ran serially, one compiler
+  process at a time.
+- Validation: Build.cmd self-host and publish; the focused
+  features/Templates fast suite (64 passed, 0 failed);
+  Tests/run-all.ps1 -Tier fast (all first-party features suites passed, 0
+  regressions; the retained corpus remained 72 rows, 72/72 evaluated, 0
+  PASS_COMPILE + 72 FAIL_COMPILE) and Tests/pedantic/run.ps1 -Group language
+  (25 suites, 577 Templates cases passed, 0 failed).  No compiler-speed
+  change was attempted.
+
+Retained-row work (2026-09-13, cycle 56)
+- Closed the indirect virtual base mem-initializer narrowed Wave A item 3 lead,
+  the last one in the list, which had no retained row of its own.  A
+  constructor that names a virtual base its class inherits only through
+  another base (`struct M : virtual V {...}; struct D : M { D() : V(2) {} };`)
+  found neither a member nor a direct base field for the written name, so
+  `skip_initializer_emit` dropped the whole mem-initializer and the base was
+  default-initialized instead of taking the written arguments.  The class has
+  no base field for that subobject because the virtual edge belongs to the
+  intermediate base; the most-derived constructor still owns it.
+- Change (src/compiler/frontend/cprimegen.c): the failed-lookup branch of
+  parse_explicit_constructor_member_initializers() now asks
+  class_virtual_base_token_for_name() whether the written name reaches one of
+  the class's virtual bases -- matched by token, by a typedef of the base or as
+  an unqualified spelling, the same way a base-specifier name is matched to its
+  base field -- and, when it does, records the piece under the base class token
+  instead of dropping it.  append_inherited_virtual_base_init() takes the
+  written argument list (including the brace and `()` forms), so the
+  virtual-base section of the most-derived constructor replays
+  `V(2)`/`V{2}` where it used to emit a default `V()`.  The section is already
+  bracketed by the complete-object split markers and dropped from the
+  `*__base` variant, so the intermediate base's own initializer for the same
+  base stays ignored at run time exactly as before.  A specialization spelling
+  after the name (`V<int>(2)`) keeps the previous drop rule, because the base
+  class token cannot stand in for the instantiation.
+- Change (src/compiler/frontend/cprimegen_lifecycle.inc): the same subobject
+  was still clobbered when the intermediate base has no constructor symbol to
+  call, where the placement-new path value-initializes it with a whole-object
+  memset (`struct M : virtual V {}`).  A base subobject now zeroes only its own
+  non-virtual regions: collect_virtual_base_regions() reports the storage the
+  class gives its virtual base subobjects from the recorded layout, and
+  emit_value_initialization_zero_fill() emits one memset per gap between them,
+  keeping the destination in a local slot because each call clobbers the
+  registers a single call used to leave it in.  `[dcl.init]` zeroes virtual
+  base subobjects only when the object being zero-initialized is not itself a
+  base class subobject.  A complete object keeps the single whole-object
+  memset, so every other path emits exactly the bytes it emitted before.
+- Coverage: Tests/features/Constructors/pass/
+  test_indirect_virtual_base_initializer.cpp pins the written argument of the
+  virtual base, its single construction (through a constructor that counts and
+  has a defaulting counterpart to catch a substituted default), the
+  intermediate base's own initializer being ignored when that base is a
+  subobject but used when it is the complete object, a deeper class overriding
+  it again, a second virtual base reached directly alongside it, and the
+  intermediate-base-without-a-constructor form.  The cycle-55 published
+  compiler compiles the test but runs it to exit 1; the new compiler exits 0.
+- Codegen-neutrality sweep, previous published compiler (saved before Build.cmd
+  published) against the new one, one process per source with the same
+  arguments over all 1633 first-party pass sources under Tests/ (features,
+  c_compat, integration, payload, debug and the pedantic performance case):
+  1631 were accepted by both, 2 failed for both (test_coroutine_headers.cpp
+  needs the coroutine flag, test_heap_list_push_clear_perf.cpp lacks the
+  GetTickCount64 prototype), no status or diagnostic differs, and the new
+  regression test is the only object difference.  290 s wall, one compiler
+  process at a time.
+- Validation: Build.cmd self-host and publish (the publication gate's
+  regression sentinels passed); Tests/run-all.ps1 -Tier fast (183 first-party
+  cases passed across the fast suites, 0 failed, 0 regressions; the retained
+  corpus is 72 rows, 72/72 evaluated, 0 PASS_COMPILE + 72 FAIL_COMPILE) and
+  Tests/run-all.ps1 -Tier pedantic (26 suites passed; 577 cases, 0 failed).
+  No compiler-speed change was attempted.
+

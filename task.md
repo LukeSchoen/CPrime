@@ -4,11 +4,113 @@ Target: 100% of the retained GCC language rows and the first-party pedantic
 corpus, with no missing coverage, weakened expectations, compiler internal
 errors or timeout retries.
 
-State (2026-09-13, cycle 50): the retained corpus is 73 rows -- 0
-PASS_COMPILE, 73 FAIL_COMPILE -- with 0 fast-tier regressions, and the
+State (2026-09-13, cycle 58): the retained corpus is 51 rows -- 0
+PASS_COMPILE, 51 FAIL_COMPILE -- with 0 fast-tier regressions, and the
 pedantic first-party list is empty: every first-party case passes at both
-tiers (`Tests/run-all.ps1 -Tier fast`, `Tests/pedantic/run.ps1 -Group
-language`). Pre-step 2 is closed (see below); cycle 37 retired the first nine
+tiers (`Tests/run-all.ps1 -Tier fast`, `Tests/run-all.ps1 -Tier pedantic`).
+Cycle 58 landed the two lookup repairs the last coroutine row exposes, without
+retiring the row. A function parameter pack's name is no longer substituted
+when it is followed by `::` or preceded by `.`, `->` or `::`: a
+nested-name-specifier ignores variables and a name after `.` belongs to the
+object, so `ranges::elements_of` and `holder.ranges` resolve inside a body
+whose pack is also spelled `ranges`. A name a using-directive makes visible is
+also resolved when it names a nested namespace, so `ranges::Wrap<int>` after
+`using namespace std;` reaches `std::ranges` instead of the unqualified token
+`__cpc_ns_ranges_Wrap`. Coverage is
+`Tests/features/Templates/pass/test_parameter_pack_name_shadowed_namespace.cpp`
+and
+`Tests/features/Namespaces/pass/test_nested_namespace_via_using_directive.cpp`;
+the previous published compiler rejects both, and over all 1554 first-party
+pass sources the 1552 that both accept produce byte-identical objects.
+`g++.dg/coroutines/pr113457.C` therefore stays as the one open Wave C item 2
+row with a recorded lead: its `ranges::elements_of(ranges)` calls need class
+template argument deduction from the explicit guide, and its
+`template <range _Range> struct elements_of` needs the `template <Concept T>`
+type-constraint spelling, which the template parser records as a value
+parameter of type `range`.
+Cycle 57 retired the whole `_Complex` cluster, all three Wave B items at once,
+as 21 rows: the 17 `complex*`/`conj*` rows plus `g++.dg/expr/stdarg2.C`,
+`g++.dg/opt/pr83608.C`, `g++.dg/tree-ssa/pr50622.C` and
+`g++.old-deja/g++.other/debug9.C`. `_Complex`, `__complex__` and `__complex`
+are now type specifiers that combine with any arithmetic element type, and the
+type itself is one canonical two-part aggregate per element type under a
+stable tag the native mangler can use, so aggregate copies, `sizeof`,
+parameters, results, arrays, pointers and variadic arguments all reuse the
+ordinary struct paths. Imaginary constants (`0i`, `90i`, `2.0i`, `2.0fi`,
+`3.0Li`) lex as complex values with a zero real part. Arithmetic lowers
+element-wise on the two parts with the usual arithmetic conversions over the
+real types, so `+`, `-`, `*`, `/`, unary `-`, the compound assignments,
+equality and the zero tests all work on mixed complex/real operands, and a
+real value converts to a complex one while a complex value converts to
+another complex element type or to `bool`. `__real__` and `__imag__` select
+the corresponding part as an lvalue, `__real__` of a non-complex class
+applies its conversion to int, and `__builtin_creal`, `__builtin_cimag` and
+`__builtin_conj` (with the `f`/`l` forms) lower onto the same parts.
+Overload resolution treats a real-to-complex conversion as viable but worse
+than any scalar arithmetic conversion, so `f(1)` prefers `f(double)` while
+`g(1)` still binds to `g(_Complex int)`. Coverage is
+`Tests/features/GnuExtensions/pass/`:
+`test_complex_type_declarations_and_literals.cpp` (spellings, element types,
+layout, `new`, the literal forms, element conversions, the two overloads),
+`test_complex_arithmetic_and_parts.cpp` (all operators, mixed operands,
+compound assignment, comparison, the part lvalues, the builtins, aggregate
+members, a class with complex members and operators, a nested try/catch and a
+const complex pointer) and `test_complex_in_classes_and_templates.cpp` (a
+class-template specialization whose constructor writes the parts,
+`__real__` of a class with a conversion operator, a template writing through
+a `T*` alias, and a struct with a complex member through `va_arg`); the
+previous published compiler rejects all three. Measured over the 182 fast-tier
+pass sources with the previous published compiler against the new one: 179
+compile with both, the three new tests are the only status difference, and of
+those 179 objects five differ only in generated `__cpc_*` local-class and
+coroutine names whose numbering follows the token table (all other symbols and
+bytes are identical). The narrowed-lead list held nothing before cycle 58, so
+the next open cluster was Wave C item 2, the remaining
+`g++.dg/coroutines/pr113457.C` row, which now carries the lead cycle 58
+recorded, followed by the general language long
+tail. Cycle 56 closed the last narrowed Wave A item 3 lead, the indirect
+virtual base mem-initializer, which had no retained row of its own. A
+constructor that names a virtual base its class inherits only through another
+base had the initializer dropped (`skip_initializer_emit`) because the name is
+neither a member nor a direct base field, so the base was default-initialized
+instead of taking the written arguments; a virtual base is now resolved
+through the class's own virtual-base set, and its initializer is replayed in
+the complete-object section the constructor already keeps for the virtual
+bases it does have a base field for, so only the most-derived constructor
+establishes the subobject. The same class's implicit construction now also
+leaves that subobject alone: zero-initializing a base subobject zeroes its
+non-virtual regions only, as `[dcl.init]` requires. Coverage is
+`Tests/features/Constructors/pass/test_indirect_virtual_base_initializer.cpp`,
+which pins the written argument, the single construction, the intermediate
+base's ignored initializer, and the deeper override; the previous published
+compiler runs it to exit 1. Cycle 55 retired the `spec7.C` narrowed Wave A
+item 3 lead, which
+the consolidation commit had already removed from the corpus while leaving its
+linked-member defect in place: an out-of-class
+`template<> template<> template<class V> void A<int>::B<char>::g(V) { }`
+definition was registered as a namespace-scope function template because
+signature canonicalization stopped at `A<int>`; the canonicalizer now resolves
+the following member class template under that instantiation and rewrites the
+whole qualifier prefix to the member specialization's class token. Coverage is
+`Tests/features/Templates/pass/test_member_class_template_of_explicit_specialization.cpp`;
+the previous published compiler fails it at link with the undefined `combine`
+symbol. The dependent template template lead was already covered by
+`test_nested_template_name_template_argument.cpp` in cycle 32, and cycle 56
+closed the lead that followed it. Cycle 54 closed the
+array-decay narrowed Wave A item 3 lead: a
+qualified id that reaches a static data member through a member typedef of a
+class-template instantiation (`B<T>::C::p`) now continues at the class the
+typedef names instead of letting the typedef's scoped alias token stand in for
+the whole name, which is what made a comparison that opened a statement or a
+`?:` condition report `invalid operand types for binary operation`; cycle 52
+closed the narrowed lead before it -- the
+constant probe's new declarations, which had no retained row of its own
+because it was narrowed out of the retired `anon3.C` -- by letting the
+emitting replay of a saved initializer reuse the tag or enumerator the probe
+of the same declaration already defined; cycle 51 retired
+`g++.dg/ext/desig11.C` by keeping a GNU array designator out of the saved-body
+lambda rewrite. Pre-step 2 is closed (see
+below); cycle 37 retired the first nine
 coroutine rows into first-party coverage and cycle 38 retired the remaining 30
 retained rows that `-fcoroutines` already compiled. Cycle 19 finished pre-step 1
 by repairing the last four first-party failures. A range-for over a member read
@@ -129,6 +231,55 @@ diagnostics (the coroutine header test needs its flag and the heap-list
 performance test lacks `GetTickCount64`), and the only status difference is the
 new regression test, which the previous compiler rejects with the row's
 diagnostic.
+
+Cycle 51 retired `g++.dg/ext/desig11.C`. A function or member body that is
+saved for template replay is rewritten so every `[` that follows `{`, `,`,
+`(` or `=` becomes a lambda introducer marker, because the replay has no way
+to re-read the original spelling. A GNU array designator in a braced
+initializer has exactly that shape, so `const int x[] = { [e] = 0 };` inside a
+template body was replayed as a capture list and reported `lambda capture 'e'
+must name an automatic variable` (`__cpc_template_const_0` for a non-type
+template parameter); the same statement outside a template parsed fine. The
+rewrite now leaves the bracket alone when the designator list it opens
+continues through further `[index]`/`.field` designators and then `=`, which
+is the one shape a lambda introducer cannot take, so real lambdas keep their
+marker. Coverage is
+`Tests/features/GnuExtensions/pass/test_array_designator_in_template_body.cpp`,
+which checks a template function's designated values and untouched slots, a
+class-template member function's designated slot and two-dimensional
+`[e][1] = 5` chain, and that a capture in the same body still works.
+
+Cycle 52 closed the constant probe's new declarations, the last narrowed Wave A
+item 3 lead, which had no retained row of its own: it was narrowed out of the
+retired `anon3.C`. A saved initializer is probed with the real parser before
+the emitting replay runs, and the probe kept every tag and enumerator it met
+for the first time, so the replay of the same tokens reported
+`struct/union/enum 'ProbeS' already defined` for
+`const int struct_size = sizeof (struct ProbeS { int a; double b; });` and
+`redeclaration of 'a'` for the anonymous `enum { a, b }` form; the same
+statements inside a function body, whose initializers are not probed, were
+already fine. The probe now records what it defines (a `probe_defined` flag on
+the tag or enumerator binding, tracked per declaration in
+`cprimegen.c`) and the emitting replay reuses it -- the tag body is skipped
+with the probe's own definition standing, and an enumerator the probe
+registered at the same scope is adopted instead of pushed again -- while a
+probe that fails leaves its definitions to the dynamic initialization replay,
+exactly as before. Genuine redefinitions outside an initializer still report
+`already defined`. Coverage is
+`Tests/features/Declarations/pass/test_constant_initializer_defines_named_type.cpp`,
+which pins the namespace-scope named struct and enum counts and enumerator
+values, the anonymous-enum form, both out-of-class static-member shapes, and an
+aggregate initializer's nested type, each of them visible and usable after the
+definition. The previous published compiler rejects the test with the lead's
+diagnostic. Measured over all 1630 first-party pass sources with the previous
+published compiler against the new one, one process per source: the 1628 that
+both accepted produced byte-identical objects, the other 2 failed for both,
+and no status or diagnostic differs. A known remaining hole in the same
+recovery path: a *genuine* redefinition inside an initializer (`struct S { int
+x; }; const int n = sizeof (struct S { int y; });`) is still swallowed by the
+probe's substitution recovery and replayed as a function-local definition
+instead of being reported, and the same statement with the tag defined by the
+same initializer now reaches that path as well.
 
 Pre-step 2 has eleven landed changes, each measured on this machine against the
 compiler it replaced and each codegen-neutral over the first-party sources that
@@ -381,8 +532,8 @@ with the now-unused `coro.h` and `coro1-ret-int-yield-int.h` support headers.
 The corpus is now 81 rows with no repaired passes, and
 `g++.dg/coroutines/pr113457.C` is its only retained coroutine row.
 
-The remaining work is Wave A item 3 and the remaining `_Complex` and coroutine
-clusters; re-open pre-step 2
+The remaining work is the last coroutine row and the general language long
+tail; re-open pre-step 2
 only with a lead that removes a lookup, a pass or a struct copy from the
 compiler's own code. The profile
 leads for a future speed session: `next_nomacro` is still the largest reliable
@@ -471,6 +622,26 @@ defect predates the row repair; the retained row is compile-only and did not
 need it fixed.  It is a separate cluster for whoever takes pointer-to-member
 calls.
 
+Cycle 51 found one more defect outside the target while narrowing its row: in a
+directly parsed braced initializer, a lambda as the first element is read as an
+array designator, so `Holder h = { []() { return 4; } };` reports `array type
+expected` in `decl_designator`.  It predates the cycle-51 compiler (the
+unchanged direct parse never entered the saved-body rewrite the row repaired),
+and no retained row needs it.  It is a separate cluster: the designator probe
+has to recognize a bracket that opens a lambda introducer before requiring an
+array type.
+
+Cycle 57 left one known gap in the new `_Complex` support, outside the target
+because no retained row needs it: a *static* (file-scope or function-local
+`static`) complex object initialized from a value rather than a brace list
+(`_Complex double z = 3.0;`, `_Complex double z = 1.0 + 2.0i;`) has no
+load-time representation, so in C++ mode it takes the dynamic-initialization
+path and runs correctly, while in C mode it reports `initializer element is not
+constant` where GCC emits static data. A brace list over the two parts
+(`{1.0, 2.0}`) and initialization from an anonymous compound literal still
+become static data. Giving the conversion a synthesized static object for
+constant operands, as the compound-literal path already does, would close it.
+
 ## Pre-steps
 
 Do these first, in order. The target does not move; the order does. While a
@@ -536,8 +707,10 @@ different predefined macros and emits different objects.
 
 Waves A to C run after the pre-steps above are done.
 
-139 rows = 40 coroutines + 17 `_Complex` + 82 general language long tail.
-Without Waves B and C the ceiling is ~82/139, so both features are required.
+139 rows = 40 coroutines + 17 `_Complex` + 82 general language long tail;
+Wave B is closed (cycle 57 retired its 20 rows and the four further
+`_Complex` rows counted in the long tail) and Wave C has one row left, so the
+ceiling is now the last coroutine row plus the long tail.
 
 ### Wave A - general language long tail
 
@@ -553,23 +726,31 @@ Batch two or three independent repairs per session, in this order:
    `cannot convert` external rows (`new5.C`, `cvt21.C`, `ptrmem5.C`).
 3. The narrowed leads recorded under
    [retained GCC checks](Tests/pedantic/gcc/README.md#narrowed-leads), one site
-   each: `spec7.C`, the dependent template template chain, the indirect
-   virtual base mem-initializer, array decay in a `?:` condition, then the
-   constant probe's new declarations (current lead). Cycles 39, 41, 43, 45, 46,
-   48, 49 and 50 retired `conv1.C`, `synth7.C`, `template25.C`, `access28.C`,
-   `canon-type-3.C`, `syshdr1.C`, `redef1.C`, `anon3.C` and `sts_iarr.C`; cycle
-   50 fixed the terminal name of a qualified id replayed inside a
-   class-template member body (the enclosing instantiation's alias table used
-   to redirect it to its own joined member name), the same rule the
-   class-body-level replay already applied.
+   each; the list is empty now. Cycles
+   39, 41, 43, 45, 46, 48, 49, 50 and 51 retired `conv1.C`, `synth7.C`,
+   `template25.C`, `access28.C`, `canon-type-3.C`, `syshdr1.C`, `redef1.C`,
+   `anon3.C`, `sts_iarr.C` and `desig11.C`; cycle 50 fixed the terminal name of
+   a qualified id replayed inside a class-template member body (the enclosing
+   instantiation's alias table used to redirect it to its own joined member
+   name), the same rule the class-body-level replay already applied, and cycle
+   52 closed the lead that followed them, the constant probe's new
+   declarations, and cycle 54 closed the array-decay site. Cycle 55 closed
+   `spec7.C` (the member function template of a member class template
+   specialization) and confirmed the dependent template template chain was
+   already covered by cycle 32; cycle 56 closed the last one, the indirect
+   virtual base mem-initializer.
 
-### Wave B - `_Complex` (17 rows, 3 sessions)
+### Wave B - `_Complex` (closed in cycle 57)
 
-1. Type/declarator parsing and imaginary literals for `_Complex` and
-   `__complex__`, retiring the `invalid number` and `';' expected (got
-   'double'/'__complex__')` clusters.
-2. Arithmetic, conversions and the `__real__` / `__imag__` / `conj` builtins.
-3. Runtime layout, ABI and the `g++.dg/opt` optimization rows.
+All three items landed together: type/declarator parsing for `_Complex`,
+`__complex__` and `__complex` with imaginary literals; the arithmetic,
+conversions and the `__real__` / `__imag__` / builtin `conj` family; and the
+layout and ABI questions the `g++.dg/opt` rows raise. Complex types reuse the
+aggregate paths, so the runtime layout follows the two-part representation on
+every row. Coverage lives in `Tests/features/GnuExtensions/pass/`
+(`test_complex_type_declarations_and_literals.cpp`,
+`test_complex_arithmetic_and_parts.cpp` and
+`test_complex_in_classes_and_templates.cpp`).
 
 ### Wave C - coroutines (40 rows, 4 sessions)
 
@@ -578,7 +759,11 @@ Batch two or three independent repairs per session, in this order:
    `-fcoroutines` exist and 39 of the 42 retained coroutine rows compile;
    cycles 37-38 retired those 39 repaired rows into first-party coverage
    (nine, then 30), leaving `pr113457.C` for item 2.
-2. Parse `co_await`, `co_yield`, `co_return` and awaitables.
+2. Parse `co_await`, `co_yield`, `co_return` and awaitables. Cycle 58 landed
+   the two lookup repairs `pr113457.C` exposed; the row itself still needs
+   class template argument deduction from an explicit deduction guide and the
+   `template <Concept T>` type-constraint spelling, and its lead is recorded
+   under [retained GCC checks](Tests/pedantic/gcc/README.md#narrowed-leads).
 3. Promise machinery and coroutine frame lowering.
 4. ABI, symmetric transfer, exceptions and destruction.
 

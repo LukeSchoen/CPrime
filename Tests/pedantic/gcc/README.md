@@ -45,34 +45,144 @@ for the remaining clusters are below.
 
 ## Narrowed leads
 
-Each lead is already reduced to one site and is the shortest path for the
-matching cluster:
+One open lead, for the last coroutine row `g++.dg/coroutines/pr113457.C`. The
+row writes `ranges::elements_of(ranges)` after `using namespace std;` inside a
+variadic function template and in a promise member body, so its body replay
+needs class template argument deduction from the explicit guide
+`elements_of(_Range &&) -> elements_of<_Range &&>`, and
+`template <range _Range> struct elements_of` needs the `template <Concept T>`
+type-constraint spelling, which the template parser currently records as a
+value parameter of type `range`. Cycle 58 landed the two lookup repairs in
+front of those sites (below); the deduction and the type-constraint spelling
+are the remaining work.
 
-- Dependent template template argument: `T::template AA<U>::template B` names
-  the nested template but loses the enclosing argument, so
-  `chain<outer<char>, char>` still builds `middle<int>::inner` (`sizeof` stays 4
-  where the `typename` spelling gives 1).
-- Member function template of a member class template specialization:
-  `template<> template<> template<class V> void A<int>::B<char>::g(V) { }` is
-  still a namespace-scope template, so a linked call to `g` is undefined
-  (`spec7.C` is compile-only; probe a call on `A<int>::B<char>`).
-- Indirect virtual base mem-initializer is dropped (`skip_initializer_emit`) and
-  default-initialized instead; cycle 17 only split base-object/complete
-  (`*__base`) variants.
-- Array decay: `return X::p == X::c ? 0 : 1;` reports `invalid operand types for
-  binary operation` where the comparison opens a statement or `?:`;
-  `if (!(...))` works.
-- New type in a static member initializer: the definition copy is complete now,
-  but the constant probe replays the initializer in the member's class scope,
-  so a name the initializer declares is registered twice.
-  `const int D::s = sizeof (struct S { int x; });` reports
-  `struct/union/enum 'S' already defined` and
-  `const int D::s = sizeof (enum { a, b });` reports `redeclaration of 'a'`,
-  while an anonymous union or struct body with named members is unaffected
-  because its second definition is not name-visible (the retired `anon3.C`
-  compiled for that reason).
+The earlier leads were each reduced to one site and are closed: cycle 56 closed
+the last of them, the indirect virtual base mem-initializer.
 
 ## Retirement queue
+
+Cycle 58 landed two lookup repairs the last coroutine row exposed without
+retiring it. A function parameter pack's name is no longer substituted when it
+is followed by `::` or preceded by `.`, `->` or `::`, because a
+nested-name-specifier ignores variables and a member name after `.` belongs to
+the object, so `ranges::elements_of` and `holder.ranges` resolve inside a body
+whose pack is also spelled `ranges`. A name a using-directive makes visible is
+also recognized when it names a nested namespace: `find_current_namespace_tok`
+probed plain symbols only, so `ranges::Wrap<int>` after `using namespace std;`
+built the token `__cpc_ns_ranges_Wrap` and reported it undeclared instead of
+reaching `std::ranges`. Coverage is
+`Tests/features/Templates/pass/test_parameter_pack_name_shadowed_namespace.cpp`
+and
+`Tests/features/Namespaces/pass/test_nested_namespace_via_using_directive.cpp`;
+the previous published compiler rejects both. Measured over all 1554
+first-party pass sources, one process per source, with the previous published
+compiler against the new one: 1552 accept with both and produce byte-identical
+objects, and the two new tests are the only status difference. The row stays,
+with its lead recorded above.
+
+Cycle 57 retired the `_Complex` cluster, all three Wave B items at once: the
+seventeen `complex*`/`conj*` rows plus `g++.dg/expr/stdarg2.C`,
+`g++.dg/opt/pr83608.C`, `g++.dg/tree-ssa/pr50622.C` and
+`g++.old-deja/g++.other/debug9.C`, leaving 51 retained rows. `_Complex`,
+`__complex__` and `__complex` are type specifiers that combine with any
+arithmetic element type, and the type is one canonical two-part aggregate per
+element type under a stable tag, so copies, `sizeof`, parameters, results,
+arrays, pointers and variadic arguments reuse the ordinary struct paths.
+Imaginary constants lex as complex values with a zero real part; arithmetic
+lowers element-wise with the usual arithmetic conversions over the real
+types; `__real__` / `__imag__` and the `__builtin_creal` / `__builtin_cimag`
+/ `__builtin_conj` family select the parts; and overload resolution ranks a
+real-to-complex conversion worse than a scalar arithmetic conversion.
+Coverage is
+`Tests/features/GnuExtensions/pass/test_complex_type_declarations_and_literals.cpp`,
+`.../test_complex_arithmetic_and_parts.cpp` and
+`.../test_complex_in_classes_and_templates.cpp`; the previous published
+compiler rejects all three. The narrowed-lead list is still empty, so the
+remaining work is `g++.dg/coroutines/pr113457.C` and the general language long
+tail below.
+
+Cycle 56 closed the indirect virtual base mem-initializer lead, the last
+narrowed Wave A item 3 lead, which had no retained row of its own.  A
+constructor that names a virtual base its class inherits only through another
+base found neither a member nor a direct base field for the name, so
+`skip_initializer_emit` dropped the whole initializer and the base was
+default-initialized instead of taking the written arguments.  The name is now
+matched against the class's own virtual-base set, and its initializer is
+replayed by the virtual-base section of the most-derived constructor -- the
+same section a direct virtual base uses -- so the intermediate base's own
+initializer for that base is still ignored at run time.  Zero-initializing a
+base subobject no longer covers its virtual base subobjects either, which is
+what `[dcl.init]` requires and what the intermediate base's implicit
+construction used to clobber.  Coverage is
+`Tests/features/Constructors/pass/test_indirect_virtual_base_initializer.cpp`,
+which pins the written argument, the single construction of the subobject, the
+intermediate base's ignored initializer, a deeper override, and a second
+virtual base reached directly.  The previous published compiler runs the test
+to exit 1.  The narrowed-lead list is empty now, so the remaining work is the
+three wave clusters below: Wave B `_Complex`, Wave C coroutines, and the rest
+of the general language long tail.
+
+Cycle 55 closed the `spec7.C` lead, which the consolidation commit had already
+removed from the corpus while leaving its linked-member defect in place.  A
+concrete qualifier chain ending in a member class template specialization
+(`A<int>::B<char>::g`) was only canonicalized for its outer class, so the
+following member class template was not resolved under that instantiation and
+the out-of-class definition became a namespace-scope function template; a call
+on `A<int>::B<char>` then reported the member symbol undefined.  The signature
+canonicalizer now carries the just-emitted concrete class token across `::`,
+instantiates the member class template under it, and replaces the whole
+qualifier prefix with the member specialization's class token, so the ordinary
+concrete-member path attaches and replays the definition.  Coverage is
+`Tests/features/Templates/pass/test_member_class_template_of_explicit_specialization.cpp`.
+The dependent template template lead was already retired by cycle 32; it is
+covered by `test_nested_template_name_template_argument.cpp`, which passes in
+the pedantic language group, so it is no longer listed as open.
+
+Cycle 54 closed the array-decay lead that followed `qualified-id2.C` and had no
+retained row of its own. A qualified id that reaches a static data member
+through a member typedef of a class-template instantiation (`B<T>::C::p`) took
+the namespace fallback for the segment after the member, and the alias
+substitution that maps that member to its scoped alias token then replaced the
+whole name, so a comparison that opened a statement or a `?:` condition
+compared the class value (`return X::p == X::c ? 0 : 1;` reported `invalid
+operand types for binary operation`), while the same comparison behind a `!` or
+inside parentheses worked. The `::`-chain loop now resolves that member through
+the class it names and continues the chain at the aliased class, so the static
+member the alias reaches is looked up under its own joined name. Coverage is
+`Tests/features/Templates/pass/test_template_member_typedef_qualified_static_member.cpp`,
+which pins the true and false comparisons of two instantiations, the
+comparison opening a `?:` condition, an initializer and an `if` condition, the
+array element reached through the stored pointer, and the discarded statement
+form. The previous published compiler rejects that test with the lead's
+diagnostic.
+
+Cycle 52 closed the constant probe's new declarations, the lead that followed
+`anon3.C`, which had no retained row of its own. A saved initializer is probed
+with the real parser before the emitting replay runs, and the probe kept every
+tag and enumerator it met for the first time, so the replay of the same tokens
+reported `struct/union/enum 'S' already defined` for `const int ns = sizeof
+(struct S { int x; });` (and for the out-of-class static-member form
+`const int D::s = ...`) and `redeclaration of 'a'` for the anonymous
+`enum { a, b }` form. The probe now records what it defines and the replay
+reuses it: the tag body is skipped with the probe's definition standing, and an
+enumerator the probe registered at the same scope is adopted instead of pushed
+again, while a probe that fails leaves its definitions to the dynamic
+initialization replay as before. Coverage is
+`Tests/features/Declarations/pass/test_constant_initializer_defines_named_type.cpp`.
+
+Cycle 51 retired `g++.dg/ext/desig11.C`. A body saved for template replay is
+rewritten with a lambda introducer marker for every `[` that follows `{`, `,`,
+`(` or `=`, so the row's GNU array designators (`const int x[] = { [e] = 0 };
+const int y[] = { [I] = 0 };` inside a function template) were replayed as
+capture lists and reported `lambda capture 'e' must name an automatic
+variable`. The bracket is now left alone when its designator list continues
+through further `[index]`/`.field` designators and then `=`, a shape no lambda
+introducer can take, so real lambdas keep their marker. Coverage is
+`Tests/features/GnuExtensions/pass/test_array_designator_in_template_body.cpp`,
+which checks the designated values and untouched slots of a template function
+and a class-template member function, a two-dimensional designator chain, and a
+capture in the same template body. The previous published compiler rejects that
+test with the row's diagnostic.
 
 Cycle 50 retired `g++.old-deja/g++.martin/sts_iarr.C`. The terminal name of a
 qualified id written inside a class-template member body belongs to the

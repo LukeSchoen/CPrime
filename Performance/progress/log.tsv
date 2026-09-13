@@ -1,0 +1,4 @@
+# cprime performance log v1
+# utc	epoch	cycle	event	value1	value2	value3	head
+# event=perf   value1 fast-tier cpc/tcc ratio, value2 self-compile ms, value3 failures
+# event=checks value1 new findings, value2 checks run, value3 stray files

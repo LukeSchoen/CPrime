@@ -423,6 +423,8 @@ static int parse_template_type_parameter_tok(int index, int *is_variadic,
                                              int *has_default,
                                              TokenString **default_str);
 static int template_parameter_is_type(void);
+static int template_is_deduction_guide(TemplateDef *);
+static int template_declaration_is_deduction_guide(TokenString *, int);
 static int parse_template_non_type_parameter_tok(int parameter_index, int *has_default,
                                                  TokenString **default_str, TokenString **type_str);
 static int template_return_substitution_matches_bound(TemplateDef *, TemplateArgList *);
@@ -488,7 +490,8 @@ static TemplateDef *find_function_template_for_call(int name_tok,
          td; td = nb_inline_namespace_scopes
            ? (++definition_index < nb_template_defs ? template_defs[definition_index] : NULL)
            : td->lookup_bucket_next)
-      if (!td->is_class && !td->is_alias && template_function_matches_namespace(td, scan_tok))
+      if (!td->is_class && !td->is_alias && !td->is_guide
+          && template_function_matches_namespace(td, scan_tok))
         ++template_count;
   }
 
@@ -501,7 +504,7 @@ static TemplateDef *find_function_template_for_call(int name_tok,
          : td->lookup_bucket_next)
   {
     TemplateArgList deduced;
-    if (td->is_class || td->is_alias)
+    if (td->is_class || td->is_alias || td->is_guide)
       continue;
     if (!template_function_matches_namespace(td, group[group_index]))
       continue;
@@ -605,7 +608,7 @@ static TemplateDef *find_function_template_def(int name_tok)
   for (td = template_def_candidates(name_tok); td;
        td = td->lookup_bucket_next)
   {
-    if (td->is_class || td->is_alias || td->friend_class_tok)
+    if (td->is_class || td->is_alias || td->friend_class_tok || td->is_guide)
       continue;
     if ((td->lookup_tok ? td->lookup_tok : td->name_tok) == name_tok)
       return td;
@@ -4276,6 +4279,43 @@ static int append_placeholder_return_pattern(TokenString *output,
   return kind;
 }
 
+/* A declarator that ends in `-> type` spells its result explicitly: the
+   leading `auto` is then only a placeholder, so the body is not probed for a
+   deduced result (and a coroutine body is not lowered during that probe). */
+static int template_declaration_has_trailing_return(TokenString *str)
+{
+  int i, paren = 0, bracket = 0, angle = 0;
+
+  if (!str)
+    return 0;
+  for (i = 0; i < str->len; ++i)
+  {
+    int token = str->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      i += tok_str_value_extra_words(str->str, str->len, i);
+      continue;
+    }
+    if (!paren && !bracket && !angle)
+    {
+      if (token == TOK_ARROW)
+        return 1;
+      if (token == TOK_EOF || token == '{' || token == ';')
+        return 0;
+    }
+    if (token == '(') ++paren;
+    else if (token == ')' && paren) --paren;
+    else if (token == '[') ++bracket;
+    else if (token == ']' && bracket) --bracket;
+    else if (!paren && !bracket && (token == TOK_LT || token == '<')) ++angle;
+    else if (!paren && !bracket && angle && (token == TOK_GT || token == '>'))
+      --angle;
+    else if (!paren && !bracket && angle && token == TOK_SAR)
+      angle = angle > 1 ? angle - 2 : 0;
+  }
+  return 0;
+}
+
 static int token_string_is_auto_type_token_prefix(TokenString *str)
 {
   int i = 0, angle = 0;
@@ -4309,7 +4349,11 @@ static int token_string_is_auto_type_token_prefix(TokenString *str)
   }
   while (i < str->len && str->str[i] == TOK_LINENUM)
     i += 2;
-  return i < str->len && (str->str[i] == TOK_AUTO || str->str[i] == TOK_DECLTYPE);
+  if (i >= str->len
+      || (str->str[i] != TOK_AUTO && str->str[i] != TOK_DECLTYPE))
+    return 0;
+  /* The explicit trailing return type supersedes the placeholder. */
+  return !template_declaration_has_trailing_return(str);
 }
 
 static int promoted_template_element_tok(int lhs_tok, int rhs_tok)
@@ -8646,6 +8690,122 @@ static int save_template_parameter_default(TokenString **default_str, int type_d
   return 1;
 }
 
+/* A concept definition (`template <...> concept Name = ...;`) declares a
+   constraint, not a template.  The compiler does not evaluate constraints,
+   so the definition only has to be recognized and its name recorded; a
+   later type-constraint spelling (`template <Name T>`) then reads as the
+   ordinary type parameter it constrains. */
+#define CPC_MAX_CONCEPT_NAMES 64
+static int concept_name_toks[CPC_MAX_CONCEPT_NAMES];
+static int nb_concept_name_toks;
+
+static int token_names_concept(int name_tok)
+{
+  int i, qualified;
+  if (name_tok < TOK_UIDENT)
+    return 0;
+  for (i = 0; i < nb_concept_name_toks; ++i)
+    if (concept_name_toks[i] == name_tok)
+      return 1;
+  /* The qualified spelling covers a concept declared in an enclosing
+     namespace and used in an inner one. */
+  qualified = find_current_namespace_tok(name_tok);
+  if (qualified != name_tok)
+    for (i = 0; i < nb_concept_name_toks; ++i)
+      if (concept_name_toks[i] == qualified)
+        return 1;
+  return 0;
+}
+
+static void register_concept_name(int name_tok)
+{
+  int plain, qualified, i;
+  if (nb_concept_name_toks >= CPC_MAX_CONCEPT_NAMES)
+    cprime_error("too many concept definitions");
+  plain = name_tok;
+  qualified = make_current_namespace_tok(name_tok);
+  for (i = 0; i < nb_concept_name_toks; ++i)
+    if (concept_name_toks[i] == plain || concept_name_toks[i] == qualified)
+      return;
+  concept_name_toks[nb_concept_name_toks++] = plain;
+  if (qualified != plain && nb_concept_name_toks < CPC_MAX_CONCEPT_NAMES)
+    concept_name_toks[nb_concept_name_toks++] = qualified;
+}
+
+static int template_is_deduction_guide(TemplateDef *definition)
+{
+  return definition && definition->is_guide;
+}
+
+/* A deduction guide spells no return type before its name and ends its
+   declarator in `-> class-template-id`; the name it declares is the class
+   template it guides.  Ordinary function templates either declare a type
+   before the name or return `auto`. */
+static int template_declaration_is_deduction_guide(TokenString *str, int name_tok)
+{
+  int i, depth = 0;
+  if (!str || !name_tok)
+    return 0;
+  for (i = 0; i + 1 < str->len; ++i)
+  {
+    int token = str->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      i += tok_str_value_extra_words(str->str, str->len, i);
+      continue;
+    }
+    if (token == name_tok && str->str[i + 1] == '(')
+      break;
+    return 0;
+  }
+  if (i + 1 >= str->len)
+    return 0;
+  for (++i; i < str->len; ++i)
+  {
+    int token = str->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      i += tok_str_value_extra_words(str->str, str->len, i);
+      continue;
+    }
+    if (token == '(') ++depth;
+    else if (token == ')' && --depth == 0) break;
+    else if (token == TOK_EOF) return 0;
+  }
+  for (++i; i < str->len; ++i)
+  {
+    int token = str->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      i += tok_str_value_extra_words(str->str, str->len, i);
+      continue;
+    }
+    return token == TOK_ARROW;
+  }
+  return 0;
+}
+
+/* A type-constraint spelling puts the concept name and its optional
+   template-argument list in front of the parameter's identifier.  Consume
+   them so the caller reads the ordinary type parameter that follows. */
+static void skip_concept_constraint_prefix(void)
+{
+  next();
+  if (tok == TOK_LT || tok == '<')
+  {
+    int angle = 0;
+    for (;;)
+    {
+      if (tok == TOK_EOF)
+        cprime_error("unexpected end of file in template parameter");
+      if (tok == TOK_LT || tok == '<') ++angle;
+      else if (tok == TOK_GT || tok == '>') { --angle; if (angle <= 0) { next(); break; } }
+      else if (tok == TOK_SAR) { angle -= 2; if (angle <= 0) { next(); break; } }
+      next();
+    }
+  }
+}
+
 static int parse_template_type_parameter_tok(int index, int *is_variadic,
                                              int *has_default,
                                              TokenString **default_str)
@@ -8655,7 +8815,11 @@ static int parse_template_type_parameter_tok(int index, int *is_variadic,
 
   *is_variadic = 0;
   *has_default = 0;
-  next();
+  if (tok == TOK_CLASS
+      || (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "typename")))
+    next();
+  else
+    skip_concept_constraint_prefix();
   if (tok == TOK_DOTS)
   {
     *is_variadic = 1;
@@ -8682,6 +8846,7 @@ static int template_parameter_is_type(void)
   TokenString *lookahead;
   int result;
   if (tok == TOK_CLASS) return 1;
+  if (token_names_concept(tok)) return 1;
   if (tok < TOK_UIDENT || strcmp(get_tok_str(tok, NULL), "typename")) return 0;
   lookahead = tok_str_alloc();
   tok_str_add_tok(lookahead); next();
@@ -9087,42 +9252,72 @@ static TokenString *canonicalize_template_signature_types(TokenString *source,
 {
   TokenString *result = tok_str_alloc();
   int i, body = 0;
+  int member_owner_tok = 0, member_owner_result_len = 0;
   for (i = 0; i < source->len; ++i) {
     int token = source->str[i];
     TemplateDef *record;
+    int member_owner, member_prefix_len = -1;
     if (token == '{') body = 1;
+    member_owner = member_owner_tok && token != ':' && token != TOK_LINENUM
+                   && result->len >= 2
+                   && result->str[result->len - 1] == ':'
+                   && result->str[result->len - 2] == ':'
+                   ? member_owner_tok : 0;
     if (!body && token >= TOK_UIDENT && i + 1 < source->len
-        && source->str[i + 1] == TOK_LT
-        && (record = find_class_template_def(find_current_namespace_tok(token))) != NULL) {
-      int end = i + 1, depth = 0, dependent = 0, j;
-      for (; end < source->len; ++end) {
-        int current = source->str[end];
-        if (current == TOK_LT) ++depth;
-        else if (current == TOK_GT) --depth;
-        else if (current == TOK_SAR) depth -= 2;
-        for (j = 0; j < count; ++j) if (current == parameters[j]) dependent = 1;
-        if (!depth) break;
-        if (TOK_HAS_VALUE(current)) end += tok_str_value_extra_words(source->str, source->len, end);
+        && source->str[i + 1] == TOK_LT)
+    {
+      record = find_class_template_def(find_current_namespace_tok(token));
+      if (!record && member_owner)
+      {
+        /* A concrete class instance followed by `::member<args>` names a
+           member class template of that instance, not a namespace template. */
+        record = find_class_template_def(make_static_member_tok(
+                   member_owner, find_current_namespace_tok(token)));
+        if (record)
+          member_prefix_len = member_owner_result_len;
       }
-      if (!dependent && end < source->len
-          && (!qualified_only || (end + 2 < source->len
-              && source->str[end + 1] == ':' && source->str[end + 2] == ':'))) {
-        TokenString *argument_tokens = tok_str_alloc(), *parent = macro_stack;
-        const int *parent_ptr = macro_ptr;
-        int saved = tok, name;
-        CValue saved_value = tokc;
-        TemplateArgList arguments;
-        for (j = i + 1; j <= end; ++j)
-          tok_str_add_record(argument_tokens, source->str, source->len, &j);
-        tok_str_add(argument_tokens, TOK_EOF);
-        begin_macro(argument_tokens, 1); next();
-        parse_template_type_args(&arguments);
-        name = instantiate_template_if_needed(record, &arguments);
-        while (macro_stack && macro_stack != parent) end_macro();
-        macro_ptr = parent_ptr; tok = saved; tokc = saved_value;
-        tok_str_add(result, name); i = end; continue;
+      if (record)
+      {
+        int end = i + 1, depth = 0, dependent = 0, j;
+        for (; end < source->len; ++end) {
+          int current = source->str[end];
+          if (current == TOK_LT) ++depth;
+          else if (current == TOK_GT) --depth;
+          else if (current == TOK_SAR) depth -= 2;
+          for (j = 0; j < count; ++j) if (current == parameters[j]) dependent = 1;
+          if (!depth) break;
+          if (TOK_HAS_VALUE(current)) end += tok_str_value_extra_words(source->str, source->len, end);
+        }
+        if (!dependent && end < source->len
+            && (!qualified_only || (end + 2 < source->len
+                && source->str[end + 1] == ':' && source->str[end + 2] == ':'))) {
+          TokenString *argument_tokens = tok_str_alloc(), *parent = macro_stack;
+          const int *parent_ptr = macro_ptr;
+          int saved = tok, name;
+          CValue saved_value = tokc;
+          TemplateArgList arguments;
+          for (j = i + 1; j <= end; ++j)
+            tok_str_add_record(argument_tokens, source->str, source->len, &j);
+          tok_str_add(argument_tokens, TOK_EOF);
+          begin_macro(argument_tokens, 1); next();
+          parse_template_type_args(&arguments);
+          name = instantiate_template_if_needed(record, &arguments);
+          while (macro_stack && macro_stack != parent) end_macro();
+          macro_ptr = parent_ptr; tok = saved; tokc = saved_value;
+          if (member_prefix_len >= 0 && member_prefix_len < result->len)
+            result->len = member_prefix_len;
+          member_owner_tok = 0;
+          member_owner_result_len = result->len;
+          tok_str_add(result, name); i = end;
+          if (end + 2 < source->len
+              && source->str[end + 1] == ':' && source->str[end + 2] == ':')
+            member_owner_tok = name;
+          continue;
+        }
       }
     }
+    if (member_owner_tok && token != ':' && token != TOK_LINENUM)
+      member_owner_tok = 0;
     tok_str_add_record(result, source->str, source->len, &i);
   }
   tok_str_free(source);
@@ -9345,7 +9540,8 @@ static void parse_template_decl(void)
   int brace = 0, saw_body = 0, parentheses = 0, brackets = 0;
   int function_try = 0;
   int saw_operator_declarator = 0;
-  int is_class = 0, is_union = 0, is_alias = 0;
+  int is_class = 0, is_union = 0, is_alias = 0, is_concept = 0;
+  int is_guide = 0;
   const char *kw;
   TemplateDef *td;
   TokenString *str;
@@ -9686,6 +9882,14 @@ static void parse_template_decl(void)
       is_class = 0;
       is_alias = 1;
     }
+    if (!name_tok && prev_tok >= TOK_UIDENT
+        && !strcmp(get_tok_str(prev_tok, NULL), "concept")
+        && tok >= TOK_UIDENT)
+    {
+      name_tok = tok;
+      is_class = 0;
+      is_concept = 1;
+    }
     if (!name_tok && prev_tok == TOK_OPERATOR)
     {
       int operator_name_tok = get_cpp_binary_operator_method_tok(tok);
@@ -9728,6 +9932,22 @@ static void parse_template_decl(void)
     next();
   }
   tok_str_add(str, TOK_EOF);
+
+  if (is_concept)
+  {
+    int parameter;
+    register_concept_name(name_tok);
+    tok_str_free(str);
+    for (parameter = 0; parameter < nb_type_params; ++parameter)
+    {
+      if (default_arg_strs[parameter]) tok_str_free(default_arg_strs[parameter]);
+      if (value_type_strs[parameter]) tok_str_free(value_type_strs[parameter]);
+    }
+    return;
+  }
+
+  if (!is_class && !is_alias)
+    is_guide = template_declaration_is_deduction_guide(str, name_tok);
 
   /* An out-of-class nested class template names its class with a qualified
      id (`struct A::B { ... }` or `struct N::B { ... }`).  The scan above
@@ -9772,13 +9992,14 @@ static void parse_template_decl(void)
     }
   }
 
-  if (!is_class && !is_alias)
+  if (!is_class && !is_alias && !is_guide)
     /* Resolve non-dependent class qualifiers before classifying a member
        template. Value<int>::read still belongs to a class even when its
        outer template<> header leaves only read's parameters dependent. */
     str = canonicalize_template_signature_types(str, type_param_toks,
                                                 nb_type_params, !friend_owner);
-  if (!is_class && !is_alias && register_template_static_data(str,type_param_toks,nb_type_params))
+  if (!is_class && !is_alias && !is_guide
+      && register_template_static_data(str,type_param_toks,nb_type_params))
   {
     int parameter;
     for(parameter=0;parameter<nb_type_params;++parameter){
@@ -9790,7 +10011,7 @@ static void parse_template_decl(void)
   if (!name_tok)
     name_tok = find_template_name_in_str(str);
 
-  member_class_tok = is_alias ? 0
+  member_class_tok = is_alias || is_guide ? 0
     : find_template_member_class_in_str(str, type_param_toks[0]);
   if (member_class_tok)
   {
@@ -9833,6 +10054,9 @@ static void parse_template_decl(void)
       analyze_template_function_signature(str, name_tok, &func_min_args,
                                           &func_max_args,
                                           &func_is_variadic, &func_sig_hash);
+    /* Deduction guides are distinct declarations of the same class template;
+       they never merge with one another or with the class itself. */
+    if (!is_guide)
     for (i = 0; i < nb_template_defs; ++i)
     {
       TemplateDef *old = template_defs[i];
@@ -9990,6 +10214,7 @@ static void parse_template_decl(void)
   td->variadic_param_index = variadic_param_index;
   td->is_class = is_class;
   td->is_alias = is_alias;
+  td->is_guide = is_guide;
   td->is_partial_specialization =
     is_class && is_class_template_partial_specialization(str, name_tok);
   td->has_body = saw_body;
@@ -14672,7 +14897,23 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
     {
       int saved_name_tok = tok;
       CValue saved_name_tokc = tokc;
+      /* A name followed by '::' is looked up in a type-only context, so a
+         namespace or class spelled like the pack is not the pack there; the
+         same spelling after '.' or '->' names a member.  Keep the written
+         token for the ordinary body parser, the rule the fold-pattern
+         expansion already applies. */
+      int previous = tok_str_prev_token_index(spec->str, spec->len, spec->len);
+      int qualified = previous >= 0
+          && (spec->str[previous] == '.' || spec->str[previous] == TOK_ARROW
+              || spec->str[previous] == ':');
       next();
+      if (!qualified && tok == ':')
+        qualified = 1;
+      if (qualified)
+      {
+        tok_str_add2(spec, saved_name_tok, &saved_name_tokc);
+        continue;
+      }
       if (tok == TOK_DOTS)
       {
         int pi;
@@ -14846,7 +15087,8 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
       continue;
     }
     if (!td->is_class && !function_body_started && !function_decl_name_done
-        && (tok == TOK_AUTO || tok == TOK_DECLTYPE || tok == TOK_DECLTYPE2))
+        && (tok == TOK_AUTO || tok == TOK_DECLTYPE || tok == TOK_DECLTYPE2)
+        && !template_declaration_has_trailing_return(td->def_str))
     {
       CType return_type;
       if (infer_saved_template_body_return(td, args, &return_type)
@@ -16752,7 +16994,7 @@ static int explicit_overload_address_type(Sym *source, CType *result)
   {
     Sym *function;
     int token;
-    if (definition->is_class || definition->is_alias
+    if (definition->is_class || definition->is_alias || definition->is_guide
         || template_def_lookup_tok(definition) != source->v
         || !infer_template_args_from_call_with_explicit(definition, no_args, 0,
                                                         &bindings,
@@ -17501,6 +17743,7 @@ static TemplateDef *find_explicit_function_template_for_call(int name,
     TemplateArgList bindings;
     int rank;
     if (definition->is_class || definition->is_alias
+        || definition->is_guide
         || template_def_lookup_tok(definition) != name
         || argument_count < definition->func_min_args
         || (!definition->func_is_variadic
@@ -17530,6 +17773,171 @@ static TemplateDef *find_explicit_function_template_for_call(int name,
     }
   }
   return best;
+}
+
+/* The class a deduction guide names: substitute the guide's deduced bindings
+   into its written result type (`-> Class<...>`) and probe it, which
+   instantiates the class template specialization. */
+static int template_guide_class_tok(TemplateDef *guide, TemplateArgList *bindings)
+{
+  TokenString *tokens = tok_str_alloc();
+  CType result;
+  int i, depth = 0, valid;
+
+  for (i = 0; i + 1 < guide->def_str->len; ++i)
+  {
+    int token = guide->def_str->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      i += tok_str_value_extra_words(guide->def_str->str, guide->def_str->len, i);
+      continue;
+    }
+    if (token == guide->name_tok && guide->def_str->str[i + 1] == '(')
+      break;
+  }
+  if (i + 1 >= guide->def_str->len)
+    return 0;
+  for (++i; i < guide->def_str->len; ++i)
+  {
+    int token = guide->def_str->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      i += tok_str_value_extra_words(guide->def_str->str, guide->def_str->len, i);
+      continue;
+    }
+    if (token == '(') ++depth;
+    else if (token == ')' && --depth == 0) break;
+    else if (token == TOK_EOF) return 0;
+  }
+  for (++i; i < guide->def_str->len; ++i)
+  {
+    int token = guide->def_str->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      i += tok_str_value_extra_words(guide->def_str->str, guide->def_str->len, i);
+      continue;
+    }
+    if (token == TOK_ARROW)
+    {
+      ++i;
+      break;
+    }
+    return 0;
+  }
+  for (; i < guide->def_str->len; ++i)
+  {
+    int token = guide->def_str->str[i];
+    if (token == TOK_EOF || token == ';' || token == '{')
+      break;
+    if (TOK_HAS_VALUE(token))
+    {
+      tok_str_add_record(tokens, guide->def_str->str, guide->def_str->len, &i);
+      continue;
+    }
+    tok_str_add(tokens, template_subst_token(guide, bindings, 0, NULL, NULL, 0,
+                                             token));
+  }
+  tok_str_add(tokens, TOK_EOF);
+  valid = template_probe_type(tokens, 0, guide->namespace_tok, &result);
+  tok_str_free(tokens);
+  if (!valid || (result.t & VT_BTYPE) != VT_STRUCT)
+    return 0;
+  return get_struct_type_name_tok(&result);
+}
+
+/* Class template argument deduction for the functional spelling
+   `Class(args)`: deduce the class's arguments from its deduction guides,
+   instantiate the class the selected guide names, and build the temporary
+   from the argument list the probe restored.  Returns non-zero when the
+   argument list has been consumed and the temporary published. */
+static int try_parse_cpp_template_ctad_construction(int name_tok,
+                                                    TemplateDef *class_td)
+{
+  TokenString *call_args[CPC_MAX_CALL_ARGUMENTS];
+  CType call_types[CPC_MAX_CALL_ARGUMENTS];
+  CType type;
+  int lookups[2], nb_lookups = 1, lookup, i, count, class_tok = 0;
+  TemplateDef *candidate, *guide = NULL;
+
+  if (!class_td->is_class || !is_cpp_translation_unit())
+    return 0;
+  lookups[0] = name_tok;
+  if (class_td->lookup_tok && class_td->lookup_tok != name_tok)
+    lookups[nb_lookups++] = class_td->lookup_tok;
+  /* A class template without deduction guides keeps its current meaning. */
+  for (lookup = 0; lookup < nb_lookups && !guide; ++lookup)
+    for (candidate = template_def_candidates(lookups[lookup]); candidate;
+         candidate = candidate->lookup_bucket_next)
+      if (candidate->is_guide
+          && template_def_lookup_tok(candidate) == lookups[lookup])
+      {
+        guide = candidate;
+        break;
+      }
+  if (!guide)
+    return 0;
+
+  count = probe_template_call_args(call_args, call_types, CPC_MAX_CALL_ARGUMENTS);
+  for (lookup = 0; lookup < nb_lookups && !class_tok; ++lookup)
+    for (candidate = template_def_candidates(lookups[lookup]); candidate;
+         candidate = candidate->lookup_bucket_next)
+    {
+      TemplateArgList bindings;
+      if (!candidate->is_guide
+          || template_def_lookup_tok(candidate) != lookups[lookup])
+        continue;
+      if (count < candidate->func_min_args
+          || (!candidate->func_is_variadic && count > candidate->func_max_args))
+        continue;
+      if (!infer_template_args_from_call(candidate, call_types, count, &bindings))
+        continue;
+      class_tok = template_guide_class_tok(candidate, &bindings);
+      if (class_tok)
+        break;
+    }
+  if (!class_tok)
+    return 0;
+  if (!make_class_type_from_tok(&type, class_tok))
+    return 0;
+  materialize_incomplete_template_type(&type);
+  if (resolve_lifecycle_func(&type, TOK_CONSTRUCTOR1))
+    return try_parse_cpp_functional_constructor(class_tok);
+  /* An aggregate has no constructor to call, so the parenthesized list
+     initializes its members exactly like the braced form.  Replay the
+     argument list the probe restored as a braced list. */
+  {
+    TokenString *braced = tok_str_alloc();
+    int trailing;
+    int depth = 0;
+    for (;;)
+    {
+      if (tok == '(') ++depth;
+      else if (tok == ')') --depth;
+      if (tok == TOK_EOF)
+      {
+        tok_str_free(braced);
+        return 0;
+      }
+      next();
+      if (depth <= 0)
+        break;
+    }
+    trailing = tok;
+    tok_str_add(braced, '{');
+    for (i = 0; i < count; ++i)
+    {
+      if (i)
+        tok_str_add(braced, ',');
+      tok_str_append_without_eof(braced, call_args[i]);
+    }
+    tok_str_add(braced, '}');
+    tok_str_add2(braced, trailing, &tokc);
+    tok_str_add(braced, 0);
+    begin_macro(braced, 1);
+    next();
+    materialize_braced_temporary(&type);
+  }
+  return 1;
 }
 
 #include "cprimegen_template_ordering.inc"

@@ -3,16 +3,6 @@
     "source":  "https://github.com/gcc-mirror/gcc",
     "cases":  [
                   {
-                      "path":  "g++.old-deja/g++.brendan/complex1.C",
-                      "role":  "case",
-                      "sha256":  "d4fb284cb2d150354401c1765fda95537888e5d2b306f3d3b418b90c2b178a59"
-                  },
-                  {
-                      "path":  "g++.dg/tree-ssa/pr50622.C",
-                      "role":  "case",
-                      "sha256":  "c558a09691c8a68aeaf7dc638d42df3f464e86881af4b7dc5869ac43214e5595"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.law/operators34.C",
                       "role":  "case",
                       "sha256":  "1038b9487e1001098baa4b541076c37f40498461af343d854aadf320a8a14660"
@@ -78,11 +68,6 @@
                       "sha256":  "05def935a322653b8d07fe7b4ec303d6c1fc448c419c90985841cf5f356306f5"
                   },
                   {
-                      "path":  "g++.old-deja/g++.other/debug9.C",
-                      "role":  "case",
-                      "sha256":  "c4fba3f76e2d88d480bdb366f614735e9265201181e2f21aa4fa7ca187cdc508"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.other/crash20.C",
                       "role":  "case",
                       "sha256":  "0e7ff5f199a44f6b1e5625259e90a8e03621d70276c7647e2035938d2c1f65d0"
@@ -93,36 +78,6 @@
                       "sha256":  "28e1e34708b315f92aecff30d285a0d81f287ab6ca3441602c65a3309a5f7044"
                   },
                   {
-                      "path":  "g++.dg/ext/complex3.C",
-                      "role":  "case",
-                      "sha256":  "af9fe11eac95870169981f2eed777e55ea52590e3e854433ff2315ca20074872"
-                  },
-                  {
-                      "path":  "g++.dg/ext/complex2.C",
-                      "role":  "case",
-                      "sha256":  "6860655d4504d16bad25fa097ca04a4265be387b6aa1bc4f290064df91611b5b"
-                  },
-                  {
-                      "path":  "g++.dg/ext/complex5.C",
-                      "role":  "case",
-                      "sha256":  "5efcbe2c2f3729e5a01f112765890a8ed5dc1be5d13591a2a715397edbd0c008"
-                  },
-                  {
-                      "path":  "g++.dg/ext/complex9.C",
-                      "role":  "case",
-                      "sha256":  "32e5ae87c3706f4ef7072282fc4a7506f45b3065461e2a3fc0869dd8e5410671"
-                  },
-                  {
-                      "path":  "g++.dg/ext/complex6.C",
-                      "role":  "case",
-                      "sha256":  "09f58293b9556142c3bf51039f0ea4215d8b54f36b8379a1edeaa92c8bb43335"
-                  },
-                  {
-                      "path":  "g++.dg/ext/complex1.C",
-                      "role":  "case",
-                      "sha256":  "e2345aa483bcfd55df9c645734d6f3a4284adf32304acd08a56aff53a9e07165"
-                  },
-                  {
                       "path":  "g++.dg/eh/comdat1.C",
                       "role":  "case",
                       "sha256":  "b64b13c1d1b59bada309a74437189991e8ca5db1b8ff0f0e275fa854a9e656c1"
@@ -131,11 +86,6 @@
                       "path":  "g++.dg/eh/dtor1.C",
                       "role":  "case",
                       "sha256":  "86ed41fcc10a1231be3b6bf18a6120ef3c80889f0a1b12d86c10cbfd13425ea0"
-                  },
-                  {
-                      "path":  "g++.dg/expr/stdarg2.C",
-                      "role":  "case",
-                      "sha256":  "0d2e1bf3a991d32aad4b2865e70f4160db8822e8a742355da78370809188f0f8"
                   },
                   {
                       "path":  "g++.dg/ext/complit12.C",
@@ -151,11 +101,6 @@
                       "path":  "g++.dg/ext/vla9.C",
                       "role":  "case",
                       "sha256":  "fcaaea16d1f8ebe75284fa2a0caae522aed4c08602e974bd74c86ff75452f9e7"
-                  },
-                  {
-                      "path":  "g++.dg/ext/desig11.C",
-                      "role":  "case",
-                      "sha256":  "7f8c28773bcf41aeb8cee9f250d6c11362ddc58246f7c614e2870a8eea2e0c2d"
                   },
                   {
                       "path":  "g++.dg/ext/pr99508.C",
@@ -218,11 +163,6 @@
                       "sha256":  "51b2ba9d5b0d7a4c5844842483ce7bf6bd6d46e1fa5d7dfde40f0e0a1adfe03a"
                   },
                   {
-                      "path":  "g++.dg/opt/pr83608.C",
-                      "role":  "case",
-                      "sha256":  "fc97c4bef7220b7827712ba9bc9b918385ba069badcd698a26c1b3b7f9f45c11"
-                  },
-                  {
                       "path":  "g++.dg/other/pr24623.C",
                       "role":  "case",
                       "sha256":  "340eeaea614a1884d0ff76e8c9b526a40b9760a53d7afe2a1e783a2a0801dd30"
@@ -231,11 +171,6 @@
                       "path":  "g++.dg/other/copy1.C",
                       "role":  "case",
                       "sha256":  "de710feb67097be2343dc47044d052a80b90c00b4f68078dcea74eb938c68d66"
-                  },
-                  {
-                      "path":  "g++.dg/other/complex1.C",
-                      "role":  "case",
-                      "sha256":  "f7d99d2a6cb896f0ea3efef34edcc35c37f36d0e162c46acbe994b23d4dca7f8"
                   },
                   {
                       "path":  "g++.dg/template/arg6.C",
@@ -313,54 +248,9 @@
                       "sha256":  "7b03a35f982436b21e952afc4194c44196c46b46f509ebcb9046de0a120cfc7b"
                   },
                   {
-                      "path":  "g++.dg/init/complex1.C",
-                      "role":  "case",
-                      "sha256":  "04563dc8a60f294a5251b0274b05c4bf53bfa0d71e84516b86caa7233183b16a"
-                  },
-                  {
-                      "path":  "g++.dg/opt/complex3.C",
-                      "role":  "case",
-                      "sha256":  "cecf315ad3cdecee8d90f7be4c1177c32caafcb07badeafeb09b45138184de2f"
-                  },
-                  {
-                      "path":  "g++.dg/opt/complex2.C",
-                      "role":  "case",
-                      "sha256":  "7742a4d5bd2e5af6be7eadbe69e9c64a9f1cd94ef369f76eb173d91f8d7e67a5"
-                  },
-                  {
-                      "path":  "g++.dg/opt/complex4.C",
-                      "role":  "case",
-                      "sha256":  "dfb3a33d335c7a58bf88e70b908db505f329e9ffdd4b6084b1b2430f31d2ac64"
-                  },
-                  {
-                      "path":  "g++.dg/opt/complex6.C",
-                      "role":  "case",
-                      "sha256":  "f7a46e50ddd625c9f744e95ca142c9d337b72f7bf6dc395bed2bc5c3bf741222"
-                  },
-                  {
-                      "path":  "g++.dg/opt/complex5.C",
-                      "role":  "case",
-                      "sha256":  "949945bad2fd78deabd23127699372f71bec9503f00563cd1f5176464fb781a9"
-                  },
-                  {
-                      "path":  "g++.dg/opt/complex1.C",
-                      "role":  "case",
-                      "sha256":  "0af39d95b5f0cdc53556811f212b789fb031d0df41914a7bc392ed5bf156c553"
-                  },
-                  {
-                      "path":  "g++.dg/opt/conj1.C",
-                      "role":  "case",
-                      "sha256":  "4cf918b77c9f6f77486d28030360f761d71e96e9859f18237711ed377e1325e4"
-                  },
-                  {
                       "path":  "g++.dg/opt/pr48967.C",
                       "role":  "case",
                       "sha256":  "4c1912a63fe988ba8f580fca8f3892f114fcdda017be15faf083191a66c9b294"
-                  },
-                  {
-                      "path":  "g++.dg/opt/conj2.C",
-                      "role":  "case",
-                      "sha256":  "05969e568b36aaaf02f64aa227fbe76a9573c9f20f7fddaa590bbfe601cb2678"
                   },
                   {
                       "path":  "g++.dg/opt/inline11.C",
@@ -379,10 +269,10 @@
                         "role":  "support",
                         "sha256":  "53f13f9ee08aa9c6b3e924329fac8f8280242a59a1ce5978465bab18937965c4"
                     },
-                  {
-                      "path":  "g++.dg/cpp0x/nolinkage1.h",
-                      "role":  "support",
-                      "sha256":  "542fa026d6630ace9503f89fb9a286798b47b3941dd705b69ef434923f9b9f15"
-                  }
+                    {
+                        "path":  "g++.dg/cpp0x/nolinkage1.h",
+                        "role":  "support",
+                        "sha256":  "542fa026d6630ace9503f89fb9a286798b47b3941dd705b69ef434923f9b9f15"
+                    }
                 ]
 }

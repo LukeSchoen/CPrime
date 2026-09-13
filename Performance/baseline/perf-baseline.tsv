@@ -1,0 +1,11 @@
+# cprime perf baseline v1
+# case	cpc_ms	cpc_over_tcc	cpc_over_ref
+c.empty.main	9.865	1.4574	1.0053
+c.float.math	9.944	1.5181	1.0078
+c.integer.expressions	10.443	1.5836	1.0243
+c.many.functions	11.561	1.5050	0.9352
+c.preprocessor.heavy	12.192	1.5539	1.0691
+c.self.driver	322.493	0.0000	0.5822
+c.string.literals	10.387	1.4489	0.9858
+c.struct.fields	9.956	1.4923	0.9398
+c.switch.dense	10.722	1.5088	1.0303

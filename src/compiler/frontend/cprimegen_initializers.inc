@@ -422,6 +422,18 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
         && (vtop->r & (VT_VALMASK | VT_LVAL | VT_NONCONST)) != VT_CONST)
       cprime_error("reference initializer address is not constant");
 
+    /* A complex value is an aggregate of two parts.  Only a value that is
+       already an object with known bytes (an anonymous compound literal) can
+       be written into a static initializer, so the constant-initialization
+       probe fails here for anything else and the declaration takes the
+       dynamic-initialization path instead of storing a temporary's offset. */
+    if (is_complex_type(&dtype) || is_complex_type(&vtop->type))
+    {
+      if ((vtop->r & (VT_SYM | VT_CONST)) != (VT_SYM | VT_CONST)
+          || !vtop->sym || vtop->sym->v < SYM_FIRST_ANOM)
+        cprime_error("initializer element is not constant");
+    }
+
     if ((vtop->r & VT_SYM)
         && bt != VT_PTR
         && (bt != (PTR_SIZE == 8 ? VT_LLONG : VT_INT)
@@ -1681,7 +1693,10 @@ do_init_list:
     }
     free_saved_array_elements(elements, len);
   }
-  else if ((type->t & VT_BTYPE) == VT_STRUCT)
+  /* A complex object takes its whole value from an expression initializer as
+     a scalar conversion; only a braced initializer lists the two parts. */
+  else if ((type->t & VT_BTYPE) == VT_STRUCT
+           && !(is_complex_type(type) && (flags & DIF_HAVE_ELEM)))
   {
     if (initialize_class_constructor_list(p, type, c, flags)) goto initialized_object;
     no_oblock = 1;

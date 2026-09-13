@@ -340,7 +340,11 @@ static int find_current_namespace_tok_ex(int name_tok, int ignore_locals)
   for (i = nb_using_namespace_toks - 1; i >= 0; --i)
   {
     t = make_static_member_tok(using_namespace_toks[i], name_tok);
-    if (sym_find(t) || global_symbol_find(t) || struct_find(t)
+    /* A using-directive also makes a nested namespace's name visible, and
+       `ranges::elements_of` written after `using namespace std;` names the
+       namespace `std::ranges`; the plain-symbol probes below cannot see it. */
+    if (namespace_member_exists(t)
+        || sym_find(t) || global_symbol_find(t) || struct_find(t)
         || find_class_template_def(t) || find_function_template_def(t))
       return t;
   }
@@ -2490,6 +2494,11 @@ static int call_arg_matches_param_type_standard(CType *param_type,
   if (btype_is_arithmetic_scalar(param_value_type.t & VT_BTYPE)
       && btype_is_arithmetic_scalar(arg_value_type.t & VT_BTYPE))
     return 1;
+  /* A real arithmetic value initializes a by-value complex parameter
+     ([C11] 6.3.1.5). */
+  if (is_complex_type(&param_value_type)
+      && btype_is_arithmetic_scalar(arg_value_type.t & VT_BTYPE))
+    return 1;
   /* A class argument initializes a by-value base parameter through a
      derived-to-base copy. Reference parameters reach the same predicate
      above; without this arm the copy was rejected and the call reported as
@@ -2784,6 +2793,12 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
   if (btype_is_arithmetic_scalar(param_value_type.t & VT_BTYPE)
       && btype_is_arithmetic_scalar(arg_value_type.t & VT_BTYPE))
     return cpp_arithmetic_conversion_rank(&param_value_type, &arg_value_type);
+  /* A real-to-complex conversion is a valid but worse conversion than any
+     scalar arithmetic conversion (`f(1)` prefers f(double) over
+     f(_Complex int)). */
+  if (is_complex_type(&param_value_type)
+      && btype_is_arithmetic_scalar(arg_value_type.t & VT_BTYPE))
+    return 5;
   if ((param_type->t & VT_BTYPE) == VT_STRUCT
       && class_has_single_arg_constructor_for(param_type,
                                               &constructor_arg_type))
