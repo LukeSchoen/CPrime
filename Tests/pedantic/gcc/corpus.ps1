@@ -1,7 +1,9 @@
 function Read-GccCorpus([string]$Directory) {
     $manifest = Get-Content -LiteralPath (Join-Path $Directory 'corpus.json') -Raw | ConvertFrom-Json
     $base = [IO.Path]::GetFullPath((Join-Path $Directory 'corpus'))
-    if (-not $manifest.cases.Count) { throw 'Corpus has no checked cases' }
+    # An empty checked set is the valid terminal inventory.  Still validate
+    # every retained support entry: an empty manifest is not permission to
+    # bypass path containment or upstream-integrity checks.
     $seen = @{}
     foreach ($entry in (@($manifest.cases) + @($manifest.support))) {
         $path = [IO.Path]::GetFullPath((Join-Path $base $entry.path))

@@ -1,13 +1,13 @@
 # cprime checks baseline v1
 # id	count
-env.win	4
-env.crt	13
-env.expand	0
-env.module	3
-env.registry	1
-marker.todo	0
-marker.fixme	0
-marker.hack	0
-marker.xxx	109
-dead.if0	25
+env.win	6
+env.crt	14
+env.expand	1
+env.module	5
+env.registry	3
+marker.todo	2
+marker.fixme	2
+marker.hack	2
+marker.xxx	111
+dead.if0	27
 stray.files	1

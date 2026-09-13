@@ -1,8 +1,8 @@
-# First-party pedantic cases that currently fail and count against the 100% target.
-# One suite-relative path per line, matching the Tests/tiers.json key form.
-# Delete the line when the case is repaired; keep this list in step with the
-# "Known first-party pedantic failures" section of task.md.
-# Empty since cycle 19: the internal baseline is green at both tiers. Cycle 19
-# repaired the const range-for loop variable, the coroutine syntax body, the
-# by-value parameter destruction expectation and the named return value
-# optimization.
+# Known current first-party failures, relative to Tests/.
+# Pending programs must pass after repair; initializer_redefinition must reject.
+# Native ABI/assembly and historical batch issues remain separately in task.md
+# until their exact current reproductions are established.
+pending/initializer_redefinition.cpp
+pending/lambda_braced_initializer.cpp
+pending/static_complex_initialization.c
+pedantic/performance/pass/test_heap_list_push_clear_perf.cpp

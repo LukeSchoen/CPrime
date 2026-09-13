@@ -51,8 +51,18 @@ foreach ($selection in $Select) {
     }
 }
 if (-not $files.Count) {
-    if (-not @($corpus.cases).Count) { throw 'Corpus has no checked cases' }
     if ($List) { exit 0 }
+    if (-not @($corpus.cases).Count) {
+        $utf8 = New-Object Text.UTF8Encoding($false)
+        $metadata = [ordered]@{ revision = $revision; compiler = $Compiler; compiler_sha256 = (Get-FileHash -LiteralPath $Compiler -Algorithm SHA256).Hash.ToLowerInvariant(); selected = 0; serial = $true; probe = $false; tier = $Tier; scope = 'retained checked failure corpus'; inventory_state = 'empty-valid-final-state'; concurrency = 1 }
+        [IO.File]::WriteAllText((Join-Path $Out 'metadata.json'), ($metadata | ConvertTo-Json -Depth 6), $utf8)
+        [IO.File]::WriteAllText((Join-Path $Out 'results.jsonl'), '', $utf8)
+        [IO.File]::WriteAllText((Join-Path $Out 'summary.json'), '{}', $utf8)
+        [IO.File]::WriteAllText((Join-Path $Out 'execution.json'), (([ordered]@{ selected = 0; recorded = 0; remaining = 0; stopped_early = $false; slow_failures = 0; inventory_state = 'empty-valid-final-state' }) | ConvertTo-Json), $utf8)
+        Write-Output '{}'
+        Write-Host "Checked score: 0/0; retained checked failure corpus is empty; output: $Out"
+        exit 0
+    }
     Write-Host "No checked cases in tier $Tier"
     exit 0
 }

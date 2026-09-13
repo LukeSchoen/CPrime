@@ -1,300 +1,120 @@
-# Retained GCC failure corpus
+# Retained GCC compatibility work
 
-This directory holds only the unresolved rows from upstream GCC tests at
-revision `5f6257c26b814de1a14c71b2d3a49291765b6577`
-(https://github.com/gcc-mirror/gcc). Every retained case is expected to fail
-until it is repaired; established passes were deleted once their behavior moved
-into first-party coverage, and git history keeps the removed sources.
+## Scope and evidence
 
-`corpus.json` lists and hashes the retained cases; supporting headers live
-beside them and are hashed separately so they are never discovered as tests.
+45 unresolved rows remain at upstream revision
+`5f6257c26b814de1a14c71b2d3a49291765b6577`. The 2026-09-13 root-CPC audit
+reported compile/link failure for every row, with no timeout. Compiler identity
+and exact commands are in `build/gcc-preparation-audit/metadata.json` and
+`results.jsonl`; task.md records the compiler hash. The manifest hashes every
+retained source and its required support header. Passing behavior must move to
+minimal first-party coverage before deleting a repaired external row.
 
-## Commands
+C++17 is the cutoff. `g++.dg/coroutines/pr113457.C` is excluded for concepts,
+ranges and coroutine requirements; do not resume its old repair queue.
+`g++.dg/cpp26/aggr-init1.C` remains because the line-92 failure is in an older
+constexpr aggregate expression. Reduce that in-scope behavior without adding
+post-C++17 support. Old GNU syntax and optimizer link sentinels are labelled
+separately below; acceptance is not a claim of standard conformance.
 
-```powershell
-./Tests/pedantic/gcc/run.ps1 -List
-./Tests/pedantic/gcc/run.ps1 -Select g++.dg/template/access27.C -Out build/gcc-exact
-./Tests/pedantic/gcc/run.ps1 -ContinueAfterTimeout -Out build/gcc-retained
-```
+## Package mechanisms
 
-The default fast tier selects every retained case. The tier partition in
-`Tests/tiers.json` is still consulted so a repaired row can be removed from the
-corpus without disturbing the rest; there is no pedantic GCC partition while
-every retained row is unresolved, and `-Tier pedantic` is a no-op.
+| ID | Mechanism and likely implementation | Package validation |
+| --- | --- | --- |
+| T1 | Declaration ownership, specialization identity and linkage: cprimegen_templates.inc, function_specializations.inc, microsoft_mangle.inc. Register the owner and declaration before replay; canonicalize once. | Member templates under non-template owners, friend template-ids, enum arguments, declarations/definitions and separate-TU symbol identity. |
+| T2 | Dependent scope and completion: templates, substitution, alias_templates, cpp_member_info. Keep lexical lookup separate from receiver lookup; materialize layout only when semantically required. | Alias/class chains, explicit-instantiation parameter scope, free names inside members, deferred nested layout; include access rejection controls. |
+| T3 | Deduction, defaults and ordering: template_ordering, substitution, cpp_names_overload. Substitute explicit arguments before deduction and preserve candidate order/ownership. | Runtime selected-overload values, all argument spellings, ambiguity controls, SFINAE versus hard errors. |
+| T4 | Member-pointer identity/calls: member_pointers, microsoft_mangle, cpp_member_info and backend receiver adjustment. Use a consistent owner/type representation through substitution and emission. | Non-primary base, virtual dispatch, member-template addresses, NTTPs and callable results; compile-only success is insufficient for runnable originals. |
+| I1 | Initialization and lifecycle: initializers, constexpr, lifecycle, temporaries. Separate parsing, viability, constant materialization and runtime cleanup. | Static assertions plus runtime values/counts, new/class conversions, mutable assignment, compound-literal lifetime and the pending reductions in task.md. |
+| E1 | Function-try-block parsing and cleanup: statements, exceptions, lifecycle. Save the function scope and constructed-subobject state for handlers. | Constructor base destruction before handler, ordinary member handler scope and propagation. |
+| X1 | GNU/C compatibility: cprimegen.c, initializers, cprimeasm.c, cprimepp.c and linker symbol naming. Keep extensions explicit; do not weaken standard diagnostics globally. | Generic atomic size, asm tied operands/names, VLA scope, alignment and system-header-only permissive behavior. |
+| L1 | Library and object model: first-party include/ library headers, class base storage, RTTI/lifecycle. Replace fixed-capacity assumptions with bounded owned storage. | bitset proxy/value checks, dynamic complete-object identity, capacity boundary and pedantic hierarchy stress. |
+| O1 | Required optimization/linkage: frontend reachability, exception attributes and x86_64-fastopt.inc. Optimize proven unreachable calls while preserving side effects and inline linkage. | Keep undefined sentinel functions undefined; both the original link check and a local semantic opposite must behave correctly. |
 
-The adapter passes `-fcoroutines` for `g++.dg/coroutines`, matching GCC's
-`coroutines.exp` default options.
+These are investigation plans based on source and first diagnostics, not claims
+that every row has a proven common root cause. Process T1 before dependent T2/T3
+and T4 fixes; initialization and exception work then feed O1. Reassess all rows
+in the affected package after a coherent repair, rather than starting another
+one-row cycle. The general order and non-GCC issues are in [task.md](../../../task.md).
 
-`-CompilerPath` and `-RuntimeRoot` select the compiler and runtime. Each
-compiler and program invocation has a five-second ceiling; crashes and timeouts
-fail and are never retried with a larger budget. An unknown `-Select` fails.
-`compare.ps1 -Baseline <old> -Current <new>` reports regressions and lost
-coverage within the same corpus.
+## Complete retained inventory
 
-`summary.json`, `progress.json`, `metadata.json`, `inputs.json` and
-`results.jsonl` under the output directory record results and provenance. The
-score is verified passes over the selected retained cases; it is not GCC or
-C++ conformance.
+All rows currently have status FAIL_COMPILE (the adapter uses this label for
+link failures too). Paths are relative to corpus/. The error column is the
+first observed blocker; the planned check includes behavior beyond that blocker.
 
-Focused adapter checks: `test_runner.ps1`, `test_compare.ps1`,
-`test_progress.ps1`, `test_provenance.ps1`, `test_corpus.ps1`.
+| Row | Package | Current blocker | Planned repair and proof |
+| --- | --- | --- | --- |
+| `c-c++-common/pr60689.c` | X1 | integral or integer-sized pointer target type expected | Implement generic __atomic_exchange for non-scalar objects; check 9-byte exchange and sequential consistency, not integer casts. |
+| `c-c++-common/pr71654.c` | O1 | undefined symbol 'foo' | Fold the proven unsigned-byte condition before emitting a reference to foo; retain the undefined sentinel. |
+| `g++.dg/cpp26/aggr-init1.C` | I1 | constant expression expected | Reduce line 92 to C++17 constexpr aggregate default-member initialization reading a string; preserve constexpr and runtime checks, exclude only later-feature branches. |
+| `g++.dg/eh/comdat1.C` | O1 | undefined symbol '?undefined@@YAXXZ' | Prove the throw() path cannot reach undefined; check exception cleanup and emitted unresolved references together. |
+| `g++.dg/eh/dtor1.C` | E1 | function definition expected | Parse constructor function-try-blocks and destroy fully constructed bases before entering the handler; observe destructor count/order. |
+| `g++.dg/ext/attrib6.C` | O1 | undefined symbol '?link_error@@YAXXZ' | Carry nothrow into reachability so link_error stays unreferenced; keep the sentinel undefined. |
+| `g++.dg/ext/complit12.C` | I1 | '{' expected (got ';') | Parse GNU array compound literals with class elements; check constructor/destructor counts and lifetime. |
+| `g++.dg/ext/pr99508.C` | X1 | undefined symbol 'bar_assembler' | Unify block extern asm names with file-scope declarations for functions and data; link under the written assembler names. |
+| `g++.dg/ext/tmplattr2.C` | X1 | initialization of incomplete type | Substitute dependent aligned attributes without losing the typedef array type; assert size/alignment and instantiate both dimensions. |
+| `g++.dg/ext/vla9.C` | X1 | 'x2d' undeclared | Keep runtime array-bound typedefs visible through pointer declarators; verify dimensions, allocation and indexed writes. |
+| `g++.dg/inherit/ptrmem2.C` | T4 | incompatible redefinition of 'D_f' | Separate derived member-pointer declarations from inherited virtual-function identity; verify owner adjustment and indirect call. |
+| `g++.dg/init/new33.C` | I1 | no matching constructor for placement new of 'A' with 1 arguments | Allow construction of A from a user conversion to const A& during new; cover trivial and nontrivial temporary cleanup. |
+| `g++.dg/init/pr25811-3.C` | I1 | static assertion failed in '' | Make new-expression substitution test default-initialization viability of const/reference members; preserve positive and negative static assertions. |
+| `g++.dg/ipa/pr60640-3.C` | T4 | no matching member function '__cpc_local_class_1659_1::foo' | Audit covariant returns, multiple-base receiver adjustment and virtual lookup; preserve the runnable dispatch assertions. |
+| `g++.dg/ipa/pr98075.C` | T2 | no matching member function 'xg__int::operator new' | Let unqualified operator new in a template member resolve the global allocation function when no class declaration owns it. |
+| `g++.dg/opt/inline11.C` | O1 | undefined symbol '?baz@@YAHH@Z' | Implement gnu_inline linkage and required call elimination without inventing baz; pin external definition versus inline body semantics. |
+| `g++.dg/opt/pr48967.C` | T2 | nested template type member 'S__F__C_O::J' must be a typedef | Resolve nested member templates/types across dependent alias chains; do not require a nested class to be a typedef. |
+| `g++.dg/opt/pr79267.C` | E1 | ';' expected (got 'catch') | Parse ordinary member function-try-blocks and lower the handlers with the member scope intact. |
+| `g++.dg/other/copy1.C` | I1 | assignment of read-only location | Respect mutable fields during implicit copy assignment through const contexts; verify copy/assignment counters and subobjects. |
+| `g++.dg/other/pr24623.C` | I1 | no matching user-declared copy assignment operator | Resolve inherited/user-declared assignment and conversion candidates before implicit fallback; test the original wrapper assignment. |
+| `g++.dg/other/vararg-5.C` | T2 | nested template type member 'b__void::c' must be a typedef | Substitute dependent base nested class types and varargs declarations; distinguish class members from typedef aliases. |
+| `g++.dg/overload/defarg4.C` | T3 | 'func' undeclared | Resolve a member-template default argument in its declaration scope and deduce the function-pointer target. |
+| `g++.dg/overload/member2.C` | T4 | unsupported non-type template argument 'int' in native linkage for 'bar' | Encode distinct member-function template and member-pointer argument types in native linkage without collapsing overloads. |
+| `g++.dg/parse/using3.C` | T1 | base class type expected | Select the explicit nested-class specialization before instantiating the invalid primary base T=int; retain using lookup for T=b. |
+| `g++.dg/pr61033.C` | X1 | ';' expected (got 'unicode') | Audit system-header permissive missing-return-type declarations as a GNU compatibility behavior, not standard C++17; isolate acceptance from backend checks. |
+| `g++.dg/pr96818.C` | T2 | no matching member function 'l::operatorY' | Keep namespace/free calls in saved member bodies from becoming member calls; resolve operatorY under lexical scope. |
+| `g++.dg/template/access37.C` | T2 | field 'range_' has incomplete type | Defer nested-class layout until its enclosing instantiation is complete; then audit the friend's access and DECLARE_FRIEND variants against upstream intent. |
+| `g++.dg/template/access6.C` | T2 | parameter type expected before 'Type' | Resolve the trailing parameter type in explicit member-template instantiation under the qualified class scope; preserve protected typedef access. |
+| `g++.dg/template/anonunion1.C` | T4 | 'F_bar' undeclared | Instantiate an addressed member template with a member-pointer argument; preserve the anonymous union body and callable symbol. |
+| `g++.dg/template/arg6.C` | T3 | ')' expected (got '1') | Parse functional/cast bool constant expressions as non-type arguments with balanced angle/parenthesis handling; check all five spellings in one test. |
+| `g++.dg/template/array21.C` | T3 | base class 'dynamic_dispatch____cpc_template_type_struct___cpc_member_pointer_file_reader_func_void_int_ref' is incomplete | Deduce array partial specializations and member-pointer function parameter packs before requiring a complete base specialization. |
+| `g++.dg/template/asm1.C` | X1 | invalid operand reference after % | Handle GCC's implicit tied input for a +r output when numbering %0/%1; check both template instantiations and emitted assembly. |
+| `g++.old-deja/g++.law/operators34.C` | I1 | new requires a complete element type | Resolve new class A to the existing complete class rather than introducing a fresh incomplete tag; check allocation and construction. |
+| `g++.old-deja/g++.martin/bitset1.C` | L1 | include file 'bitset' not found | Supply first-party bitset support needed by this case; test proxy assignment, indexed read and value preservation, without pretending this covers the entire header. |
+| `g++.old-deja/g++.mike/dyncast5.C` | L1 | no matching member function 'Foo::isObjectAllocation' | Audit inherited static lookup before RTTI/allocation tracking; preserve complete-object address and dynamic-cast assertions. |
+| `g++.old-deja/g++.mike/hog1.C` | L1 | too many base classes for 'super' | Replace the hard base-class capacity limit with owned growable storage; preserve virtual-base uniqueness and add small boundary plus pedantic stress coverage. |
+| `g++.old-deja/g++.other/crash5.C` | I1 | function parameter type expected (got 'D') | Disambiguate a typedef-named functional expression in an initializer from a parameter declaration; retain declaration-versus-expression controls. |
+| `g++.old-deja/g++.other/overload12.C` | T3 | ambiguous overloaded function 'f' | Rank derived/base pointer conversions by the correct inheritance distance; retain genuinely ambiguous negative controls. |
+| `g++.old-deja/g++.other/pmf4.C` | T4 | incompatible types for redefinition of 'B_f': 'void (struct B *)' versus 'struct __cpc_member_pointer_C_func_void' | Prevent data member PMFs from redeclaring inherited function symbols; verify invocation through a non-primary vtable. |
+| `g++.old-deja/g++.pt/explicit81.C` | T3 | too many arguments to function | Substitute explicit template arguments before deduction; preserve overload arity and invoke the selected specialization. |
+| `g++.old-deja/g++.pt/instantiate11.C` | T1 | ')' expected (got '<') | Parse friend operator template-ids with explicit argument lists and bind the existing declaration, not a new overload. |
+| `g++.old-deja/g++.pt/ptrmem2.C` | T4 | invalid type for 'h' | Represent and substitute member-function pointers as non-type arguments through typedefs; verify indirect calls. |
+| `g++.old-deja/g++.pt/spec18.C` | T3 | '>' expected (got '*') | Parse and order function-template specializations with pointer arguments; retain both primary overloads as selection controls. |
+| `g++.old-deja/g++.pt/ttp23.C` | T3 | qualified member requires an object of its class | Preserve ownership through template-template argument substitution; check the qualified call on its actual object. |
+| `g++.old-deja/g++.pt/ttp53.C` | T1 | 'H____cpc_template_type_const_int_template' undeclared | Bind an explicitly qualified friend function-template specialization under the instantiated class without rewriting its template keyword as a name. |
 
-The repair order and row buckets live in [task.md](../../../task.md) under the
-wave plan; repaired rows are deleted rather than promoted. The narrowed leads
-for the remaining clusters are below.
+## Commands and retirement
 
-## Narrowed leads
+Run an exact row with
+`powershell -NoProfile -ExecutionPolicy Bypass -File Tests/pedantic/gcc/run.ps1 -Select <path> -Out build/gcc-package`.
+Prefix selections may select a package directory; unknown selections fail.
+Use root CPC only and one compiler process at a time. Each compile/program has
+a five-second ceiling; crashes/timeouts fail without retries. The adapter uses
+CPC's default language mode, so content inspection/reduction is required for
+the C++17 cutoff; the runner does not enforce a standard-version matrix.
 
-One open lead, for the last coroutine row `g++.dg/coroutines/pr113457.C`. The
-row writes `ranges::elements_of(ranges)` after `using namespace std;` inside a
-variadic function template and in a promise member body, so its body replay
-needs class template argument deduction from the explicit guide
-`elements_of(_Range &&) -> elements_of<_Range &&>`, and
-`template <range _Range> struct elements_of` needs the `template <Concept T>`
-type-constraint spelling, which the template parser currently records as a
-value parameter of type `range`. Cycle 58 landed the two lookup repairs in
-front of those sites (below); the deduction and the type-constraint spelling
-are the remaining work.
+The retained suite deliberately exits nonzero while positive cases fail; it is
+not an expected-failure green gate. Fast selects all retained rows, pedantic
+selects none, and `-Tier all` selects the complete manifest. Before final
+retirement, fix empty-manifest handling in corpus.ps1 and run.ps1; both currently
+reject an empty corpus instead of reporting a valid zero-case assessment.
+Implement new/replacement tooling in native C under src/, built by root CPC;
+avoid expanding the PowerShell runner implementation.
 
-The earlier leads were each reduced to one site and are closed: cycle 56 closed
-the last of them, the indirect virtual base mem-initializer.
+For each repaired row, preserve its distinct observable behavior in a combined
+first-party test where flags and scope permit, verify original and reduction,
+then delete the source and manifest entry. Remove unused support entries only
+after checking remaining include dependencies. Keep auxiliary multi-TU cases
+open until their complete linkage scenario is represented locally.
 
-## Retirement queue
-
-Cycle 58 landed two lookup repairs the last coroutine row exposed without
-retiring it. A function parameter pack's name is no longer substituted when it
-is followed by `::` or preceded by `.`, `->` or `::`, because a
-nested-name-specifier ignores variables and a member name after `.` belongs to
-the object, so `ranges::elements_of` and `holder.ranges` resolve inside a body
-whose pack is also spelled `ranges`. A name a using-directive makes visible is
-also recognized when it names a nested namespace: `find_current_namespace_tok`
-probed plain symbols only, so `ranges::Wrap<int>` after `using namespace std;`
-built the token `__cpc_ns_ranges_Wrap` and reported it undeclared instead of
-reaching `std::ranges`. Coverage is
-`Tests/features/Templates/pass/test_parameter_pack_name_shadowed_namespace.cpp`
-and
-`Tests/features/Namespaces/pass/test_nested_namespace_via_using_directive.cpp`;
-the previous published compiler rejects both. Measured over all 1554
-first-party pass sources, one process per source, with the previous published
-compiler against the new one: 1552 accept with both and produce byte-identical
-objects, and the two new tests are the only status difference. The row stays,
-with its lead recorded above.
-
-Cycle 57 retired the `_Complex` cluster, all three Wave B items at once: the
-seventeen `complex*`/`conj*` rows plus `g++.dg/expr/stdarg2.C`,
-`g++.dg/opt/pr83608.C`, `g++.dg/tree-ssa/pr50622.C` and
-`g++.old-deja/g++.other/debug9.C`, leaving 51 retained rows. `_Complex`,
-`__complex__` and `__complex` are type specifiers that combine with any
-arithmetic element type, and the type is one canonical two-part aggregate per
-element type under a stable tag, so copies, `sizeof`, parameters, results,
-arrays, pointers and variadic arguments reuse the ordinary struct paths.
-Imaginary constants lex as complex values with a zero real part; arithmetic
-lowers element-wise with the usual arithmetic conversions over the real
-types; `__real__` / `__imag__` and the `__builtin_creal` / `__builtin_cimag`
-/ `__builtin_conj` family select the parts; and overload resolution ranks a
-real-to-complex conversion worse than a scalar arithmetic conversion.
-Coverage is
-`Tests/features/GnuExtensions/pass/test_complex_type_declarations_and_literals.cpp`,
-`.../test_complex_arithmetic_and_parts.cpp` and
-`.../test_complex_in_classes_and_templates.cpp`; the previous published
-compiler rejects all three. The narrowed-lead list is still empty, so the
-remaining work is `g++.dg/coroutines/pr113457.C` and the general language long
-tail below.
-
-Cycle 56 closed the indirect virtual base mem-initializer lead, the last
-narrowed Wave A item 3 lead, which had no retained row of its own.  A
-constructor that names a virtual base its class inherits only through another
-base found neither a member nor a direct base field for the name, so
-`skip_initializer_emit` dropped the whole initializer and the base was
-default-initialized instead of taking the written arguments.  The name is now
-matched against the class's own virtual-base set, and its initializer is
-replayed by the virtual-base section of the most-derived constructor -- the
-same section a direct virtual base uses -- so the intermediate base's own
-initializer for that base is still ignored at run time.  Zero-initializing a
-base subobject no longer covers its virtual base subobjects either, which is
-what `[dcl.init]` requires and what the intermediate base's implicit
-construction used to clobber.  Coverage is
-`Tests/features/Constructors/pass/test_indirect_virtual_base_initializer.cpp`,
-which pins the written argument, the single construction of the subobject, the
-intermediate base's ignored initializer, a deeper override, and a second
-virtual base reached directly.  The previous published compiler runs the test
-to exit 1.  The narrowed-lead list is empty now, so the remaining work is the
-three wave clusters below: Wave B `_Complex`, Wave C coroutines, and the rest
-of the general language long tail.
-
-Cycle 55 closed the `spec7.C` lead, which the consolidation commit had already
-removed from the corpus while leaving its linked-member defect in place.  A
-concrete qualifier chain ending in a member class template specialization
-(`A<int>::B<char>::g`) was only canonicalized for its outer class, so the
-following member class template was not resolved under that instantiation and
-the out-of-class definition became a namespace-scope function template; a call
-on `A<int>::B<char>` then reported the member symbol undefined.  The signature
-canonicalizer now carries the just-emitted concrete class token across `::`,
-instantiates the member class template under it, and replaces the whole
-qualifier prefix with the member specialization's class token, so the ordinary
-concrete-member path attaches and replays the definition.  Coverage is
-`Tests/features/Templates/pass/test_member_class_template_of_explicit_specialization.cpp`.
-The dependent template template lead was already retired by cycle 32; it is
-covered by `test_nested_template_name_template_argument.cpp`, which passes in
-the pedantic language group, so it is no longer listed as open.
-
-Cycle 54 closed the array-decay lead that followed `qualified-id2.C` and had no
-retained row of its own. A qualified id that reaches a static data member
-through a member typedef of a class-template instantiation (`B<T>::C::p`) took
-the namespace fallback for the segment after the member, and the alias
-substitution that maps that member to its scoped alias token then replaced the
-whole name, so a comparison that opened a statement or a `?:` condition
-compared the class value (`return X::p == X::c ? 0 : 1;` reported `invalid
-operand types for binary operation`), while the same comparison behind a `!` or
-inside parentheses worked. The `::`-chain loop now resolves that member through
-the class it names and continues the chain at the aliased class, so the static
-member the alias reaches is looked up under its own joined name. Coverage is
-`Tests/features/Templates/pass/test_template_member_typedef_qualified_static_member.cpp`,
-which pins the true and false comparisons of two instantiations, the
-comparison opening a `?:` condition, an initializer and an `if` condition, the
-array element reached through the stored pointer, and the discarded statement
-form. The previous published compiler rejects that test with the lead's
-diagnostic.
-
-Cycle 52 closed the constant probe's new declarations, the lead that followed
-`anon3.C`, which had no retained row of its own. A saved initializer is probed
-with the real parser before the emitting replay runs, and the probe kept every
-tag and enumerator it met for the first time, so the replay of the same tokens
-reported `struct/union/enum 'S' already defined` for `const int ns = sizeof
-(struct S { int x; });` (and for the out-of-class static-member form
-`const int D::s = ...`) and `redeclaration of 'a'` for the anonymous
-`enum { a, b }` form. The probe now records what it defines and the replay
-reuses it: the tag body is skipped with the probe's definition standing, and an
-enumerator the probe registered at the same scope is adopted instead of pushed
-again, while a probe that fails leaves its definitions to the dynamic
-initialization replay as before. Coverage is
-`Tests/features/Declarations/pass/test_constant_initializer_defines_named_type.cpp`.
-
-Cycle 51 retired `g++.dg/ext/desig11.C`. A body saved for template replay is
-rewritten with a lambda introducer marker for every `[` that follows `{`, `,`,
-`(` or `=`, so the row's GNU array designators (`const int x[] = { [e] = 0 };
-const int y[] = { [I] = 0 };` inside a function template) were replayed as
-capture lists and reported `lambda capture 'e' must name an automatic
-variable`. The bracket is now left alone when its designator list continues
-through further `[index]`/`.field` designators and then `=`, a shape no lambda
-introducer can take, so real lambdas keep their marker. Coverage is
-`Tests/features/GnuExtensions/pass/test_array_designator_in_template_body.cpp`,
-which checks the designated values and untouched slots of a template function
-and a class-template member function, a two-dimensional designator chain, and a
-capture in the same template body. The previous published compiler rejects that
-test with the row's diagnostic.
-
-Cycle 50 retired `g++.old-deja/g++.martin/sts_iarr.C`. The terminal name of a
-qualified id written inside a class-template member body belongs to the
-qualifier in front of it, but both body replays redirected every identifier
-that named a member of the instantiation being replayed, so
-`typename Outer<N-1>::Inner` reached the lookup of `Outer<1>` spelled as
-`Outer<2>`'s joined member name and reported `nested template type member
-'Outer____cpc_template_const_1::Outer____cpc_template_const_2_Inner' must be a
-typedef`. The class-body member-body rewrite and the member-template body
-substitution now keep the written spelling after a `::` -- the same rule the
-class-body-level replay already applied -- while still substituting the
-template's own parameters, and the joined-name probe keeps running so token
-numbering and object bytes are unchanged. Coverage is
-`Tests/features/Templates/pass/test_qualified_nested_class_in_member_body.cpp`,
-which runs the row's nested `operator[]` chain down to `Outer<1>::Inner`,
-checks the injected class name qualified through the current instantiation,
-pins the member-typedef alias shape and a member function template of the
-class template. The previous published compiler rejects that test with the
-row's diagnostic.
-
-Cycle 49 retired `g++.old-deja/g++.ext/anon3.C`. An out-of-class static data
-member definition is copied into the member's class scope before it is parsed,
-and the copy ended at the first `;` at any depth. A new type in the initializer
-carries a `;` inside its own body (`sizeof (struct { int x; })`), so the copied
-declaration was truncated and the replay failed with `unexpected end of file`;
-the row's `(union { ... }){ __c: { ... } }` initializer hit the same `;`.  The
-copy now tracks `(`/`[`/`{` groups and ends at the definition's own `;`.
-Coverage is
-`Tests/features/Classes/pass/test_static_member_initializer_defines_type.cpp`,
-which checks the row's infinity constant plus a `sizeof (struct { ... })`
-member and a lambda-bodied member at run time, and pins that the initializer's
-new type is not injected into the class.  The previous published compiler
-rejects that test with the row's diagnostic.
-
-Cycle 48 retired `g++.old-deja/g++.ext/syshdr1.C` and `g++.dg/parse/redef1.C`.
-A GCC linemarker's trailing numeric flags were discarded, so the `3` bit that
-marks system-header text was not visible to the parser and `typedef int bool;`
-was read as two basic type specifiers.  Buffered files now retain that flag,
-and system-header typedefs of `bool` and `wchar_t` are accepted without
-replacing the builtin types.  Coverage is
-`Tests/features/GnuExtensions/pass/test_system_header_builtin_typedefs.cpp`,
-which checks the `int` and `long wchar_t` forms through flagged linemarkers,
-returns to the source file, and verifies the builtin sizes and runtime behavior.
-
-Cycle 46 retired `g++.dg/template/canon-type-3.C`.  A class-template member
-typedef may name a function type through a parenthesized declarator
-(`typedef Y (FP) ();`), and the class-body generator read the identifier in
-front of the group -- a template parameter here -- as the declared name, so
-the replayed definition named an undeclared type and the instantiation failed
-with `function parameter type expected (got 'FP')`.  Both class-body scans now
-take the group's own identifier as the name when the identifier before the `(`
-resolves to a type, and keep the depth-zero name for a parameter list.
-Coverage is
-`Tests/features/Templates/pass/test_parenthesized_function_typedef_member.cpp`,
-which instantiates the row's `E<Y>` and a member-typedef-typed variant and
-calls through `E<int>::FP` and `D<int, char>::FP`.
-
-Cycle 45 retired `g++.dg/template/access28.C`. A static member function template
-declared inside its class and defined out of line is two member records that
-instantiate the same specialization, so `&grac::once<Derived>` looked
-ambiguous to the address path, which has no call to rank and required exactly
-one candidate. The address path now resolves each candidate to its function
-symbol and accepts them while they agree, still failing when two distinct
-functions match. Coverage is
-`Tests/features/Templates/pass/test_static_member_template_address.cpp`, which
-takes the address in a class-template member-initializer, calls through the
-stored pointer and keeps the row's `has_R<T>` SFINAE overload selection over
-the ellipsis fallback.
-
-Cycle 43 retired `g++.old-deja/g++.jason/template25.C` and
-`g++.dg/opt/pr6713.C`.  A class-template member definition may put its
-declarator-id on the line after `Class<T>::`.
-The member-class recognizer and `template_member_def_method_tok()` both read
-the line record as the member name, so the definitions became namespace-scope
-function templates and calls left undefined symbols (or replay reported
-`Foo::<no name>`).  Both scans now advance with the line-aware next-token
-helper, including after `::` for operators and destructors.  Coverage is
-`Tests/features/Templates/pass/test_member_definition_line_break.cpp`, which
-also pins the constructor and static-member forms fixed in
-`g++.dg/opt/pr6713.C`.
-
-Cycle 41 retired `g++.old-deja/g++.jason/synth7.C`. An implicit copy assignment
-had an inline memberwise path but no addressable symbol, so `&A::operator=`
-failed on the synthetic `A_operator=` name. The member-pointer path now
-materializes the implicit copy assignment when the class has no user-declared
-copy assignment, no user-declared move operation, and memberwise-assignable
-data and bases; it reuses the `= default` declaration and body path, and the
-ordinary member-address lookup forms the pointer. Coverage lives in
-`Tests/features/OperatorOverloads/pass/test_implicit_copy_assignment_address.cpp`.
-
-Cycle 39 retired `g++.dg/template/conv1.C`.  A qualified conversion-operator
-name hides its member template argument list inside the conversion-type-id, so
-`&First<D>::operator First<B>` reached the class-template-argument path with
-`operator` itself as the member name and never saw the `<B>`.  The path now
-parses the whole operator name, deduces the conversion member template against
-the written target type, and publishes the selected specialization under the
-spelled target -- the same name a non-template conversion function uses -- so
-the member-address lookup finds it.  Coverage lives in
-`Tests/features/Templates/pass/test_conversion_template_member_address.cpp` and
-..._declarations.cpp.
-
-The coroutine rows `-fcoroutines` and the shipped `<coroutine>` already
-unblocked were repaired rows waiting for coverage, not failures. Cycles 37-38
-retired all 39 of them by reducing what each pins to a first-party test in
-`Tests/features/Declarations/pass/` (with `EXPECT_COMPILE_ARGS: -fcoroutines`
-and, for a snippet without `main`, `EXPECT_COMPILE_ONLY: 1`) and deleting the
-corpus file and its `corpus.json` entry; the tests stay in the fast tier
-because `Tests/tiers.json` lists only the pedantic partition. Cycle 37 retired
-nine rows (`coro-pre-proc.C`, `coro-function-decl.C`, `pr95346.C`,
-`pr95350.C`, `pr95822.C`, `pr95823.C`, `pr95824.C`, `pr102051.C`,
-`pr109283.C`) and cycle 38 retired the remaining 30, including the
-coroutine-only `coro.h` and `coro1-ret-int-yield-int.h` support headers. Both
-mappings are recorded in `BuildProfile/README.txt`. The only retained coroutine
-row left is `g++.dg/coroutines/pr113457.C`, which still fails and belongs to
-Wave C.
+Corpus/tier edits require `test_corpus.ps1` and discovery checks. Harness
+changes also need runner, assessment, provenance and progress fixture checks.
+Raw logs remain in build/; this file contains only current decisions and work.

@@ -96,55 +96,65 @@
 extern "C" {
 #endif
 
-#define __RENAME(X) __asm__(X)
-#define __BUILTINBC(ret,name,params) ret __builtin_##name params __RENAME(#name);
-#define __BOUND(ret,name,params) ret name params __RENAME(#name);
-#define __BOTH(ret,name,params) __BUILTINBC(ret,name,params)__BOUND(ret,name,params)
-#define __BUILTIN(ret,name,params) ret __builtin_##name params __RENAME(#name);
-
-__BOTH(void*, memcpy, (void *, const void*, __SIZE_TYPE__))
-__BOTH(void*, memmove, (void *, const void*, __SIZE_TYPE__))
-__BOTH(void*, memset, (void *, int, __SIZE_TYPE__))
-__BOTH(int, memcmp, (const void *, const void*, __SIZE_TYPE__))
-__BOTH(__SIZE_TYPE__, strlen, (const char *))
-__BOTH(char*, strcpy, (char *, const char *))
-__BOTH(char*, strncpy, (char *, const char*, __SIZE_TYPE__))
-__BOTH(int, strcmp, (const char*, const char*))
-__BOTH(int, strncmp, (const char*, const char*, __SIZE_TYPE__))
-__BOTH(char*, strcat, (char*, const char*))
-__BOTH(char*, strncat, (char*, const char*, __SIZE_TYPE__))
-__BOTH(char*, strchr, (const char*, int))
-__BOTH(char*, strrchr, (const char*, int))
-__BOTH(char*, strdup, (const char*))
-
-#define __MAYBE_REDIR __BUILTIN
-__MAYBE_REDIR(void*, malloc, (__SIZE_TYPE__))
-__MAYBE_REDIR(void*, realloc, (void *, __SIZE_TYPE__))
-__MAYBE_REDIR(void*, calloc, (__SIZE_TYPE__, __SIZE_TYPE__))
-__MAYBE_REDIR(void*, memalign, (__SIZE_TYPE__, __SIZE_TYPE__))
-__MAYBE_REDIR(void, free, (void*))
-__BOTH(void*, alloca, (__SIZE_TYPE__))
+/* Direct declarations avoid regenerating the same tokens for every input. */
+void* __builtin_memcpy(void *, const void*, __SIZE_TYPE__) __asm__("memcpy");
+void* memcpy(void *, const void*, __SIZE_TYPE__) __asm__("memcpy");
+void* __builtin_memmove(void *, const void*, __SIZE_TYPE__) __asm__("memmove");
+void* memmove(void *, const void*, __SIZE_TYPE__) __asm__("memmove");
+void* __builtin_memset(void *, int, __SIZE_TYPE__) __asm__("memset");
+void* memset(void *, int, __SIZE_TYPE__) __asm__("memset");
+int __builtin_memcmp(const void *, const void*, __SIZE_TYPE__) __asm__("memcmp");
+int memcmp(const void *, const void*, __SIZE_TYPE__) __asm__("memcmp");
+__SIZE_TYPE__ __builtin_strlen(const char *) __asm__("strlen");
+__SIZE_TYPE__ strlen(const char *) __asm__("strlen");
+char* __builtin_strcpy(char *, const char *) __asm__("strcpy");
+char* strcpy(char *, const char *) __asm__("strcpy");
+char* __builtin_strncpy(char *, const char*, __SIZE_TYPE__) __asm__("strncpy");
+char* strncpy(char *, const char*, __SIZE_TYPE__) __asm__("strncpy");
+int __builtin_strcmp(const char*, const char*) __asm__("strcmp");
+int strcmp(const char*, const char*) __asm__("strcmp");
+int __builtin_strncmp(const char*, const char*, __SIZE_TYPE__) __asm__("strncmp");
+int strncmp(const char*, const char*, __SIZE_TYPE__) __asm__("strncmp");
+char* __builtin_strcat(char*, const char*) __asm__("strcat");
+char* strcat(char*, const char*) __asm__("strcat");
+char* __builtin_strncat(char*, const char*, __SIZE_TYPE__) __asm__("strncat");
+char* strncat(char*, const char*, __SIZE_TYPE__) __asm__("strncat");
+char* __builtin_strchr(const char*, int) __asm__("strchr");
+char* strchr(const char*, int) __asm__("strchr");
+char* __builtin_strrchr(const char*, int) __asm__("strrchr");
+char* strrchr(const char*, int) __asm__("strrchr");
+char* __builtin_strdup(const char*) __asm__("strdup");
+char* strdup(const char*) __asm__("strdup");
+void* __builtin_malloc(__SIZE_TYPE__) __asm__("malloc");
+void* __builtin_realloc(void *, __SIZE_TYPE__) __asm__("realloc");
+void* __builtin_calloc(__SIZE_TYPE__, __SIZE_TYPE__) __asm__("calloc");
+void* __builtin_memalign(__SIZE_TYPE__, __SIZE_TYPE__) __asm__("memalign");
+void __builtin_free(void*) __asm__("free");
+void* __builtin_alloca(__SIZE_TYPE__) __asm__("alloca");
+void* alloca(__SIZE_TYPE__) __asm__("alloca");
 void *alloca(__SIZE_TYPE__);
-__BUILTIN(void, abort, (void))
-__BOUND(void, longjmp, ())
-__BOUND(void*, mmap, ())
-__BOUND(int, munmap, ())
-
-#undef __BUILTINBC
-#undef __BUILTIN
-#undef __BOUND
-#undef __BOTH
-#undef __MAYBE_REDIR
-#undef __RENAME
-
-#define __BUILTIN_EXTERN(name,u) int __builtin_##name(u int); int __builtin_##name##l(u long); int __builtin_##name##ll(u long long);
-__BUILTIN_EXTERN(ffs,)
-__BUILTIN_EXTERN(clz, unsigned)
-__BUILTIN_EXTERN(ctz, unsigned)
-__BUILTIN_EXTERN(clrsb,)
-__BUILTIN_EXTERN(popcount, unsigned)
-__BUILTIN_EXTERN(parity, unsigned)
-#undef __BUILTIN_EXTERN
+void __builtin_abort(void) __asm__("abort");
+void longjmp() __asm__("longjmp");
+void* mmap() __asm__("mmap");
+int munmap() __asm__("munmap");
+int __builtin_ffs( int);
+int __builtin_ffsl( long);
+int __builtin_ffsll( long long);
+int __builtin_clz(unsigned int);
+int __builtin_clzl(unsigned long);
+int __builtin_clzll(unsigned long long);
+int __builtin_ctz(unsigned int);
+int __builtin_ctzl(unsigned long);
+int __builtin_ctzll(unsigned long long);
+int __builtin_clrsb( int);
+int __builtin_clrsbl( long);
+int __builtin_clrsbll( long long);
+int __builtin_popcount(unsigned int);
+int __builtin_popcountl(unsigned long);
+int __builtin_popcountll(unsigned long long);
+int __builtin_parity(unsigned int);
+int __builtin_parityl(unsigned long);
+int __builtin_parityll(unsigned long long);
 
 #if defined _WIN32
 unsigned char _BitScanForward64(unsigned long *index,

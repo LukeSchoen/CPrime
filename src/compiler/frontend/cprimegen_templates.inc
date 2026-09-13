@@ -1310,6 +1310,7 @@ static ExplicitMemberArguments *explicit_member_keys[4096], *explicit_member_arg
 
 static void free_explicit_member_arguments(void)
 {
+  if (!explicit_member_arguments) return;
   memset(explicit_member_keys, 0, sizeof(explicit_member_keys));
   memset(explicit_member_args, 0, sizeof(explicit_member_args));
   while (explicit_member_arguments)
@@ -9131,6 +9132,117 @@ static int register_template_static_data(TokenString *declaration,
   return 0;
 }
 
+/* Namespace-scope variable templates use declaration replay, but must stay
+   out of function-template overload lookup and class static-data replay. */
+static int register_template_variable(TokenString *declaration,
+                                      int *parameters, int parameter_count)
+{
+  TemplateVariableDef *definition;
+  int i, name = 0, has_parens = 0, has_scope = 0, has_initializer = 0;
+  if (!declaration || !parameter_count) return 0;
+  for (i = 0; i < declaration->len; ++i) {
+    int token = declaration->str[i];
+    if (TOK_HAS_VALUE(token)) {
+      i += tok_str_value_extra_words(declaration->str, declaration->len, i);
+      continue;
+    }
+    if (token == '(' || token == ')') has_parens = 1;
+    if (token == ':') has_scope = 1;
+    if (token == '=' || token == ';') break;
+    if (token >= TOK_UIDENT) name = token;
+  }
+  if (!name || has_parens || has_scope || i >= declaration->len) return 0;
+  if (declaration->str[i] == '=') {
+    has_initializer = 1;
+    while (++i < declaration->len && declaration->str[i] != ';') {
+      if (TOK_HAS_VALUE(declaration->str[i]))
+        i += tok_str_value_extra_words(declaration->str, declaration->len, i);
+    }
+  }
+  if (i >= declaration->len || declaration->str[i] != ';') return 0;
+  for (definition = template_variable_defs; definition; definition = definition->next)
+    if (definition->name_tok == name
+        && definition->namespace_tok == current_namespace_scope_tok()) {
+      /* A preceding extern declaration and this initialized definition are
+         one variable template.  Keep the definition for later replay so a
+         demand in this translation unit emits storage instead of another
+         undefined declaration. */
+      if (has_initializer) {
+        tok_str_free(definition->declaration);
+        definition->declaration = declaration;
+      } else
+        tok_str_free(declaration);
+      return 1;
+    }
+  definition = cprime_mallocz(sizeof(*definition));
+  definition->name_tok = name;
+  definition->parameter_count = parameter_count;
+  definition->namespace_tok = current_namespace_scope_tok();
+  memcpy(definition->parameters, parameters, parameter_count * sizeof(int));
+  definition->declaration = declaration;
+  definition->next = template_variable_defs;
+  template_variable_defs = definition;
+  return 1;
+}
+
+static TemplateVariableDef *find_template_variable(int name_tok)
+{
+  TemplateVariableDef *definition;
+  for (definition = template_variable_defs; definition; definition = definition->next)
+    if (definition->name_tok == name_tok
+        && definition->namespace_tok == current_namespace_scope_tok()) return definition;
+  return NULL;
+}
+
+static int instantiate_template_variable(TemplateVariableDef *definition,
+                                         TemplateArgList *arguments)
+{
+  TokenString *replay;
+  CString name;
+  int instance_tok, i, j;
+  TokenString *saved_macro_stack;
+  const int *saved_macro_ptr;
+  int saved_tok;
+  CValue saved_tokc;
+  if (!definition || !arguments || arguments->nb != definition->parameter_count)
+    cprime_error("variable template argument count");
+  cstr_new(&name);
+  cstr_cat(&name, get_tok_str(definition->name_tok, NULL), -1);
+  for (i = 0; i < arguments->nb; ++i) {
+    cstr_cat(&name, "__", -1);
+    cstr_cat(&name, get_tok_str(arguments->toks[i], NULL), -1);
+  }
+  cstr_ccat(&name, 0);
+  instance_tok = tok_alloc_const(name.data);
+  cstr_free(&name);
+  if (global_symbol_find(instance_tok) || sym_find(instance_tok)) return instance_tok;
+  replay = tok_str_alloc();
+  for (i = 0; i < definition->declaration->len; ++i) {
+    int token = definition->declaration->str[i];
+    if (TOK_HAS_VALUE(token)) {
+      tok_str_add_record(replay, definition->declaration->str,
+                         definition->declaration->len, &i);
+      continue;
+    }
+    if (token == definition->name_tok) token = instance_tok;
+    else for (j = 0; j < definition->parameter_count; ++j)
+      if (token == definition->parameters[j]) { token = arguments->toks[j]; break; }
+    tok_str_add(replay, token);
+  }
+  saved_macro_stack = macro_stack;
+  saved_macro_ptr = macro_ptr;
+  saved_tok = tok;
+  saved_tokc = tokc;
+  begin_macro(replay, 1);
+  next();
+  decl(VT_CONST);
+  while (macro_stack && macro_stack != saved_macro_stack) end_macro();
+  macro_ptr = saved_macro_ptr;
+  tok = saved_tok;
+  tokc = saved_tokc;
+  return instance_tok;
+}
+
 /* Rebuild one specialization of a saved out-of-class static data member
    definition: the class template-id becomes the mangled specialization token
    and every template parameter becomes its argument. */
@@ -9662,11 +9774,26 @@ static void parse_template_decl(void)
     if (tok < TOK_UIDENT)
       expect("identifier");
     name_tok = tok;
-    td = find_class_template_def(nb_namespace_stack ? make_current_namespace_tok(name_tok) : name_tok);
+    /* An explicit specialization can name a member class template of an
+       ordinary class (`template<> struct Owner::Member<int>`).  Such an
+       owner is not itself a TemplateDef, so looking up the first identifier
+       loses the declaration identity before we reach Member.  Flatten the
+       non-dependent qualifier exactly as ordinary class members do, then
+       look up the template declaration under that canonical member token. */
+    name_tok = nb_namespace_stack ? make_current_namespace_tok(name_tok) : name_tok;
+    next();
+    while (tok == ':') {
+      next();
+      skip(':');
+      if (tok < TOK_UIDENT)
+        expect("qualified class template name");
+      name_tok = make_static_member_tok(name_tok, tok);
+      next();
+    }
+    td = find_class_template_def(name_tok);
     if (!td || !td->is_class)
       cprime_error("unknown class template specialization '%s'",
                    get_tok_str(name_tok, NULL));
-    next();
     if (tok != TOK_LT && tok != '<')
       cprime_error("expected template specialization argument list");
     parse_template_type_args(&args);
@@ -10008,6 +10135,9 @@ static void parse_template_decl(void)
     }
     return;
   }
+  if (!is_class && !is_alias && !is_guide
+      && register_template_variable(str, type_param_toks, nb_type_params))
+    return;
   if (!name_tok)
     name_tok = find_template_name_in_str(str);
 
@@ -10457,8 +10587,9 @@ static int validate_template_value_parameter_type(TemplateDef *definition,
                                   TemplateArgList *arguments, int parameter)
 {
   TokenString *source, *replay;
+  const CppRecordDeclInfo *record;
   CType type;
-  int i, j, valid;
+  int i, j, valid, owner_tok;
   if (parameter >= definition->nb_type_params)
     parameter = definition->variadic_param_index;
   if (parameter < 0) return 0;
@@ -10478,7 +10609,15 @@ static int validate_template_value_parameter_type(TemplateDef *definition,
       if (token == definition->type_param_toks[j]) break;
     tok_str_add(replay,j < parameter && j < arguments->nb ? arguments->toks[j] : token);
   }
-  valid = template_probe_type(replay, 0, definition->namespace_tok, &type);
+  /* A member template's value-parameter type is declared in its owner
+     class.  Replaying `Enum` (or a qualified spelling that resolves through
+     that owner) only in namespace scope loses nested enum identity, then
+     rejects an otherwise valid enum non-type specialization.  This mirrors
+     default-argument lookup while leaving namespace templates unaffected. */
+  record = lookup_cpp_record_decl(definition->name_tok);
+  owner_tok = record ? record->owner_tok : 0;
+  valid = template_probe_type_ex(replay, 0, definition->namespace_tok,
+                                 owner_tok, 0, &type);
   tok_str_free(replay);
   if (valid) {
     canonicalize_cpp_member_pointer_declarator(&type);

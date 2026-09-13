@@ -120,6 +120,7 @@ ST_FUNC void free_section(Section *s)
 ST_FUNC void cprimeelf_delete(CPRIMEState *s1)
 {
 #ifdef CPRIME_TARGET_PE
+  pe_free_def_symbols(s1);
   int archive;
   for (archive = 0; archive < s1->nb_pe_archives; ++archive) {
     struct pe_archive_state *state = s1->pe_archives[archive];
@@ -397,6 +398,15 @@ ST_FUNC int put_elf_str(Section *s, const char *sym)
 // Elf Symbol Hashing Function
 static ObjW(Word) elf_hash(const unsigned char *name)
 {
+#ifdef CPRIME_TARGET_PE
+  /* These are private lookup indexes in a PE link, not an ELF DT_HASH.
+     Mix every character into the low bits: import and C++ names often share
+     long suffixes, which cluster badly with the ELF shift-and-fold hash. */
+  unsigned h = 2166136261u;
+  while (*name)
+    h = (h ^ *name++) * 16777619u;
+  return h ^ (h >> 16);
+#else
   ObjW(Word) h = 0, g;
 
   while (*name)
@@ -408,6 +418,7 @@ static ObjW(Word) elf_hash(const unsigned char *name)
     h &= ~g;
   }
   return h;
+#endif
 }
 
 // Rebuild Hash Table Of Section S
@@ -521,6 +532,10 @@ ST_FUNC int find_elf_sym(Section *s, const char *name)
       return sym_index;
     sym_index = ((int *)hs->data)[2 + nbuckets + sym_index];
   }
+#ifdef CPRIME_TARGET_PE
+  if (s == s->s1->dynsymtab_section)
+    return pe_find_def_symbol(s->s1, name);
+#endif
   return 0;
 }
 
@@ -4380,6 +4395,32 @@ the_end:
 }
 
 #ifdef CPRIME_TARGET_PE
+static int pe_archive_needs_rescan(CPRIMEState *s1, struct pe_archive_state *archive)
+{
+  Section *symbols = s1->symtab;
+  unsigned i, count = symbols->data_offset / sizeof(ObjW(Sym));
+  for (i = 1; i < count; ++i) {
+    ObjW(Sym) *symbol = (ObjW(Sym) *)symbols->data + i;
+    const char *name, *import_name;
+    int candidate;
+    if (symbol->st_shndx != SHN_UNDEF
+        || Obj64_ST_BIND(symbol->st_info) == STB_LOCAL
+        || !pe_weak_external_search(s1, i)) continue;
+    name = (const char *)symbols->link->data + symbol->st_name;
+    for (candidate = archive->name_buckets[
+           elf_hash((const unsigned char *)name) & archive->name_mask];
+         candidate >= 0; candidate = archive->name_next[candidate]) {
+      if (archive->loaded[candidate] || strcmp(archive->names[candidate], name))
+        continue;
+      import_name = name;
+      if (!strncmp(import_name, "__imp_", 6)) import_name += 6;
+      else if (!strncmp(import_name, "_imp__", 6)) import_name += 6;
+      if (!find_elf_sym(s1->dynsymtab_section, import_name)) return 1;
+    }
+  }
+  return 0;
+}
+
 /* Native PE linkers retain archive candidates for references introduced by
    later libraries. Rescan in the original order until neither extraction nor
    DEFAULTLIB discovery makes progress; persistent member state prevents
@@ -4391,7 +4432,10 @@ ST_FUNC void pe_rescan_archives(CPRIMEState *s1)
   do {
     before = s1->pe_archive_members_loaded;
     for (i = 0; i < s1->nb_pe_archives && !s1->nb_errors; ++i)
-      cprime_add_file_internal(s1, s1->pe_archives[i]->filename,
+      /* The retained index can prove there is no extractable member without
+         reopening and reparsing the archive. Recheck after each earlier load. */
+      if (pe_archive_needs_rescan(s1, s1->pe_archives[i]))
+        cprime_add_file_internal(s1, s1->pe_archives[i]->filename,
                                AFF_TYPE_LIB | AFF_PRINT_ERROR);
     cprime_add_pragma_libs(s1);
   } while (!s1->nb_errors && (s1->pe_archive_members_loaded != before

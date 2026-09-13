@@ -22,6 +22,7 @@
      --now EPOCH        override the current time (default: system clock)
      --append           append a sample for the current state
      --last-cycle       print the last recorded cycle number and exit
+     --brief            show backlog and last sample without rates or ETA
      --help             print this text
 
    Exit: 0 ok, 2 usage or input error, 10 target reached (nothing left). */
@@ -237,7 +238,7 @@ static double window_rate(long long now, int total, double window_hours, double 
 static void usage(void)
 {
     printf("usage: worker-status [--root DIR] [--log PATH] [--corpus PATH] [--first-party PATH]\n"
-           "                     [--cycle N] [--event NAME] [--head REV] [--now EPOCH] [--append] [--last-cycle]\n");
+           "                     [--cycle N] [--event NAME] [--head REV] [--now EPOCH] [--append] [--last-cycle] [--brief]\n");
 }
 
 int main(int argc, char **argv)
@@ -256,6 +257,7 @@ int main(int argc, char **argv)
     long long now_override = 0;
     int append = 0;
     int last_cycle = 0;
+    int brief = 0;
     int gcc_left = 0;
     int fp_left = 0;
     int valid = 0;
@@ -276,6 +278,7 @@ int main(int argc, char **argv)
         else if (strcmp(key, "--now") == 0 && value) { now_override = atoll(value); index++; }
         else if (strcmp(key, "--append") == 0) append = 1;
         else if (strcmp(key, "--last-cycle") == 0) last_cycle = 1;
+        else if (strcmp(key, "--brief") == 0) brief = 1;
         else if (strcmp(key, "--help") == 0 || strcmp(key, "-h") == 0) { usage(); return 0; }
         else { fprintf(stderr, "worker-status: unknown or incomplete argument: %s\n", key); usage(); return 2; }
     }
@@ -327,6 +330,24 @@ int main(int argc, char **argv)
             fprintf(stderr, "worker-status: cannot append to progress log: %s\n", log_path);
             return 2;
         }
+    }
+
+    if (brief) {
+        printf("Backlog at %s: GCC %d; first-party %d; total %d\n",
+               head, gcc_left, fp_left, gcc_left + fp_left);
+        if (sample_count) {
+            const Sample *previous = &samples[sample_count - 1];
+            printf("  Since recorded cycle %d (%s): GCC %+d, first-party %+d\n",
+                   previous->cycle, previous->utc,
+                   gcc_left - previous->gcc, fp_left - previous->fp);
+        }
+        printf("  Counts are inventory, not test results; scope removals are not repairs.\n");
+        printf("  Acceptance: task.md; speed work: Performance/task.md\n");
+        if (gcc_left + fp_left == 0) {
+            printf("BACKLOG EMPTY: verify language, native gates, test speed and self-build before done.x\n");
+            return 10;
+        }
+        return 0;
     }
 
     target = gcc_left + fp_left;

@@ -96,6 +96,46 @@ int main() { Derived d; d.x = $value; return Box<int>::evaluate(d.x) != 2 * $val
         if ($LASTEXITCODE -ne 0) { throw "Batch executable failed: $exe" }
     }
     Write-Host 'PASS batch fresh-state runtime checks'
+
+    # This pair used to leave anonymous-class scope ownership live after the
+    # first job, so Controls in the second unit was not registered globally.
+    # Keep forward, reversed and interleaved orderings: a fresh process for
+    # each source does not exercise the response-file lifetime boundary.
+    $anonymousBatches = @(
+        @{ Name = 'anonymous-forward'; Tests = @(
+            'Classes/pass/test_anonymous_class_member_functions.cpp',
+            'Classes/pass/test_anonymous_enum_member_replay.cpp') },
+        @{ Name = 'anonymous-reversed'; Tests = @(
+            'Classes/pass/test_anonymous_enum_member_replay.cpp',
+            'Classes/pass/test_anonymous_class_member_functions.cpp') },
+        @{ Name = 'anonymous-interleaved'; Tests = @(
+            'Classes/pass/test_anonymous_class_member_functions.cpp',
+            'MemberFunctions/pass/test_member_lookup_class_index.cpp',
+            'Classes/pass/test_anonymous_enum_member_replay.cpp') }
+    )
+    foreach ($batchCase in $anonymousBatches) {
+        $batch = Join-Path $fixture ($batchCase.Name + '.txt')
+        $commands = @()
+        $executables = @()
+        foreach ($test in $batchCase.Tests) {
+            $inputPath = Join-Path $PSScriptRoot ('features/' + $test)
+            $outputPath = Join-Path $fixture ($batchCase.Name + '-' +
+                [IO.Path]::GetFileNameWithoutExtension($test) + '.exe')
+            $arguments = @($inputPath, '-o', $outputPath)
+            $commands += (@($arguments | ForEach-Object {
+                '"' + $_.Replace('\', '\\').Replace('"', '\"') + '"'
+            }) -join ' ')
+            $executables += $outputPath
+        }
+        [IO.File]::WriteAllLines($batch, $commands, [Text.UTF8Encoding]::new($false))
+        & $CompilerPath ('@' + $batch)
+        if ($LASTEXITCODE -ne 0) { throw "Anonymous-state batch failed: $($batchCase.Name)" }
+        foreach ($exe in $executables) {
+            & $exe
+            if ($LASTEXITCODE -ne 0) { throw "Anonymous-state executable failed: $exe" }
+        }
+        Write-Host "PASS batch $($batchCase.Name)"
+    }
 } finally {
     $resolved = [IO.Path]::GetFullPath($fixture)
     if (-not $resolved.StartsWith($temporaryRoot, [StringComparison]::OrdinalIgnoreCase)) { throw 'Unsafe fixture cleanup path' }

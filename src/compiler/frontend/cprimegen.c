@@ -557,6 +557,17 @@ typedef struct TemplateStaticDataDef {
 } TemplateStaticDataDef;
 static TemplateStaticDataDef *template_static_data_defs;
 
+/* Namespace-scope variable templates are declarations, not function
+   templates and not class-template static members. */
+typedef struct TemplateVariableDef {
+  int name_tok;
+  int parameters[16], parameter_count;
+  int namespace_tok;
+  TokenString *declaration;
+  struct TemplateVariableDef *next;
+} TemplateVariableDef;
+static TemplateVariableDef *template_variable_defs;
+
 typedef struct TemplateInstOwner
 {
   int inst_tok;
@@ -1058,6 +1069,7 @@ typedef struct MemberFunctionScope {
 } MemberFunctionScope;
 #define MEMBER_SCOPE_BUCKETS 16384
 static MemberFunctionScope *member_function_scopes[MEMBER_SCOPE_BUCKETS];
+static int member_function_scopes_used;
 static void note_member_function_scope(int function_tok, int class_tok);
 static int member_function_class_tok(int function_tok);
 static int compare_member_function_template_order(int first_tok, int second_tok);
@@ -1081,6 +1093,10 @@ static int local_type_function_owner(int function_tok);
 static void note_local_type_function_owner(int function_tok, int owner_tok);
 static void free_local_type_replay(void);
 static int last_decl_was_auto;
+/* Set by a declarator that ends in `-> type`: the written result supersedes
+   the placeholder in front of the declarator, so the body is not probed for a
+   deduced return type. */
+static int last_decl_had_trailing_return;
 static CType template_member_call_arg_types[CPC_MAX_CALL_ARGUMENTS];
 static int nb_template_member_call_arg_types;
 static int explicit_member_template_arg_tok;
@@ -1285,6 +1301,7 @@ static void token_set_free(TokenSet *set)
 static TokenSet compiled_pending_members;
 static TokenSet pending_member_declarator_tokens;
 static unsigned pending_member_token_filter[8192];
+static int pending_member_token_filter_used;
 static int compile_lifecycle_member_funcs_only;
 static int nb_pending_global_inits;
 
@@ -1379,9 +1396,11 @@ static int cpp_permit_incomplete_array_type;
 static int cpp_permit_deferred_array_bound;
 typedef struct MemberNameCacheEntry {
   int owner, member, is_const, result;
+  unsigned generation;
 } MemberNameCacheEntry;
 #define MEMBER_NAME_BUCKETS 65536
 static MemberNameCacheEntry member_name_cache[MEMBER_NAME_BUCKETS];
+static unsigned member_name_generation = 1;
 static TokenSet materialized_member_bodies;
 #define TEMPLATE_TYPE_CACHE_BUCKETS 2048
 typedef struct TemplateTypeCacheEntry
@@ -1773,6 +1792,7 @@ static void index_pending_member_tokens(PendingMemberFunc *pm)
 {
   int i, paren = 0;
   if (!pm || !pm->str) return;
+  pending_member_token_filter_used = 1;
   /* These are conservative unions: removing a body need not clear a bit.
      Rewritten bodies add their new tokens before another lookup can use them. */
   for (i = 0; i < pm->str->len; ++i) {
@@ -1897,7 +1917,19 @@ static void free_template_state(void)
     cprime_free(template_static_data_defs);
     template_static_data_defs = next;
   }
-  memset(member_name_cache, 0, sizeof(member_name_cache));
+  while (template_variable_defs) {
+    TemplateVariableDef *next = template_variable_defs->next;
+    tok_str_free(template_variable_defs->declaration);
+    cprime_free(template_variable_defs);
+    template_variable_defs = next;
+  }
+  /* Token numbers are reused by the next translation unit. Invalidate by
+     generation rather than touching every unused cache page, including for C
+     and preprocessing jobs which never look up a C++ member name. */
+  if (++member_name_generation == 0) {
+    memset(member_name_cache, 0, sizeof(member_name_cache));
+    member_name_generation = 1;
+  }
   while (cpp_member_pointer_types)
   {
     CppMemberPointerType *next = cpp_member_pointer_types->next;
@@ -1968,8 +2000,10 @@ static void free_template_state(void)
     tok_str_free(pm->str);
     cprime_free(pm);
   }
-  memset(pending_auto_members, 0, sizeof(pending_auto_members));
-  memset(pending_auto_tails, 0, sizeof(pending_auto_tails));
+  if (pending_member_funcs) {
+    memset(pending_auto_members, 0, sizeof(pending_auto_members));
+    memset(pending_auto_tails, 0, sizeof(pending_auto_tails));
+  }
   cprime_free(pending_member_funcs);
   free_cpp_member_declarations();
   if (last_cpp_conversion_operator_type_tokens)
@@ -1988,8 +2022,10 @@ static void free_template_state(void)
   auto_return_member_toks = NULL;
   nb_auto_return_member_toks = al_auto_return_member_toks = 0;
   token_set_free(&compiled_pending_members);
+  if (pending_member_token_filter_used)
+    memset(pending_member_token_filter, 0, sizeof(pending_member_token_filter));
+  pending_member_token_filter_used = 0;
   token_set_free(&pending_member_declarator_tokens);
-  memset(pending_member_token_filter, 0, sizeof(pending_member_token_filter));
 
   cprime_free(pending_template_member_body_requests);
   pending_template_member_body_requests = NULL;
@@ -2022,13 +2058,15 @@ static void free_template_state(void)
   explicit_function_specializations = NULL;
   nb_explicit_function_specializations = 0;
   cprime_free(template_member_defs);
-  memset(template_member_buckets, 0, sizeof(template_member_buckets));
-  memset(template_member_owner_buckets, 0, sizeof(template_member_owner_buckets));
-  memset(template_member_owner_tails, 0, sizeof(template_member_owner_tails));
-  memset(template_member_lookup_buckets, 0, sizeof(template_member_lookup_buckets));
-  memset(template_member_lookup_tails, 0, sizeof(template_member_lookup_tails));
-  memset(template_member_bucket_tails, 0,
-         sizeof(template_member_bucket_tails));
+  if (nb_template_member_defs) {
+    memset(template_member_buckets, 0, sizeof(template_member_buckets));
+    memset(template_member_owner_buckets, 0, sizeof(template_member_owner_buckets));
+    memset(template_member_owner_tails, 0, sizeof(template_member_owner_tails));
+    memset(template_member_lookup_buckets, 0, sizeof(template_member_lookup_buckets));
+    memset(template_member_lookup_tails, 0, sizeof(template_member_lookup_tails));
+    memset(template_member_bucket_tails, 0,
+           sizeof(template_member_bucket_tails));
+  }
   template_member_defs = NULL;
   nb_template_member_defs = 0;
   token_set_free(&materialized_member_bodies);
@@ -2066,22 +2104,24 @@ static void free_template_state(void)
   class_source_name_toks = NULL;
   class_source_name_capacity = 0;
   cprime_free(template_defs);
-  memset(template_def_buckets, 0, sizeof(template_def_buckets));
-  memset(template_def_bucket_tails, 0, sizeof(template_def_bucket_tails));
-  for (i = 0; i < TEMPLATE_LOOKUP_BUCKETS; ++i)
-  {
-    TemplateInstOwner *entry = template_inst_owner_buckets[i];
-    while (entry)
+  if (nb_template_defs) {
+    memset(template_def_buckets, 0, sizeof(template_def_buckets));
+    memset(template_def_bucket_tails, 0, sizeof(template_def_bucket_tails));
+    for (i = 0; i < TEMPLATE_LOOKUP_BUCKETS; ++i)
     {
-      TemplateInstOwner *next = entry->next;
-      cprime_free(entry);
-      entry = next;
+      TemplateInstOwner *entry = template_inst_owner_buckets[i];
+      while (entry)
+      {
+        TemplateInstOwner *next = entry->next;
+        cprime_free(entry);
+        entry = next;
+      }
     }
+    memset(template_inst_owner_buckets, 0,
+           sizeof(template_inst_owner_buckets));
+    memset(template_inst_owner_bucket_tails, 0,
+           sizeof(template_inst_owner_bucket_tails));
   }
-  memset(template_inst_owner_buckets, 0,
-         sizeof(template_inst_owner_buckets));
-  memset(template_inst_owner_bucket_tails, 0,
-         sizeof(template_inst_owner_bucket_tails));
   template_defs = NULL;
   nb_template_defs = 0;
   template_adl_classes = NULL;
@@ -2091,8 +2131,10 @@ static void free_template_state(void)
   /* These bindings contain token IDs owned by this translation unit. */
   cprime_free(template_alias_insts);
   template_alias_insts = NULL;
-  memset(template_alias_buckets, 0, sizeof(template_alias_buckets));
-  memset(template_scoped_alias_buckets, 0, sizeof(template_scoped_alias_buckets));
+  if (nb_template_alias_insts) {
+    memset(template_alias_buckets, 0, sizeof(template_alias_buckets));
+    memset(template_scoped_alias_buckets, 0, sizeof(template_scoped_alias_buckets));
+  }
   nb_template_alias_insts = al_template_alias_insts = 0;
 
   cprime_free(member_init_list_struct_toks);
@@ -2109,13 +2151,14 @@ static void free_template_state(void)
   nb_namespace_scopes = 0;
   nb_inline_namespace_scopes = 0;
   free_cpp_type_info_records();
-  for (i = 0; i < MEMBER_SCOPE_BUCKETS; ++i)
+  for (i = 0; member_function_scopes_used && i < MEMBER_SCOPE_BUCKETS; ++i)
     while (member_function_scopes[i])
     {
       MemberFunctionScope *scope = member_function_scopes[i];
       member_function_scopes[i] = scope->next;
       cprime_free(scope);
     }
+  member_function_scopes_used = 0;
   cprime_free(using_namespace_toks);
   using_namespace_toks = NULL;
   nb_using_namespace_toks = 0;
@@ -2127,16 +2170,21 @@ static void free_template_state(void)
   cpp_using_lookup_links = NULL;
   nb_cpp_using_lookup_links = 0;
 
+  if (member_func_overloads) {
+    memset(member_func_overload_buckets, 0, sizeof(member_func_overload_buckets));
+    memset(member_mangled_buckets, 0, sizeof(member_mangled_buckets));
+    memset(conversion_overloads, 0, sizeof(conversion_overloads));
+  }
   while (member_func_overloads)
   {
     o = member_func_overloads;
     member_func_overloads = o->next;
     cprime_free(o);
   }
-  memset(member_func_overload_buckets, 0,
-         sizeof(member_func_overload_buckets));
-  memset(member_mangled_buckets, 0, sizeof(member_mangled_buckets));
-  memset(conversion_overloads, 0, sizeof(conversion_overloads));
+  if (free_func_overloads) {
+    memset(free_name_buckets, 0, sizeof(free_name_buckets));
+    memset(free_mangled_buckets, 0, sizeof(free_mangled_buckets));
+  }
   while (free_func_overloads)
   {
     fo = free_func_overloads;
@@ -2144,25 +2192,25 @@ static void free_template_state(void)
     cprime_free(fo);
   }
   free_func_registration_order = 0;
-  memset(free_name_buckets, 0, sizeof(free_name_buckets));
-  memset(free_mangled_buckets, 0, sizeof(free_mangled_buckets));
   cprime_free(template_type_cache);
   template_type_cache = NULL;
   template_type_cache_count = template_type_cache_capacity = 0;
-  memset(class_base_buckets, 0, sizeof(class_base_buckets));
+  if (class_base_infos)
+    memset(class_base_buckets, 0, sizeof(class_base_buckets));
   while (class_base_infos)
   {
     bi = class_base_infos;
     class_base_infos = bi->next;
     cprime_free(bi);
   }
+  if (virtual_method_infos)
+    memset(virtual_method_mangled, 0, sizeof(virtual_method_mangled));
   while (virtual_method_infos)
   {
     vm = virtual_method_infos;
     virtual_method_infos = vm->next;
     cprime_free(vm);
   }
-  memset(virtual_method_mangled, 0, sizeof(virtual_method_mangled));
   while (virtual_table_infos)
   {
     vt = virtual_table_infos;
@@ -2402,6 +2450,14 @@ static void ptype(const char *msg, CType *type, int v)
 // initialize vstack and types.  This must be done also for cpc -E
 ST_FUNC void cprimegen_init(CPRIMEState *s1)
 {
+  /* A response file runs several independent translation units in one
+     process.  Class-scope state is parser-owned, not part of CPRIMEState, so
+     it must never let an unfinished anonymous aggregate in one job qualify
+     declarations in the next. */
+  memset(defining_class_stack, 0, sizeof defining_class_stack);
+  nb_defining_class_stack = 0;
+  active_member_class_tok = 0;
+  cpp_member_decl_context = NULL;
   cpp_this_name_tok = cpp_private_this_tok = cpp_assign_operator_tok = 0;
   cpp_bool_operator_tok = cpp_index_operator_tok = cpp_call_operator_tok = 0;
   cpp_new_operator_tok = cpp_new_array_operator_tok = 0;
@@ -7860,7 +7916,7 @@ static int cached_member_name_tok(int struct_tok, int method_tok, int is_const)
                     ^ ((unsigned)method_tok * 97u) ^ (unsigned)is_const)
                     & (MEMBER_NAME_BUCKETS - 1);
   MemberNameCacheEntry *entry = &member_name_cache[slot];
-  if (entry->result && entry->owner == struct_tok
+  if (entry->generation == member_name_generation && entry->result && entry->owner == struct_tok
       && entry->member == method_tok && entry->is_const == is_const)
     return entry->result;
   entry->owner = struct_tok;
@@ -7868,6 +7924,7 @@ static int cached_member_name_tok(int struct_tok, int method_tok, int is_const)
   entry->is_const = is_const;
   entry->result = make_joined_name_tok(struct_tok, method_tok, "_",
                                        is_const ? "_const" : "");
+  entry->generation = member_name_generation;
   return entry->result;
 }
 
@@ -14565,6 +14622,7 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
 
   memset(ad, 0, sizeof(AttributeDef));
   last_decl_was_auto = 0;
+  last_decl_had_trailing_return = 0;
   last_btype_was_typedef = 0;
   last_btype_was_decltype = 0;
   type_found = 0;
@@ -15838,6 +15896,7 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
         /* The explicit trailing type supersedes the placeholder in the
            leading `auto`; the body must not be probed for a deduced return. */
         last_decl_was_auto = 0;
+        last_decl_had_trailing_return = 1;
       }
     }
     sr->type = *type, s = sr;
@@ -20552,6 +20611,13 @@ tok_identifier:
         break;
       }
       unqualified_call_syntax = !explicit_global_scope && tok != ':';
+      /* C has ordinary lexical/global lookup. Template, namespace, ADL and
+         implicit-receiver probes belong to the C++ identifier path. */
+      if (!is_cpp_translation_unit()) {
+        s = sym_find(t);
+        if (!s) s = global_symbol_find(t);
+        goto ordinary_identifier;
+      }
       if (unqualified_call_syntax && tok == '(' && active_member_class_tok
           && class_has_static_member_func(active_member_class_tok, t))
         t = make_static_member_tok(active_member_class_tok, t);
@@ -21123,6 +21189,16 @@ tok_identifier:
       }
       if (tok == TOK_LT || tok == '<')
       {
+        TemplateVariableDef *variable = find_template_variable(t);
+        if (variable)
+        {
+          TemplateArgList arguments;
+          parse_template_type_args(&arguments);
+          t = instantiate_template_variable(variable, &arguments);
+        }
+      }
+      if (tok == TOK_LT || tok == '<')
+      {
         TemplateDef *td = find_function_template_def(t);
         if (td)
         {
@@ -21686,9 +21762,13 @@ tok_identifier:
         if (try_parse_cpp_functional_type_cast(t))
           break;
       }
-      if (try_parse_cpp_functional_type_cast(t))
+      if (is_cpp_translation_unit() && tok == '('
+          && try_parse_cpp_functional_type_cast(t))
         break;
-      if (try_parse_cpp_functional_constructor(t))
+      /* Constructor parsing reserves argument replay storage. Do not enter
+         it for ordinary C identifiers or non-construction expressions. */
+      if (is_cpp_translation_unit() && (tok == '(' || tok == '{')
+          && try_parse_cpp_functional_constructor(t))
         break;
       if (template_direct_constexpr && tok == '(')
       {
@@ -21755,6 +21835,7 @@ tok_identifier:
             s = NULL; /* Member lookup precedes a namespace variable. */
         }
       }
+ordinary_identifier:
       if (!s || IS_ASM_SYM(s))
       {
         const char *name = get_tok_str(t, NULL);
@@ -26754,9 +26835,10 @@ static int decl_context(int l, int condition)
           cprime_error("cannot use local functions");
 
         /* A trailing return type supersedes the leading placeholder, and the
-           declarator cleared last_decl_was_auto for it, so the body must not
-           be probed for a deduced result. */
-        if (is_cpp_translation_unit() && btype_is_auto && last_decl_was_auto)
+           declarator recorded it, so the body must not be probed for a
+           deduced result. */
+        if (is_cpp_translation_unit() && btype_is_auto
+            && !last_decl_had_trailing_return)
         {
           TokenString *body = NULL, *probe = tok_str_alloc();
           Sym *parameter;

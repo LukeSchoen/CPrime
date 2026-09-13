@@ -1,5 +1,13 @@
 [
     {
+        "name": "test_compiler_cold_paths",
+        "path": "../scripts/windows/test-compiler-cold-paths.cmd",
+        "tier": "fast",
+        "seconds": 5,
+        "compiler": false,
+        "runtime": false
+    },
+    {
         "name": "check_native_project",
         "path": "check_native_project.ps1",
         "tier": "fast",

@@ -2055,18 +2055,121 @@ static char *get_token(char **s, char *f)
   return p;
 }
 
+typedef struct PeDefExport {
+  const char *name;
+  int ordinal, next;
+} PeDefExport;
+
+/* Keep the export catalog as source slices. Only referenced imports need a
+   linker symbol, string-table copy and hash-chain entry. The catalog belongs
+   to the link state, so references introduced by later archives still see it. */
+struct pe_export_file {
+  struct pe_export_file *next;
+  char *text;
+  PeDefExport *exports;
+  int *buckets;
+  unsigned mask;
+  int count, dllindex;
+};
+
+static unsigned pe_def_hash(const char *name)
+{
+  unsigned h = 2166136261u;
+  while (*name) h = (h ^ (unsigned char)*name++) * 16777619u;
+  return h ^ (h >> 16);
+}
+
+/* Tokenize and hash in one pass over each export spelling. */
+static char *pe_def_token(char **s, char *f, unsigned *hash)
+{
+  char *p = trimfront(*s), *e = p;
+  unsigned h = 2166136261u;
+  while ((unsigned char)*e > ' ')
+    h = (h ^ (unsigned char)*e++) * 16777619u;
+  *s = trimfront(e);
+  *f = **s;
+  *e = 0;
+  *hash = h ^ (h >> 16);
+  return p;
+}
+
+static PeDefExport *pe_def_lookup(struct pe_export_file *file, const char *name,
+                                 unsigned hash)
+{
+  int index;
+  PeDefExport *selected = NULL;
+  for (index = file->buckets[hash & file->mask]; index;
+       index = file->exports[index - 1].next)
+    if (!strcmp(file->exports[index - 1].name, name)
+        && (!selected || file->exports[index - 1].ordinal))
+      selected = &file->exports[index - 1];
+  /* The chain is newest first: retain the last unresolved definition, or
+     the first ordinal definition, just as eager symbol insertion did. */
+  return selected;
+}
+
+ST_FUNC int pe_find_def_symbol(CPRIMEState *s1, const char *name)
+{
+  struct pe_export_file *file;
+  PeDefExport *selected = NULL;
+  int dllindex = 0;
+  unsigned hash;
+  if (!s1->pe_export_files) return 0;
+  hash = pe_def_hash(name);
+  for (file = s1->pe_export_files; file; file = file->next) {
+    PeDefExport *entry = pe_def_lookup(file, name, hash);
+    if (!entry) continue;
+    selected = entry;
+    dllindex = file->dllindex;
+    /* Match set_elf_sym: an ordinal is a defined symbol and keeps the first
+       provider; an unresolved name can be replaced by a later provider. */
+    if (entry->ordinal) break;
+  }
+  if (!selected) return 0;
+  return put_elf_sym(s1->dynsymtab_section, selected->ordinal, dllindex,
+      Obj64_ST_INFO(STB_GLOBAL, STT_NOTYPE), 0,
+      selected->ordinal ? SHN_ABS : SHN_UNDEF, name);
+}
+
+ST_FUNC void pe_free_def_symbols(CPRIMEState *s1)
+{
+  while (s1->pe_export_files) {
+    struct pe_export_file *file = s1->pe_export_files;
+    s1->pe_export_files = file->next;
+    cprime_free(file->text);
+    cprime_free(file->exports);
+    cprime_free(file->buckets);
+    cprime_free(file);
+  }
+  s1->pe_export_files_tail = NULL;
+}
+
 static int pe_load_def(CPRIMEState *s1, int fd)
 {
   int state = 0, ret = -1, dllindex = 0, ord;
   char dllname[80], *buf, *line, *p, *x, next;
+  struct pe_export_file *catalog;
+  unsigned hash;
 
   buf = cprime_load_text(fd);
   if (!buf)
     return ret;
 
+  catalog = cprime_mallocz(sizeof(*catalog));
+  catalog->text = buf;
+  {
+    unsigned lines = 1, buckets = 16;
+    const char *newline = buf;
+    while ((newline = strchr(newline, '\n')) != NULL) ++lines, ++newline;
+    while (buckets < lines) buckets *= 2;
+    catalog->mask = buckets - 1;
+    catalog->exports = cprime_malloc(lines * sizeof(*catalog->exports));
+    catalog->buckets = cprime_mallocz(buckets * sizeof(*catalog->buckets));
+  }
+
   for (line = buf;; ++line)
   {
-    p = get_token(&line, &next);
+    p = pe_def_token(&line, &next, &hash);
     if (!(*p && *p != ';'))
       goto skip;
     switch (state)
@@ -2095,7 +2198,13 @@ static int pe_load_def(CPRIMEState *s1, int fd)
         ord = (int)strtol(x + 1, &x, 10);
       }
       //printf("token %s ; %s : %d\n", dllname, p, ord);
-      pe_putimport(s1, dllindex, p, ord);
+      {
+        PeDefExport *entry = &catalog->exports[catalog->count++];
+        entry->name = p;
+        entry->ordinal = ord;
+        entry->next = catalog->buckets[hash & catalog->mask];
+        catalog->buckets[hash & catalog->mask] = catalog->count;
+      }
       break;
     }
 skip:
@@ -2106,7 +2215,27 @@ skip:
   }
   ret = 0;
 quit:
-  cprime_free(buf);
+  if (!ret) {
+    Section *symbols = s1->dynsymtab_section;
+    unsigned i, count = symbols->data_offset / sizeof(ObjW(Sym));
+    catalog->dllindex = dllindex;
+    if (s1->pe_export_files_tail) s1->pe_export_files_tail->next = catalog;
+    else s1->pe_export_files = catalog;
+    s1->pe_export_files_tail = catalog;
+    /* A user can load another definition file after an import was already
+       referenced. Apply the same provider precedence to materialized symbols. */
+    for (i = 1; i < count; ++i) {
+      ObjW(Sym) *symbol = (ObjW(Sym) *)symbols->data + i;
+      const char *name = (char *)symbols->link->data + symbol->st_name;
+      PeDefExport *entry = pe_def_lookup(catalog, name, pe_def_hash(name));
+      if (entry) pe_putimport(s1, dllindex, name, entry->ordinal);
+    }
+  } else {
+    cprime_free(catalog->text);
+    cprime_free(catalog->exports);
+    cprime_free(catalog->buckets);
+    cprime_free(catalog);
+  }
   return ret;
 }
 

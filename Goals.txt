@@ -1,0 +1,10 @@
+ensure c as max requirement
+(cprime itself should only require c)
+
+ensure c++ 17 as min requirement
+(cprime should be able to handle c++)
+
+  - pass gcc tests
+  - pass clang tests (todo find them)
+  - pass c++ suite (todo extend this)
+  - pass cl suite (todo create this)

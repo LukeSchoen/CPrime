@@ -1,127 +1,85 @@
-# Development loop
+# Development and validation
 
-Remaining work and the current state line live in [task.md](../task.md). Keep
-that file short and current; git history and the tests themselves are the
-record of completed work.
+The scope, work packages and acceptance criteria are in [task.md](../task.md).
+C++17 is the cutoff. Resolve a complete mechanism/package, including its related
+rows and negative controls, rather than cycling through one row at a time.
+Plans record remaining work; code, tests and git history record completed work.
 
-Use root `cpc.exe` for every compile, build and regression step. Do not invoke
-Clang, GCC, MSVC or another compiler for host builds, comparisons or benchmarks
-without an explicit user request; a CPC failure is a bug to reproduce, not a
-reason to switch hosts. Compile and build serially, one compiler process at a
-time. Language compiler/program invocations and fast gates have five-second
-ceilings; record timeouts as failures and never retry with a relaxed budget.
+## Compiler and validation discipline
 
-## One session, one cluster
+Use the repository root cpc.exe explicitly; PATH may select an unrelated binary.
+One compiler process at a time. Build.cmd self-hosts, validates and publishes;
+a failed build preserves root CPC. Compiler overrides are for build-internal
+staging only. Do not use other hosts. The requested TCC performance comparison
+is separate from MSVC/Clang/GCC ABI or build authorization.
 
-Pick the next unfinished pre-step in `task.md` first -- a green internal
-baseline, then the compilation-speed wave. Only then work the wave plan (Wave A
-while the language long tail lasts; Waves B and C need a funding decision), or
-the top cluster in `build/compiler-bug-triage.txt` when the ordered list is
-empty. Reproduce, repair and verify that cluster only. If a fix has not landed
-after roughly half the session budget, revert it, record the narrowed lead in
-`task.md`, and stop.
+Start with exact GCC selections and the nearest subsystem gate. Preserve the
+original expected behavior and reduce external inputs to standalone local
+fixtures. For a completed compiler package, run the related regressions, then
+self-build and the appropriate language tiers once. Do not repeatedly run the
+whole corpus after each edit. Individual language processes and fast standalone
+gates retain their five-second ceiling; never retry a timeout with a larger one.
 
-### Repairing a retained GCC row
+## Commands and truthful status
 
-1. Reproduce the row exactly:
-   `Tests/pedantic/gcc/run.ps1 -Select <path> -Out build/<name>`.
-2. Reduce the behavior to a small first-party regression in the nearest
-   `Tests/features/...` suite, with every required fixture inside CPrime.
-3. Fix the compiler and re-run the exact selection plus the first-party
-   regression until both pass.
-4. Retire the row: delete its corpus file, remove its `corpus.json` case entry,
-   and drop any `Tests/tiers.json` entry for it. A repaired row must not stay in
-   the corpus as a permanent external dependency.
-5. Re-run the retained gate and the fast tier, then update the `task.md` state
-   line and stop.
+- `Tests/run.ps1 -Suite features/Templates -Select test_name.cpp` selects an
+  exact regression across tiers unless a tier is explicitly restricted.
+- `Tests/gates.ps1 -Subsystem members` selects related small regressions.
+- `Tests/run-all.ps1 -Tier fast` includes the unresolved GCC assessment and
+  therefore fails while positive retained cases fail; it is not currently green.
+- `Tests/run-all.ps1 -Tier pedantic` guards established first-party language
+  coverage, including already passing post-C++17 extensions. Run after a large
+  package or consolidation; it does not run every native/performance workload.
+- `Tests/run-all.ps1 -Tier all` runs both language partitions once.
+- `Tests/run-checks.ps1 -Select <name>` selects a native gate; inspect it for
+  external compilers/tools first. `tests.cmd` and `-IncludeChecks` include
+  external ABI gates and are not blanket-authorized CPC-only validation.
 
-### Repairing a first-party regression
+A zero outstanding-row count is inventory, not proof of passing tests. Pending
+reproducers and historical native/batch issues in task.md remain acceptance
+work even if discovered language tests pass. The GCC reader/runner must accept
+an empty corpus before the final row can be retired cleanly.
 
-1. Keep the smallest reproducing test in the relevant suite; reuse helpers and
-   remove duplicate fixtures without losing distinct behavior.
-2. Rebuild with `Build.cmd` when compiler sources change, then run the exact
-   case with `Tests/run.ps1 -Suite <suite> -Select <test>`.
-3. Run the other established cases that exercise the changed behavior. Explicit
-   `-Select` crosses tiers unless `-Tier` restricts it.
-4. Run `Tests/run-all.ps1` for the active verification and any selected
-   CPC-only native gates, then update `task.md` and stop.
+## Test consolidation
 
-## Verification tiers
+Combine related positive cases with identical flags and compatible scope into
+one small source, using named checks or distinct failure return codes. Map all
+original assertions to the combined test before deleting originals. Keep
+compile-only declaration shapes, negative diagnostic cases and multi-source
+linkage cases separate when combining would change what is exercised.
 
-- `Tests/run-all.ps1 -Tier fast` is the routine check: unresolved retained GCC
-  rows (expected to fail until repaired) plus new first-party regressions.
-- `Tests/run-all.ps1 -Tier pedantic` is the established-pass guard: the
-  first-party regression corpus. Run it after large changes or consolidation,
-  not after every edit.
-- `Tests/pedantic/gcc/run.ps1` defaults to the retained rows. `-Tier pedantic`
-  is an empty no-op while every retained row is unresolved; `-Tier all` selects
-  the same rows as the default.
+Tests/tiers.json lists the pedantic partition; an unlisted discovered case is
+fast. Promote proven regressions to pedantic after consolidating them, retaining
+a small representative fast set for active mechanisms. Keep stress workloads
+explicitly pedantic. Record both process count and end-to-end time; runner
+startup/cleanup time is distinct from compiler time. Batch compiler state must
+be correct before using in-process batching to speed up testing.
 
-`Tests/run-checks.ps1` adds fast CPC-only native/integration gates.
-`tests.cmd`, `-IncludeChecks` and `tests_pedantic.cmd` can invoke cross-compiler
-ABI gates and need explicit authorization for those invocations.
+Current pending reductions live in Tests/pending/ and are named in the outstanding
+list. They are not expected-failure passes. Compile directly with root CPC;
+after repair, move them to the matching first-party pass/fail suite and remove
+the pending path. The initializer redefinition case must reject normally; the
+other accepted-program reductions must compile/link/run successfully.
 
-## Progress log
+Runner/tier edits require the focused suite/fixture/tier checks. Corpus edits
+also require `Tests/pedantic/gcc/test_corpus.ps1`. Do not expand old PowerShell
+tooling by default: new shared helpers belong in src/ as native C; test-specific
+sources in Tests/; generated executables and logs in build/.
 
-`worker.cmd` prints test completion: cases left, the rate in real hours and
-days, and the time that rate implies. One sample per finished cycle is appended
-to `Tests/progress/log.tsv`, a tab-separated, append-only file that git commits
-together with the work the sample describes, so stopping and restarting the
-worker needs no recovery step. The baseline is the consolidation commit that
-created the retained failure corpus; earlier rows are not comparable.
+## Worker reporting
 
-`build/worker-status.exe` (from `src/tools/worker_status.c`) owns the format and
-the arithmetic:
+worker.cmd reports current inventory counts, changes since the previous sample,
+cycle exit, changed files and a distinct build/worker-cycle-N.log path. It omits
+rate/trend/ETA projections from its normal display: differently sized fixes and
+scope removals make those projections poor completion estimates.
 
-```powershell
-./cpc.exe -o build/worker-status.exe src/tools/worker_status.c
-./build/worker-status.exe --root .                    # completion report
-./build/worker-status.exe --root . --last-cycle       # resume the cycle counter
-```
+The native tool retains the existing log protocol and optional detailed output:
+`cpc.exe -o build/worker-status.exe src/tools/worker_status.c`, then
+`build/worker-status.exe --root . --brief`. Use an explicit root path when
+invoking CPC from outside this directory. Tests/progress/log.tsv remains
+append-only; scope removal is not a repaired case even though counts fall.
 
-Remaining work is the retained `corpus.json` cases plus the paths listed in
-`Tests/progress/first-party-failures.txt`. Retiring a first-party failure means
-deleting its line there as well as in `task.md`; the worker reports 100% and
-stops only when both lists are empty. `test_WorkerProgress.ps1` covers the log
-format, the rate arithmetic and the failure exits.
-
-## Consolidation policy
-
-Prefer one focused test per distinct behavior, and combine tests that differ
-only in call syntax or receiver shape into one file with named cases. Deleting
-coverage, weakening expectations, or turning a reproducible failure into an
-expected failure is not consolidation. External rows are retired by deletion
-after the behavior is covered first-party, never promoted into the corpus.
-
-Keep tests minimal, deterministic and fast; keep reproducing sources and
-fixtures in `Tests/`, and generated output in `build/`. Regression reports carry
-only the repository-relative test path, the exact command, compiler/runtime
-identity, expected versus actual behavior, and the runner summary with timing.
-
-## Tools
-
-Prefer C sources compiled with root `cpc.exe` for new build drivers and helpers;
-avoid new PowerShell implementations unless a native approach is impractical or
-measurably slower. Keep tool sources in `src/` and generated executables in
-`build/`.
-
-- `Tests/diagnose.ps1 -Source <repro.cpp>` captures commands, preprocessing,
-  hashes and diagnostics; `CPRIME_PARSER_STATE=1` enables parser tracing.
-- `Tests/triage_retained_failures.ps1 [-ResultsPath <results.jsonl>]` groups
-  retained failures by area and first diagnostic into
-  `build/compiler-bug-triage.{txt,json}`. It defaults to the newest
-  `build/pedantic-gcc-*/results.jsonl`.
-- `Tests/check_regressions.ps1` is the compiler publication gate.
-- `Tests/run-checks.ps1 -Select <name>` runs one fast native/integration gate.
-- Runner or tier changes: `Tests/test_RunnerFixtures.ps1`,
-  `test_SuiteRunner.ps1`, `test_CheckTiers.ps1`. GCC adapter changes also need
-  its focused `test_*.ps1` checks, including corpus integrity.
-- Build dispatch changes: `check_build_default.ps1`,
-  `check_build_regression_gate.ps1`. Project cache changes: fast
-  `run-checks.ps1 -Select test_IncrementalCache`, plus `check_native_project`,
-  `check_incremental_build` and `check_batch_build` for graph, dependency or
-  process changes.
-
-Redirect temporary instrumentation output to `build/` and remove the
-instrumentation before publishing. Keep the concise triage summary as durable
-session state; leave full per-case diagnostics in the generated `results.jsonl`.
+Only validated task.md acceptance justifies done.x. Empty backlog no longer
+creates it automatically. The worker retains its existing commit-at-cycle-boundary
+behavior; do not run it to test formatting on an active working tree. Validate
+the native reporter directly and worker control flow in an isolated fixture.

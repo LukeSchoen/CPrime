@@ -20,7 +20,8 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     int token, depth, nocode, local_offset, temporary_count, namespace_tok;
     int declarator_depth, alias_layout_depth;
     int global_expression;
-    int member_class, declaration_auto, declaration_typedef, declaration_decltype;
+    int member_class, declaration_auto, declaration_trailing_return;
+    int declaration_typedef, declaration_decltype;
     int scope, deferred_members, binding_count, global_binding_count;
     int *query_alignment;
     int unevaluated_depth, probe_depth, standard_conversion_only;
@@ -56,6 +57,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   saved->member_class = active_member_class_tok;
   saved->member_declaration_context = cpp_member_decl_context;
   saved->declaration_auto = last_decl_was_auto;
+  saved->declaration_trailing_return = last_decl_had_trailing_return;
   saved->declaration_typedef = last_btype_was_typedef;
   saved->declaration_decltype = last_btype_was_decltype;
   saved->previous = cpp_substitution_jump;
@@ -298,6 +300,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   active_member_class_tok = saved->member_class;
   cpp_member_decl_context = saved->member_declaration_context;
   last_decl_was_auto = saved->declaration_auto;
+  last_decl_had_trailing_return = saved->declaration_trailing_return;
   last_btype_was_typedef = saved->declaration_typedef;
   last_btype_was_decltype = saved->declaration_decltype;
   cprime_free(saved);

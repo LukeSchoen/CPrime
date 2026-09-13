@@ -1,0 +1,533 @@
+{
+    "date":  "2026-09-13",
+    "published_root_cpc_sha256":  "66ff6629ffc375a2967e4186788243d7aebbeb294f803134cbb9f09f77ff912a",
+    "tcc_sha256":  "b09dc6ffa52cc00462f9cd82abfea9ee5f5df967435ca2bf6b050f15b952e772",
+    "method":  "Serial CreateProcess; one warmup per case; fresh full executables; interleaved CPC then TCC; sum of matched case medians; unchanged baseline and inputs. Harness retains medians, not individual samples. Self driver is CPC-only.",
+    "fast_command":  "build/perf/perf-compare.exe -Root . -Fast -Iterations 63 -Results build/speed-final.tsv",
+    "cost_command":  "build/perf/perf-compare.exe -Root . -Cases Tests/benchmarks/compile/costs -Iterations 7 -NoGate -Results build/speed-costs-confirm.tsv",
+    "validation":  {
+                       "build_exit":  0,
+                       "fast_language_passed":  48,
+                       "c_compat_passed":  41,
+                       "cold_paths_gate_seconds":  0.7,
+                       "include_search":  "passed"
+                   },
+    "runs":  [
+                 {
+                     "name":  "before",
+                     "source":  "build/speed-baseline.tsv",
+                     "measured_samples":  15,
+                     "self_samples":  7,
+                     "rows":  [
+                                  {
+                                      "case":  "c.empty.main",
+                                      "compiler":  "cpc",
+                                      "median_ms":  12.273,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.empty.main",
+                                      "compiler":  "tcc",
+                                      "median_ms":  8.036,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.float.math",
+                                      "compiler":  "cpc",
+                                      "median_ms":  11.857,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.float.math",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.728,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.integer.expressions",
+                                      "compiler":  "cpc",
+                                      "median_ms":  11.219,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.integer.expressions",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.677,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.many.functions",
+                                      "compiler":  "cpc",
+                                      "median_ms":  12.972,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.many.functions",
+                                      "compiler":  "tcc",
+                                      "median_ms":  8.746,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.preprocessor.heavy",
+                                      "compiler":  "cpc",
+                                      "median_ms":  12.226,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.preprocessor.heavy",
+                                      "compiler":  "tcc",
+                                      "median_ms":  8.136,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.string.literals",
+                                      "compiler":  "cpc",
+                                      "median_ms":  11.33,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.string.literals",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.52,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.struct.fields",
+                                      "compiler":  "cpc",
+                                      "median_ms":  11.695,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.struct.fields",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.504,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.switch.dense",
+                                      "compiler":  "cpc",
+                                      "median_ms":  14.927,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.switch.dense",
+                                      "compiler":  "tcc",
+                                      "median_ms":  9.294,
+                                      "failed":  0
+                                  }
+                              ]
+                 },
+                 {
+                     "name":  "first-below-one",
+                     "source":  "build/speed-final-shape.tsv",
+                     "measured_samples":  31,
+                     "self_samples":  7,
+                     "rows":  [
+                                  {
+                                      "case":  "c.empty.main",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.215,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.empty.main",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.57,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.float.math",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.304,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.float.math",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.392,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.integer.expressions",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.478,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.integer.expressions",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.391,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.many.functions",
+                                      "compiler":  "cpc",
+                                      "median_ms":  8.316,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.many.functions",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.827,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.preprocessor.heavy",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.392,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.preprocessor.heavy",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.622,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.string.literals",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.137,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.string.literals",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.465,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.struct.fields",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.285,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.struct.fields",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.306,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.switch.dense",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.02,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.switch.dense",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.444,
+                                      "failed":  0
+                                  }
+                              ]
+                 },
+                 {
+                     "name":  "confirmation",
+                     "source":  "build/speed-confirm.tsv",
+                     "measured_samples":  63,
+                     "self_samples":  7,
+                     "rows":  [
+                                  {
+                                      "case":  "c.empty.main",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.124,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.empty.main",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.361,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.float.math",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.268,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.float.math",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.314,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.integer.expressions",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.423,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.integer.expressions",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.562,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.many.functions",
+                                      "compiler":  "cpc",
+                                      "median_ms":  8.512,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.many.functions",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.869,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.preprocessor.heavy",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.428,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.preprocessor.heavy",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.19,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.string.literals",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.303,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.string.literals",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.394,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.struct.fields",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.336,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.struct.fields",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.325,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.switch.dense",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.397,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.switch.dense",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.42,
+                                      "failed":  0
+                                  }
+                              ]
+                 },
+                 {
+                     "name":  "published",
+                     "source":  "build/speed-final.tsv",
+                     "measured_samples":  63,
+                     "self_samples":  7,
+                     "rows":  [
+                                  {
+                                      "case":  "c.empty.main",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.043,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.empty.main",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.381,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.float.math",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.447,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.float.math",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.521,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.integer.expressions",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.464,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.integer.expressions",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.775,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.many.functions",
+                                      "compiler":  "cpc",
+                                      "median_ms":  8.175,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.many.functions",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.894,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.preprocessor.heavy",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.339,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.preprocessor.heavy",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.477,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.string.literals",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.471,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.string.literals",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.471,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.struct.fields",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.995,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.struct.fields",
+                                      "compiler":  "tcc",
+                                      "median_ms":  7.879,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.switch.dense",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.903,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "c.switch.dense",
+                                      "compiler":  "tcc",
+                                      "median_ms":  8.099,
+                                      "failed":  0
+                                  }
+                              ]
+                 },
+                 {
+                     "name":  "self-and-options-first",
+                     "source":  "build/speed-costs-final.tsv",
+                     "measured_samples":  15,
+                     "self_samples":  7,
+                     "rows":  [
+                                  {
+                                      "case":  "cost.exe_c",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.603,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.exe_cpp",
+                                      "compiler":  "cpc",
+                                      "median_ms":  6.986,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.exe_default",
+                                      "compiler":  "cpc",
+                                      "median_ms":  6.978,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.object",
+                                      "compiler":  "cpc",
+                                      "median_ms":  6.173,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.object_c",
+                                      "compiler":  "cpc",
+                                      "median_ms":  6.203,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.preprocess",
+                                      "compiler":  "cpc",
+                                      "median_ms":  5.516,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.self.driver",
+                                      "compiler":  "cpc",
+                                      "median_ms":  367.386,
+                                      "failed":  0
+                                  }
+                              ]
+                 },
+                 {
+                     "name":  "self-and-options-confirm",
+                     "source":  "build/speed-costs-confirm.tsv",
+                     "measured_samples":  7,
+                     "self_samples":  7,
+                     "rows":  [
+                                  {
+                                      "case":  "cost.exe_c",
+                                      "compiler":  "cpc",
+                                      "median_ms":  6.91,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.exe_cpp",
+                                      "compiler":  "cpc",
+                                      "median_ms":  7.156,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.exe_default",
+                                      "compiler":  "cpc",
+                                      "median_ms":  6.503,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.object",
+                                      "compiler":  "cpc",
+                                      "median_ms":  5.846,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.object_c",
+                                      "compiler":  "cpc",
+                                      "median_ms":  5.813,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.preprocess",
+                                      "compiler":  "cpc",
+                                      "median_ms":  6.127,
+                                      "failed":  0
+                                  },
+                                  {
+                                      "case":  "cost.self.driver",
+                                      "compiler":  "cpc",
+                                      "median_ms":  314.775,
+                                      "failed":  0
+                                  }
+                              ]
+                 }
+             ]
+}

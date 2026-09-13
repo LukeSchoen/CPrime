@@ -238,8 +238,8 @@ ST_FUNC void expect(const char *msg)
 #define TAL_DEBUG_PARAMS , const char *sfile, int sline
 #endif
 
-#define TOKSYM_TAL_SIZE (256 * 1024) // allocator for TokenSym in table_ident 
-#define TOKSTR_TAL_SIZE (256 * 1024) // allocator for TokenString instances 
+#define TOKSYM_TAL_SIZE (256 * 1024) // allocator for TokenSym in table_ident
+#define TOKSTR_TAL_SIZE (256 * 1024) // allocator for TokenString instances
 
 typedef struct TinyAlloc
 {
@@ -1637,7 +1637,7 @@ typedef struct IncludeDirectoryFile {
 typedef struct IncludeDirectory {
   struct IncludeDirectory *next;
   IncludeDirectoryFile *files[64];
-  int complete;
+  int complete, probes;
   char path[1];
 } IncludeDirectory;
 static IncludeDirectory *include_directories[256];
@@ -1717,12 +1717,17 @@ static int include_candidate_may_exist(const char *filename)
   for (dir = include_directories[h]; dir; dir = dir->next)
     if (!PATHCMP(dir->path, path)) break;
   if (!dir) {
-    WIN32_FIND_DATAA found;
-    HANDLE handle;
     dir = cprime_mallocz(sizeof(*dir) + len);
     strcpy(dir->path, path);
     dir->next = include_directories[h];
     include_directories[h] = dir;
+  }
+  /* A directory scan pays off only after repeated include searches. Small
+     translation units should use the ordinary exact-file open instead. */
+  if (dir->probes < 4) {
+    WIN32_FIND_DATAA found;
+    HANDLE handle;
+    if (++dir->probes < 4) return 1;
     strcpy(pattern, path);
     strcat(pattern, "*");
     handle = FindFirstFileA(pattern, &found);

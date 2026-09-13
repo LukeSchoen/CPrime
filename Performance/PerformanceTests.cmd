@@ -2,19 +2,18 @@
 setlocal EnableExtensions EnableDelayedExpansion
 
 rem CPrime performance suite: cpc against tcc on the C cases in
-rem Performance\cases, plus the leftovers/lookup checks in perf-check.
+rem Tests\benchmarks\compile, plus the leftovers/lookup checks in perf-check.
 rem
-rem The speed gate compares the machine independent ratios (cpc/tcc and
-rem cpc/reference) with Performance\baseline\perf-baseline.tsv, so a result
-rem recorded on one machine still means something on another.  The reference
-rem build defaults to the cpc.exe committed at HEAD, which makes every run
-rem answer "has today's compiler lost speed against the published one?".
+rem The speed gate compares the machine independent ratios (cpc/tcc and an
+rem explicitly supplied cpc/reference) with Performance\baseline\perf-baseline.tsv.
+rem Normal runs use root cpc.exe only; a reference is never extracted or chosen
+rem automatically.
 rem
 rem Options:
 rem   -Fast             skip the heavy tier (the self-compile case)
 rem   -NoGate           report only, never fail on a regression or a finding
 rem   -UpdateBaseline   record the current numbers as the baseline
-rem   -NoReference      do not extract HEAD's cpc.exe for comparison
+rem   -NoReference      accepted compatibility no-op (normal runs have no reference)
 rem   -Reference PATH   use PATH as the reference CPC build
 rem   -Iterations N     measured runs per case (default 5)
 rem   -Warmups N        discarded runs per case (default 1)
@@ -52,7 +51,6 @@ if /i "%~1"=="-Reference" (set "REFERENCE=%~2" & shift & shift & goto parse)
 if /i "%~1"=="-Iterations" (set "EXTRAS=%EXTRAS% -Iterations %~2" & shift & shift & goto parse)
 if /i "%~1"=="-Warmups" (set "EXTRAS=%EXTRAS% -Warmups %~2" & shift & shift & goto parse)
 if /i "%~1"=="-Tolerance" (set "EXTRAS=%EXTRAS% -Tolerance %~2" & shift & shift & goto parse)
-if /i "%~1"=="-NoiseLimit" (set "EXTRAS=%EXTRAS% -NoiseLimit %~2" & shift & shift & goto parse)
 if /i "%~1"=="-SpeedOnly" (set "SKIP_CHECKS=1" & shift & goto parse)
 if /i "%~1"=="-ChecksOnly" (set "SKIP_SPEED=1" & shift & goto parse)
 if /i "%~1"=="-Log" (set "EXTRAS=%EXTRAS% -Log %~2" & set "CHECK_ARGS=%CHECK_ARGS% -Log %~2" & shift & shift & goto parse)
@@ -66,7 +64,6 @@ goto usage
 echo usage: Performance\PerformanceTests.cmd [options]
 echo   -Fast -NoGate -UpdateBaseline -NoReference -Reference PATH
 echo   -Iterations N -Warmups N -Tolerance PCT -SpeedOnly -ChecksOnly
-echo   -NoiseLimit PCT
 echo   -Log FILE -Cycle N -Head REV
 exit /b 2
 
@@ -77,26 +74,18 @@ if not exist "%CPC%" (
 )
 if not exist "%OUT%" mkdir "%OUT%"
 
-rem Tools are first-party C programs built with the compiler under test, so a
-rem broken cpc leaves the previous executables in place and the suite reports
-rem what it measured with them.
-call :build_tool "%CPC%" "%OUT%\perf-check.exe" "%ROOT%\Performance\src\perf_check.c"
-call :build_tool "%CPC%" "%OUT%\perf-compare.exe" "%ROOT%\Performance\src\perf_compare.c"
+rem Never measure with a stale helper after a root-CPC rebuild failure.
+call :build_tool "%CPC%" "%OUT%\perf-check.exe" "%ROOT%\src\tools\perf_check.c"
+if errorlevel 1 exit /b 2
+call :build_tool "%CPC%" "%OUT%\perf-compare.exe" "%ROOT%\src\tools\perf_compare.c"
+if errorlevel 1 exit /b 2
+call :build_tool "%CPC%" "%OUT%\perf-dispersion.exe" "%ROOT%\src\tools\perf_dispersion.c"
+if errorlevel 1 exit /b 2
 if not exist "%OUT%\perf-compare.exe" (
     echo [perf] no perf-compare.exe available.
     exit /b 2
 )
 
-if "%NO_REFERENCE%"=="1" goto have_reference
-if defined REFERENCE goto have_reference
-git rev-parse --git-dir >nul 2>&1
-if errorlevel 1 goto have_reference
-git cat-file -e HEAD:cpc.exe >nul 2>&1
-if errorlevel 1 goto have_reference
-git show HEAD:cpc.exe > "%OUT%\cpc-reference.exe"
-if errorlevel 1 goto have_reference
-if not exist "%OUT%\cpc-reference.exe" goto have_reference
-set "REFERENCE=%OUT%\cpc-reference.exe"
 :have_reference
 set REFARG=
 if defined REFERENCE set REFARG=-Reference "%REFERENCE%"
@@ -143,9 +132,5 @@ exit /b 0
 
 :tool_failed
 if exist "%~2.new" del "%~2.new" >nul 2>&1
-if exist "%~2" (
-    echo [perf] rebuild of %~nx2 failed; using the existing executable.
-) else (
-    echo [perf] cannot build %~nx2 with the compiler under test.
-)
-exit /b 0
+echo [perf] cannot rebuild %~nx2 with the root compiler; benchmark stopped.
+exit /b 1

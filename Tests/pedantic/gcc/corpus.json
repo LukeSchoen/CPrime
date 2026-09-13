@@ -68,11 +68,6 @@
                       "sha256":  "05def935a322653b8d07fe7b4ec303d6c1fc448c419c90985841cf5f356306f5"
                   },
                   {
-                      "path":  "g++.old-deja/g++.other/crash20.C",
-                      "role":  "case",
-                      "sha256":  "0e7ff5f199a44f6b1e5625259e90a8e03621d70276c7647e2035938d2c1f65d0"
-                  },
-                  {
                       "path":  "g++.dg/ext/attrib6.C",
                       "role":  "case",
                       "sha256":  "28e1e34708b315f92aecff30d285a0d81f287ab6ca3441602c65a3309a5f7044"
@@ -108,11 +103,6 @@
                       "sha256":  "2f1e2e6c7262218307a8e2a00b43ca3b8a885533823337b3ca5bda8d47a486a8"
                   },
                   {
-                      "path":  "g++.dg/DRs/dr2387-aux.cc",
-                      "role":  "case",
-                      "sha256":  "19a6743fc61150adbf5a8a8ff85a507db9540f24209190ef70026a1872c40e75"
-                  },
-                  {
                       "path":  "c-c++-common/pr71654.c",
                       "role":  "case",
                       "sha256":  "3b8754dafda7954726f120f03e70a98abc3037859a350a6a68e8feb5cf28c96d"
@@ -123,19 +113,9 @@
                       "sha256":  "12953485ef4235010b89249210ef56442677b4c35f6a56abe6927fe1f8d77e41"
                   },
                   {
-                      "path":  "g++.dg/cpp0x/nolinkage1a.cc",
-                      "role":  "case",
-                      "sha256":  "57a96b28659fd18f8bad81dd59a90f1954a73bec753142e617256151ff3bc3c3"
-                  },
-                  {
                       "path":  "g++.dg/cpp26/aggr-init1.C",
                       "role":  "case",
                       "sha256":  "01b3de523bbeb50ced7ed0cdee00a723327e76a767e171c52012ba0a8882e75e"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr113457.C",
-                      "role":  "case",
-                      "sha256":  "a3e1fc44fb6dd139a87b45e9fc3c7c0bc9c9fbd29530fba66261bbddfcd68c07"
                   },
                   {
                       "path":  "g++.dg/overload/defarg4.C",
@@ -146,11 +126,6 @@
                       "path":  "g++.dg/overload/member2.C",
                       "role":  "case",
                       "sha256":  "e1d89f8158c45795a1d67b396f1901c0fa4281b0ca1300dac20634fc38945a6d"
-                  },
-                  {
-                      "path":  "g++.dg/parse/access1.C",
-                      "role":  "case",
-                      "sha256":  "aa2f0b91fb41d33f88f44f9a2e79e07b2d2e77207ebe7963ee4ccabb50802588"
                   },
                   {
                       "path":  "g++.dg/other/vararg-5.C",
@@ -203,11 +178,6 @@
                       "sha256":  "308686b5e80408dc6f1e2d51a90219338826b8086ab1b314d61ae3296a6addcc"
                   },
                   {
-                      "path":  "g++.dg/template/access10.C",
-                      "role":  "case",
-                      "sha256":  "14654943462dfec4cbdf53710f8a46b0063c839bdf3804371e807f79ddd7e5b3"
-                  },
-                  {
                       "path":  "g++.dg/parse/using3.C",
                       "role":  "case",
                       "sha256":  "9dc83ae2b9d520ad3359cb949f34122de8c51385839b4045b7ec6cadf9b563fe"
@@ -258,21 +228,5 @@
                       "sha256":  "043dac0918a22f6b79372a02875c9b0e4361360cd20815ec633cd73f2f4659fc"
                   }
               ],
-    "support":  [
-                    {
-                        "path":  "gcc.dg/cpp/c23-elifdef-1.c",
-                        "role":  "support",
-                        "sha256":  "c480f9e891ada56626a27c2b0e1030fb70eec6465f9dd82f1603670236903f8f"
-                    },
-                    {
-                        "path":  "gcc.dg/builtin-object-size-common.h",
-                        "role":  "support",
-                        "sha256":  "53f13f9ee08aa9c6b3e924329fac8f8280242a59a1ce5978465bab18937965c4"
-                    },
-                    {
-                        "path":  "g++.dg/cpp0x/nolinkage1.h",
-                        "role":  "support",
-                        "sha256":  "542fa026d6630ace9503f89fb9a286798b47b3941dd705b69ef434923f9b9f15"
-                    }
-                ]
+    "support":  []
 }

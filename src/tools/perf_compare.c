@@ -1,5 +1,5 @@
 /* Compare CPC compilation speed against tcc, and against an optional reference
-   CPC build, over the portable C cases under Performance/cases.
+   CPC build, over the portable C cases under Tests/benchmarks/compile.
 
    Every case is one translation unit.  A case carries metadata in the leading
    comment lines of its file:
@@ -23,7 +23,7 @@
      -Cpc EXE          compiler under test (default ROOT/cpc.exe)
      -Tcc EXE          vendored tcc (default ROOT/third-party/tcc/win32/tcc.exe)
      -Reference EXE    reference CPC build, compared when given
-     -Cases DIR        case directory (default ROOT/Performance/cases)
+     -Cases DIR        case directory (default ROOT/Tests/benchmarks/compile)
      -Out DIR          executables, logs and results (default ROOT/build/perf)
      -Results FILE     results TSV (default OUT/perf-results.tsv)
      -Baseline FILE    baseline TSV (default ROOT/Performance/baseline/perf-baseline.tsv)
@@ -82,6 +82,7 @@ typedef struct {
   char cases[PATH_CAP];
   char out[PATH_CAP];
   char results[PATH_CAP];
+  char raw_samples[PATH_CAP];
   char baseline[PATH_CAP];
   char log[PATH_CAP];
   char head[64];
@@ -95,7 +96,6 @@ typedef struct {
   int quiet;
   int last_cycle;
   int history;
-  double noise_limit;
   int have_ref;
 } Options;
 
@@ -105,14 +105,14 @@ static const char help_text[] =
   "  -Cpc EXE         compiler under test (default ROOT/cpc.exe)\n"
   "  -Tcc EXE         vendored tcc (default ROOT/third-party/tcc/win32/tcc.exe)\n"
   "  -Reference EXE   reference CPC build, compared when given\n"
-  "  -Cases DIR       case directory (default ROOT/Performance/cases)\n"
+  "  -Cases DIR       case directory (default ROOT/Tests/benchmarks/compile)\n"
   "  -Out DIR         executables, logs and results (default ROOT/build/perf)\n"
   "  -Results FILE    results TSV (default OUT/perf-results.tsv)\n"
+  "  -RawSamples FILE write individual wall/CPU/load samples\n"
   "  -Baseline FILE   baseline TSV\n"
   "  -Iterations N    measured runs per case (default 5)\n"
   "  -Warmups N       discarded runs per case (default 1)\n"
   "  -Tolerance PCT   allowed slowdown over the baseline (default 25)\n"
-  "  -NoiseLimit PCT  c.empty.main cpc/tcc above this is a disturbed machine (default 400)\n"
   "  -UpdateBaseline  record this run as the baseline\n"
   "  -NoGate          report only; never fail on a regression\n"
   "  -Fast            skip heavy-tier cases\n"
@@ -166,8 +166,21 @@ static int directory_exists(const char *path)
 
 static int make_directory(const char *path)
 {
+  char work[PATH_CAP];
+  char *cursor;
   if (directory_exists(path)) return 1;
-  CreateDirectoryA(path, 0);
+  copy_text(work, sizeof work, path);
+  for (cursor = work; *cursor; cursor++) {
+    char saved;
+    if (*cursor != '\\' && *cursor != '/') continue;
+    /* Do not try to create the drive designator in an absolute path. */
+    if (cursor == work + 2 && work[1] == ':') continue;
+    saved = *cursor;
+    *cursor = 0;
+    if (work[0] && !directory_exists(work)) CreateDirectoryA(work, 0);
+    *cursor = saved;
+  }
+  if (!directory_exists(work)) CreateDirectoryA(work, 0);
   return directory_exists(path);
 }
 
@@ -188,6 +201,50 @@ static char *read_text(const char *path)
   fclose(file);
   text[got] = 0;
   return text;
+}
+
+/* The raw file carries an inexpensive content identity for every executable
+   and source used in a run.  It is intentionally labelled FNV-1a rather than
+   presented as a cryptographic digest: it detects accidental workload/host
+   changes while the recorded paths retain the exact audit trail. */
+static unsigned long long file_hash64(const char *path)
+{
+  FILE *file = fopen(path, "rb");
+  unsigned char bytes[4096];
+  unsigned long long hash = 1469598103934665603ULL;
+  size_t count;
+  if (!file) return 0;
+  while ((count = fread(bytes, 1, sizeof bytes, file)) != 0) {
+    size_t i;
+    for (i = 0; i < count; i++) {
+      hash ^= bytes[i];
+      hash *= 1099511628211ULL;
+    }
+  }
+  fclose(file);
+  return hash;
+}
+
+static void write_runtime_identity(FILE *raw, const Options *options)
+{
+  SYSTEM_INFO system;
+  OSVERSIONINFOA version;
+  char computer[256];
+  DWORD computer_size = sizeof computer;
+  memset(&version, 0, sizeof version);
+  version.dwOSVersionInfoSize = sizeof version;
+  GetNativeSystemInfo(&system);
+  GetVersionExA(&version);
+  if (!GetComputerNameA(computer, &computer_size)) copy_text(computer, sizeof computer, "unavailable");
+  fprintf(raw, "# root\t%s\n", options->root);
+  fprintf(raw, "# runtime\tcomputer=%s; os=%lu.%lu build=%lu; architecture=%u\n", computer,
+          (unsigned long)version.dwMajorVersion, (unsigned long)version.dwMinorVersion,
+          (unsigned long)version.dwBuildNumber, (unsigned)system.wProcessorArchitecture);
+  fprintf(raw, "# compiler\tcpc\t%s\tfnv1a64=%016llx\n", options->cpc, file_hash64(options->cpc));
+  if (file_exists(options->tcc))
+    fprintf(raw, "# compiler\ttcc\t%s\tfnv1a64=%016llx\n", options->tcc, file_hash64(options->tcc));
+  if (options->have_ref)
+    fprintf(raw, "# compiler\treference\t%s\tfnv1a64=%016llx\n", options->ref, file_hash64(options->ref));
 }
 
 static double now_ms(void)
@@ -220,8 +277,27 @@ static void quote_arg(char *dst, size_t cap, const char *arg)
    so relative include paths behave the same for every compiler.  Compiler
    output goes to its own log file; the timed region opens the log first so it
    covers only the child process. */
+static double filetime_ms(const FILETIME *value)
+{
+  ULARGE_INTEGER bits;
+  bits.LowPart = value->dwLowDateTime;
+  bits.HighPart = value->dwHighDateTime;
+  return (double)bits.QuadPart / 10000.0;
+}
+
+static double system_busy_percent(const FILETIME *idle_before, const FILETIME *kernel_before,
+                                  const FILETIME *user_before, const FILETIME *idle_after,
+                                  const FILETIME *kernel_after, const FILETIME *user_after)
+{
+  double idle = filetime_ms(idle_after) - filetime_ms(idle_before);
+  double total = (filetime_ms(kernel_after) - filetime_ms(kernel_before)) +
+                 (filetime_ms(user_after) - filetime_ms(user_before));
+  if (total <= 0.0) return -1.0;
+  return 100.0 * (total - idle) / total;
+}
+
 static int run_compiler(const char *cmdline, const char *cwd, const char *logfile,
-                        double *elapsed_ms)
+                        double *elapsed_ms, double *cpu_ms, double *system_busy)
 {
   STARTUPINFOA si;
   PROCESS_INFORMATION pi;
@@ -233,6 +309,9 @@ static int run_compiler(const char *cmdline, const char *cwd, const char *logfil
   DWORD code = (DWORD)-1;
   BOOL started;
   double start;
+  FILETIME idle_before, kernel_before, user_before;
+  FILETIME idle_after, kernel_after, user_after;
+  FILETIME creation, exit_time, kernel_time, user_time;
 
   mutable_cmd = (char *)malloc(length);
   if (!mutable_cmd) die("out of memory");
@@ -259,13 +338,19 @@ static int run_compiler(const char *cmdline, const char *cwd, const char *logfil
      the measurement.  The worker loop runs from a console, and the standard
      handles above keep compiler output out of it. */
   start = now_ms();
+  GetSystemTimes(&idle_before, &kernel_before, &user_before);
   started = CreateProcessA(0, mutable_cmd, 0, 0, TRUE, 0, 0, cwd, &si, &pi);
   if (started) {
     WaitForSingleObject(pi.hProcess, INFINITE);
     GetExitCodeProcess(pi.hProcess, &code);
+    if (GetProcessTimes(pi.hProcess, &creation, &exit_time, &kernel_time, &user_time))
+      *cpu_ms = filetime_ms(&kernel_time) + filetime_ms(&user_time);
     CloseHandle(pi.hThread);
     CloseHandle(pi.hProcess);
   }
+  if (GetSystemTimes(&idle_after, &kernel_after, &user_after))
+    *system_busy = system_busy_percent(&idle_before, &kernel_before, &user_before,
+                                        &idle_after, &kernel_after, &user_after);
   *elapsed_ms = now_ms() - start;
 
   if (out != INVALID_HANDLE_VALUE) CloseHandle(out);
@@ -454,7 +539,7 @@ typedef struct {
    slows down halfway through the case would otherwise hand the win to whoever
    ran during the quiet half. */
 static void run_case(const Options *options, const Case *item, int runs, int warmups,
-                     RunTarget *targets, int target_count, int *failures)
+                     RunTarget *targets, int target_count, int *failures, FILE *raw)
 {
   int run;
   int t;
@@ -473,6 +558,8 @@ static void run_case(const Options *options, const Case *item, int runs, int war
       char name[160];
       char cmd[CMD_CAP];
       double elapsed = 0.0;
+      double cpu = 0.0;
+      double busy = -1.0;
       int code;
 
       if (!target->enabled || target->failed) continue;
@@ -483,7 +570,10 @@ static void run_case(const Options *options, const Case *item, int runs, int war
       build_command(cmd, sizeof cmd, target->exe, target->bindir, item, out_path);
 
       DeleteFileA(out_path);
-      code = run_compiler(cmd, options->root, log_path, &elapsed);
+      code = run_compiler(cmd, options->root, log_path, &elapsed, &cpu, &busy);
+      if (raw) fprintf(raw, "%s\t%s\t%d\t%d\t%.3f\t%.3f\t%.3f\t%d\t%d\n",
+                       item->name, target->tag, run - warmups, run < warmups,
+                       elapsed, cpu, busy, code, file_exists(out_path) ? 1 : 0);
       if (code != 0 || !file_exists(out_path)) {
         target->failed = 1;
         (*failures)++;
@@ -668,7 +758,6 @@ static void parse_options(int argc, char **argv, Options *options)
   options->iterations = 5;
   options->warmups = 1;
   options->tolerance = 25.0;
-  options->noise_limit = 400.0;
 
   for (i = 1; i < argc; i++) {
     const char *arg = argv[i];
@@ -680,6 +769,7 @@ static void parse_options(int argc, char **argv, Options *options)
     else if (strcmp(arg, "-Cases") == 0 && next) { copy_text(options->cases, sizeof options->cases, next); i++; }
     else if (strcmp(arg, "-Out") == 0 && next) { copy_text(options->out, sizeof options->out, next); i++; }
     else if (strcmp(arg, "-Results") == 0 && next) { copy_text(options->results, sizeof options->results, next); i++; }
+    else if (strcmp(arg, "-RawSamples") == 0 && next) { copy_text(options->raw_samples, sizeof options->raw_samples, next); i++; }
     else if (strcmp(arg, "-Baseline") == 0 && next) { copy_text(options->baseline, sizeof options->baseline, next); i++; }
     else if (strcmp(arg, "-Log") == 0 && next) { copy_text(options->log, sizeof options->log, next); i++; }
     else if (strcmp(arg, "-Head") == 0 && next) { copy_text(options->head, sizeof options->head, next); i++; }
@@ -687,7 +777,6 @@ static void parse_options(int argc, char **argv, Options *options)
     else if (strcmp(arg, "-Warmups") == 0 && next) { options->warmups = parse_integer(next, options->warmups); i++; }
     else if (strcmp(arg, "-Cycle") == 0 && next) { options->cycle = parse_integer(next, 0); i++; }
     else if (strcmp(arg, "-Tolerance") == 0 && next) { options->tolerance = atof(next); i++; }
-    else if (strcmp(arg, "-NoiseLimit") == 0 && next) { options->noise_limit = atof(next); i++; }
     else if (strcmp(arg, "-UpdateBaseline") == 0) options->update_baseline = 1;
     else if (strcmp(arg, "-NoGate") == 0) options->no_gate = 1;
     else if (strcmp(arg, "-Fast") == 0) options->fast = 1;
@@ -701,15 +790,17 @@ static void parse_options(int argc, char **argv, Options *options)
   absolute_path(options->root, sizeof options->root, options->root);
   if (!options->cpc[0]) join_path(options->cpc, sizeof options->cpc, options->root, "cpc.exe");
   if (!options->tcc[0]) join_path(options->tcc, sizeof options->tcc, options->root, "third-party\\tcc\\win32\\tcc.exe");
-  if (!options->cases[0]) join_path(options->cases, sizeof options->cases, options->root, "Performance\\cases");
+  if (!options->cases[0]) join_path(options->cases, sizeof options->cases, options->root, "Tests\\benchmarks\\compile");
   if (!options->out[0]) join_path(options->out, sizeof options->out, options->root, "build\\perf");
   if (!options->results[0]) join_path(options->results, sizeof options->results, options->out, "perf-results.tsv");
+  if (!options->raw_samples[0]) join_path(options->raw_samples, sizeof options->raw_samples, options->out, "perf-samples.tsv");
   if (!options->baseline[0]) join_path(options->baseline, sizeof options->baseline, options->root, "Performance\\baseline\\perf-baseline.tsv");
   absolute_path(options->cpc, sizeof options->cpc, options->cpc);
   absolute_path(options->tcc, sizeof options->tcc, options->tcc);
   absolute_path(options->cases, sizeof options->cases, options->cases);
   absolute_path(options->out, sizeof options->out, options->out);
   absolute_path(options->results, sizeof options->results, options->results);
+  absolute_path(options->raw_samples, sizeof options->raw_samples, options->raw_samples);
   absolute_path(options->baseline, sizeof options->baseline, options->baseline);
   if (options->log[0]) absolute_path(options->log, sizeof options->log, options->log);
   options->have_ref = options->ref[0] != 0;
@@ -742,8 +833,10 @@ int main(int argc, char **argv)
   int violations = 0;
   double total_cpc_fast = 0.0, total_tcc_fast = 0.0;
   double total_cpc_all = 0.0, total_tcc_all = 0.0, total_ref_all = 0.0;
-  int tcc_cases = 0, ref_cases = 0;
+  double cpc_only_all = 0.0;
+  int tcc_cases = 0, ref_cases = 0, missing_matched = 0;
   int heavy_cpc_ms = 0;
+  FILE *raw;
 
   parse_options(argc, argv, &options);
   if (options.last_cycle) { printf("%d\n", read_last_cycle(options.log)); return 0; }
@@ -757,10 +850,18 @@ int main(int argc, char **argv)
   join_path(log_dir, sizeof log_dir, options.out, "logs");
   if (!make_directory(tmp_dir) || !make_directory(log_dir))
     die("cannot create output directories");
+  raw = fopen(options.raw_samples, "wb");
+  if (!raw) die("cannot write raw samples");
+  fprintf(raw, "# cprime perf samples v2\n");
+  write_runtime_identity(raw, &options);
+  fprintf(raw, "# case\tcompiler\tsample\twarmup\twall_ms\tchild_cpu_ms\tsystem_busy_percent\texit\toutput\n");
   tcc_bindir(&options, tcc_bin, sizeof tcc_bin);
 
   case_count = list_cases(&options, cases);
   if (case_count == 0) die("no C cases found");
+  for (i = 0; i < case_count; i++)
+    fprintf(raw, "# input\t%s\t%s\tfnv1a64=%016llx\tflags=%s\n", cases[i].name,
+            cases[i].source, file_hash64(cases[i].source), cases[i].args[0] ? cases[i].args : "(none)");
 
   printf("CPrime C compilation speed\n");
   printf("  cpc       : %s\n", options.cpc);
@@ -802,7 +903,7 @@ int main(int argc, char **argv)
       target_count++;
     }
 
-    run_case(&options, item, iterations, item->warmups, targets, target_count, &failures);
+    run_case(&options, item, iterations, item->warmups, targets, target_count, &failures, raw);
 
     if (targets[0].count > 0) { r->cpc_ok = 1; r->cpc_ms = targets[0].median; }
     if (options.have_ref && !targets[1].failed && targets[1].count > 0) {
@@ -819,18 +920,24 @@ int main(int argc, char **argv)
 
     if (!options.quiet) print_row(item->name, r);
 
-    if (r->cpc_ok) {
+    if (r->cpc_ok && r->tcc_ok) {
       total_cpc_all += r->cpc_ms;
       if (!item->heavy) total_cpc_fast += r->cpc_ms;
-      if (item->heavy) heavy_cpc_ms = (int)(r->cpc_ms + 0.5);
-    }
-    if (r->tcc_ok) {
       total_tcc_all += r->tcc_ms;
       if (!item->heavy) total_tcc_fast += r->tcc_ms;
       tcc_cases++;
+    } else if (item->use_tcc) {
+      /* A comparison row is unusable unless both compilers measured it. */
+      missing_matched++;
     }
-    if (r->ref_ok) { total_ref_all += r->ref_ms; ref_cases++; }
+    if (r->cpc_ok && r->ref_ok) { total_ref_all += r->ref_ms; ref_cases++; }
+    if (r->cpc_ok && !item->use_tcc) {
+      cpc_only_all += r->cpc_ms;
+      if (item->heavy) heavy_cpc_ms = (int)(r->cpc_ms + 0.5);
+    }
   }
+
+  fclose(raw);
 
   if (!options.quiet) {
     printf("\n");
@@ -839,11 +946,12 @@ int main(int argc, char **argv)
       printf("   cpc takes %.2fx tcc time (%.0f%% of tcc throughput)",
              total_cpc_fast / total_tcc_fast, 100.0 * total_tcc_fast / total_cpc_fast);
     printf("\n");
-    printf("all cases  : cpc %8.2f ms   tcc %8.2f ms", total_cpc_all, total_tcc_all);
+    printf("all matched: cpc %8.2f ms   tcc %8.2f ms", total_cpc_all, total_tcc_all);
     if (total_tcc_all > 0.0) printf("   cpc takes %.2fx tcc time", total_cpc_all / total_tcc_all);
     printf("\n");
+    printf("cpc-only   : %8.2f ms (excluded from CPC/TCC ratios)\n", cpc_only_all);
     if (ref_cases > 0) {
-      printf("reference  : %8.2f ms across %d case(s)", total_ref_all, ref_cases);
+      printf("reference  : %8.2f ms across %d matched case(s)", total_ref_all, ref_cases);
       if (total_ref_all > 0.0)
         printf("   cpc takes %.3fx reference time", total_cpc_all / total_ref_all);
       printf("\n");
@@ -870,27 +978,6 @@ int main(int argc, char **argv)
   }
 
   baseline_count = load_baseline(options.baseline, baseline, MAX_CASES);
-
-  /* A compiler that suddenly takes nine times as long to compile an empty file
-     is not a slower compiler; it is a machine being hammered by something else
-     (another build, a scanner, a busy disk).  The cpc/tcc ratio on the smallest
-     case is the cheapest witness of that, and it is worth naming: a real
-     regression fails the baseline gate below, while a disturbed machine gets
-     its own exit code so a worker can simply measure again. */
-  for (i = 0; i < case_count; i++) {
-    const Case *item = &cases[i];
-    const CaseResult *r = &results[i];
-    if (strcmp(item->name, "c.empty.main") != 0) continue;
-    if (r->cpc_ok && r->tcc_ok && r->tcc_ms > 0.0) {
-      double ratio = 100.0 * r->cpc_ms / r->tcc_ms;
-      if (ratio > options.noise_limit) {
-        printf("measured cpc %.1f ms against tcc %.1f ms on c.empty.main: %.0f%% of tcc's\n",
-               r->cpc_ms, r->tcc_ms, ratio);
-        printf("measurement environment disturbed; re-run when nothing else is building\n");
-        return 3;
-      }
-    }
-  }
 
   if (options.update_baseline) {
     FILE *out = fopen(options.baseline, "wb");
@@ -954,6 +1041,10 @@ int main(int argc, char **argv)
 
   if (failures > 0) {
     printf("%d compiler invocation(s) failed; see %s\\logs\n", failures, options.out);
+    return 1;
+  }
+  if (missing_matched > 0) {
+    printf("%d shared CPC/TCC case(s) did not produce a matched measurement\n", missing_matched);
     return 1;
   }
   if (violations > 0) {

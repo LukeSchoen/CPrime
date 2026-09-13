@@ -29,6 +29,10 @@ try {
     $rejected = $false
     try { [void](Read-GccCorpus $work) } catch { $rejected = $true }
     if (-not $rejected) { throw 'Escaping corpus path was accepted' }
+    $empty = @{ cases = @(); support = @() }
+    $empty | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $work 'corpus.json')
+    $emptyRead = Read-GccCorpus $work
+    if (@($emptyRead.cases).Count -ne 0) { throw 'Empty terminal corpus was not preserved' }
     Write-Host ("PASS {0} checked cases, support exclusion, source hashes, and path containment" -f $manifest.cases.Count)
 } finally {
     $resolved = [IO.Path]::GetFullPath($work)

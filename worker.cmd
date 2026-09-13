@@ -4,24 +4,23 @@ setlocal EnableExtensions EnableDelayedExpansion
 rem CPrime worker: run codex in the foreground, one work cycle at a time, and
 rem report progress toward the retained-GCC plus first-party test target.
 rem
-rem The status printed here is test completion, not process activity: how many
-rem cases are left, the rate in real hours and days, and the time that rate
-rem implies. History lives in a machine-readable append-only log
+rem The status printed here is backlog inventory, not verified completion.
+rem History lives in a machine-readable append-only log
 rem (Tests\progress\log.tsv) that git commits together with the work each sample
 rem describes, so frequent stops and starts need no recovery step: the log
-rem supplies the cycle counter, baseline and rates, and each finished cycle
+rem supplies the cycle counter, and each finished cycle
 rem appends the next sample. An unreadable log or corpus is reported and the
 rem loop continues; a false "complete" is never claimed.
 rem
 rem Cycle pacing is work driven: codex runs in the foreground and the next
 rem cycle starts as soon as it exits. There is no fixed sleep, and a running
-rem agent is never killed. The session budget is enforced by task.md.
+rem agent is never killed. Work packages and acceptance are defined in task.md.
 rem Run one worker per working tree; each cycle waits for its own codex.
 rem
 rem Optional environment overrides:
 rem   DONE             stop marker file (default done.x)
 rem   CODEX_EXE        codex executable (default codex.exe)
-rem   TASK_PROMPT      prompt passed to codex exec (default "implement task.md")
+rem   TASK_PROMPT      optional replacement for the task-completion prompt below
 rem   MAX_CYCLES       stop after N cycles in this session, 0 = unlimited (default 0)
 rem   FAIL_EXIT_LIMIT  stop after N consecutive nonzero codex exits (default 3)
 rem   PROGRESS_LOG     progress log (default Tests\progress\log.tsv)
@@ -33,7 +32,7 @@ cd /d "%~dp0"
 
 if not defined DONE set "DONE=done.x"
 if not defined CODEX_EXE set "CODEX_EXE=codex.exe"
-if not defined TASK_PROMPT set "TASK_PROMPT=implement task.md"
+if not defined TASK_PROMPT set "TASK_PROMPT=Complete task.md and Performance/task.md, following AGENTS.md. Read the current GCC inventory and first-party outstanding list, then continue the earliest unfinished work package in dependency order. Map related cases and independent blockers before implementing a coherent fix; retain minimal first-party regressions and run focused checks during repairs. Use only root cpc.exe, one compiler process at a time, and the validated Build.cmd publication path. External compiler invocations remain unauthorized; record those blocked checks explicitly. Preserve existing work, revert failed experiments, and never hide failures or weaken acceptance. Continue useful authorized work until the task is complete; if a cycle must end, update remaining-work files with the exact next action and evidence paths so the next cycle can resume. Keep raw commands, identities, diagnostics and timing evidence under build/. Empty backlog alone is not completion. Create done.x only after every completion condition in task.md has recorded passing evidence, including required correctness, self-build and repeatable speed acceptance. End each cycle with the package, result, changes, tests, unresolved blockers and evidence paths."
 if not defined MAX_CYCLES set "MAX_CYCLES=0"
 if not defined FAIL_EXIT_LIMIT set "FAIL_EXIT_LIMIT=3"
 if not defined PROGRESS_LOG set "PROGRESS_LOG=Tests\progress\log.tsv"
@@ -41,7 +40,7 @@ if not defined FIRST_PARTY set "FIRST_PARTY=Tests\progress\first-party-failures.
 if not defined CORPUS set "CORPUS=Tests\pedantic\gcc\corpus.json"
 if not defined STATUS_EXE set "STATUS_EXE=build\worker-status.exe"
 if not defined STATUS_SRC set "STATUS_SRC=src\tools\worker_status.c"
-set "CYCLE_LOG=build\worker-cycle.log"
+set "CYCLE_LOG="
 set "TARGET_REACHED=0"
 set "SESSION=0"
 set "FAILS=0"
@@ -56,37 +55,37 @@ if errorlevel 1 (
 call :build_status
 call :read_cycle
 
-echo [%DATE% %TIME%] ==========================================================
 echo [%DATE% %TIME%] CPrime worker starting
 echo [%DATE% %TIME%] directory    : %CD%
 echo [%DATE% %TIME%] task prompt  : %TASK_PROMPT%
-echo [%DATE% %TIME%] cycle log    : %CYCLE_LOG%
+echo [%DATE% %TIME%] cycle logs   : build\worker-cycle-N.log
 echo [%DATE% %TIME%] progress log : %PROGRESS_LOG%
 echo [%DATE% %TIME%] stop marker  : %DONE% ^(create this file to stop after the current cycle^)
-echo [%DATE% %TIME%] pacing       : next cycle starts when codex exits; no fixed wait
 call :report
-echo [%DATE% %TIME%] ==========================================================
 
 :cycle
 call :commit_work
 if exist "%DONE%" (
-    echo [%DATE% %TIME%] !DONE! present, stopping after !CYCLE! cycle^(s^).
+    echo [%DATE% %TIME%] !DONE! present; stopping at cycle !CYCLE!, !SESSION! cycle^(s^) this session.
+    exit /b 0
+)
+if %MAX_CYCLES% gtr 0 if !SESSION! geq %MAX_CYCLES% (
+    call :report
+    echo [%DATE% %TIME%] session limit %MAX_CYCLES% reached: !SESSION! cycle^(s^) this session; last cycle !CYCLE!.
     exit /b 0
 )
 set /a SESSION+=1 >nul
 set /a CYCLE+=1 >nul
-if %MAX_CYCLES% gtr 0 if !SESSION! gtr %MAX_CYCLES% (
-    call :report
-    echo [%DATE% %TIME%] session limit %MAX_CYCLES% reached, stopping after !CYCLE! cycle^(s^).
-    exit /b 0
-)
+set "CYCLE_LOG=build\worker-cycle-!CYCLE!.log"
 echo.
 echo [%DATE% %TIME%] ---------- cycle !CYCLE! starting ----------
+echo [%DATE% %TIME%] output: !CYCLE_LOG!
 call :run_codex
+git diff HEAD --stat
+git ls-files --others --exclude-standard
 call :report append
 if "!TARGET_REACHED!"=="1" (
-    echo [%DATE% %TIME%] target reached: no retained GCC rows or first-party failures remain.
-    >"%DONE%" echo target reached after cycle !CYCLE!
+    echo [%DATE% %TIME%] backlog empty; task.md acceptance still controls completion.
     set "TARGET_REACHED=0"
 )
 if !FAILS! geq %FAIL_EXIT_LIMIT% (
@@ -134,9 +133,9 @@ if not exist "%STATUS_EXE%" (
 set "HEAD=-"
 for /f "delims=" %%H in ('git rev-parse --short HEAD 2^>nul') do set "HEAD=%%H"
 if /i "%~1"=="append" (
-    "%STATUS_EXE%" --root "%CD%" --log "%PROGRESS_LOG%" --corpus "%CORPUS%" --first-party "%FIRST_PARTY%" --append --cycle !CYCLE! --event cycle --head "!HEAD!"
+    "%STATUS_EXE%" --brief --root "%CD%" --log "%PROGRESS_LOG%" --corpus "%CORPUS%" --first-party "%FIRST_PARTY%" --append --cycle !CYCLE! --event cycle --head "!HEAD!"
 ) else (
-    "%STATUS_EXE%" --root "%CD%" --log "%PROGRESS_LOG%" --corpus "%CORPUS%" --first-party "%FIRST_PARTY%" --head "!HEAD!"
+    "%STATUS_EXE%" --brief --root "%CD%" --log "%PROGRESS_LOG%" --corpus "%CORPUS%" --first-party "%FIRST_PARTY%" --head "!HEAD!"
 )
 set "RC=!ERRORLEVEL!"
 if "!RC!"=="10" set "TARGET_REACHED=1"
@@ -156,17 +155,15 @@ if errorlevel 1 (
         for /f "delims=" %%H in ('git rev-parse --short HEAD 2^>nul') do set "HEAD=%%H"
         echo [%DATE% %TIME%] committed work as !HEAD!.
     )
-) else (
-    echo [%DATE% %TIME%] nothing to commit ^(working tree clean^).
 )
 exit /b 0
 
 :run_codex
-echo [%DATE% %TIME%] running codex: %CODEX_EXE% exec "%TASK_PROMPT%"
 rem `call` keeps control flow intact when CODEX_EXE is a wrapper script
 rem (.cmd/.bat); it is harmless for codex.exe itself.
-call "%CODEX_EXE%" exec "%TASK_PROMPT%" > "%CYCLE_LOG%" 2>&1
+call "%CODEX_EXE%" exec --model gpt-5.6-terra -c model_reasoning_effort="medium" -C "%CD%" --sandbox danger-full-access -c approval_policy="never" --color never --output-last-message "build\worker-cycle-!CYCLE!-result.txt" "%TASK_PROMPT%" > "%CYCLE_LOG%" 2>&1
 set "RC=!ERRORLEVEL!"
+echo [%DATE% %TIME%] cycle !CYCLE! process exit !RC!; output: !CYCLE_LOG!
 if "!RC!"=="0" (
     set "FAILS=0"
 ) else (

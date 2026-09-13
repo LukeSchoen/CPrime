@@ -1,31 +1,21 @@
-# Performance suite
+# Performance measurements
 
-Compares cpc against tcc, and against the published compiler from HEAD, on the C
-cases in `cases/`. The rules and the measurement record are in `task.md`; the
-commands are:
+The remaining measurement repairs, audit numbers and speed acceptance criteria
+are in [task.md](task.md). The existing harness compares shared C cases against
+vendored TCC; the full CPC self-driver case has no TCC measurement.
 
-```bat
-Performance\PerformanceTests.cmd            rem full suite, gated
-Performance\PerformanceTests.cmd -Fast      rem skip the heavy self-compile case
-Performance\PerformanceTests.cmd -NoGate    rem report only
-Performance\PerformanceTests.cmd -UpdateBaseline
-Performance\PerformanceWorker.cmd           rem measure, run codex, measure, loop
-```
+Use `Performance\PerformanceTests.cmd -SpeedOnly` for the current serial speed
+assessment, or add `-Fast` to omit the self-driver. Root CPC builds the native
+helpers. TCC measurements require the task's explicit authorization; other
+external compiler/ABI gates also remain blocked. Normal runs never extract a
+reference compiler or update baselines.
 
-Layout:
+Generated tools/logs/results belong in build/perf/. Baseline and progress data
+live here. The planned source/script/input migration into src/, scripts/ and
+Native helpers live in src/tools/ and shared compile inputs in
+Tests/benchmarks/compile/. Generated data stays in build/perf/.
 
-- `cases/` - one C translation unit per case, metadata in the leading comments.
-- `src/` - `perf_compare.c` (timing and ratios) and `perf_check.c` (leftover and
-  lookup checks). Both are first-party C, built by root `cpc.exe` into
-  `build/perf/`.
-- `baseline/` - `perf-baseline.tsv` (ratios) and `checks.tsv` (counts). A run
-  fails when it is more than `-Tolerance` percent slower, or when a check count
-  rises.
-- `progress/log.tsv` - one row per worker cycle: the measured ratios and the
-  check totals.
-
-Exit codes: 0 clean, 1 regression or new finding, 3 the machine was too busy to
-measure (nothing was recorded).
-
-Generated output (executables, compiler logs, results TSV) belongs in
-`build/perf/`.
+The existing drift gate can pass while CPC remains slower than TCC. Use per-case
+results and the matched shared-C aggregate; the CPC-only self-driver never enters
+that ratio. Raw rows must be read with `build\perf\perf-dispersion.exe` before
+claiming a speed result.

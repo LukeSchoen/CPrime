@@ -947,6 +947,7 @@ static void note_member_function_scope(int function_tok, int class_tok)
   scope->class_tok = class_tok;
   scope->next = member_function_scopes[bucket];
   member_function_scopes[bucket] = scope;
+  member_function_scopes_used = 1;
 }
 
 static void note_member_function_template(int function_tok, int class_tok,
@@ -1338,6 +1339,21 @@ static int make_static_member_func_tok_for_type(int name_tok, CType *func_type)
    The overload registry may keep the first source declaration under its
    lookup token; every emitted C++ free function nevertheless gets the same
    signature-based label in every translation unit. */
+/* An unnamed record can acquire a linkage spelling through a typedef of the
+   record itself or through a pointer/reference typedef.  The latter is the
+   ordinary shape of `typedef struct { ... } *P`; its outer CType is the
+   pointer, so comparing it directly with the record misses the declaration. */
+static int cpp_typedef_references_unnamed_tag(CType *candidate, CType *tag)
+{
+  CType current = *candidate;
+  while ((current.t & VT_BTYPE) == VT_PTR) {
+    if (!current.ref) return 0;
+    current = *pointed_type(&current);
+  }
+  return (current.t & VT_BTYPE) == (tag->t & VT_BTYPE)
+      && current.ref == tag->ref;
+}
+
 static int cpp_unnamed_tag_typedef_tok(CType *type)
 {
   Sym *alias;
@@ -1351,6 +1367,13 @@ static int cpp_unnamed_tag_typedef_tok(CType *type)
         && (alias->type.t & VT_BTYPE) == (type->t & VT_BTYPE)
         && alias->v >= TOK_UIDENT && alias->v < SYM_FIRST_ANOM)
       name_tok = alias->v;
+  if (!name_tok)
+    for (alias = global_stack; alias; alias = alias->prev)
+      if ((alias->type.t & VT_TYPEDEF)
+          && cpp_typedef_references_unnamed_tag(&alias->type, type)
+          && alias->v >= TOK_UIDENT && alias->v < SYM_FIRST_ANOM) {
+        name_tok = alias->v;
+      }
   type->ref->linkage_typedef_tok = name_tok;
   return name_tok;
 }

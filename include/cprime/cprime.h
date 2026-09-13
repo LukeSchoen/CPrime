@@ -810,6 +810,7 @@ struct CPRIMEState {
 #ifdef CPRIME_TARGET_PE
     struct pe_archive_state **pe_archives;
     int nb_pe_archives;
+    struct pe_export_file *pe_export_files, *pe_export_files_tail;
     struct pe_weak_external **pe_weak_externals;
     int nb_pe_weak_externals;
     unsigned pe_archive_members_loaded;
@@ -1682,6 +1683,8 @@ ST_FUNC int pe_load_weak_externals(CPRIMEState *s1, const unsigned char *data, u
 ST_FUNC void pe_resolve_weak_externals(CPRIMEState *s1);
 ST_FUNC int pe_output_file(CPRIMEState * s1, const char *filename);
 ST_FUNC int pe_putimport(CPRIMEState *s1, int dllindex, const char *name, addr_t value);
+ST_FUNC int pe_find_def_symbol(CPRIMEState *s1, const char *name);
+ST_FUNC void pe_free_def_symbols(CPRIMEState *s1);
 ST_FUNC int pe_setsubsy(CPRIMEState *s1, const char *arg);
 #ifdef CPRIME_TARGET_X86_64
 ST_FUNC void pe_add_unwind_data(unsigned start, unsigned end, unsigned stack, unsigned saved);
