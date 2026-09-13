@@ -3,80 +3,15 @@
     "source":  "https://github.com/gcc-mirror/gcc",
     "cases":  [
                   {
-                      "path":  "g++.old-deja/g++.martin/bitset1.C",
-                      "role":  "case",
-                      "sha256":  "4cb4bf320364b55a97128a63edde76158391b20c4b6c84561dd573360d1bcf97"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/dyncast5.C",
-                      "role":  "case",
-                      "sha256":  "99a695fe3f98cc1485d05020492748077eb3081bc2b3aa5f7033f6c2a34422b4"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.mike/hog1.C",
-                      "role":  "case",
-                      "sha256":  "3c7958dd515195b492942774680843c076244484672bf688c3ca0fa7c4400e32"
-                  },
-                  {
                       "path":  "g++.dg/eh/dtor1.C",
                       "role":  "case",
                       "sha256":  "86ed41fcc10a1231be3b6bf18a6120ef3c80889f0a1b12d86c10cbfd13425ea0"
-                  },
-                  {
-                      "path":  "g++.dg/ext/tmplattr2.C",
-                      "role":  "case",
-                      "sha256":  "0693977498e2ff6c0f06da20ecf33b021fe5fc51a899a163f515f2d9e1b6cc25"
-                  },
-                  {
-                      "path":  "g++.dg/ext/vla9.C",
-                      "role":  "case",
-                      "sha256":  "fcaaea16d1f8ebe75284fa2a0caae522aed4c08602e974bd74c86ff75452f9e7"
-                  },
-                  {
-                      "path":  "g++.dg/ext/pr99508.C",
-                      "role":  "case",
-                      "sha256":  "2f1e2e6c7262218307a8e2a00b43ca3b8a885533823337b3ca5bda8d47a486a8"
                   },
                   {
                       "path":  "c-c++-common/pr71654.c",
                       "role":  "case",
                       "sha256":  "3b8754dafda7954726f120f03e70a98abc3037859a350a6a68e8feb5cf28c96d"
                   },
-                  {
-                      "path":  "c-c++-common/pr60689.c",
-                      "role":  "case",
-                      "sha256":  "12953485ef4235010b89249210ef56442677b4c35f6a56abe6927fe1f8d77e41"
-                  },
-                  {
-                      "path":  "g++.dg/cpp26/aggr-init1.C",
-                      "role":  "case",
-                      "sha256":  "01b3de523bbeb50ced7ed0cdee00a723327e76a767e171c52012ba0a8882e75e"
-                  },
-                  {
-                      "path":  "g++.dg/opt/pr79267.C",
-                      "role":  "case",
-                      "sha256":  "51b2ba9d5b0d7a4c5844842483ce7bf6bd6d46e1fa5d7dfde40f0e0a1adfe03a"
-                  },
-                  {
-                      "path":  "g++.dg/template/asm1.C",
-                      "role":  "case",
-                      "sha256":  "f2050954913f2a4481a7967c05eaa3a7f27653de27beb9d761377fbc4cea446f"
-                  },
-                  {
-                      "path":  "g++.dg/pr61033.C",
-                      "role":  "case",
-                      "sha256":  "b82c18e921e5840d881718c77f24a1446179b72d0f9f75eaad697482d91e4c05"
-                  },
-                  {
-                      "path":  "g++.dg/ipa/pr60640-3.C",
-                      "role":  "case",
-                      "sha256":  "03f07e335fb4b16fadfebe9cb24f91925219104ad508e56429ae22ab619cc55c"
-                  },
-                  {
-                      "path":  "g++.dg/opt/inline11.C",
-                      "role":  "case",
-                      "sha256":  "043dac0918a22f6b79372a02875c9b0e4361360cd20815ec633cd73f2f4659fc"
-                  }
               ],
     "support":  []
 }

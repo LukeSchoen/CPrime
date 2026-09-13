@@ -2,7 +2,7 @@
 
 ## Scope and evidence
 
-34 unresolved rows remain at upstream revision
+5 unresolved rows remain at upstream revision
 `5f6257c26b814de1a14c71b2d3a49291765b6577`. The 2026-09-13 root-CPC audit
 reported compile/link failure for every row, with no timeout. Compiler identity
 and exact commands are in `build/gcc-preparation-audit/metadata.json` and
@@ -12,9 +12,7 @@ minimal first-party coverage before deleting a repaired external row.
 
 C++17 is the cutoff. `g++.dg/coroutines/pr113457.C` is excluded for concepts,
 ranges and coroutine requirements; do not resume its old repair queue.
-`g++.dg/cpp26/aggr-init1.C` remains because the line-92 failure is in an older
-constexpr aggregate expression. Reduce that in-scope behavior without adding
-post-C++17 support. Old GNU syntax and optimizer link sentinels are labelled
+Old GNU syntax and optimizer link sentinels are labelled
 separately below; acceptance is not a claim of standard conformance.
 
 ## Package mechanisms
@@ -28,7 +26,6 @@ separately below; acceptance is not a claim of standard conformance.
 | I1 | Initialization and lifecycle: initializers, constexpr, lifecycle, temporaries. Separate parsing, viability, constant materialization and runtime cleanup. | Static assertions plus runtime values/counts, new/class conversions, mutable assignment, compound-literal lifetime and the pending reductions in task.md. |
 | E1 | Function-try-block parsing and cleanup: statements, exceptions, lifecycle. Save the function scope and constructed-subobject state for handlers. | Constructor base destruction before handler, ordinary member handler scope and propagation. |
 | X1 | GNU/C compatibility: cprimegen.c, initializers, cprimeasm.c, cprimepp.c and linker symbol naming. Keep extensions explicit; do not weaken standard diagnostics globally. | Generic atomic size, asm tied operands/names, VLA scope, alignment and system-header-only permissive behavior. |
-| L1 | Library and object model: first-party include/ library headers, class base storage, RTTI/lifecycle. Replace fixed-capacity assumptions with bounded owned storage. | bitset proxy/value checks, dynamic complete-object identity, capacity boundary and pedantic hierarchy stress. |
 | O1 | Required optimization/linkage: frontend reachability, exception attributes and x86_64-fastopt.inc. Optimize proven unreachable calls while preserving side effects and inline linkage. | Keep undefined sentinel functions undefined; both the original link check and a local semantic opposite must behave correctly. |
 
 These are investigation plans based on source and first diagnostics, not claims
@@ -45,27 +42,8 @@ first observed blocker; the planned check includes behavior beyond that blocker.
 
 | Row | Package | Current blocker | Planned repair and proof |
 | --- | --- | --- | --- |
-| `c-c++-common/pr60689.c` | X1 | integral or integer-sized pointer target type expected | Implement generic __atomic_exchange for non-scalar objects; check 9-byte exchange and sequential consistency, not integer casts. |
 | `c-c++-common/pr71654.c` | O1 | undefined symbol 'foo' | Fold the proven unsigned-byte condition before emitting a reference to foo; retain the undefined sentinel. |
-| `g++.dg/cpp26/aggr-init1.C` | I1 | constant expression expected | Reduce line 92 to C++17 constexpr aggregate default-member initialization reading a string; preserve constexpr and runtime checks, exclude only later-feature branches. |
-| `g++.dg/eh/dtor1.C` | E1 | function definition expected | Parse constructor function-try-blocks and destroy fully constructed bases before entering the handler; observe destructor count/order. |
-| `g++.dg/ext/complit12.C` | I1 | '{' expected (got ';') | Parse GNU array compound literals with class elements; check constructor/destructor counts and lifetime. |
-| `g++.dg/ext/pr99508.C` | X1 | undefined symbol 'bar_assembler' | Unify block extern asm names with file-scope declarations for functions and data; link under the written assembler names. |
-| `g++.dg/ext/tmplattr2.C` | X1 | initialization of incomplete type | Substitute dependent aligned attributes without losing the typedef array type; assert size/alignment and instantiate both dimensions. |
-| `g++.dg/ext/vla9.C` | X1 | 'x2d' undeclared | Keep runtime array-bound typedefs visible through pointer declarators; verify dimensions, allocation and indexed writes. |
-| `g++.dg/ipa/pr60640-3.C` | T4 | no matching member function '__cpc_local_class_1659_1::foo' | Audit covariant returns, multiple-base receiver adjustment and virtual lookup; preserve the runnable dispatch assertions. |
-| `g++.dg/opt/inline11.C` | O1 | undefined symbol '?baz@@YAHH@Z' | Implement gnu_inline linkage and required call elimination without inventing baz; pin external definition versus inline body semantics. |
-| `g++.dg/opt/pr79267.C` | E1 | ';' expected (got 'catch') | Parse ordinary member function-try-blocks and lower the handlers with the member scope intact. |
-| `g++.dg/other/copy1.C` | I1 | assignment of read-only location | Respect mutable fields during implicit copy assignment through const contexts; verify copy/assignment counters and subobjects. |
-| `g++.dg/other/pr24623.C` | I1 | no matching user-declared copy assignment operator | Resolve inherited/user-declared assignment and conversion candidates before implicit fallback; test the original wrapper assignment. |
-| `g++.dg/overload/defarg4.C` | T3 | 'func' undeclared | Resolve a member-template default argument in its declaration scope and deduce the function-pointer target. |
-| `g++.dg/pr61033.C` | X1 | ';' expected (got 'unicode') | Audit system-header permissive missing-return-type declarations as a GNU compatibility behavior, not standard C++17; isolate acceptance from backend checks. |
-| `g++.dg/template/array21.C` | T3 | base class 'dynamic_dispatch____cpc_template_type_struct___cpc_member_pointer_file_reader_func_void_int_ref' is incomplete | Deduce array partial specializations and member-pointer function parameter packs before requiring a complete base specialization. |
-| `g++.dg/template/asm1.C` | X1 | invalid operand reference after % | Handle GCC's implicit tied input for a +r output when numbering %0/%1; check both template instantiations and emitted assembly. |
-| `g++.old-deja/g++.martin/bitset1.C` | L1 | include file 'bitset' not found | Supply first-party bitset support needed by this case; test proxy assignment, indexed read and value preservation, without pretending this covers the entire header. |
-| `g++.old-deja/g++.mike/dyncast5.C` | L1 | no matching member function 'Foo::isObjectAllocation' | Audit inherited static lookup before RTTI/allocation tracking; preserve complete-object address and dynamic-cast assertions. |
-| `g++.old-deja/g++.mike/hog1.C` | L1 | too many base classes for 'super' | Replace the hard base-class capacity limit with owned growable storage; preserve virtual-base uniqueness and add small boundary plus pedantic stress coverage. |
-| `g++.old-deja/g++.other/crash5.C` | I1 | function parameter type expected (got 'D') | Disambiguate a typedef-named functional expression in an initializer from a parameter declaration; retain declaration-versus-expression controls. |
+| `g++.dg/eh/dtor1.C` | E1 | function definition expected | Lower an out-of-class destructor function-try-block without invalid destructor cleanup state; observe base destruction before handler entry. |
 
 ## Commands and retirement
 

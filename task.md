@@ -64,9 +64,9 @@ Fresh speed evidence and measurement limitations are in Performance/task.md.
 These observations do not clear the pending cases or native gates below.
 
 The coroutine row `g++.dg/coroutines/pr113457.C` is outside the cutoff; its
-concepts/ranges/promise work is cancelled. The `cpp26/aggr-init1.C` failure is
-retained because its failing expression uses C++14 constexpr aggregate default
-member initialization. A minimal C++17 reduction must preserve that defect.
+concepts/ranges/promise work is cancelled. The former `cpp26/aggr-init1.C`
+C++14 constexpr aggregate behavior is covered by first-party regressions; its
+retained row has been retired after a validated publication.
 
 ## Work packages and dependency order
 
@@ -1097,6 +1097,95 @@ publication passed 28 native regressions and Expressions passed 2/2.
 `complit12.C` is retired. The sole remaining I1 row is `aggr-init1.C`'s
 constexpr aggregate/default-member evaluation.
 
+I1 aggregate constexpr follow-up (2026-09-14): omitted aggregate members now
+replay their stored default initializer with the receiving object bound for
+unqualified earlier-field references, and scalar members of static aggregate
+storage (including relocated string pointers) retain their constant-expression
+value. `test_constexpr_aggregate_default_member.cpp` covers the C++14
+constexpr and runtime forms; its focused candidate batch passed alongside the
+existing default-member and negative constexpr controls. The raw retained file
+now clears N3 and first stops at N4 line 128 (`constexpr int x2[]` element
+reads), proving a separate constexpr-array indexing mechanism. A normal
+publication passed the staged 28-test native regression gate. The complete
+Constructors pedantic suite has 154 passes and 16 existing failures outside
+this mechanism; the new regression passes. Keep `aggr-init1.C` retained until
+the independent N4 blocker and any later sections are resolved.
+
+I1 constexpr-array follow-up (2026-09-14): constant scalar indirection now
+accepts a constexpr array backing symbol as well as a string literal. The new
+`test_constexpr_array_element_read.cpp` and a mutable-array rejection control
+passed with the N3 aggregate regression; the raw corpus advanced from N4 line
+128 to N5. A normal publication passed 28/28 staged native regressions and
+Expressions passed 128/131 (three existing unrelated failures). The flat
+constexpr array of aggregates (`a2`) now passes too; its nested-brace sibling
+(`b2`, line 149) fails its assertion, which isolates a separate nested
+aggregate-array initialization defect. The current unpublished candidate only
+contains the flat aggregate-read extension; continue with nested-brace
+initialization before publishing or retiring the retained row.
+
+I1 constexpr aggregate-array continuation (2026-09-14): aggregate member
+materialization now includes the selected array element's byte offset. The
+expanded first-party constexpr-array regression covers both flat and nested
+aggregate clauses and passed with the scalar-array and aggregate-default
+controls. The retained file clears N5 and now first rejects N14 line 302,
+where aggregate initialization needs a user-defined conversion before the
+conversion operator's later definition. This is dynamic conversion
+initialization, independent of static constant-storage reads. Normal
+publication passed 28/28 staged regressions; Expressions remains 128/131 with
+the same three unrelated existing failures. Keep `aggr-init1.C` retained for
+N14 and later sections.
+
+Cycle acceptance (2026-09-14, I1 constexpr aggregate conversion): static
+aggregate initialization now copies a named constexpr aggregate's stored bytes
+and relocations, while the final scalar store evaluates a selected constexpr
+conversion operator. In-class lifecycle-specifier handling preserves the
+`constexpr` marker on conversion operators so their bodies are available to
+constant evaluation. The retained `aggr-init1.C`, its focused first-party
+constexpr aggregate-copy/conversion regression, default-member positive, and
+runtime non-constexpr conversion control passed in one serial candidate batch.
+Validated publication passed all 28 staged native regressions and the relevant
+Constructors gate passed 6/6. `aggr-init1.C` is retired; I1 has no retained
+GCC corpus row. The manifest now contains 10 unresolved rows: E1's three
+independently proven function-try paths, X1's six distinct GNU/C mechanisms,
+and O1's two independent reachability/linkage rows. Select the next repair only from a fresh
+within-package shared mechanism; do not revive retired I1 rows.
+
+Cycle acceptance (2026-09-14, L1 hierarchy capacity): the already-landed
+growable base-subobject storage repair now passes its package validation.
+`hog1.C` compiled and ran with the direct-base boundary and object-model
+controls in one serial batch. A validated publication passed 28 staged
+regressions and Classes passed 14/14. `hog1.C` is retired. The subsequent
+L1 batch proved inherited static lookup/dynamic-cast behavior already repaired:
+`dyncast5.C` compiled, linked, and ran alongside the same object-model
+controls. A second validated publication passed 28 staged regressions and
+Classes 14/14, so `dyncast5.C` is also retired.
+
+Cycle acceptance (2026-09-14, L1 bitset library surface): added bounded
+first-party `std::bitset<N>` storage with proxy indexed assignment, indexed
+read, `set`, `test`, and `size`, plus the focused proxy-assignment regression.
+The retained `bitset1.C`, regression, and positive/negative Classes controls
+passed in one serial candidate batch. A packaging retry confirmed the candidate
+runtime response batch and then validated publication passed all 28 staged
+native regressions; the root-compiler focused gate passed 3/3 and Classes
+passed 14/14. `bitset1.C` is retired; L1 has no retained rows.
+
+Follow-up reassessment (2026-09-14, O1): root CPC still reports undefined
+`foo` for `pr71654.c` and undefined `baz` for `inline11.C` in one serial
+`-O2` batch. The former is unsigned range/bit contradiction folding; the
+latter is GNU-inline constant-only body elimination. They remain independent,
+so neither is a safe continuation of the completed L1 repair.
+
+X1 reassessment follow-up (2026-09-14): all six retained rows still stop in
+distinct mechanisms (generic atomic object lowering, dependent attributes,
+VLA declarator scope, assembler linkage, system-header permissiveness, and
+asm operand numbering). Their serial candidate controls passed except the
+existing `test_attributes_cleanup_and_layout.cpp`, which independently exposed
+a root-CPC declaration-merge regression: `T(foo)(T x);` followed by
+`T foo(T x)` reports a redefinition. The parenthesized function prototype is
+retained as non-extern before its compatible definition; repair that precise
+declaration/definition transition with a duplicate-strong-definition negative
+control before resuming an X1 row.
+
 Cycle acceptance (2026-09-14, O1 no-throw catch reachability): GNU
 `__attribute__((nothrow))` now records the existing no-throw function flag.
 Backend calls to no-throw functions do not establish an EH state, and a try
@@ -1139,3 +1228,277 @@ controls passed in one serial candidate batch. Validated publication passed
 receiver path in `pr60640-3.C`. The concurrent aggregate-initializer replay
 edit was corrected to pass its source length to `tok_str_add_record`; the
 subsequent validated root publication again passed all 28 native regressions.
+
+Cycle acceptance (2026-09-14, T4 unnamed-namespace elaborated tag lookup): an
+elaborated tag used as a reference now performs the existing implicit unnamed-
+namespace lookup even from a global function; definitions and forward
+declarations retain their global spelling. This prevents `struct A *` in
+`pr60640-3.C` from becoming a fresh local record before its covariant virtual
+call. The runnable retained row, anonymous-namespace elaborated-tag positive
+and global-forward-declaration negative controls, plus virtual dispatch
+controls passed in one serial candidate batch. Validated publication passed 28
+native regressions and Classes passed 13/13. `pr60640-3.C` is retired. T4 has
+no remaining retained row; reassess the largest remaining package cluster.
+
+E1 reassessment (2026-09-14, post-T4): the two remaining function-try rows
+still reproduce independently through the shared lowering boundary:
+`dtor1.C` stops at the out-of-class destructor's `try` token (the lifecycle
+path only recognizes constructor function-try-blocks), while `pr79267.C`
+captures its templated constructor try body but later reaches `catch` as an
+ordinary statement. Both require auditing `capture_cpp_function_try_body` and
+its replay/lifecycle handoff, but destructor cleanup/rethrow and templated
+ordinary handler scope are separate correctness obligations. Next candidate:
+first reduce the capture/replay token boundary using `pr79267.C`, retaining a
+destructor handler-order control before extending lifecycle recognition.
+
+E1 follow-up (2026-09-14): accepting destructor `try` in both lifecycle paths
+made `dtor1.C` run, but the existing constructor function-try control faulted
+and a destructor cleanup control crashed the candidate compiler. The extension
+and control were reverted. The rows share syntax capture but not a safe
+cleanup implementation yet; next trace the constructor-handler cleanup state
+before allowing destructor handlers, and retain `pr79267.C` as its independent
+templated replay blocker.
+
+E1 function-try rethrow reduction (2026-09-14): the published root already
+terminates an explicit rethrow from a lowered free function-try handler, even
+with `noexcept(false)`, whereas equivalent nested ordinary-try rethrows pass.
+The constructor function-try control has the same termination and
+`pr79267.C` still loses its handler during templated replay. Thus this is one
+shared function-try lowering defect, not a constructor noexcept rule: audit
+the protected-range/handler state emitted by `capture_cpp_function_try_body`
+and `cpp_eh_parse_try` before separately enabling destructor function-try
+syntax. Existing first-party constructor and free function-try rethrow controls
+reproduce this failure; only the failed lifecycle extension was removed.
+Recording the rethrow helper as an ordinary cleanup state did not change the
+termination and was reverted. Next compare the emitted function-try catch
+range and target-unwind cleanup chain against the passing nested-try rethrow;
+do not broaden handler recognition before that ABI state is accounted for.
+Forcing that state even when bypassing the helper's call type likewise left all
+three function-try controls terminating, so the missing behavior is not merely
+the compiler's ordinary-call noexcept filter. That candidate was reverted.
+
+E1 handler-unwind and template replay probes (2026-09-14): excluding the live
+catch context during runtime handler selection did not change the four lowered
+function-try handler exits (explicit rethrow, a newly thrown value, and both
+constructor controls); nested ordinary rethrow and templated ordinary
+function-try controls still passed. The handler's end-catch cleanup is
+registered, but its throw-site state does not currently drive that cleanup;
+the runtime probe and direct-throw control were reverted. Independently,
+`pr79267.C` fails before the instantiated-template replay branch observes its
+`try`, while the existing ordinary template function-try control reaches that
+branch and passes. Normalizing raw function-try syntax in the template
+declaration collector neither fixed `pr79267.C` nor preserved that control, so
+it too was reverted. E1 is now proven to contain three independent paths:
+out-of-class destructor function-try recognition (`dtor1.C`), constructor
+member-template collection/replay (`pr79267.C`), and handler-unwind state
+coverage. No publication or corpus retirement is justified by these probes.
+
+E1 handler-range state probe (2026-09-14): adding an explicit metadata state
+over each catch handler, rooted at its live end-catch cleanup chain, left all
+three lowered function-try handler controls terminating. The retained E1 rows
+still stop at their independent syntax/replay blockers, while nested ordinary
+rethrow, templated ordinary function-try, and destructor unwind controls pass.
+The range-state candidate was reverted; the remaining shared failure is not
+absence of a handler PC range and needs target-unwind/landing dispatch tracing.
+
+E1 target-unwind trace attempt (2026-09-14): a temporary native-runtime trace
+of state selection and end-catch cleanup could not be packaged because the
+minimal exception runtime's formatted-I/O addition crashes the candidate
+runtime build. It did not execute any test and was removed immediately. Keep
+the next dispatch trace allocation-free (or extend the first-party native
+workflow deliberately); do not treat this packaging failure as an E1 result.
+
+E1 end-catch ABI probe (2026-09-14): encoding `__cpc_eh_end_catch` with the
+runtime's dedicated cleanup flag self-hosted but caused every focused exception
+test to fail compilation under the candidate, before execution. The encoding
+candidate was reverted. The current generic helper-call representation is at
+least required by normal exception compilation; do not change cleanup flags
+without an isolated metadata/relocation proof.
+
+E1 destructor lifecycle revalidation (2026-09-14): extending both lifecycle
+recognition sites to accept destructor function-try-blocks again made
+`dtor1.C` execute, but it faulted with access violation `0xC0000005` and every
+focused exception control then failed candidate compilation. The extension was
+reverted. The destructor row is therefore not a parser-only repair: its
+captured handler generates invalid lifecycle/cleanup state and requires a
+minimal destructor-specific lowering trace before re-enabling recognition.
+
+Batch runner lifetime repair (2026-09-14): a serial candidate build exposed
+stale frontend pointers between independent runtime translation units. The
+GNU vector-type registry retained entries whose symbols belonged to the prior
+unit's arena, and the scoped-binding head could likewise survive recovery with
+freed symbols. `cprimegen_finish` now releases the registry before the arena
+is discarded, and `free_template_state` clears the scoped-binding head.
+The non-publishing candidate completed all 30 runtime manifest jobs in one
+native process, including `libunicode.c` at the former batch-13 fault. The
+direct-base boundary regression, member-pointer/template-member-pointer
+controls, const-assignment negative control, and vector positive control
+passed with the candidate. Validated publication passed all 28 staged native
+regressions, and the root Classes gate passed 14/14. This package-level repair
+has no remaining retained corpus row; `hog1.C` was already retired above.
+
+X1 reassessment (2026-09-14, after batch-runner acceptance): a serial root
+batch confirms that the six remaining GNU/C corpus cases are not a shared
+mechanism. `tmplattr2.C` stops at dependent aligned-storage layout,
+`vla9.C` at VLA pointer-declarator binding, `pr60689.c` at generic atomic
+object lowering, `asm1.C` at extended-asm percent operands, and `pr61033.C`
+at its malformed constructor/member syntax. `pr99508.C` uniquely compiles but
+fails at link with undefined `bar_assembler`: a block-scope asm-named
+declaration does not bind to a later asm-named definition. It is the next
+independent X1 candidate; inspect symbol identity through declaration storage
+and definition emission, with an asm-name positive and ordinary-name negative
+control, before changing alias behavior.
+
+X1 `pr99508.C` alias-identity probe (2026-09-14): the asm-labelled
+prototype and unlabelled definition share the generated overload key, but the
+definition's generated C++ linkage overwrites the prototype's explicit
+assembler label. Propagating every prior `asm_label` repaired the row and a
+local asm-name control, but broke four existing overload/linkage regressions
+in the validated native gate; that candidate and its temporary regression
+were reverted. Generated and explicit asm labels need distinct provenance on
+the symbol before compatible redeclarations can inherit only the latter.
+
+Cycle acceptance (2026-09-14, X1 asm-label provenance): symbols now record
+whether an assembler spelling came from source `asm("...")`; compatible C++
+function redeclarations inherit only that explicit spelling, never generated
+language linkage. `pr99508.C` linked and ran with the local asm-name runtime
+regression and vector positive control, while the unrelated extended-asm
+operand negative continued to reject. The four former overload/linkage guard
+regressions passed under the candidate. Validated publication passed all 28
+native regressions and GNU Extensions passed 4/4. `pr99508.C` is retired;
+the remaining five X1 rows retain independent first blockers.
+
+Cycle acceptance (2026-09-14, X1 aggregate atomic exchange): non-scalar GNU
+`__atomic_exchange` now lowers through a pointer-based helper with explicit
+byte count, leaving the 1/2/4/8-byte scalar helpers unchanged. The runtime
+performs the aggregate exchange under its scalar atomic lock. `pr60689.c`, a
+9-byte exchange runtime regression, scalar builtin/width controls, and the
+legacy sync control passed with a forced candidate runtime rebuild. Validated
+publication passed all 28 native regressions and Atomics passed. `pr60689.c`
+is retired; the remaining X1 rows are independent VLA, alignment, asm operand,
+and permissive-parser mechanisms.
+
+Cycle acceptance (2026-09-14, X1 VLA pointer declarators): the C++ local
+declaration-versus-expression probe now permits deferred VLA bounds, so a
+parenthesized pointer declarator is checked in its enclosing function scope.
+When a pointer declarator followed by array bounds has a semantic error, the
+probe also preserves declaration parsing so the real VLA diagnostic is kept.
+`vla9.C`, a multidimensional VLA pointer runtime regression, one-dimensional
+cast and initialized-VLA positives, and a non-integer-bound negative passed
+under the serial candidate runner. Validated publication passed all 28 native
+regressions; GNU Extensions passed 7/7. The fast CPC-only gate exposed only
+the previously recorded E1 function-try rethrow failures. `vla9.C` is retired;
+the remaining X1 rows are independent alignment, extended-asm, and
+permissive-parser mechanisms.
+
+Cycle acceptance (2026-09-14, X1 dependent aligned typedefs): every resolved
+nested template typedef path now transfers the typedef's stored attributes to
+the consuming declaration. This preserves an `aligned(Alignment)` array
+typedef through `typename Template<...>::type` replay and class layout.
+`tmplattr2.C`, dependent and ordinary alignment runtime controls, two template
+lookup guards, and a declaration negative passed under the serial candidate.
+Validated publication passed all 28 native regressions and Templates passed
+43/43. The fast CPC-only gate again exposed only the recorded E1 function-try
+rethrow failures. `tmplattr2.C` is retired; X1 retains independent extended
+asm and permissive-parser mechanisms.
+
+Cycle acceptance (2026-09-14, X1 extended-asm tied operands): asm-template
+substitution now maps GCC's logical read/write-output input slot back to its
+single physical output operand. The original `asm1.C`, a runnable templated
+`%0`/`%1` first-party reduction, existing inline-asm and local-asm-name
+positives passed together in the serial candidate batch; both numeric-immediate
+constraint negatives continued to reject. Validated publication passed all 28
+native regressions and GNU Extensions passed 8/8. `asm1.C` is retired.
+
+Cycle acceptance (2026-09-14, X1 system-header legacy declarations): the
+direct-initializer probe now keeps `struct A value` in a deferred constructor
+signature as a parameter declaration rather than treating `A::value` as an
+expression. System-header recovery accepts the retained untyped members,
+pointer field, and operator spelling; overload viability additionally permits
+only a const string-literal array to bind to a mutable character pointer in a
+system header. Ordinary-source pointer qualification remains strict. The
+original `pr61033.C`, the new runnable system-header regression, the existing
+class-parameter regression, and ordinary missing-return/pointer negatives
+passed in one serial candidate batch. A global direct-initializer covariant
+virtual control caught and then verified the preserved global grammar path.
+Validated publication passed all 28 native regressions; GNU Extensions passed
+10/10 and the fast CPC-only gate passed 26/26 suites. `pr61033.C` is retired;
+X1 has no remaining retained corpus row.
+
+E1 acceptance (2026-09-14, function-try propagation): catch metadata was
+previously omitted when a protected body had a potentially throwing call but
+no active cleanup. The lowered function-try handler then rethrew correctly,
+but its caller had no emitted handler table and terminated during dispatch.
+`cpp_eh_note_call` now records potential throws independently of cleanup-state
+creation, and `cpp_eh_parse_try` retains a handler whenever its protected body
+contains one. The function-try rethrow, constructor function-try block and
+rethrow, nested-rethrow cleanup-order, templated function-try, and destructor
+unwind controls passed in one serial candidate batch. Validated publication
+passed all 28 staged native regressions; the fast Exceptions suite passed 5/5.
+The retained `dtor1.C` and `pr79267.C` remain independent: respectively
+out-of-class destructor function-try recognition and member-template replay.
+
+E1 destructor recheck (2026-09-14): after the published function-try
+propagation repair, accepting destructor function-try syntax in both lifecycle
+entry points still self-hosts but does not complete the retained-row compiler
+batch or produce `dtor1.exe`. The candidate was reverted. Destructor
+function-try lowering therefore remains a lifecycle compile-path defect, not
+a parser-only continuation of the repaired handler metadata path.
+
+Post-X1 reassessment (2026-09-14, E1): the serial root batch still rejects
+`dtor1.C` at the out-of-class destructor `try`, while `pr79267.C` reaches the
+separate templated-constructor replay `catch` failure. Constructor and
+ordinary-template function-try runtime controls both pass. The common
+function-try syntax therefore does not justify a shared candidate: keep the
+destructor cleanup/lifecycle lowering and member-template replay repairs
+separate. The remaining O1 rows are likewise already partitioned between
+unsigned contradiction/range analysis (`pr71654.c`) and GNU-inline
+constant-body linkage elimination (`inline11.C`).
+
+Cycle acceptance (2026-09-14, O1 GNU inline): function attributes now retain
+`gnu_inline` provenance through redeclarations. GNU-inline bodies use the
+existing call-site replay path, allowing a constant argument to resolve
+`__builtin_constant_p` and eliminate an otherwise unresolved external call;
+ordinary inline linkage remains deferred and unchanged. `inline11.C` ran, the
+new constant-argument regression passed, the existing multi-input inline
+linkage regression passed, and both a nonconstant unresolved-call negative and
+the independent `pr71654.c` undefined-`foo` sentinel held in one serial
+candidate batch. Validated publication passed all 28 native regressions; GNU
+Extensions passed 12/12, Functions passed, and the fast CPC-only gate passed
+26/26 suites. `inline11.C` is retired. O1 retains only the independent
+range-analysis row `pr71654.c`.
+
+E1 acceptance (2026-09-14, member-template function-try replay): deferred
+member-template collection stopped at the try body's closing brace, leaving
+its handler to be parsed as a following class member. The collector now keeps
+the `catch` clause with the saved definition, so replay receives the complete
+function-try-block. The original `pr79267.C`, the new minimal member-template
+constructor function-try regression, focused function-try and deferred-member
+controls, and a throwing-call negative passed in one serial candidate batch;
+all runnable positives exited successfully. Validated publication passed all
+28 native regressions and the fast Templates suite passed 44/44. `pr79267.C`
+is retired; E1 retains only the independent destructor lifecycle row.
+
+E1 destructor narrowing (2026-09-14): limiting `try` admission to the
+out-of-class destructor path still self-hosts, then stops in `dtor1.C` at
+compiler batch job 1 without an end marker or output executable. The parser
+change was reverted. This rules out the in-class lifecycle entry point as the
+cause and keeps the remaining row assigned to destructor function-try
+lowering/unwind scheduling.
+
+O1 reassessment (2026-09-14): the retained `pr71654.c` link still reaches
+undefined `foo` under `-O2`, while ordinary unsigned-field behavior and an
+unrelated function-try runtime control pass; the independent unresolved-call
+negative also continues to fail. The branch lowerer emits each dynamic
+condition separately and retains neither source-object identity nor a
+dominating range fact after `gvtst`. Removing this call needs a general CFG
+range/alias representation across conversions and repeated loads, so it is
+independent of every repaired exception/template mechanism and remains the
+sole O1 row.
+
+E1 destructor fault narrowing (2026-09-14): a candidate that admits only the
+out-of-class destructor function-try path self-hosts, but compiling `dtor1.C`
+even with `-c` exits the native compiler with `0xC0000005`; no batch end marker
+or object is produced. The admission probe was reverted. This is a
+lifecycle-lowering memory fault, not linking, handler syntax, source-body
+brace reconstruction, or base-subobject unwinding.

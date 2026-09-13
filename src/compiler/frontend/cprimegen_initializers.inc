@@ -331,6 +331,7 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
   int size, align;
   Section *sec = p->sec;
   uint64_t val;
+  int static_conversion_prev;
 
   dtype = *type;
   dtype.t &= ~VT_CONSTANT; // need to do that to avoid false warning
@@ -416,7 +417,10 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
   {
     // XXX: not portable
     // XXX: generate error if incorrect relocation
+    static_conversion_prev = static_initializer_conversion_wanted;
+    ++static_initializer_conversion_wanted;
     gen_assign_cast(&dtype);
+    static_initializer_conversion_wanted = static_conversion_prev;
     bt = dtype.t &VT_BTYPE;
     if (is_reference_type(type)
         && (vtop->r & (VT_VALMASK | VT_LVAL | VT_NONCONST)) != VT_CONST)
@@ -438,7 +442,8 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
         && bt != VT_PTR
         && (bt != (PTR_SIZE == 8 ? VT_LLONG : VT_INT)
             || (type->t & VT_BITFIELD))
-        && !((vtop->r & VT_CONST) && vtop->sym->v >= SYM_FIRST_ANOM)
+        && !((vtop->r & VT_CONST) && (vtop->sym->v >= SYM_FIRST_ANOM
+            || (bt == VT_STRUCT && (vtop->sym->type.t & VT_CONSTANT))))
        )
       cprime_error("initializer element is not computable at load time");
 
@@ -453,7 +458,8 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
 
     // XXX: make code faster ?
     if ((vtop->r & (VT_SYM | VT_CONST)) == (VT_SYM | VT_CONST) &&
-        vtop->sym->v >= SYM_FIRST_ANOM &&
+        (vtop->sym->v >= SYM_FIRST_ANOM
+         || (bt == VT_STRUCT && (vtop->sym->type.t & VT_CONSTANT))) &&
         /* XXX This rejects compound literals like
            '(void *){ptr}'.  The problem is that '&sym' is
            represented the same way, which would be ruled out
@@ -1260,7 +1266,10 @@ static TokenString *bind_aggregate_default_initializer(TokenString *source,
       }
     }
     if (TOK_HAS_VALUE(current))
+    {
       tok_str_add_record(bound, source->str, source->len, &i);
+      ++i;
+    }
     else
     {
       tok_str_add(bound, current);
@@ -1311,12 +1320,8 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
     if (!(!p->sec && !(flags & DIF_SIZE_ONLY)
           && is_cpp_translation_unit() && (type->t & VT_BTYPE) == VT_STRUCT
           && parse_direct_class_initializer(p, type, c)))
-      parse_init_elem(!p->sec || is_reference_type(type) ? EXPR_ANY : EXPR_CONST);
+      parse_init_elem(!p->sec || is_reference_type(type) || static_initializer_constant_fold ? EXPR_ANY : EXPR_CONST);
     cpp_member_address_target = saved_member_target;
-    if (!p->sec && is_cpp_translation_unit()
-        && (type->t & VT_BTYPE) == VT_STRUCT
-        && !is_compatible_unqualified_types(type, &vtop->type))
-      try_call_cpp_conversion_operator(type, 0);
     nocode_wanted = ncw_prev;
     flags |= DIF_HAVE_ELEM;
   }
@@ -2452,7 +2457,7 @@ err_size:
     Sym *initial_cleanup = cur_scope ? cur_scope->cl.s : NULL;
     int initial_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
     p.sec = sec;
-    p.aggregate_target_sym = sym && sec
+    p.aggregate_target_sym = sym && (r & VT_VALMASK) == VT_CONST
                              && (type->t & VT_BTYPE) == VT_STRUCT
                              ? sym : NULL;
     p.track_partial_cleanups = cur_scope && is_cpp_translation_unit() && !sec

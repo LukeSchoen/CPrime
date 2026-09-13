@@ -1278,7 +1278,46 @@ found:
   return index;
 }
 
+/* GCC numbers a read/write output twice in an asm template: once among
+   outputs and once among inputs.  The compiler keeps one physical operand,
+   so translate that logical input number back to its output here. */
+static int find_asm_template_operand(ASMOperand *operands, int nb_operands,
+                                     int nb_outputs, const char *name,
+                                     const char **pp)
+{
+  int index, i;
+
+  if (!isnum(*name))
+    return find_constraint(operands, nb_operands, name, pp);
+
+  index = 0;
+  while (isnum(*name))
+  {
+    index = (index * 10) + (*name) - '0';
+    name++;
+  }
+  if (pp)
+    *pp = name;
+
+  if ((unsigned)index < nb_outputs)
+    return index;
+
+  index -= nb_outputs;
+  for (i = 0; i < nb_outputs; i++)
+  {
+    if (strchr(operands[i].constraint, '+'))
+    {
+      if (index == 0)
+        return i;
+      index--;
+    }
+  }
+  index += nb_outputs;
+  return (unsigned)index < nb_operands ? index : -1;
+}
+
 static void subst_asm_operands(ASMOperand *operands, int nb_operands,
+                               int nb_outputs,
                                CString *out_str, const char *str)
 {
   int c, index, modifier;
@@ -1306,7 +1345,8 @@ static void subst_asm_operands(ASMOperand *operands, int nb_operands,
              and make literal operands not be decorated with '$'.  */
           *str == 'P')
         modifier = *str++;
-      index = find_constraint(operands, nb_operands, str, &str);
+      index = find_asm_template_operand(operands, nb_operands, nb_outputs,
+                                        str, &str);
       if (index < 0)
 error:
         cprime_error("invalid operand reference after %%");
@@ -1520,7 +1560,8 @@ ST_FUNC void asm_instr(void)
     cstr_reset(astr1);
     cstr_cat(astr1, astr.data, astr.size);
     cstr_reset(&astr);
-    subst_asm_operands(operands, nb_operands + nb_labels, &astr, astr1->data);
+    subst_asm_operands(operands, nb_operands + nb_labels, nb_outputs,
+                       &astr, astr1->data);
   }
 
 #ifdef ASM_DEBUG

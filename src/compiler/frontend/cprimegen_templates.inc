@@ -1962,6 +1962,11 @@ static TokenString *skip_or_save_template_member_decl(int save)
           if (brace_is_body)
           {
             next();
+            /* A function-try-block owns its handlers as part of the member
+               definition.  Keep collecting after its try body so replay sees
+               the `catch` rather than treating it as the next class member. */
+            if (tok == TOK_CATCH)
+              continue;
             break;
           }
           next();
@@ -15356,7 +15361,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
     if (!td->is_class && function_params_done && !function_body_started && tok == TOK_TRY) {
       TokenString *body;
       next();
-      body = capture_cpp_function_try_body(NULL, 0);
+      body = capture_cpp_function_try_body(NULL, 0, 0);
       --body->len;
       restore_cpp_lifecycle_probe(body);
       continue;

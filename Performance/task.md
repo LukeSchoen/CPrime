@@ -160,6 +160,15 @@ non-type specialization repair. Its serial root-CPC publication passed at
 only and does not change the matched-C or self-driver acceptance evidence.
 TCC was not invoked because external compiler invocation remains unauthorized.
 
+Current cycle (2026-09-14): L1 hierarchy-capacity validation was
+correctness-only. The serial validated publication passed 28 native regressions
+and Classes (14/14); no performance measurement or workload change occurred.
+
+Current cycle (2026-09-14): L1 dynamic-cast/inherited-static-lookup validation
+was correctness-only. The serial validated publication passed 28 native
+regressions and Classes (14/14); no performance measurement or workload change
+occurred.
+
 Current cycle (2026-09-13): no performance measurement was run for the T1
 friend operator template-id repair. Its serial root-CPC publication passed;
 this correctness publication does not change matched-C or self-driver
@@ -228,3 +237,20 @@ OperatorOverloads (8/8) plus Constructors (6/6) gates; no performance
 measurement or workload change occurred. Matched-C and self-driver evidence is
 unchanged, and TCC was not invoked because external compiler invocation remains
 unauthorized.
+
+Current cycle (2026-09-14): the T4 unnamed-namespace elaborated-tag lookup
+repair was correctness-only. Validated publication passed 28 native regressions
+and Classes (13/13); no performance measurement or workload change occurred.
+Matched-C and self-driver evidence is unchanged, and TCC was not invoked
+because external compiler invocation remains unauthorized.
+
+Current cycle (2026-09-14): the I1 constexpr aggregate-copy/conversion repair
+was correctness-only. The serial validated publication passed 28 native
+regressions and the Constructors gate (6/6); no performance measurement or
+workload change occurred. Matched-C and self-driver evidence is unchanged, and
+TCC was not invoked because external compiler invocation remains unauthorized.
+
+Current cycle (2026-09-14): the L1 bitset library-surface repair was
+correctness-only. Validated publication passed 28 native regressions; the
+root-compiler focused Classes gate passed 3/3 and Classes passed 14/14. No
+performance measurement or workload change occurred.

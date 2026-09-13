@@ -100,7 +100,11 @@ static int evaluate_constexpr_function(Sym *function, SValue *arguments, int cou
   int saved_scope, binding_count = 0, argument;
   SValue *saved_top = vtop;
   for (argument = 0; argument < count; ++argument)
-    if ((arguments[argument].r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) != VT_CONST)
+    if ((arguments[argument].r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) != VT_CONST
+        && !((arguments[argument].type.t & VT_BTYPE) == VT_PTR
+             && (arguments[argument].r & VT_VALMASK) == VT_CONST
+             && (arguments[argument].r & VT_SYM)
+             && !(arguments[argument].r & VT_NONCONST)))
       return 0;
   for (entry = constexpr_functions; entry; entry = entry->next)
     if (entry->token == function->v) break;

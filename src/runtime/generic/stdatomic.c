@@ -74,6 +74,22 @@ ATOMIC_GEN(uint16_t, 2)
 ATOMIC_GEN(uint32_t, 4)
 ATOMIC_GEN(uint64_t, 8)
 
+/* Aggregate GNU __atomic_exchange is address based.  Keep the scalar fast
+   paths above and use one byte-wise critical section for other object sizes. */
+void __cprime_atomic_exchange(void *atom, const void *value, void *previous,
+                              int memorder, size_t size)
+{
+    static volatile int lock;
+    unsigned char *dst = atom, *old = previous;
+    const unsigned char *src = value;
+    size_t i;
+    (void)memorder;
+    while (__atomic_exchange_n(&lock, 1, __ATOMIC_SEQ_CST)) {}
+    for (i = 0; i < size; ++i) old[i] = dst[i];
+    for (i = 0; i < size; ++i) dst[i] = src[i];
+    __atomic_store_n(&lock, 0, __ATOMIC_SEQ_CST);
+}
+
 /* uses alias to allow building with gcc/clang */
 #ifdef __TINYC__
 #define ATOMIC(x)      __atomic_##x

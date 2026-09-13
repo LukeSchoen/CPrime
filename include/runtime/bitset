@@ -1,0 +1,39 @@
+#ifndef _CPC_BITSET
+#define _CPC_BITSET
+
+#include <stddef.h>
+
+namespace std
+{
+  template<size_t N>
+  class bitset
+  {
+    typedef unsigned long storage_type;
+    enum { bits_per_word = sizeof(storage_type) * 8 };
+    enum { word_count = N ? (N + bits_per_word - 1) / bits_per_word : 1 };
+  public:
+    class reference
+    {
+      storage_type *word;
+      storage_type mask;
+    public:
+      reference(storage_type *word_, storage_type mask_) : word(word_), mask(mask_) {}
+      reference &operator=(bool value) { if (value) *word |= mask; else *word &= ~mask; return *this; }
+      reference &operator=(const reference &value) { return *this = (bool)value; }
+      operator bool() const { return (*word & mask) != 0; }
+    };
+    bitset() { reset(); }
+    bitset(unsigned long value) { reset(); words[0] = value; trim(); }
+    reference operator[](size_t position) { return reference(&words[position / bits_per_word], storage_type(1) << (position % bits_per_word)); }
+    bool operator[](size_t position) const { return (words[position / bits_per_word] & (storage_type(1) << (position % bits_per_word))) != 0; }
+    bitset &set(size_t position, bool value = true) { operator[](position) = value; return *this; }
+    bitset &reset() { for (size_t i = 0; i < word_count; ++i) words[i] = 0; return *this; }
+    bool test(size_t position) const { return (*this)[position]; }
+    size_t size() const { return N; }
+  private:
+    storage_type words[word_count];
+    void trim() { if (N && N % bits_per_word) words[word_count - 1] &= (storage_type(1) << (N % bits_per_word)) - 1; }
+  };
+}
+
+#endif

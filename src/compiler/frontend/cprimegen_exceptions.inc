@@ -18,6 +18,7 @@ typedef struct CppEhFunction {
   int state_count;
   int state_capacity;
   int throw_count;
+  int potential_throw_count;
   CppEhNode *nodes;
   int node_count;
   int node_capacity;
@@ -559,6 +560,7 @@ static void cpp_eh_note_call(void)
       && vtop->type.ref->f.func_noexcept)
     return;
   if (!eh->enabled || nocode_wanted || !cur_scope) return;
+  ++eh->potential_throw_count;
   cleanup = cpp_eh_cleanup_index(eh->has_cleanup_override
       ? eh->cleanup_override : cur_scope->cl.s);
   if (cleanup < 0) return;
@@ -1254,7 +1256,8 @@ static void cpp_eh_parse_try(void)
 {
   CppEhFunction *eh = &cpp_eh_function;
   int start, end, done = 0, saved_nocode = nocode_wanted;
-  int context_offset, cleanup_stop, saw_catch_all = 0, state_start, throw_start;
+  int context_offset, cleanup_stop, saw_catch_all = 0, state_start, throw_start,
+      potential_throw_start;
   int handler_nocode;
   if (!is_cpp_translation_unit()) cprime_error("try requires C++");
   if (tok != '{') expect("compound statement after try");
@@ -1263,11 +1266,13 @@ static void cpp_eh_parse_try(void)
   cleanup_stop = cpp_eh_cleanup_index(cur_scope->cl.s);
   state_start = eh->state_count;
   throw_start = eh->throw_count;
+  potential_throw_start = eh->potential_throw_count;
   start = ind;
   block(0);
   end = ind;
   handler_nocode = saved_nocode || (eh->state_count == state_start
-                                    && eh->throw_count == throw_start);
+                                    && eh->throw_count == throw_start
+                                    && eh->potential_throw_count == potential_throw_start);
   nocode_wanted = handler_nocode;
   done = gjmp(done);
   if (tok != TOK_CATCH) expect("catch after try block");

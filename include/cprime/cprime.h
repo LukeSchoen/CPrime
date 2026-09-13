@@ -406,7 +406,10 @@ struct SymAttr {
     probe_defined : 1,
     vector : 1,
     /* A synthetic aggregate holding a complex value's two parts. */
-    complex : 1;
+    complex : 1,
+    /* The assembler spelling came from source asm("...") rather than
+       generated language linkage. */
+    explicit_asm_label : 1;
 };
 
 struct FuncAttr {
@@ -424,12 +427,13 @@ struct FuncAttr {
     func_cxx_destructor : 1,
     func_language_linkage : 2,
     func_linkage_explicit : 1,
+    func_gnu_inline : 1,
     func_cpp_conversion : 1,
     func_cpp_explicit : 1,
     func_cpp_member : 1,
     func_ref_qualifier : 2,
     func_unresolved_overload : 1,
-    xxxx        : 2;
+    xxxx        : 1;
 };
 
 typedef struct Sym {
@@ -607,6 +611,7 @@ typedef struct AttributeDef {
     Sym *cleanup_func;
     int alias_target;
     int asm_label;
+    char asm_label_explicit;
     int static_member_owner;
     char attr_mode;
     int vector_size;

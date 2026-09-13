@@ -1551,6 +1551,11 @@ static void cpp_prepare_free_function_linkage(int name_tok, CType *func_type,
   }
   if (ad->asm_label)
     return;
+  if (prior && prior->a.explicit_asm_label && prior->asm_label) {
+    ad->asm_label = prior->asm_label;
+    ad->asm_label_explicit = 1;
+    return;
+  }
   if (attr->func_language_linkage == 1) {
     int namespace_tok = symbol_namespace_scope_tok(source_name);
     const char *name = get_tok_str(source_name, NULL);
@@ -2352,6 +2357,26 @@ static Sym *find_cpp_conversion_operator(CType *source, CType *target,
 
 static int call_arg_matches_param_type(CType *param_type, CType *arg_type);
 
+/* GCC accepts a string literal for a char* parameter in a system header.
+   Keep that legacy compatibility confined to the header spelling of a string
+   literal; ordinary source and non-array const pointers stay type-safe. */
+static int system_header_allows_legacy_string_literal_pointer(CType *target,
+                                                              CType *source)
+{
+  CType *target_element, *source_element;
+
+  if (!is_cpp_translation_unit() || !file || !file->sys_header
+      || (target->t & VT_BTYPE) != VT_PTR
+      || (source->t & VT_BTYPE) != VT_PTR
+      || !(source->t & VT_ARRAY))
+    return 0;
+  target_element = pointed_type(target);
+  source_element = pointed_type(source);
+  return (source_element->t & VT_CONSTANT)
+      && !(target_element->t & VT_CONSTANT)
+      && is_compatible_unqualified_types(target_element, source_element);
+}
+
 static int call_arg_matches_param_type_standard(CType *param_type,
                                                 CType *arg_type)
 {
@@ -2494,6 +2519,9 @@ static int call_arg_matches_param_type_standard(CType *param_type,
              & ~(param_pointed->t & (VT_CONSTANT | VT_VOLATILE))))
       return 1;
     if (cpp_pointer_qualification_conversion(param_type, &arg_value_type) > 0)
+      return 1;
+    if (system_header_allows_legacy_string_literal_pointer(param_type,
+                                                            &arg_value_type))
       return 1;
     if (class_value_is_derived_from(arg_pointed, param_pointed)
         && !(arg_pointed->t & (VT_CONSTANT | VT_VOLATILE)
@@ -2807,7 +2835,9 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
   if ((param_type->t & VT_BTYPE) == VT_PTR
       && (arg_value_type.t & VT_BTYPE) == VT_PTR)
   {
-    if (!call_arg_matches_param_type(param_type, arg_type))
+    if (!call_arg_matches_param_type(param_type, arg_type)
+        && !system_header_allows_legacy_string_literal_pointer(param_type,
+                                                                 &arg_value_type))
       return -1;
     /* Array decay and pointed-to qualification are exact conversion
        sequences. They beat object-to-void and derived-to-base pointer
@@ -4028,6 +4058,16 @@ static void finish_cpp_member_func_call_to(Sym *func_type, int nb_args,
   }
 
   vcheck_cmp();
+  if (nb_args && vtop[-nb_args].sym && static_initializer_constant_fold
+      && (func_type->type.t & VT_BTYPE) != VT_STRUCT) {
+    SValue constant;
+    if (evaluate_constexpr_function(vtop[-nb_args].sym, vtop + 1 - nb_args,
+                                    nb_args, &constant)) {
+      vtop -= nb_args;
+      *vtop = constant;
+      return;
+    }
+  }
   gfunc_call(nb_args);
 
   if (ret_nregs < 0)
@@ -4879,6 +4919,12 @@ static int try_call_cpp_conversion_operator(CType *target, int allow_explicit)
   maybe_indir_reference();
   mk_pointer(&vtop->type);
   gaddrof();
+  if (static_initializer_conversion_wanted
+      && (signature->type.t & VT_BTYPE) != VT_STRUCT) {
+    SValue constant, argument = {0};
+    argument.type = signature->next->type; argument.r = VT_CONST;
+    if (evaluate_constexpr_function(function, &argument, 1, &constant)) { *vtop = constant; return 1; }
+  }
   gv(RC_INT);
   save_lvalues();
   if (virtual_method)

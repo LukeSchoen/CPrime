@@ -123,7 +123,11 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     lambda_probe = NULL;
     ++nocode_wanted;
     cpp_permit_incomplete_array_type = argument == 6;
-    cpp_permit_deferred_array_bound = argument == 6;
+    /* A statement-declarator probe (mode 8) must accept VLA bounds from the
+       surrounding function while deciding `T (*name)[bound];` versus a
+       functional expression. The replay evaluates the bound in its real
+       local scope. */
+    cpp_permit_deferred_array_bound = argument == 6 || argument == 8;
     begin_macro(&saved->replay, 0);
     next();
     if (argument == 9)

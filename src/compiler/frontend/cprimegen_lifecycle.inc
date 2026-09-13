@@ -3157,6 +3157,7 @@ static int member_field_func_arg_match_rank(Sym *field, CType *arg_types,
 {
   int i, rank, total = 0;
   Sym *arg;
+  Sym *member_sym;
 
   if (!field || (field->type.t & VT_BTYPE) != VT_FUNC || !field->type.ref)
     return -1;
@@ -4111,12 +4112,13 @@ static int cpp_member_class_name_tok(CType *struct_type)
 
 static void add_pending_member_func(CType *struct_type, int method_tok,
                                     CType *func_type, TokenString *body,
-                                    int is_auto_return)
+                                    int is_auto_return, int is_constexpr)
 {
   int struct_tok, mangled_tok, i;
   int is_local_class_member = local_stack || local_scope;
   int this_tok, public_this_tok;
   Sym *arg;
+  Sym *member_sym;
   PendingMemberFunc *pm;
   TokenString *str;
 
@@ -4131,7 +4133,10 @@ static void add_pending_member_func(CType *struct_type, int method_tok,
   {
     CType lowered_type = make_lowered_member_func_type(struct_type, func_type);
   note_member_func_overload(struct_tok, method_tok, mangled_tok, &lowered_type);
-  external_global_sym(mangled_tok, &lowered_type);
+  member_sym = external_global_sym(mangled_tok, &lowered_type);
+  if (is_constexpr && member_sym) {
+    note_constexpr_function(member_sym, body);
+  }
   }
 
   str = tok_str_alloc();
@@ -4693,7 +4698,6 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
   str = build_lifecycle_func_string(struct_type, struct_tok, mangled_tok,
                                     params, complete_body, internal,
                                     is_local_class_member, &func_type.ref->f);
-
   pm = cprime_mallocz(sizeof(*pm));
   pm->str = str;
   pm->token_filter_valid = 0;
@@ -4950,6 +4954,16 @@ static void complete_global_class_array_bound(CType *type, TokenString *initiali
   free_saved_array_elements(elements, count);
 }
 
+static int aggregate_has_default_member_initializer(CType *type)
+{
+  Sym *field;
+  if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref) return 0;
+  for (field = type->ref->next; field; field = field->next)
+    if (!(field->type.t & (VT_TYPEDEF | VT_STATIC)) && field->default_arg)
+      return 1;
+  return 0;
+}
+
 static int can_lower_global_dynamic_init(CType *type, int l, int has_init)
 {
   int bt;
@@ -4957,8 +4971,10 @@ static int can_lower_global_dynamic_init(CType *type, int l, int has_init)
   if (!is_cpp_translation_unit() || l != VT_CONST || !has_init)
     return 0;
   if ((type->t & VT_BTYPE) == VT_STRUCT && type->ref
-      && !type->ref->a.cpp_user_constructor)
-    return 0;
+      && !type->ref->a.cpp_user_constructor) {
+    if (type->t & VT_CONSTANT) return 0;
+    return !aggregate_has_default_member_initializer(type);
+  }
   if (type_requires_class_construction(type))
     return 1;
   if (type->t & VT_ARRAY)
