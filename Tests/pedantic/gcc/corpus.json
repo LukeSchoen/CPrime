@@ -1,17 +1,6 @@
 {
     "revision":  "5f6257c26b814de1a14c71b2d3a49291765b6577",
     "source":  "https://github.com/gcc-mirror/gcc",
-    "cases":  [
-                  {
-                      "path":  "g++.dg/eh/dtor1.C",
-                      "role":  "case",
-                      "sha256":  "86ed41fcc10a1231be3b6bf18a6120ef3c80889f0a1b12d86c10cbfd13425ea0"
-                  },
-                  {
-                      "path":  "c-c++-common/pr71654.c",
-                      "role":  "case",
-                      "sha256":  "3b8754dafda7954726f120f03e70a98abc3037859a350a6a68e8feb5cf28c96d"
-                  },
-              ],
+    "cases":  [],
     "support":  []
 }

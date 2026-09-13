@@ -2,7 +2,7 @@
 
 ## Scope and evidence
 
-5 unresolved rows remain at upstream revision
+No unresolved rows remain at upstream revision
 `5f6257c26b814de1a14c71b2d3a49291765b6577`. The 2026-09-13 root-CPC audit
 reported compile/link failure for every row, with no timeout. Compiler identity
 and exact commands are in `build/gcc-preparation-audit/metadata.json` and
@@ -42,8 +42,7 @@ first observed blocker; the planned check includes behavior beyond that blocker.
 
 | Row | Package | Current blocker | Planned repair and proof |
 | --- | --- | --- | --- |
-| `c-c++-common/pr71654.c` | O1 | undefined symbol 'foo' | Fold the proven unsigned-byte condition before emitting a reference to foo; retain the undefined sentinel. |
-| `g++.dg/eh/dtor1.C` | E1 | function definition expected | Lower an out-of-class destructor function-try-block without invalid destructor cleanup state; observe base destruction before handler entry. |
+| — | — | — | The retained inventory is empty. |
 
 ## Commands and retirement
 

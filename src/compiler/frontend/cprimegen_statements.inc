@@ -863,11 +863,14 @@ again:
 if_chain:
     new_scope(&o);
     skip('(');
+    cpp_range_condition_begin();
     gexpr_decl(0);
     cpp_temp_end_condition(temporary_mark);
+    cpp_range_condition_push();
     a = gvtst(1, 0);
     skip(')');
     block(0);
+    cpp_range_condition_pop();
     if (tok == TOK_ELSE)
     {
       end_chain = gjmp(end_chain);

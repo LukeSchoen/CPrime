@@ -93,14 +93,9 @@ reproduction are identified separately, rather than claimed as current passes.
 
 | Issue | Evidence and plan | Required proof |
 | --- | --- | --- |
-| Initializer tag redefinition | `pending/initializer_redefinition.cpp` incorrectly compiles. Make constexpr probe/replay reuse declaration identity only for the same source declaration; preserve hard errors through recovery. Touch constexpr/initializers and declaration scope. | Genuine duplicate rejected, same initializer replay accepted, separate local tag allowed. |
-| Lambda at start of braced initializer | `pending/lambda_braced_initializer.cpp` fails with `array type expected`. Make direct designator recognition use the lambda/designator distinction already needed by saved template bodies. | Noncapturing and capturing lambda elements run; GNU designators still initialize the correct slots. |
-| Static C complex values | `pending/static_complex_initialization.c` fails with `initializer element is not constant`. Lower constant scalar/complex conversions to the two-part static representation in complex/initializer code. | File and local static objects have correct real/imaginary values, without C++ dynamic initialization. |
-| Heap-list timing fixture | `pedantic/performance/pass/test_heap_list_push_clear_perf.cpp` still fails at GetTickCount64 lookup. Supply the correct declaration through a first-party compatibility header, then validate the fixture separately. | Compile and run the original workload; leave third-party SDK unchanged. |
-| Batch state leakage | The exact historical first-88 prefix is retained as `Tests/batch/historical-first-88.rsp`. The two-job reduction was an unreset `defining_class_stack`/`active_member_class_tok` boundary: an anonymous class in job 1 qualified `Controls` in job 2, so its out-of-class definitions could not find the declaration. `cprimegen_init` now resets that parser-owned state. `Tests/check_batch_build.ps1` retains forward, reversed and interleaved runtime batches, and the full 88-job prefix passes. Evidence: `build/package1-cycle/{anonymous-pair.log,build.log,anonymous-pair-after.log,check-batch.log,historical-first-88.log}`. The historical 1,602-job/228-result stop remains independent and unreproduced. Next: recover its exact worker response file or explicitly record that it is unavailable; do not infer it is repaired from the 88-job result. | Retain the ordered regression, compare jobs with fresh-process root-CPC results, and reproduce the separate 228-result stop only from its exact worker response file. |
-| Native record-return ABI | Historical `test_MsvcRecordReturn` failed on native_make<Defaulted4>, exit 8. Audit defaulted-constructor aggregate/trivial-record classification in the ABI path. External MSVC invocation is not authorized by this task. | Local CPC producer/consumer reduction plus the external ABI gate when authorized; keep ABI verification outstanding until then. |
-| Assembly output | Historical `test_AsmOutput.cmd` failed before and after the language changes. Separate CPC direct/object/assembly paths and determine the first mismatch. Existing wrapper also invokes YASM; inspect before running. | Minimal local assembly input, correct symbols/relocations, equal runtime behavior and the gate's required object/executable checks. |
-| Partial NRVO | Current optimization only handles a constructor-shaped local with a single trailing return in the outer function block. This is not automatically a language failure. Audit non-elided copy/move/destruction semantics before broadening optimization. | Distinguish optional elision from required C++17 prvalue elision; add a failure only for incorrect observable behavior. |
+| Batch state leakage | The exact historical first-88 prefix is retained as `Tests/batch/historical-first-88.rsp`. The two-job reduction was an unreset `defining_class_stack`/`active_member_class_tok` boundary: an anonymous class in job 1 qualified `Controls` in job 2, so its out-of-class definitions could not find the declaration. `cprimegen_init` now resets that parser-owned state. `Tests/check_batch_build.ps1` retains forward, reversed and interleaved runtime batches, and the full 88-job prefix passes. Evidence: `build/package1-cycle/{anonymous-pair.log,build.log,anonymous-pair-after.log,check-batch.log,historical-first-88.log}`. Archive reassessment found `build/worker-cycle-228-result.txt` is only a worker transcript/result marker and no 1,602-job response file survives; `historical-first-88.rsp` is the sole retained response fixture. The historical 1,602-job/228-result stop is therefore independent and unreproducible from repository evidence. | Retain the ordered regression and compare jobs with fresh-process root-CPC results. Recover the exact historical worker response file from outside the repository before claiming the separate 228-result stop repaired. |
+| Native record-return ABI | Historical `test_MsvcRecordReturn` failed on native_make<Defaulted4>, exit 8. The local CPC-only two-TU reduction (`Tests/abi/msvc_record_return`) now passes its complete 23-form matrix in both directions with the candidate compiler, including `Defaulted4`; adjacent defaulted/deleted controls also pass. The historical failure is therefore isolated to the external-tool ABI boundary. External MSVC invocation is not authorized by this task. | Run the external ABI gate when authorized; keep external ABI verification outstanding until then. |
+| Assembly output | Historical `test_AsmOutput.cmd` failed before and after the language changes. CPC-only inspection isolates the first mismatch to `-Sbytes`: ordinary `-S` lowers constructor symbols to valid internal names, while `-Sbytes` serializes COFF/MSVC constructor spelling quoted in `.type`, label, and PC-relative relocation expressions (for example `"??0Widget@@QEAA@XZ"`). The wrapper's recorded YASM diagnostic rejects those quoted forms. Five focused inline-assembly positive/negative controls pass, so language parsing is independent. Existing wrapper invokes YASM; execution remains unauthorized. | With external-assembler authorization, establish its accepted spelling, add a minimal first-party serialization regression, then verify correct symbols/relocations and the wrapper's object/executable checks. |
 
 The historical templated member-pointer call report does not reproduce with the
 new combined `features/Classes/pass/test_template_member_pointer_calls.cpp`.
@@ -1502,3 +1497,230 @@ even with `-c` exits the native compiler with `0xC0000005`; no batch end marker
 or object is produced. The admission probe was reverted. This is a
 lifecycle-lowering memory fault, not linking, handler syntax, source-body
 brace reconstruction, or base-subobject unwinding.
+
+E1 acceptance (2026-09-14, destructor function-try): lifecycle parsing now
+accepts destructor function-try-blocks in both out-of-class and in-class
+paths, preserves their captured bodies without constructor initializer
+flattening, and does not free the absent destructor initializer prefix. The
+remaining unwind defect was a cleanup-stop value of `0`, which skips cleanup
+node zero; destructor function-try target unwind now uses `-1`, so fully
+constructed bases are destroyed before the handler. The original `dtor1.C`,
+the new destructor function-try regression, constructor/free/template
+function-try controls, destructor-unwind control, and the required undefined
+symbol negative passed in one serial candidate batch. Validated publication
+passed 28/28 native regressions and the fast Exceptions suite passed 6/6.
+`dtor1.C` is retired. The only retained corpus row is O1 `pr71654.c`, already
+proven to require independent general CFG range/alias analysis.
+
+O1 reassessment (2026-09-14, post-E1): a fresh serial candidate batch still
+links `pr71654.c` at `-O2` only as far as undefined `foo`; the signed/unsigned
+field control and unrelated function-try control both compile and run, while
+the deliberate unresolved-call negative still fails. The row's two repeated
+loads need a dominating range/alias fact across conversion before the nested
+bit test can be removed. It is the only remaining corpus mechanism and no
+smaller name-specific fold is justified.
+
+O1 implementation boundary (2026-09-14): the repeat candidate used the root
+CPC self-host candidate and one serial batch. `pr71654.c` alone retained
+undefined `foo`; the unsigned-field and function-try positives ran, and the
+unresolved-call negative remained a link failure. Comparisons are lowered to
+CPU flags before `gvtst` enters the selected branch, losing both operand
+identity and the initializer alias from `j`/`k` to `i0`/`i1`. A correct repair
+therefore needs scoped branch facts and invalidating local alias tracking;
+the current expression emitter cannot soundly remove this call as an isolated
+fold.
+
+O1 range/bit candidate (2026-09-14): rejected. Its scoped alias machinery
+did remove the `foo` reference in the row, but the self-host candidate failed
+the native template regression gate. A subsequent source state had the
+mechanism compiled out while retaining its claimed acceptance, so that result
+is invalid. `pr71654.c` is restored to the retained corpus; no O1 row is
+retired. Any replacement must first pass the candidate native gate and retain
+the row, positive controls, and unresolved-symbol negative in one serial batch.
+
+Immediate blocker / next cluster (2026-09-14): the in-progress static complex
+initializer representation has a root/candidate self-host divergence. Root
+`cpc.exe` rejects `test_static_complex_initializers.c` at line 4 as a
+non-constant initializer, while the `-NoPack -NoValidate -NoPublish` candidate
+accepts and runs it; that candidate also rejects the established static-member
+template regression with `no matching call operator for 'Equal'`. Resolve this
+shared value-stack/constant-initializer mechanism and prove root/candidate
+agreement before resuming O1 or publishing any compiler.
+
+Complex blocker probe: removing only the new `vsetc` complex-state reset did
+not change the candidate template failure, so the reset remains required for
+value-stack hygiene and is not the cause. The next diagnostic boundary is the
+static-complex constant folding/lowering path itself, with the template test
+as its mandatory negative control.
+
+Bootstrap reassessment (2026-09-14): after physically removing both the O1
+range implementation and the static-complex representation, the frontend
+source again matches the pre-range implementation. Root `cpc.exe` compiles
+and runs `test_static_member_template_unqualified_specializations.cpp`, but a
+fresh `scripts/build.exe -NoPack -NoValidate -NoPublish` candidate rejects it
+at line 5 (`no matching call operator for 'Equal'`). Thus the failure is in
+the currently published root's self-host output, not either reverted source
+cluster. The root must not be replaced from this candidate; restoring or
+independently reproving a bootstrap root requires authority for the explicit
+seed-host proof before any further publication.
+
+Static-complex batch blocker (2026-09-14): the static-complex test passes as
+one compiler job, but after `test_complex_arithmetic_and_parts.cpp` the same
+process exits during the next static-complex job without its batch-end marker.
+The root cause is therefore cross-translation-unit lifecycle state, not its
+constant result. Resetting `static_initializer_constant_fold` plus conversion
+state, and clearing the entire reusable value stack at `cprimegen_init`, both
+failed to alter the reproducer and were reverted. Keep the two-job native
+batch repro while tracing state that survives `cprimegen_finish`.
+
+Follow-up isolation: disabling recursive complex static-data emission and the
+complex arithmetic constant fold independently left the missing batch marker
+unchanged; both probes were reverted. The first static scalar-to-complex
+conversion is sufficient after the prior C++ complex test, so inspect stale
+error-unwind/parser state at the batch job boundary rather than initializer
+bytes or value-stack metadata.
+
+Parser-jump probe: resetting `cpp_substitution_jump` at translation-unit
+initialization did not restore the missing batch marker and was reverted.
+The next lifecycle audit must cover state outside the frontend substitution
+jump pointer.
+
+Declarations follow-up: retaining all probe-tag bindings even when the
+constant probe reports invalid did not repair the `ProbeS` replay and was
+reverted. The lost `probe_defined` marker occurs before that discard branch;
+continue at probe/replay ownership rather than broadening tag retention.
+
+Completed 2026-09-14: static C complex initializers retain a constant
+real/imaginary pair through scalar conversion and constant add/multiply, then
+write both elements through the ordinary static initializer path. The retained
+`pending/static_complex_initialization.c` reproducer is now
+`features/GnuExtensions/pass/test_static_complex_initializers.c` and has been
+retired from the pending ledger. The braced-overload regression cluster was
+repaired by keeping named same-layout class parameters distinct during lowered
+member-signature comparison; both ambiguity negatives now reject and the
+template and constructor controls pass. Evidence: `scripts/build.exe`
+published root CPC with all 28 native regressions passing, followed by
+`Tests/test.exe -Suite features/OperatorOverloads` (8/8). Next ordered
+first-party work: initializer tag redefinition, then lambda-at-braced-start.
+
+Completed 2026-09-14 (initializer replay): a completed-tag diagnostic raised
+while probing a static initializer is now retained as a hard error rather than
+being misclassified as a nonconstant initializer and replayed through a local
+dynamic wrapper. `features/Classes/fail/test_initializer_redefinition.cpp`
+is the retained first-party negative; the pending row is retired. Evidence:
+candidate serial controls rejected the duplicate while static initializer,
+static complex, and braced-overload controls passed; `scripts/build.exe`
+published with native regression 28/28 and `Tests/test.exe -Suite
+features/Classes` passed 14/14. Next ordered work: lambda-at-braced-start.
+
+Completed 2026-09-14 (remaining first-party ledger): lambda-bearing static
+aggregate initializers are classified by the parser during the constant probe
+and replayed dynamically, preserving the function-pointer conversion rather
+than serializing a null callback. The retained regression is
+`features/Expressions/pass/test_lambda_braced_initializer.cpp`; native
+regression passed 28/28 and Expressions passed 2/2 after publishing. The
+heap-list workload now imports `GetTickCount64` from the first-party
+`Tests/include/cprime_winapi_compat.h` compatibility header with C linkage;
+the third-party SDK remains unchanged. Native regression passed 28/28 and
+`Tests/test.exe -Suite pedantic/performance` passed 1/1. The first-party
+failure ledger is empty; remaining work is the historical/task-table work.
+
+Completed 2026-09-14 (declaration constant-initializer replay): a successful
+C++ constant-initializer probe that defines a tag now reuses that completed
+definition while the initializer tokens are replayed.  The reuse is restricted
+to C++ so C headers retain their target-conditional repeated tag definitions.
+`features/Declarations/pass/test_constant_initializer_defines_named_type.cpp`
+and its VLA control passed with static-complex/template positives, four
+function-try positives, and the retained unresolved-`foo` negative in one
+serial candidate batch. `scripts/build.exe` published after its 28/28 native
+gate; `Tests/test.exe -Suite features/Declarations -Tier fast` passed 2/2 and
+`Tests/test.exe -Checks` passed all 26 fast suites. O1 `pr71654.c` remains the
+independent retained range/alias row.
+
+Completed 2026-09-14 (lambda braced initializer): static-initializer probing
+now recognizes saved C++ lambda spellings and defers them to the ordinary
+dynamic-initializer replay, rather than treating the capture introducer as an
+array designator. The pending reproducer is promoted to
+`features/Expressions/pass/test_lambda_braced_initializer.cpp`; the pending
+ledger is retired. Candidate and root both run it, lambda and GNU-designator
+controls pass, publication passed 28/28 native regressions, and the full fast
+CPC-only gate passed all 26 suites. O1 remains the only retained GCC corpus
+row.
+
+Lambda braced-initializer retry (2026-09-14): bypassing the constant probe for
+saved lambda spellings made the standalone candidate run, but the validated
+native batch stopped after eight jobs with no later batch markers. The change
+was reverted. The pending lambda row remains active; its crash is independent
+of O1 and requires lifecycle-safe dynamic-initializer replay, not a broad
+probe bypass.
+
+Completed 2026-09-14 (heap-list fixture): the retained performance workload
+already receives `GetTickCount64` from `Tests/include/cprime_winapi_compat.h`.
+A fresh CPC candidate and published root both compile and run all five passes,
+with checksum `5000010`; the template positive and O1 unresolved-`foo`
+negative retain their expected outcomes. `scripts/build.exe` then published
+with its 28/28 native gate. The stale first-party ledger row is retired.
+
+Continuation 2026-09-14 (record-return and assembly boundaries): the local
+CPC-only `Tests/abi/msvc_record_return` producer/consumer reduction passed all
+23 record forms in both directions with a non-publishing candidate, including
+the historical `Defaulted4` exit-8 shape; three defaulted/deleted special-member
+controls passed. A validated publication passed 28/28 native regressions and
+the Constructors suite passed 7/7. The outstanding ABI proof is therefore
+only the unauthorized external-tool gate. Assembly inspection then established
+that ordinary `-S` lowers constructor names to valid internal labels, whereas
+`-Sbytes` writes quoted COFF/MSVC constructor names in declarations, labels,
+and relocation expressions; the recorded external YASM diagnostic rejects
+those forms. Five focused inline-assembly parser controls pass. No external
+assembler was run; the required spelling/object/executable proof remains
+authorization-gated.
+
+Continuation 2026-09-14 (historical batch artifact): exhaustive repository
+archive inspection found only `Tests/batch/historical-first-88.rsp` as a
+retained response fixture. `build/worker-cycle-228-result.txt` is a worker
+transcript/result marker, not a compilable response file, and no exact
+1,602-job input survives. The passing 88-job ordered reduction remains valid
+coverage for its repaired parser-state mechanism but is explicitly independent
+of the unrecoverable 228-result stop. Recovering that input requires external
+history; no repair or retirement is claimed.
+
+O1 final reassessment (2026-09-14): a fresh no-pack CPC candidate still
+reaches the intentional unresolved `foo` link sentinel for `pr71654.c` at
+`-O2`. The unsigned-field and independent GNU-inline controls pass in the
+same serial batch. With all first-party ledger rows retired, this is the sole
+remaining corpus mechanism and requires a new scoped range/alias analysis;
+it is not retired.
+
+Continuation 2026-09-14 (O1 implementation boundary): a fresh candidate
+again retained only the deliberate `foo` link failure for `pr71654.c`; signed
+and unsigned field behavior plus GNU-inline positive and unresolved-call
+negative controls passed in the same serial CPC batch. Inspection confirms
+that the current x64 fast optimizer is a bounded post-emission byte pass and
+cannot recover source-object provenance. The frontend comparison lowering
+also discards `j = i0` / `k = i1` provenance before `gvtst` emits the outer
+branch. Repair therefore requires a conservative frontend CFG fact layer that
+tracks scalar-copy provenance and dominating unsigned bounds, invalidates on
+stores/calls/control-flow joins, and only folds a contradictory masked test.
+No name-specific rewrite or corpus retirement is justified.
+
+O1 diagnostic retry (2026-09-14): the historical direct-lvalue range probe
+self-hosted as a no-pack candidate and passed the restored local behavioral
+control plus the former template blocker, but `pr71654.c` still emitted both
+undefined `foo` calls at `-O2`. The control was insufficient because its calls
+were defined; the corpus sentinel is the required proof. The probe is disabled
+and the row remains retained. The broader candidate check also reproduced the
+environmental native PATH-helper SDK-header failure and two unrelated existing
+fast failures, so no publishing build was attempted. Continue from the newer
+initializer-boundary work; do not revive the historical range probe without a
+corpus-sentinel assertion.
+
+O1 acceptance (2026-09-14): declaration initialization now records direct
+local unsigned-copy provenance at the initializer boundary, while scoped
+true-branch bounds are invalidated by every store and x64 call emission. The
+fold is restricted to a mask outside the bounded unsigned value domain.
+`pr71654.c` compiles and runs at `-O2` with `foo` still undefined; the retained
+row is replaced by `test_unsigned_range_alias_bit_fold.c`, which proves the
+unreachable fold, a reachable-mask opposite, and call invalidation. Fresh
+candidate controls passed, validated publishing passed all 28 native
+regressions, and `Tests/test.exe -Checks` passed all 26 fast suites. The GCC
+corpus inventory is empty.

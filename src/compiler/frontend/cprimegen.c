@@ -136,6 +136,8 @@ typedef struct
      address; the referent is recorded on the symbol for deferred member
      bodies of local classes. */
   Sym *reference_capture_sym;
+  /* Direct local scalar initialization target for the bounded range fact. */
+  Sym *range_alias_target;
 } init_params;
 
 #if 1
@@ -164,6 +166,7 @@ static int vector_integer_bitcast_cast(CType *target);
 static int is_complex_type(const CType *type);
 static CType complex_element_type(const CType *type);
 static void make_complex_type(CType *type);
+static void free_complex_type_registry(void);
 static void gen_complex_binop(int op);
 static int gen_cast_complex(CType *type);
 static void complex_part_operand(int imag);
@@ -228,6 +231,7 @@ typedef struct ProbeTagBinding {
 } ProbeTagBinding;
 static ProbeTagBinding *probe_tag_bindings;
 static int probe_tag_journal;
+static int probe_static_initializer_redefinition_tok;
 static void note_probe_tag_binding(Sym *binding);
 static void discard_probe_tag_bindings(ProbeTagBinding *mark);
 static void emit_placement_aggregate_initializer(CType *type, TokenString *placement,
@@ -1138,6 +1142,7 @@ static int last_btype_was_typedef;
 static int last_btype_was_decltype;
 static int suppress_integral_constexpr_fold;
 static int static_initializer_constant_fold;
+static int static_initializer_lambda_seen;
 static int static_initializer_conversion_wanted;
 static int integral_constant_expression_wanted;
 static int constexpr_function_materialization;
@@ -2642,6 +2647,7 @@ ST_FUNC void cprimegen_finish(CPRIMEState *s1)
   free_constexpr_functions();
   free_template_state();
   free_vector_type_registry();
+  free_complex_type_registry();
   free_explicit_member_arguments();
   free_template_body_return_cache();
   free_lambda_expressions();
@@ -3036,6 +3042,147 @@ static inline int sym_scope_ex(Sym *s)
          : s->sym_scope;
 }
 
+#if 1
+/* Direct scalar aliases and true-branch upper bounds. Every store and call
+   invalidates active facts, so this remains intentionally narrower than SSA. */
+typedef struct CppRangeAlias { Sym *destination, *source; } CppRangeAlias;
+typedef struct CppRangeFact { Sym *source; uint64_t upper; } CppRangeFact;
+static CppRangeAlias cpp_range_aliases[128];
+static int cpp_range_alias_count;
+static CppRangeFact cpp_range_facts[32], cpp_range_last;
+static int cpp_range_fact_count;
+
+static int cpp_range_unsigned_scalar(Sym *symbol)
+{
+  int base;
+  if (!symbol || (symbol->type.t & VT_VOLATILE)
+      || !(symbol->type.t & VT_UNSIGNED)) return 0;
+  base = symbol->type.t & VT_BTYPE;
+  return base == VT_BYTE || base == VT_SHORT || base == VT_INT || base == VT_LLONG;
+}
+
+static Sym *cpp_range_source(Sym *symbol)
+{
+  int i;
+  for (i = 0; symbol && i < cpp_range_alias_count; ++i)
+    if (cpp_range_aliases[i].destination == symbol)
+      return cpp_range_aliases[i].source;
+  return symbol;
+}
+
+static void cpp_range_reset(void)
+{
+  cpp_range_alias_count = cpp_range_fact_count = 0;
+  cpp_range_last.source = NULL;
+}
+static void cpp_range_condition_begin(void) { cpp_range_last.source = NULL; }
+static void cpp_range_condition_push(void)
+{
+  if (cpp_range_fact_count < 32)
+    cpp_range_facts[cpp_range_fact_count++] = cpp_range_last;
+}
+static void cpp_range_condition_pop(void)
+{
+  if (cpp_range_fact_count) --cpp_range_fact_count;
+}
+static void cpp_range_invalidate_facts(void)
+{
+  int i;
+  for (i = 0; i < cpp_range_fact_count; ++i) cpp_range_facts[i].source = NULL;
+}
+void cpp_range_note_call(void) { cpp_range_invalidate_facts(); }
+
+/* Declaration initialization addresses a local slot directly, so its
+   destination does not retain the declaration symbol that ordinary vstore()
+   sees.  Record that one simple local copy at the initializer boundary. */
+static void cpp_range_note_initializer(Sym *target, SValue *source)
+{
+  Sym *origin;
+  int i;
+  cpp_range_invalidate_facts();
+  if (!target || !source->sym || !(source->r & VT_LVAL)) return;
+  for (i = 0; i < cpp_range_alias_count; ++i)
+    if (cpp_range_aliases[i].destination == target) {
+      cpp_range_aliases[i].source = NULL;
+      break;
+    }
+  origin = cpp_range_source(source->sym);
+  if (!sym_scope_ex(target) || !cpp_range_unsigned_scalar(origin)) return;
+  if (i < cpp_range_alias_count) {
+    cpp_range_aliases[i].source = origin;
+    return;
+  }
+  if (cpp_range_alias_count < 128) {
+    cpp_range_aliases[cpp_range_alias_count].destination = target;
+    cpp_range_aliases[cpp_range_alias_count++].source = origin;
+  }
+}
+
+static void cpp_range_note_store(SValue *destination, SValue *source)
+{
+  Sym *target, *origin;
+  int i;
+  cpp_range_invalidate_facts();
+  if (!destination->sym) return;
+  target = destination->sym;
+  for (i = 0; i < cpp_range_alias_count; ++i)
+    if (cpp_range_aliases[i].destination == target) {
+      cpp_range_aliases[i].source = NULL;
+      break;
+    }
+  if (!source->sym || !(destination->r & VT_LVAL) || !(source->r & VT_LVAL)) return;
+  origin = cpp_range_source(source->sym);
+  if (!sym_scope_ex(target) || !cpp_range_unsigned_scalar(origin)) return;
+  if (i < cpp_range_alias_count) {
+    cpp_range_aliases[i].source = origin;
+    return;
+  }
+  if (cpp_range_alias_count < 128) {
+    cpp_range_aliases[cpp_range_alias_count].destination = target;
+    cpp_range_aliases[cpp_range_alias_count++].source = origin;
+  }
+}
+
+static void cpp_range_note_comparison(int op)
+{
+  Sym *source;
+  if (is_cpp_translation_unit()) return;
+  if (op != TOK_LT || !vtop[-1].range_direct || !(vtop->r & VT_CONST)
+      || vtop->sym || vtop->c.i < 0) return;
+  source = cpp_range_source(vtop[-1].sym);
+  if (!cpp_range_unsigned_scalar(source)) return;
+  cpp_range_last.source = source;
+  cpp_range_last.upper = vtop->c.i;
+}
+
+static uint64_t cpp_range_reachable_bits(uint64_t upper)
+{
+  uint64_t ceiling = 1;
+  while (ceiling < upper && ceiling <= UINT64_MAX / 2)
+    ceiling <<= 1;
+  return ceiling - 1;
+}
+
+static int cpp_range_fold_bit_and(void)
+{
+  Sym *source;
+  int i;
+  uint64_t mask;
+  if (is_cpp_translation_unit()) return 0;
+  if (!vtop[-1].range_direct || !(vtop->r & VT_CONST) || vtop->sym) return 0;
+  source = cpp_range_source(vtop[-1].sym);
+  mask = vtop->c.i;
+  for (i = cpp_range_fact_count; --i >= 0;)
+    if (cpp_range_facts[i].source == source && cpp_range_facts[i].upper
+        && ((cpp_range_reachable_bits(cpp_range_facts[i].upper) & mask) == 0)) {
+      vpop(); vpop(); vpushi(0);
+      return 1;
+    }
+  return 0;
+}
+
+#endif
+
 // Push A Given Symbol On The Symbol Stack
 ST_FUNC Sym *sym_push(int v, CType *type, int r, int c)
 {
@@ -3255,6 +3402,9 @@ static void vsetc(CType *type, int r, CValue *vc)
   object_size_reset(&vtop->object_size);
   vtop->object_size_int_value = 0;
   vtop->object_size_int_valid = 0;
+  vtop->range_direct = 0;
+  vtop->complex_constant = 0;
+  memset(&vtop->complex_imaginary, 0, sizeof vtop->complex_imaginary);
   vtop->bound_member_receiver = 0;
   vtop->bound_member_name = 0;
   vtop->bound_member_qualified = 0;
@@ -3498,6 +3648,7 @@ ST_FUNC void vpushsym(CType *type, Sym *sym)
   cval.i = 0;
   vsetc(type, VT_CONST | VT_SYM, &cval);
   vtop->sym = sym;
+  vtop->range_direct = 1;
 }
 
 // Return a static symbol pointing to a section
@@ -3617,6 +3768,8 @@ static void merge_funcattr(struct FuncAttr *fa, struct FuncAttr *fa1)
     fa->func_dtor = 1;
   if (fa1->func_cxx_destructor)
     fa->func_cxx_destructor = 1;
+  fa->func_cxx_destructor_function_try |=
+    fa1->func_cxx_destructor_function_try;
   fa->func_cpp_conversion |= fa1->func_cpp_conversion;
   fa->func_cpp_explicit |= fa1->func_cpp_explicit;
   fa->func_cpp_member |= fa1->func_cpp_member;
@@ -5946,6 +6099,11 @@ ST_FUNC void gen_op(int op)
   int t1, t2, bt1, bt2, t;
   CType type1, combtype;
   int op_class = op;
+  if (op == TOK_LT)
+    cpp_range_note_comparison(op);
+  if (op == '&' && cpp_range_fold_bit_and())
+    return;
+  vtop[-1].range_direct = 0;
   if (compare_cpp_member_pointers(op))
     return;
 
@@ -7022,6 +7180,8 @@ ST_FUNC void vstore(void)
 {
   int sbt, dbt, ft, r, size, align, bit_size, bit_pos, delayed_cast;
   int move_source = (vtop->type.t & (VT_RVALUE_REFERENCE | VT_CONSTANT)) == VT_RVALUE_REFERENCE;
+
+  cpp_range_note_store(vtop - 1, vtop);
 
   /* A value assigned to a complex object, or a complex value assigned to
      another complex type, is converted first, so the store below is the
@@ -10179,7 +10339,9 @@ lifecycle_class_found:
     tok_str_free(init_prefix);
     body = combined;
   }
-  add_pending_lifecycle_func(&struct_type, method_tok, params, body, 0, 0, noexcept_spec, 0);
+  add_pending_lifecycle_func(&struct_type, method_tok, params, body, 0, 0,
+                             noexcept_spec, 0,
+                             function_try && method_tok == TOK_DESTRUCTOR1);
   if (saved_nb_pending_member_funcs != nb_pending_member_funcs
       && !defer_pending_member_funcs)
   {
@@ -13373,16 +13535,16 @@ do_decl:
   if (is_cpp_translation_unit() && local_stack && !s->sym_scope
       && (u == VT_STRUCT || u == VT_UNION))
     local_class_boundary = local_stack;
-  if (s->a.probe_defined && s->c != -1 && (tok == ':' || tok == '{'))
+  if (is_cpp_translation_unit() && s->a.probe_defined && s->c != -1
+      && (tok == ':' || tok == '{'))
   {
     /* A probe of an initializer in this declaration already parsed this
-       definition.  The emitting replay reads the same tokens, so keep the
+       definition. The emitting replay reads the same tokens, so keep the
        definition the probe built instead of declaring the tag twice. */
     if (tok == ':') while (tok != '{' && tok != TOK_EOF) next();
     if (tok == '{') skip_or_save_block(NULL);
     return;
   }
-
   if (u == VT_STRUCT && tok == ':')
   {
     const CppRecordDeclInfo *defined_record =
@@ -13443,8 +13605,12 @@ do_decl:
     next();
     if (s->c != -1
         && !(u == VT_ENUM && s->c == 0)) // Not Yet Defined Typed Enum
+    {
+      if (probe_tag_journal)
+        probe_static_initializer_redefinition_tok = s->v & ~SYM_STRUCT;
       cprime_error("struct/union/enum '%s' already defined",
                    get_tok_str(s->v & ~SYM_STRUCT, NULL));
+    }
     s->c = -2;
     if (probe_tag_journal)
       note_probe_tag_binding(s);
@@ -14027,7 +14193,8 @@ cpp_conversion_operator:
                 lifecycle_init_prefix = NULL;
               }
               add_pending_lifecycle_func(type, lifecycle_tok, lifecycle_params,
-                                         body, 1, 1, lifecycle_noexcept_spec, lifecycle_explicit);
+                                         body, 1, 1, lifecycle_noexcept_spec,
+                                         lifecycle_explicit, 0);
               lifecycle_body = 1;
             }
             else if (lifecycle_default_suffix == 2)
@@ -14071,7 +14238,10 @@ cpp_conversion_operator:
                 lifecycle_init_prefix = NULL;
               }
               add_pending_lifecycle_func(type, lifecycle_tok, lifecycle_params,
-                                         body, 1, 0, lifecycle_noexcept_spec, lifecycle_explicit);
+                                         body, 1, 0, lifecycle_noexcept_spec,
+                                         lifecycle_explicit,
+                                         lifecycle_function_try
+                                           && lifecycle_tok == TOK_DESTRUCTOR1);
               lifecycle_body = 1;
             }
           }
@@ -22679,6 +22849,7 @@ ordinary_identifier:
       Will be used by at least the x86 inline asm parser for
       regvars.  */
       vtop->sym = s;
+      vtop->range_direct = 1;
 
       if (r & VT_SYM)
       {
@@ -26240,6 +26411,7 @@ static void gen_function(Sym *sym)
   local_type_declaration_index = 0;
   func_ind = ind;
   cpp_temp_function_begin();
+  cpp_range_reset();
   cpp_eh_function_begin(sym);
   func_vt = sym->type.ref->type;
   /* A prior auto-return declaration may leave the merged definition with an
@@ -26984,15 +27156,33 @@ static int cpp_local_type_starts_expression(CType *type, int condition)
 /* 'l' is VT_LOCAL or VT_CONST to define default storage type
    or VT_CMP if parsing old style parameter list
    or VT_JMP if parsing c99 for decl: for (int i = 0, ...) */
+static int static_initializer_starts_captureless_lambda(const TokenString *tokens)
+{
+  int i;
+  if (!is_cpp_translation_unit()) return 0;
+  i = tok_str_next_non_linenum_index(tokens->str, tokens->len, 0);
+  if (i >= tokens->len || tokens->str[i] != '{') return 0;
+  i = tok_str_next_non_linenum_index(tokens->str, tokens->len, i + 1);
+  if (i >= tokens->len || tokens->str[i] != '[') return 0;
+  i = tok_str_next_non_linenum_index(tokens->str, tokens->len, i + 1);
+  if (i >= tokens->len || tokens->str[i] != ']') return 0;
+  i = tok_str_next_non_linenum_index(tokens->str, tokens->len, i + 1);
+  return i < tokens->len && tokens->str[i] == '(';
+}
+
 static int probe_static_initializer(TokenString *tokens, int mode,
                                     int namespace_tok, CType *type)
 {
   int saved = static_initializer_constant_fold, valid;
   ProbeTagBinding *mark = probe_tag_bindings;
+  if (static_initializer_starts_captureless_lambda(tokens)) return 0;
+  probe_static_initializer_redefinition_tok = 0;
+  static_initializer_lambda_seen = 0;
   if (!is_reference_type(type)) ++static_initializer_constant_fold;
   ++probe_tag_journal;
   valid = template_probe_type_ex(tokens, mode, namespace_tok,
                                  active_member_class_tok, 0, type);
+  if (static_initializer_lambda_seen) valid = 0;
   --probe_tag_journal;
   /* A probe that failed leaves its definitions to the dynamic initialization
      replay; only the mark that a later replay may reuse them is provisional. */
@@ -27893,6 +28083,10 @@ found:
                   restore_cpp_lifecycle_probe(init_str);
                   init_str = NULL;
                 } else {
+                  if (probe_static_initializer_redefinition_tok)
+                    cprime_error("struct/union/enum '%s' already defined",
+                                 get_tok_str(probe_static_initializer_redefinition_tok,
+                                             NULL));
                   complete_global_class_array_bound(&type, init_str);
                   has_init = has_ctor_init = 0;
                   local_static_dynamic_init = 1;
@@ -27939,6 +28133,10 @@ found:
                 }
                 else
                 {
+                  if (probe_static_initializer_redefinition_tok)
+                    cprime_error("struct/union/enum '%s' already defined",
+                                 get_tok_str(probe_static_initializer_redefinition_tok,
+                                             NULL));
                   complete_global_class_array_bound(&type, init_str);
                   has_init = 0;
                   /* Dynamic initialization writes through the original const

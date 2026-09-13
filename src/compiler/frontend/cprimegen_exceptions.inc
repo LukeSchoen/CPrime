@@ -1258,17 +1258,26 @@ static void cpp_eh_parse_try(void)
   int start, end, done = 0, saved_nocode = nocode_wanted;
   int context_offset, cleanup_stop, saw_catch_all = 0, state_start, throw_start,
       potential_throw_start;
-  int handler_nocode;
+  int handler_nocode, destructor_function_try;
   if (!is_cpp_translation_unit()) cprime_error("try requires C++");
   if (tok != '{') expect("compound statement after try");
   loc = (loc - sizeof(CpcEhCatchContext)) & -PTR_SIZE;
   context_offset = loc;
   cleanup_stop = cpp_eh_cleanup_index(cur_scope->cl.s);
+  if (eh->function && eh->function->type.ref
+      && eh->function->type.ref->f.func_cxx_destructor_function_try)
+    cleanup_stop = -1;
+  destructor_function_try = eh->function && eh->function->type.ref
+    && eh->function->type.ref->f.func_cxx_destructor_function_try;
+  if (destructor_function_try)
+    cpp_eh_set_cleanup_state(cur_scope->cl.s);
   state_start = eh->state_count;
   throw_start = eh->throw_count;
   potential_throw_start = eh->potential_throw_count;
   start = ind;
   block(0);
+  if (destructor_function_try)
+    cpp_eh_restore_cleanup_state();
   end = ind;
   handler_nocode = saved_nocode || (eh->state_count == state_start
                                     && eh->throw_count == throw_start

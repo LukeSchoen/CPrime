@@ -1,8 +1,4 @@
 # Known current first-party failures, relative to Tests/.
-# Pending programs must pass after repair; initializer_redefinition must reject.
+# Pending programs must pass after repair.
 # Native ABI/assembly and historical batch issues remain separately in task.md
 # until their exact current reproductions are established.
-pending/initializer_redefinition.cpp
-pending/lambda_braced_initializer.cpp
-pending/static_complex_initialization.c
-pedantic/performance/pass/test_heap_list_push_clear_perf.cpp

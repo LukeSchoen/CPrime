@@ -666,6 +666,8 @@ static void append_captureless_lambda_conversion(TokenString *declaration,
 
 static void parse_cpp_lambda_expression(void)
 {
+  if (static_initializer_constant_fold)
+    static_initializer_lambda_seen = 1;
   int marker = tok == '[' ? new_lambda_marker() : tok;
   int owner = lambda_lexical_owner();
   int enclosing_class = active_member_class_tok;

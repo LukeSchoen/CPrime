@@ -21,6 +21,16 @@ typedef struct ComplexTypeEntry {
 
 static ComplexTypeEntry *complex_type_registry;
 
+static void free_complex_type_registry(void)
+{
+  ComplexTypeEntry *entry;
+  while ((entry = complex_type_registry) != NULL)
+  {
+    complex_type_registry = entry->next;
+    cprime_free(entry);
+  }
+}
+
 /* True for the aggregate types built by make_complex_type(). */
 static int is_complex_type(const CType *type)
 {
@@ -216,6 +226,23 @@ static void complex_store_part(CType *elem, int offset)
   vpop();
 }
 
+static long double complex_static_part(CValue *value, int type)
+{
+  if ((type & VT_BTYPE) == VT_FLOAT) return value->f;
+  if ((type & VT_BTYPE) == VT_DOUBLE) return value->d;
+  if ((type & VT_BTYPE) == VT_LDOUBLE) return value->ld;
+  return value->i;
+}
+
+static void complex_static_set_part(CValue *value, int type, long double part)
+{
+  memset(value, 0, sizeof *value);
+  if ((type & VT_BTYPE) == VT_FLOAT) value->f = (float)part;
+  else if ((type & VT_BTYPE) == VT_DOUBLE) value->d = (double)part;
+  else if ((type & VT_BTYPE) == VT_LDOUBLE) value->ld = part;
+  else value->i = (int64_t)part;
+}
+
 /* Apply a built-in operator to complex operands.  A scalar operand is first
    converted to the complex operand's type, so only whole complex values reach
    the formulas.  On return the result is on top of the value stack: a complex
@@ -245,6 +272,30 @@ static void gen_complex_binop(int op)
   elem = complex_element_type(&ct);
   esize = type_size(&elem, &ealign);
   csize = type_size(&ct, &calign);
+
+  if (CONST_WANTED || static_initializer_constant_fold)
+  {
+    CValue real, imaginary;
+    long double ar, ai, br, bi;
+    gen_cast(&ct); vswap(); gen_cast(&ct); vswap();
+    if (vtop[-1].complex_constant && vtop->complex_constant) {
+      ar = complex_static_part(&vtop[-1].c, elem.t);
+      ai = complex_static_part(&vtop[-1].complex_imaginary, elem.t);
+      br = complex_static_part(&vtop->c, elem.t);
+      bi = complex_static_part(&vtop->complex_imaginary, elem.t);
+      if (op == '+') { ar += br; ai += bi; }
+      else if (op == '-') { ar -= br; ai -= bi; }
+      else if (op == '*') { long double r = ar * br - ai * bi; ai = ar * bi + ai * br; ar = r; }
+      else goto static_complex_runtime;
+      complex_static_set_part(&real, elem.t, ar);
+      complex_static_set_part(&imaginary, elem.t, ai);
+      vtop--; vtop->type = ct; vtop->r = vtop->r2 = VT_CONST;
+      vtop->c = real; vtop->sym = NULL; vtop->complex_constant = 1;
+      vtop->complex_imaginary = imaginary;
+      return;
+    }
+  }
+static_complex_runtime:
 
   switch (op)
   {
@@ -425,11 +476,18 @@ static void push_complex_imaginary_constant(CType *elem, CValue *value)
   CValue zero;
   int esize, ealign, csize, calign, off;
   make_complex_type(&ct);
+  memset(&zero, 0, sizeof zero);
+  if (CONST_WANTED || static_initializer_constant_fold)
+  {
+    vsetc(&ct, VT_CONST, &zero);
+    vtop->complex_constant = 1;
+    vtop->complex_imaginary = *value;
+    return;
+  }
   esize = type_size(elem, &ealign);
   csize = type_size(&ct, &calign);
   loc = (loc - csize) & -calign;
   off = loc;
-  memset(&zero, 0, sizeof zero);
   vsetc(elem, VT_CONST, &zero);
   complex_store_part(elem, off);
   vsetc(elem, VT_CONST, value);
@@ -480,6 +538,21 @@ static int gen_cast_complex(CType *type)
     CValue zero;
     if (!btype_is_arithmetic_scalar(vtop->type.t & VT_BTYPE))
       cprime_error("cannot convert to complex type");
+    if ((CONST_WANTED || static_initializer_constant_fold)
+        && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST)
+    {
+      CValue real;
+      memset(&zero, 0, sizeof zero);
+      gen_cast(&delem);
+      real = vtop->c;
+      vtop->type = *type;
+      vtop->r = vtop->r2 = VT_CONST;
+      vtop->c = real;
+      vtop->sym = NULL;
+      vtop->complex_constant = 1;
+      vtop->complex_imaginary = zero;
+      return 1;
+    }
     dsize = type_size(&delem, &dalign);
     csize = type_size(type, &calign);
     loc = (loc - csize) & -calign;

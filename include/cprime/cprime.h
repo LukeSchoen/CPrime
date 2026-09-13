@@ -353,6 +353,9 @@ typedef struct SValue {
     ObjectSizeInfo object_size;
     long long object_size_int_value;
     unsigned char object_size_int_valid;
+    unsigned char range_direct;
+    unsigned char complex_constant;
+    CValue complex_imaginary;
     int bound_member_receiver;
     int bound_member_name;
     int bound_member_qualified;
@@ -433,7 +436,7 @@ struct FuncAttr {
     func_cpp_member : 1,
     func_ref_qualifier : 2,
     func_unresolved_overload : 1,
-    xxxx        : 1;
+    func_cxx_destructor_function_try : 1;
 };
 
 typedef struct Sym {
@@ -1551,6 +1554,7 @@ ST_FUNC int store_immediate(SValue *v, uint64_t value);
 #endif
 ST_FUNC int gfunc_sret(CType *vt, int variadic, CType *ret, int *align, int *regsize);
 ST_FUNC void gfunc_call(int nb_args);
+void cpp_range_note_call(void);
 ST_FUNC void cpp_prepare_native_member_call(int nb_args);
 ST_FUNC int cpp_native_member_returns_record(CType *function_type);
 ST_FUNC void gfunc_prolog(Sym *func_sym);

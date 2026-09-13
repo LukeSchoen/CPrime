@@ -1232,6 +1232,7 @@ void gfunc_call(int nb_args)
   int size, r, args_size, i, d, bt, struct_size;
   int arg;
   int is_alloca_call;
+  cpp_range_note_call();
   Sym *argument_cleanup_stop = cur_scope ? cur_scope->cl.s : NULL;
   int argument_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
 
@@ -1917,6 +1918,7 @@ void gfunc_call(int nb_args)
   int nb_sse_args = 0;
   int sse_reg, gen_reg;
   char *onstack = cprime_malloc((nb_args + 1) * sizeof (char));
+  cpp_range_note_call();
 
 #ifdef CONFIG_CPRIME_BCHECK
   if (cprime_state->do_bounds_check)
@@ -3182,7 +3184,3 @@ ST_FUNC void gen_struct_copy(int size)
 //***********************************************************
 #endif // ! TARGET_DEFS_ONLY 
 //****************************************************
-
-
-
-

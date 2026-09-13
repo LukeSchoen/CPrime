@@ -1,8 +1,10 @@
 // EXPECT_EXIT: 0
+// EXPECT_COMPILE_ARGS: -Iinclude/runtime -Iinclude/cprime -Ithird-party/win32-sdk/include -Ithird-party/win32-sdk/include/winapi -ITests/include
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <windows.h>
+#include "cprime_winapi_compat.h"
 
 template<typename T>
 class List

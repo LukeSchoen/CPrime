@@ -6,7 +6,8 @@ static void call_lifecycle_constructor_members_base_ptr(CType *type,
 static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
                                        TokenString *params, TokenString *body,
                                        int internal, int is_defaulted,
-                                       int exception_spec, int is_explicit);
+                                       int exception_spec, int is_explicit,
+                                       int destructor_function_try);
 
 static int cpp_class_tag_keyword_tok(CType *type)
 {
@@ -173,7 +174,7 @@ static Sym *resolve_autodtor_func(CType *type)
         tok_str_add(body, '{');
         tok_str_add(body, '}');
         tok_str_add(body, TOK_EOF);
-        add_pending_lifecycle_func(type, TOK_DESTRUCTOR1, NULL, body, 1, 1, 0, 0);
+        add_pending_lifecycle_func(type, TOK_DESTRUCTOR1, NULL, body, 1, 1, 0, 0, 0);
         tok_str_free(body);
         break;
       }
@@ -226,7 +227,7 @@ static Sym *resolve_autoctor_func(CType *type)
         }
         tok_str_add(body, '}');
         tok_str_add(body, TOK_EOF);
-        add_pending_lifecycle_func(type, TOK_CONSTRUCTOR1, NULL, body, 1, 1, 0, 0);
+        add_pending_lifecycle_func(type, TOK_CONSTRUCTOR1, NULL, body, 1, 1, 0, 0, 0);
         tok_str_free(body);
         break;
       }
@@ -3364,10 +3365,21 @@ static int same_lowered_member_func_signature(CType *type1, CType *type2)
   arg2 = type2->ref->next;
   for (;;)
   {
+    CType left, right;
     if (!arg1 || !arg2)
       return arg1 == arg2;
     if ((arg1->type.t & VT_RVALUE_REFERENCE)
         != (arg2->type.t & VT_RVALUE_REFERENCE))
+      return 0;
+    left = arg1->type;
+    right = arg2->type;
+    if (is_reference_type(&left)) left = *pointed_type(&left);
+    if (is_reference_type(&right)) right = *pointed_type(&right);
+    /* Same-layout named classes are not one overload signature.  Collapsing
+       them here hides the required ambiguity for braced conversion to two
+       unrelated reference targets. */
+    if ((left.t & VT_BTYPE) == VT_STRUCT && (right.t & VT_BTYPE) == VT_STRUCT
+        && get_struct_type_name_tok(&left) != get_struct_type_name_tok(&right))
       return 0;
     if (!is_compatible_types(&arg1->type, &arg2->type))
       return 0;
@@ -4635,7 +4647,7 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
                                        TokenString *params,
                                        TokenString *body, int internal,
                                        int is_defaulted, int exception_spec,
-                                       int is_explicit)
+                                       int is_explicit, int destructor_function_try)
 {
   int struct_tok, mangled_tok;
   int is_local_class_member = local_stack || local_scope;
@@ -4653,6 +4665,7 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
   ret_type.ref = NULL;
   func_type = make_member_func_type_from_saved_params(&ret_type, params, struct_tok);
   func_type.ref->f.func_cpp_explicit = is_explicit;
+  func_type.ref->f.func_cxx_destructor_function_try = destructor_function_try;
   note_lifecycle_exception_spec(struct_type, &func_type, method_tok, exception_spec);
   lowered_type = make_lowered_member_func_type(struct_type, &func_type);
   mangled_tok = make_lifecycle_func_tok_for_type(struct_tok, method_tok,
@@ -4678,6 +4691,8 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
   note_member_func_overload(struct_tok, method_tok, mangled_tok, &lowered_type);
   {
     Sym *function = external_global_sym(mangled_tok, &lowered_type);
+    if (destructor_function_try && function->type.ref)
+      function->type.ref->f.func_cxx_destructor_function_try = 1;
     /* In-class and implicitly generated lifecycle definitions obey the
        inline ODR even when first needed while compiling a caller body.
        Body scheduling (which can depend on the active scope) must not

@@ -456,7 +456,7 @@ static int find_batch_exit(const char *output, int job, DWORD *code) {
 
 static int run_regressions(const char *compiler, const char *runtime, unsigned timeout_ms) {
     static const RegressionGroup groups[] = {
-        {"c_compat", {"test_abstract_function_pointer_cast.c", "test_winapi_function_pointer_cast.c", "test_nested_pointer_cast_argument.c", NULL}},
+        {"c_compat", {"test_abstract_function_pointer_cast.c", "test_winapi_function_pointer_cast.c", "test_nested_pointer_cast_argument.c", "test_fast_unsigned_range_masked_unreachable.c", NULL}},
         {"features/Expressions", {"test_abstract_function_pointer_cast.cpp", "test_parenthesized_functional_construction.cpp", NULL}},
         {"features/Constructors", {"test_implicit_derived_copy_with_base_constructors.cpp", "test_initializer_list_backing_lifetime.cpp", "test_array_before_explicit_member_initializers.cpp", NULL}},
         {"features/Statements", {"test_static_string_array_in_branch.cpp", "test_static_string_array_too_long.cpp", NULL}},

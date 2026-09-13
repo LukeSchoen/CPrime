@@ -148,7 +148,9 @@ static int decl_designator(init_params *p, CType *type, unsigned long c,
   }
 
   // NOTE: we only support ranges for last designator
-  while (nb_elems == 1 && (tok == '[' || tok == '.'))
+  while (nb_elems == 1 && (tok == '.'
+                           || (tok == '[' && (!is_cpp_translation_unit()
+                                               || (type->t & VT_ARRAY)))))
   {
     if (tok == '[')
     {
@@ -335,6 +337,9 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
 
   dtype = *type;
   dtype.t &= ~VT_CONSTANT; // need to do that to avoid false warning
+  if (p->range_alias_target && !sec)
+    cpp_range_note_initializer(p->range_alias_target, vtop);
+  p->range_alias_target = NULL;
   if (is_cpp_translation_unit() && (p->copy_list_initialization || p->list_initialization))
     check_integer_list_initialization(&dtype, vtop);
   if (!is_reference_type(&dtype) && is_reference_type(&vtop->type))
@@ -433,6 +438,19 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
        dynamic-initialization path instead of storing a temporary's offset. */
     if (is_complex_type(&dtype) || is_complex_type(&vtop->type))
     {
+      if (is_complex_type(&dtype) && vtop->complex_constant)
+      {
+        CType element = complex_element_type(&dtype);
+        int element_size, element_align;
+        SValue value = *vtop;
+        element_size = type_size(&element, &element_align);
+        vtop--;
+        vsetc(&element, VT_CONST, &value.c);
+        init_putv(p, &element, c);
+        vsetc(&element, VT_CONST, &value.complex_imaginary);
+        init_putv(p, &element, c + element_size);
+        return;
+      }
       if ((vtop->r & (VT_SYM | VT_CONST)) != (VT_SYM | VT_CONST)
           || !vtop->sym || vtop->sym->v < SYM_FIRST_ANOM)
         cprime_error("initializer element is not constant");
@@ -2476,6 +2494,10 @@ err_size:
     p.reference_capture_sym = sym && is_reference_type(type)
                               && (r & VT_VALMASK) == VT_LOCAL
                               && !(type->t & VT_STATIC) ? sym : NULL;
+    p.range_alias_target = sym && (r & VT_VALMASK) == VT_LOCAL
+                           && is_integer_btype(type->t & VT_BTYPE)
+                           && !(type->t & (VT_ARRAY | VT_VLA | VT_VOLATILE))
+                           ? sym : NULL;
     if (sec && !is_reference_type(type)) ++static_initializer_constant_fold;
     decl_initializer(&p, type, addr, DIF_FIRST);
     if (sec && !is_reference_type(type)) --static_initializer_constant_fold;
