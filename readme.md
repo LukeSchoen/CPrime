@@ -23,7 +23,7 @@ C++ semantics must therefore be implemented directly in the parser / code genera
   to machine code with MUCH-LESS machinery. The tradeoff is optimization depth: CPC’s optimizer is a bounded peephole
   register-promotion passes and small inlining CPC -O2 is not remotely equivalent to the -O2 mode in Clang or GCC.
 
-Use root `cpc.exe` for development. Plain `Build.cmd` rebuilds it serially with
+Use root `cpc.exe` for development. `scripts/build.exe` rebuilds it serially with
 that same CPC host and replaces root `cpc.exe` after validation. There are no
 host-selection flags or alternate working compiler copies. Failure preserves
 the working compiler and stops the build.

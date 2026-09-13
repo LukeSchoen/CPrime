@@ -101,9 +101,10 @@ static int hash_tree(CacheHash *h, const char *directory) {
 
 static int cache_digest(const char *cache, const char *root, const char *runtime, unsigned char digest[32]) {
     static const char *trees[] = { "include/runtime", "third-party/win32-sdk/include",
-        "third-party/win32-sdk/lib", "lib" };
+        "third-party/win32-sdk/lib" };
     static const char *files[] = { "src/tools/portable_payload.c", "src/tools/portable_cache.inc",
-        "src/tools/check_runtime_abi.c", "src/tools/check_runtime_abi.S", "scripts/windows/pack-portable.ps1" };
+        "src/tools/check_runtime_abi.c", "src/tools/check_runtime_abi.S", "scripts/build.c",
+        "scripts/common/native_tool.h" };
     static const char *dlls[] = { "kernel32", "user32", "gdi32", "ws2_32", "msvcrt", "ucrtbase",
         "comdlg32", "shell32", "uxtheme", "dwmapi", "msimg32", "advapi32", "comctl32",
         "ole32", "oleaut32", "rpcrt4", "shlwapi", "windowscodecs", "imm32", "shcore" };
@@ -112,7 +113,7 @@ static int cache_digest(const char *cache, const char *root, const char *runtime
     unsigned i;
     int ok = 1;
     hash_begin(&h);
-    hash_bytes(&h, "CPC prepared payload 1", sizeof "CPC prepared payload 1");
+    hash_bytes(&h, "CPC prepared payload 2", sizeof "CPC prepared payload 2");
     for (i = 0; i < sizeof trees / sizeof *trees; ++i) {
         join_path(path, sizeof path, root, trees[i]);
         if (!hash_tree(&h, path)) ok = 0;

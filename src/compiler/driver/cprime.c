@@ -27,6 +27,8 @@ static const char help[] =
   "  -bench       show compilation statistics\n"
   "  -            use stdin pipe as infile\n"
   "  @listfile    read arguments from listfile\n"
+  "  --batch FILE compile one argument-list job per line\n"
+  "  --batch-continue FILE compile every job and report aggregate failure\n"
   "Preprocessor options:\n"
   "  -Idir        add include path 'dir'\n"
   "  -Dsym[=val]  define 'sym' with value 'val'\n"
@@ -441,9 +443,9 @@ cleanup:
   return ret;
 }
 
-static int cprime_run_batch_file(const char *path)
+static int cprime_run_batch_file(const char *path, int keep_going)
 {
-  int fd, ret = 0;
+  int fd, ret = 0, result = 0;
   char *text, *line, *next;
   int job = 0;
   fd = open(path, O_RDONLY | O_BINARY);
@@ -493,18 +495,23 @@ static int cprime_run_batch_file(const char *path)
       fflush(stderr);
     }
     batch_args_free(&ba);
-    if (ret)
+    if (ret) result = ret;
+    if (ret && !keep_going)
       break;
     line = next;
   }
   cprime_free(text);
-  return ret;
+  return result;
 }
 
 int main(int argc, char **argv)
 {
   if (argc == 2 && argv[1] && argv[1][0] == '@' && argv[1][1])
-    return cprime_run_batch_file(argv[1] + 1);
+    return cprime_run_batch_file(argv[1] + 1, 0);
+  if (argc == 3 && !strcmp(argv[1], "--batch"))
+    return cprime_run_batch_file(argv[2], 0);
+  if (argc == 3 && !strcmp(argv[1], "--batch-continue"))
+    return cprime_run_batch_file(argv[2], 1);
   return cprime_run_job(argc, argv);
 }
 

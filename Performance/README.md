@@ -4,7 +4,7 @@ The remaining measurement repairs, audit numbers and speed acceptance criteria
 are in [task.md](task.md). The existing harness compares shared C cases against
 vendored TCC; the full CPC self-driver case has no TCC measurement.
 
-Use `Performance\PerformanceTests.cmd -SpeedOnly` for the current serial speed
+Use `scripts\performance.exe` for the current serial CPC-only speed
 assessment, or add `-Fast` to omit the self-driver. Root CPC builds the native
 helpers. TCC measurements require the task's explicit authorization; other
 external compiler/ABI gates also remain blocked. Normal runs never extract a

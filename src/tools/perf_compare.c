@@ -38,6 +38,7 @@
      -Head REV         commit hash recorded in -Log rows
      -LastCycle        print the last cycle in -Log and exit
      -Quiet            suppress the per-case table
+     -CpcOnly          never invoke TCC; report CPC-only measurements
      -Help             print this text
 
    Exit: 0 ok, 1 compiler failure or speed regression, 2 usage or input error. */
@@ -97,6 +98,7 @@ typedef struct {
   int last_cycle;
   int history;
   int have_ref;
+  int cpc_only;
 } Options;
 
 static const char help_text[] =
@@ -121,7 +123,8 @@ static const char help_text[] =
   "  -Head REV        commit hash recorded in -Log rows\n"
   "  -LastCycle       print the last cycle in -Log and exit\n"
   "  -History N       print the last N samples in -Log and exit (default 5)\n"
-  "  -Quiet           suppress the per-case table\n";
+  "  -Quiet           suppress the per-case table\n"
+  "  -CpcOnly         never invoke TCC\n";
 
 static void die(const char *message)
 {
@@ -758,6 +761,9 @@ static void parse_options(int argc, char **argv, Options *options)
   options->iterations = 5;
   options->warmups = 1;
   options->tolerance = 25.0;
+#ifdef PERF_CPC_ONLY_DEFAULT
+  options->cpc_only = 1;
+#endif
 
   for (i = 1; i < argc; i++) {
     const char *arg = argv[i];
@@ -781,6 +787,7 @@ static void parse_options(int argc, char **argv, Options *options)
     else if (strcmp(arg, "-NoGate") == 0) options->no_gate = 1;
     else if (strcmp(arg, "-Fast") == 0) options->fast = 1;
     else if (strcmp(arg, "-Quiet") == 0) options->quiet = 1;
+    else if (strcmp(arg, "-CpcOnly") == 0) options->cpc_only = 1;
     else if (strcmp(arg, "-LastCycle") == 0) options->last_cycle = 1;
     else if (strcmp(arg, "-History") == 0) { options->history = next ? parse_integer(next, 5) : 5; if (next) i++; }
     else if (strcmp(arg, "-Help") == 0 || strcmp(arg, "-h") == 0) { printf("%s", help_text); exit(0); }
@@ -895,7 +902,7 @@ int main(int argc, char **argv)
       targets[target_count].enabled = 1;
       target_count++;
     }
-    if (item->use_tcc && file_exists(options.tcc)) {
+    if (!options.cpc_only && item->use_tcc && file_exists(options.tcc)) {
       targets[target_count].tag = "tcc";
       targets[target_count].exe = options.tcc;
       targets[target_count].bindir = tcc_bin;
@@ -926,12 +933,12 @@ int main(int argc, char **argv)
       total_tcc_all += r->tcc_ms;
       if (!item->heavy) total_tcc_fast += r->tcc_ms;
       tcc_cases++;
-    } else if (item->use_tcc) {
+    } else if (!options.cpc_only && item->use_tcc) {
       /* A comparison row is unusable unless both compilers measured it. */
       missing_matched++;
     }
     if (r->cpc_ok && r->ref_ok) { total_ref_all += r->ref_ms; ref_cases++; }
-    if (r->cpc_ok && !item->use_tcc) {
+    if (r->cpc_ok && (options.cpc_only || !item->use_tcc)) {
       cpc_only_all += r->cpc_ms;
       if (item->heavy) heavy_cpc_ms = (int)(r->cpc_ms + 0.5);
     }

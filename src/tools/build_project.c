@@ -776,6 +776,18 @@ static List job_arguments(Job *j) {
 }
 static void compile_jobs(void) {
     int i,k,batch_index=0;
+#ifdef BUILD_PROJECT_EXTERNAL
+    for(i=0;i<job_count;i++)if(jobs[i].dirty){
+        List args=job_arguments(&jobs[i]);
+        char label[64];
+        sprintf(label,"compile_%04d",batch_index++);
+        batch_jobs=alloc(sizeof(Job*));
+        batch_jobs[0]=&jobs[i];
+        batch_count=1;
+        run_tool(compiler,&args,jobs[i].project->directory,label,1,0);
+        free(batch_jobs);
+    }
+#else
     for(i=0;i<job_count;i++)if(jobs[i].dirty){
         Buf response={
             0
@@ -803,6 +815,7 @@ static void compile_jobs(void) {
         free(batch_jobs);
         i=k-1;
     }
+#endif
 }
 static int newer_version(const char *a,const char *b) {
     unsigned av[4]={
@@ -1263,7 +1276,7 @@ static int project_main(int argc,char **argv) {
         else if(!_stricmp(a,"-SkipLink"))skiplink=1;
         else if(!_stricmp(a,"-AllowWarnings"))allowwarnings=1;
         else if(!_stricmp(a,"--help")||!_stricmp(a,"-Help")){
-            puts("build_project.exe -ProjectRoot <path> [-ManifestPath <json>] [-OutDir <path>] [-ExePath <path>] [-CompilerPath <cpc.exe>] [-BuildInputs <path> ...] [-Unity] [-UnityBatchSize <1..256>] [-Rebuild] [-SkipLink] [-CompileTimeoutSeconds <seconds>] [-AllowWarnings]\nCPC only; one compiler process at a time.");
+            puts("project.exe -ProjectRoot <path> [-ManifestPath <json>] [-OutDir <path>] [-ExePath <path>] [-CompilerPath <compiler.exe>] [-BuildInputs <path> ...] [-Unity] [-UnityBatchSize <1..256>] [-Rebuild] [-SkipLink] [-CompileTimeoutSeconds <seconds>] [-AllowWarnings]\nOne compiler process at a time.");
             return 0;
         }
         else {
@@ -1295,13 +1308,23 @@ static int project_main(int argc,char **argv) {
                 unity_batch_size=(int)size;
             }
             else if(!_stricmp(a,"-Toolchain")){
+#ifdef BUILD_PROJECT_EXTERNAL
+                if(_stricmp(argv[i],"Clang"))die("The external native project driver requires Clang");
+#else
                 if(_stricmp(argv[i],"Prime"))die("The native build driver uses CPC only");
+#endif
             }
             else die(cat("Unknown option: ",a));
         }
     }
     if(!projectroot)projectroot=absolute(cwd,".");
-    if(!compiler)compiler=absolute(repo,"cpc.exe");
+    if(!compiler)compiler=absolute(repo,
+#ifdef BUILD_PROJECT_EXTERNAL
+        "third-party/clang/bin/clang.exe"
+#else
+        "cpc.exe"
+#endif
+    );
     if(!outdir)outdir=absolute(projectroot,"build/prime");
     if(!manifestpath)manifestpath=absolute(projectroot,"build/manifest/Release-x64.json");
     if(!exists(compiler))die("CPC compiler not found");
