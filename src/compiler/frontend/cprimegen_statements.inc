@@ -750,14 +750,14 @@ again:
     /* The containing declaration closes explicit initializer temporaries.
        Omitted array elements still use ordinary statement boundaries. */
   }
-  else if (t >= TOK_UIDENT && !strcmp(get_tok_str(t, NULL), "using")
+  else if (t == CPP_TOK_USING
       && tok == TOK_NAMESPACE)
   {
     unget_tok(tok);
     tok = t;
     try_parse_using_namespace_directive();
   }
-  else if (t >= TOK_UIDENT && !strcmp(get_tok_str(t, NULL), "using"))
+  else if (t == CPP_TOK_USING)
   {
     int alias_tok, dummy_v = 0;
     CType alias_type;

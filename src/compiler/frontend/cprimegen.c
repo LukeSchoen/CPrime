@@ -398,6 +398,7 @@ static int try_parse_cpp_functional_type_cast(int type_tok);
 static CType make_lowered_member_func_type(CType *struct_type, CType *func_type);
 static int struct_needs_memberwise_assignment(CType *type);
 static int struct_has_implicit_move_assignment(CType *type);
+static void materialize_implicit_copy_assignment_address(CType *struct_type);
 static void assign_struct_memberwise_from_base_ptr(CType *type, SValue *dst_ptr,
                                                    SValue *src_ptr,
                                                    int base_offset, int move_source);
@@ -783,6 +784,17 @@ static int cpp_operator_overload_seen;
    namespace alias.  Until then a lookup cannot be answered by such a binding,
    so the namespace lookup can skip the local symbol probe. */
 static int cpp_using_binding_seen;
+/* Set once a 'this' or lambda-'this' identifier binding has been linked.
+   find_cpp_this_symbol() is asked for the receiver of every call expression,
+   and while no such binding exists its two identifier-table lookups cannot
+   succeed, so they can be skipped.  Only sym_link_scoped() and
+   global_identifier_push() publish an identifier binding. */
+static int cpp_this_binding_seen;
+ST_INLN void note_cpp_this_binding(int v)
+{
+  if (v == cpp_this_name_tok || v == cpp_lambda_this_name_tok)
+    cpp_this_binding_seen = 1;
+}
 /* Only sym_push2() creates a binding, and it zeroes the new symbol, so every
    redirect comes from one of these calls. */
 static void note_cpp_using_binding(Sym *binding, int target)
@@ -803,6 +815,24 @@ static void note_cpp_using_binding(Sym *binding, int target)
 #define CPP_TOK_DELETE_OP CPC_CACHED_TOK(cpp_delete_operator_tok, "operator delete")
 #define CPP_TOK_DELETE_ARRAY_OP \
   CPC_CACHED_TOK(cpp_delete_array_operator_tok, "operator delete[]")
+/* Contextual spellings the declaration and expression paths compare against on
+   every name token.  These are ordinary identifiers, so a spelling test costs
+   a get_tok_str() call and a strcmp() there; next_nomacro() records each id as
+   the lexer interns the spelling, so the test is one integer compare and the
+   identifier numbering is exactly the one the source produces.  See
+   note_cpp_probed_spelling(). */
+#define CPP_TOK_USING cpp_spelling_using_tok
+#define CPP_TOK_TYPENAME cpp_spelling_typename_tok
+#define CPP_TOK_STATIC_ASSERT cpp_spelling_static_assert_tok
+#define CPP_TOK_TEMPLATE cpp_spelling_template_tok
+#define CPP_TOK_FRIEND cpp_spelling_friend_tok
+#define CPP_TOK_WCHAR_T cpp_spelling_wchar_t_tok
+#define CPP_TOK_INDEX_OP_SPELLING cpp_spelling_index_op_tok
+#define CPP_TOK_STATIC_CAST cpp_spelling_static_cast_tok
+#define CPP_TOK_REINTERPRET_CAST cpp_spelling_reinterpret_cast_tok
+#define CPP_TOK_CONST_CAST cpp_spelling_const_cast_tok
+#define CPP_TOK_DYNAMIC_CAST cpp_spelling_dynamic_cast_tok
+#define CPP_TOK_DELETE_SPELLING cpp_spelling_delete_tok
 #define CPP_TOK_NO_NAME CPC_CACHED_TOK(cpp_no_name_tok, "<no name>")
 #define CPP_TOK_LEXICAL_TYPES \
   CPC_CACHED_TOK(cpp_lexical_types_tok, "__cpc_lexical_types")
@@ -2345,6 +2375,7 @@ ST_FUNC void cprimegen_init(CPRIMEState *s1)
   cpp_lambda_this_name_tok = cpp_namespace_prefix_tok = 0;
   cpp_operator_overload_seen = 0;
   cpp_using_binding_seen = 0;
+  cpp_this_binding_seen = 0;
 
   profile_scans_enabled = getenv("CPC_PROFILE_SCANS") != NULL;
   cpp_trace_incomplete_state = cpp_dump_autoret_state = cpp_trace_return_state = 0;
@@ -2714,8 +2745,13 @@ static inline Sym *sym_malloc(void)
 
 ST_INLN void sym_free(Sym *sym)
 {
-  cprime_free(sym->field_index);
-  sym->field_index = NULL;
+  /* Almost every symbol is popped without ever owning a field-index list:
+     the free would only forward NULL through the reallocator hook. */
+  if (sym->field_index)
+  {
+    cprime_free(sym->field_index);
+    sym->field_index = NULL;
+  }
 
 #ifndef SYM_DEBUG
   sym->next = sym_free_first;
@@ -2815,6 +2851,8 @@ static void sym_link_scoped(Sym *s, int yes, int scope)
   s->scope_prev = s->scope_next = NULL;
   if (yes)
   {
+    if (!(s->v & SYM_STRUCT))
+      note_cpp_this_binding(s->v & ~SYM_STRUCT);
     s->prev_tok = *ps, *ps = s;
     s->sym_scope = scope;
     if (scope > 0) {
@@ -2882,6 +2920,7 @@ ST_FUNC Sym *global_identifier_push(int v, int t, int c)
   // don't record anonymous symbol
   if (v < SYM_FIRST_ANOM)
   {
+    note_cpp_this_binding(v);
     ps = &table_ident[v - TOK_IDENT]->sym_identifier;
     /* modify the top most local identifier, so that sym_identifier will
        point to 's' when popped; happens when called from inline asm */
@@ -8418,6 +8457,129 @@ static void emit_implicit_virtual_assignment_bodies(CType *struct_type)
                                     param_tok, canonical_tok);
 }
 
+static int class_has_user_declared_move_operation(CType *type, int method_tok)
+{
+  MemberFuncOverload *candidate;
+  int struct_tok;
+
+  if (!type || (type->t & VT_BTYPE) != VT_STRUCT || !type->ref)
+    return 0;
+  struct_tok = get_struct_type_name_tok(type);
+  if (!struct_tok)
+    return 0;
+  for (candidate = member_func_candidates(struct_tok, method_tok);
+       candidate; candidate = candidate->bucket_next)
+  {
+    Sym *parameter;
+    if (candidate->struct_tok != struct_tok
+        || candidate->method_tok != method_tok
+        || candidate->is_using_declaration
+        || !candidate->func_type.ref)
+      continue;
+    parameter = candidate->func_type.ref->next;
+    if (parameter)
+      parameter = parameter->next;
+    if (parameter && (parameter->type.t & VT_RVALUE_REFERENCE)
+        && is_reference_type(&parameter->type)
+        && is_compatible_unqualified_types(pointed_type(&parameter->type), type))
+      return 1;
+  }
+  return 0;
+}
+
+static int class_implicit_copy_assignment_available(CType *type, int depth)
+{
+  ClassBaseInfo *base;
+  Sym *field;
+  int struct_tok;
+
+  if (!type || depth > 32)
+    return 0;
+  if (type->t & VT_ARRAY)
+    return class_implicit_copy_assignment_available(pointed_type(type), depth + 1);
+  if (is_reference_type(type))
+    return 0;
+  if ((type->t & VT_BTYPE) != VT_STRUCT)
+    return !(type->t & VT_CONSTANT);
+  if (!type->ref || type->ref->c < 0)
+    return 0;
+  if (IS_UNION(type->t))
+    return type->ref->a.cpp_nontrivial_copy_assignment;
+  struct_tok = get_struct_type_name_tok(type);
+  if (!struct_tok)
+    return 0;
+  if (type->ref->a.cpp_nontrivial_copy_assignment)
+    return 1;
+  if (class_has_user_declared_move_operation(type, TOK_CONSTRUCTOR1)
+      || class_has_user_declared_move_operation(type, CPP_TOK_ASSIGN))
+    return 0;
+  for (field = type->ref->next; field; field = field->next)
+  {
+    if ((field->type.t & VT_STATIC)
+        || (field->type.t & VT_BTYPE) == VT_FUNC)
+      continue;
+    if (is_reference_type(&field->type) || (field->type.t & VT_CONSTANT))
+      return 0;
+    if (!class_implicit_copy_assignment_available(&field->type, depth + 1))
+      return 0;
+  }
+  for (base = class_base_candidates(struct_tok); base; base = base->bucket_next)
+    if (base->class_tok == struct_tok)
+    {
+      CType base_type;
+      if (!make_class_type_from_tok(&base_type, base->base_tok)
+          || !class_implicit_copy_assignment_available(&base_type, depth + 1))
+        return 0;
+    }
+  return 1;
+}
+
+/* Taking the address of an implicitly declared copy assignment needs a real
+   function symbol.  The ordinary assignment path can copy memberwise inline,
+   but a pointer-to-member names a callable target, so materialize the same
+   defaulted body the explicit `= default` path uses. */
+static void materialize_implicit_copy_assignment_address(CType *struct_type)
+{
+  int struct_tok, param_tok, mangled_tok, canonical_tok;
+  CType func_type;
+  Sym *function, *parameter;
+
+  if (!struct_type || (struct_type->t & VT_BTYPE) != VT_STRUCT
+      || IS_UNION(struct_type->t)
+      || !struct_type->ref || struct_type->ref->c < 0)
+    return;
+  struct_tok = get_struct_type_name_tok(struct_type);
+  if (!struct_tok
+      || struct_type->ref->a.cpp_nontrivial_copy_assignment
+      || !class_implicit_copy_assignment_available(struct_type, 0))
+    return;
+
+  func_type = make_implicit_copy_assignment_type(struct_type);
+  mangled_tok = make_member_func_tok_for_type(struct_tok, CPP_TOK_ASSIGN,
+                                              &func_type);
+  function = global_symbol_find(mangled_tok);
+  if (!function)
+    function = sym_find(mangled_tok);
+  if (function && (function->type.t & VT_BTYPE) == VT_FUNC)
+    return;
+
+  function = declare_member_func(struct_type, CPP_TOK_ASSIGN, &func_type);
+  if (!function)
+    return;
+  mangled_tok = function->v;
+  parameter = func_type.ref ? func_type.ref->next : NULL;
+  param_tok = parameter ? parameter->v & ~SYM_FIELD : 0;
+  if (param_tok < TOK_IDENT || param_tok >= SYM_FIRST_ANOM)
+    param_tok = tok_alloc_const("__cpc_implicit_source");
+  queue_defaulted_assignment_body(struct_type, struct_tok, &func_type,
+                                  param_tok, mangled_tok);
+  canonical_tok = make_member_func_tok(struct_tok, CPP_TOK_ASSIGN);
+  if (canonical_tok != mangled_tok
+      && !pending_member_func_has_body_tok(canonical_tok))
+    queue_defaulted_assignment_body(struct_type, struct_tok, &func_type,
+                                    param_tok, canonical_tok);
+}
+
 static int member_is_auto_return_tok(int member_tok)
 {
   int i;
@@ -9812,6 +9974,71 @@ static int make_type_from_saved_type_tokens(CType *type, TokenString *tokens)
   return 1;
 }
 
+/* Take the conversion target written after a just-parsed `operator` name.
+   A conversion-operator member template carries its argument list in that
+   spelling, so this is the only place its specialization can be deduced
+   from; callers instantiate against the class once it is known. */
+static int take_cpp_conversion_operator_target_type(CType *target)
+{
+  TokenString *conversion = take_cpp_conversion_operator_type_tokens();
+  int ok;
+
+  if (!conversion)
+    return 0;
+  ok = make_type_from_saved_type_tokens(target, conversion);
+  tok_str_free(conversion);
+  return ok;
+}
+
+/* The conversion function of `class_tok` whose target type is exactly
+   `target`, whether declared directly or instantiated from a member
+   template.  A qualified reference names the target type rather than a
+   parameter list, so this is how it selects one specialization. */
+static int find_cpp_conversion_member_by_target(int class_tok, CType *target)
+{
+  MemberFuncOverload *candidate;
+  int found = 0;
+
+  for (candidate = conversion_overloads[(unsigned)class_tok & 4095];
+       candidate; candidate = candidate->conversion_next)
+  {
+    if (candidate->struct_tok != class_tok || !candidate->func_type.ref
+        || !candidate->func_type.ref->f.func_cpp_conversion)
+      continue;
+    if (!compare_types(&candidate->func_type.ref->type, target, 1))
+      continue;
+    if (found && found != candidate->mangled_tok)
+      return 0;
+    found = candidate->mangled_tok;
+  }
+  return found;
+}
+
+/* A qualified conversion-operator reference carries its argument list in the
+   conversion-type-id (`A::operator B<int>`), so the ordinary `<...>` member
+   argument path never sees it.  Publish the selected specialization under the
+   spelled target, which is how a non-template conversion function is named,
+   so the member-address path resolves it by name. */
+static void note_cpp_qualified_conversion_member(int class_tok, int member_tok,
+                                                 CType *target)
+{
+  Sym *function;
+  int function_tok;
+
+  if (!class_tok || !member_tok || !target)
+    return;
+  instantiate_cpp_conversion_templates(class_tok, target);
+  function_tok = find_cpp_conversion_member_by_target(class_tok, target);
+  if (!function_tok)
+    return;
+  function = global_symbol_find(function_tok);
+  if (!function)
+    function = sym_find(function_tok);
+  if (function && (function->type.t & VT_BTYPE) == VT_FUNC)
+    note_member_func_overload(class_tok, member_tok, function_tok,
+                              &function->type);
+}
+
 static int tok_str_add_integer_const_sym(TokenString *str, Sym *s)
 {
   CValue cv;
@@ -10526,15 +10753,27 @@ scoped_class_found:
       if (!add_ctype_tokens(str, ret_type))
         cprime_error("unsupported static data member type");
       tok_str_add(str, member_tok);
-      while (tok != TOK_EOF)
+      /* The definition is copied into class scope before it is parsed, so the
+         copy has to end at the definition's own `;`.  An initializer may
+         define a new type or use braces (`sizeof (struct { int x; })`), and
+         the first `;` inside those braces is not the end of the declaration. */
       {
-        tok_str_add_tok(str);
-        if (tok == ';')
+        int group = 0;
+        while (tok != TOK_EOF)
         {
+          int t = tok;
+          tok_str_add_tok(str);
+          if (t == '(' || t == '[' || t == '{')
+            ++group;
+          else if ((t == ')' || t == ']' || t == '}') && group > 0)
+            --group;
+          if (t == ';' && group == 0)
+          {
+            next();
+            break;
+          }
           next();
-          break;
         }
-        next();
       }
       tok_str_add(str, TOK_EOF);
       saved_tok = tok;
@@ -12922,8 +13161,7 @@ enum_done:
 
         {
         int extra_inline = 0, extra_constexpr = 0;
-        int is_friend_declaration = tok >= TOK_UIDENT
-            && !strcmp(get_tok_str(tok, NULL), "friend");
+        int is_friend_declaration = tok == CPP_TOK_FRIEND;
         if (!is_friend_declaration)
           is_friend_declaration =
             try_skip_in_class_friend_specifiers(&extra_inline,
@@ -12956,8 +13194,7 @@ enum_done:
                                  friend_src->len, &fi);
               continue;
             }
-            if (!skipped_friend && ft >= TOK_UIDENT
-                && !strcmp(get_tok_str(ft, NULL), "friend"))
+            if (!skipped_friend && ft == CPP_TOK_FRIEND)
             {
               skipped_friend = 1;
               tok_str_add(friend_decl, ft);
@@ -12979,13 +13216,13 @@ enum_done:
         }
         }
 
-        if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "using"))
+        if (tok == CPP_TOK_USING)
         {
           int alias_tok, dummy_v = 0;
           Sym *alias_sym;
 
           next();
-          if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "typename")) next();
+          if (tok == CPP_TOK_TYPENAME) next();
           if (tok < TOK_UIDENT)
             expect("using alias name");
           alias_tok = tok;
@@ -14215,8 +14452,12 @@ tmbt: cprime_error("too many basic types");
       }
       next();
       break;
-    case TOK_BOOL:
     case TOK_BOOL2:
+      /* GCC accepts definitions of these keywords in a system header.  Leave
+         the name for the declarator when it follows a type specifier. */
+      if (file && file->sys_header && typespec_found)
+        goto the_end;
+    case TOK_BOOL:
       u = VT_BOOL;
       goto basic_type;
     case TOK_COMPLEX:
@@ -14447,8 +14688,7 @@ storage:
           if (!block_tag || block_tag->sym_scope <= visible->sym_scope)
             goto the_end;
         }
-        if (tok >= TOK_UIDENT
-            && !strcmp(get_tok_str(tok, NULL), "typename"))
+        if (tok == CPP_TOK_TYPENAME)
         {
           next();
           continue;
@@ -16825,7 +17065,16 @@ static void parse_sync(int tok)
 
 static Sym *find_cpp_this_symbol(void)
 {
+  Sym *s;
   if (!cpp_lambda_this_name_tok) cpp_lambda_this_name_tok = tok_alloc_const("__cpc_lambda_this");
+  /* No 'this'-named binding has been linked, no synthetic receiver name
+     exists and no lambda is being probed, so neither lookup below can find
+     anything.  The spellings stay interned at their first use as before. */
+  if (!cpp_this_binding_seen && !cpp_this_prefixed_identifier_seen && !lambda_probe)
+  {
+    (void)CPP_TOK_THIS;
+    return NULL;
+  }
   Sym *enclosing = sym_find(cpp_lambda_this_name_tok);
   if (enclosing && enclosing->sym_scope && (enclosing->type.t & VT_BTYPE) == VT_PTR)
     return enclosing;
@@ -16835,7 +17084,7 @@ static Sym *find_cpp_this_symbol(void)
     return visible ? visible : lambda_probe->outer_this;
   }
 
-  Sym *s = sym_find(CPP_TOK_THIS);
+  s = sym_find(CPP_TOK_THIS);
   if (s && (s->type.t & VT_BTYPE) == VT_PTR)
     return s;
   /* The synthetic receiver names are mangled from a fixed prefix, so the
@@ -18475,7 +18724,6 @@ ST_FUNC void unary(void)
   CType type;
   Sym *s;
   AttributeDef ad;
-  const char *tok_name;
 
   // Generate Line Number Info
   if (debug_modes)
@@ -18503,20 +18751,14 @@ tok_next:
   }
   if (try_expand_cpp_alias_template(explicit_global_scope))
     goto tok_next;
-  tok_name = (tok >= TOK_UIDENT
-              && (unsigned)(tok - TOK_IDENT) < (unsigned)(tok_ident - TOK_IDENT))
-             ? table_ident[tok - TOK_IDENT]->str : NULL;
-  if (tok_name && tok_name[0] == 't' && !strcmp(tok_name, "typename")) {
+  if (tok == CPP_TOK_TYPENAME) {
     memset(&ad, 0, sizeof(ad));
     if (!parse_btype(&type, &ad, 0)) cprime_error("qualified type expected after typename");
     unget_tok(template_exact_ctype_typedef_tok(&type));
     goto tok_next;
   }
-  if (tok_name
-      && ((tok_name[0] == 's' && !strcmp(tok_name, "static_cast"))
-          || (tok_name[0] == 'r' && !strcmp(tok_name, "reinterpret_cast"))
-          || (tok_name[0] == 'c' && !strcmp(tok_name, "const_cast"))
-          || (tok_name[0] == 'd' && !strcmp(tok_name, "dynamic_cast"))))
+  if (tok == CPP_TOK_STATIC_CAST || tok == CPP_TOK_REINTERPRET_CAST
+      || tok == CPP_TOK_CONST_CAST || tok == CPP_TOK_DYNAMIC_CAST)
   {
     CType cast_type;
     AttributeDef cast_ad;
@@ -18652,7 +18894,7 @@ tok_next:
    }
     goto unary_post;
   }
-  if (tok_name && tok_name[0] == 'd' && !strcmp(tok_name, "delete"))
+  if (tok == CPP_TOK_DELETE_SPELLING)
   {
     int array_delete = 0;
     next();
@@ -19940,7 +20182,7 @@ tok_identifier:
          `operator[]`).  Preserve the implicit-object call semantics for a
          bare call in that replayed body, just as the raw TOK_OPERATOR path
          above does before substitution. */
-      if (tok == '(' && !strcmp(get_tok_str(t, NULL), "operator[]"))
+      if (tok == '(' && t == CPP_TOK_INDEX_OP_SPELLING)
       {
         Sym *this_sym = find_cpp_this_symbol();
         if (this_sym && ((this_sym->type.t & VT_BTYPE) == VT_PTR))
@@ -19963,9 +20205,12 @@ tok_identifier:
           break;
         }
       }
-      if ((!strncmp(get_tok_str(t, NULL), "std::is_", 8)
-           || !strncmp(get_tok_str(t, NULL), "__cpc_ns_std_is_", 16))
-          && (tok == TOK_LT || tok == '<'))
+      /* The qualifier probe can only match a name followed by '<', and the
+         name spelling is two table lookups and two strncmp() calls here, so
+         test the operator first: this expression runs for every call. */
+      if ((tok == TOK_LT || tok == '<')
+          && (!strncmp(get_tok_str(t, NULL), "std::is_", 8)
+              || !strncmp(get_tok_str(t, NULL), "__cpc_ns_std_is_", 16)))
       {
         TemplateArgList trait_args;
         parse_template_type_args(&trait_args);
@@ -19991,6 +20236,9 @@ tok_identifier:
         {
           TemplateArgList args;
           int qualified_member_tok = 0;
+          int qualified_member_parsed = 0;
+          CType qualified_conversion_type;
+          int has_qualified_conversion = 0;
           parse_template_type_args(&args);
           if (tok == ':')
           {
@@ -20020,11 +20268,26 @@ tok_identifier:
             {
               if (is_standard_type_trait_tok(t))
                 cprime_error("type trait value expected");
-              qualified_member_tok = tok;
+              if (tok == TOK_OPERATOR)
+              {
+                /* A qualified operator name is more than the `operator`
+                   keyword; parse the whole name so `A<T>::operator B<U>`
+                   names the conversion member instead of `A<T>::operator`. */
+                qualified_member_tok = parse_cpp_operator_method_tok();
+                qualified_member_parsed = 1;
+                has_qualified_conversion =
+                  take_cpp_conversion_operator_target_type(
+                    &qualified_conversion_type);
+              }
+              else
+                qualified_member_tok = tok;
             }
           }
           t = instantiate_template_if_needed(td, &args);
           compile_pending_template_specs_without_member_flush();
+          if (has_qualified_conversion)
+            note_cpp_qualified_conversion_member(t, qualified_member_tok,
+                                                 &qualified_conversion_type);
           if (qualified_member_tok)
           {
             qualified_instance_class_tok = t;
@@ -20032,7 +20295,8 @@ tok_identifier:
             instantiate_static_template_member_for_call(t,
                                                         qualified_member_tok);
             t = make_static_member_tok(t, qualified_member_tok);
-            next();
+            if (!qualified_member_parsed)
+              next();
           }
         }
       }
@@ -20113,6 +20377,10 @@ tok_identifier:
               next();
             if (tok == TOK_OPERATOR) {
               int operator_name = parse_cpp_operator_method_tok();
+              CType conversion_target;
+              if (take_cpp_conversion_operator_target_type(&conversion_target))
+                note_cpp_qualified_conversion_member(class_tok, operator_name,
+                                                     &conversion_target);
               unget_tok(operator_name);
             }
             if (tok < TOK_UIDENT)
@@ -20204,9 +20472,9 @@ tok_identifier:
         }
         if (t == preceding_scope_tok) break;
       }
-      if ((!strncmp(get_tok_str(t, NULL), "std::is_", 8)
-           || !strncmp(get_tok_str(t, NULL), "__cpc_ns_std_is_", 16))
-          && (tok == TOK_LT || tok == '<'))
+      if ((tok == TOK_LT || tok == '<')
+          && (!strncmp(get_tok_str(t, NULL), "std::is_", 8)
+              || !strncmp(get_tok_str(t, NULL), "__cpc_ns_std_is_", 16)))
       {
         TemplateArgList trait_args;
         parse_template_type_args(&trait_args);
@@ -20335,6 +20603,10 @@ tok_identifier:
           next();
         if (tok == TOK_OPERATOR) {
           int operator_name = parse_cpp_operator_method_tok();
+          CType conversion_target;
+          if (take_cpp_conversion_operator_target_type(&conversion_target))
+            note_cpp_qualified_conversion_member(class_tok, operator_name,
+                                                 &conversion_target);
           unget_tok(operator_name);
         }
         if (tok < TOK_UIDENT)
@@ -20571,7 +20843,7 @@ tok_identifier:
                                                    base_subobject_construction))
           break;
       }
-      if (!strcmp(get_tok_str(t, NULL), "static_assert") && tok == '(')
+      if (tok == '(' && t == CPP_TOK_STATIC_ASSERT)
       {
         int assertion_value;
         next();
@@ -25193,7 +25465,7 @@ static int try_parse_using_alias_declaration(int decl_scope)
   int alias_tok, dummy_v = 0, global_qualified = 0;
   int qualifier_tok = 0, nb_using_imports = 0, using_import_toks[16];
 
-  if (tok < TOK_UIDENT || strcmp(get_tok_str(tok, NULL), "using"))
+  if (tok != CPP_TOK_USING)
     return 0;
 
   replay = tok_str_alloc();
@@ -25671,8 +25943,7 @@ static int decl_context(int l, int condition)
         continue;
       }
     }
-    if (tok >= TOK_UIDENT
-        && !strcmp(get_tok_str(tok, NULL), "static_assert"))
+    if (tok == CPP_TOK_STATIC_ASSERT)
     {
       int assertion_value;
       next();
@@ -25720,7 +25991,7 @@ static int decl_context(int l, int condition)
         }
         pending_cpp_extern_linkage = requested_linkage;
       }
-      else if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "template"))
+      else if (tok == CPP_TOK_TEMPLATE)
       {
         int saved_extern_template = extern_template_explicit_declaration;
         extern_template_explicit_declaration = 1;
@@ -25731,7 +26002,7 @@ static int decl_context(int l, int condition)
       else
         unget_tok(TOK_EXTERN);
     }
-    if (l == VT_CONST && tok >= 0 && !strcmp(get_tok_str(tok, NULL), "template"))
+    if (l == VT_CONST && tok == CPP_TOK_TEMPLATE)
     {
       int saved_friend_owner = friend_template_declaration_owner;
       friend_template_declaration_owner = friend_declaration ? active_member_class_tok : 0;
@@ -26211,9 +26482,16 @@ found:
         }
         else if (type.t & VT_TYPEDEF)
         {
+          /* GNU headers historically define bool and wchar_t.  Ignore those
+             typedefs in system headers instead of replacing the builtins. */
+          if (file && file->sys_header
+              && (v == TOK_BOOL2 || v == CPP_TOK_WCHAR_T))
+            ;
+          else
+          {
           // Save Typedefed Type
           // XXX: test storage specifiers ?
-          if (v >= TOK_UIDENT && !strcmp(get_tok_str(v, NULL), "wchar_t"))
+          if (v == CPP_TOK_WCHAR_T)
             type.t = (type.t & ~VT_DEFSIGN) | VT_WCHAR_T;
           sym = sym_find(v);
           if (sym && sym->sym_scope == local_scope)
@@ -26234,6 +26512,7 @@ found:
             merge_funcattr(&sym->type.ref->f, &ad.f);
           if (debug_modes)
             cprime_debug_typedef (cprime_state, sym);
+          }
         }
         else if ((type.t & VT_BTYPE) == VT_VOID
                  && !(type.t & VT_EXTERN))

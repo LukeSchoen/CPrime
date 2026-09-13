@@ -440,6 +440,8 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
         instantiate_template_member_for_call(&owner_type, member_tok, NULL, -1);
       explicit_member_template_arg_tok = saved_explicit;
     }
+    if (member_tok == CPP_TOK_ASSIGN)
+      materialize_implicit_copy_assignment_address(&owner_type);
     function = find_member_func_address_candidate(class_tok, member_tok,
         cpp_member_address_target
           ? find_cpp_member_pointer_type(cpp_member_address_target) : NULL,

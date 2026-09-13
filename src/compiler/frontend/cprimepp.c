@@ -32,6 +32,24 @@ static CString cstr_buf;
 static TokenString tokstr_buf;
 static TokenString unget_buf;
 static unsigned char isidnum_table[256 - CH_EOF];
+/* Derived from isidnum_table so the identifier scan in next_nomacro() can
+   read one classification byte per character and use it directly as the
+   spelling byte: entry c holds c while c can continue an identifier and 0
+   otherwise, which is exactly the old IS_ID|IS_NUM test (no identifier
+   character is 0).  set_idnum() is the only writer of isidnum_table, so the
+   two stay in step. */
+static unsigned char ident_cont[256];
+/* Derived from isidnum_table in the same way: entry c is 1 while c is
+   horizontal whitespace, so the tokenizer's run loop needs one table load
+   and one test per byte instead of a load, mask and compare. */
+static unsigned char ident_space[256];
+
+/* Characters preprocess_skip()'s switch handles specially.  A skipped block
+   is mostly ordinary text, so the scan advances over runs of other bytes
+   instead of dispatching through the switch once per byte.  After #warning
+   or #error the quotes and '/' are ordinary text as well. */
+static unsigned char pp_skip_stop[256];
+static unsigned char pp_skip_stop_msg[256];
 static int pp_debug_tok, pp_debug_symv;
 static int pp_counter;
 /* Set while preprocessing a translation unit with a C++ source suffix; the
@@ -53,6 +71,77 @@ static TokenString *macro_stack;
 /* Set once any identifier with the synthetic member-receiver prefix has been
    interned.  See find_cpp_this_symbol(). */
 static int cpp_this_prefixed_identifier_seen;
+
+/* Identifier ids of the contextual spellings the declaration and expression
+   paths probe by name: `using`, `typename`, `static_assert`, `template`,
+   `friend`, `wchar_t`, `operator[]`, the four named casts and `delete`.  A
+   spelling test against one of them otherwise costs a get_tok_str() call, a
+   table_ident load and a strcmp() on every name token, and interning the
+   literal on first use to compare ids instead would intern it at the first
+   probe rather than at its first appearance in the source and renumber the
+   identifiers in between.  Recording the id as the lexer interns the spelling
+   keeps the numbering the source produces, and probing is then one integer
+   compare.  A spelling that has not been interned cannot appear as a token, so
+   CPC_SPELLING_UNSEEN marks "not seen yet". */
+#define CPC_SPELLING_UNSEEN 0x7fffffff
+ST_DATA int cpp_spelling_using_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_typename_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_static_assert_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_template_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_friend_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_wchar_t_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_index_op_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_static_cast_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_reinterpret_cast_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_const_cast_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_dynamic_cast_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_delete_tok = CPC_SPELLING_UNSEEN;
+
+/* Called for each identifier the lexer interns, so the table above is filled
+   at the same point the spelling first appears in the source. */
+static void note_cpp_probed_spelling(int v, const char *str, int len)
+{
+  switch (len)
+  {
+  case 5:
+    if (!memcmp(str, "using", 5)) cpp_spelling_using_tok = v;
+    break;
+  case 6:
+    if (!memcmp(str, "friend", 6)) cpp_spelling_friend_tok = v;
+    else if (!memcmp(str, "delete", 6)) cpp_spelling_delete_tok = v;
+    break;
+  case 7:
+    if (!memcmp(str, "wchar_t", 7)) cpp_spelling_wchar_t_tok = v;
+    break;
+  case 8:
+    if (!memcmp(str, "typename", 8)) cpp_spelling_typename_tok = v;
+    else if (!memcmp(str, "template", 8)) cpp_spelling_template_tok = v;
+    break;
+  case 10:
+    if (!memcmp(str, "operator[]", 10)) cpp_spelling_index_op_tok = v;
+    else if (!memcmp(str, "const_cast", 10)) cpp_spelling_const_cast_tok = v;
+    break;
+  case 11:
+    if (!memcmp(str, "static_cast", 11)) cpp_spelling_static_cast_tok = v;
+    break;
+  case 12:
+    if (!memcmp(str, "dynamic_cast", 12)) cpp_spelling_dynamic_cast_tok = v;
+    break;
+  case 16:
+    if (!memcmp(str, "reinterpret_cast", 16))
+      cpp_spelling_reinterpret_cast_tok = v;
+    break;
+  case 13:
+    if (!memcmp(str, "static_assert", 13)) cpp_spelling_static_assert_tok = v;
+    break;
+  }
+}
+
+/* The TokenSym the last next_nomacro() call interned for its identifier
+   token.  next() reads the macro binding of that very token, so it can use
+   the entry the tokenizer already touched instead of probing table_ident
+   again; the token id is re-checked to keep the shortcut exact. */
+static TokenSym *last_ident_sym;
 
 static int cprimepp_has_suffix(const char *s, const char *suffix)
 {
@@ -534,6 +623,7 @@ static TokenSym *tok_alloc_new(TokenSym **pts, const char *str, int len, unsigne
      call expression. */
   if (len >= 14 && !memcmp(ts->str, "__cprime_this_", 14))
     cpp_this_prefixed_identifier_seen = 1;
+  note_cpp_probed_spelling(ts->tok, ts->str, len);
   *pts = ts;
   /* Keep identifier lookup proportional to the bucket load even in a
      template-heavy unity translation unit. Token addresses stay stable. */
@@ -555,9 +645,7 @@ static TokenSym *tok_alloc_new(TokenSym **pts, const char *str, int len, unsigne
 }
 
 #define TOK_HASH_INIT 1
-#define TOK_HASH_FUNC(h, c) ((h) + ((h) << 5) + ((h) >> 27) + (c))
-
-
+#define TOK_HASH_FUNC(h, c) ((h) * 31 + (c))
 
 // find a token and add it if not found
 ST_FUNC TokenSym *tok_alloc(const char *str, int len)
@@ -1083,7 +1171,14 @@ redo_start:
       break;
 _default:
     default:
-      p++;
+      /* Ordinary text: advance over the whole run up to the next byte the
+         switch would handle specially. */
+      if (in_warn_or_error)
+        while (!pp_skip_stop_msg[*p])
+          ++p;
+      else
+        while (!pp_skip_stop[*p])
+          ++p;
       break;
     }
     start_of_line = 0;
@@ -1487,6 +1582,26 @@ ST_FUNC void skip_to_eol(int warn)
     end_macro();
   file->buf_ptr = parse_line_comment(file->buf_ptr - 1);
   next_nomacro();
+}
+
+/* Return the value of the current TOK_PPNUM when it consists only of decimal
+   digits.  Linemarker flags are written as one or more such numbers. */
+static int parse_linemarker_flag(int *value)
+{
+  const char *q = tokc.str.data;
+  int n = 0;
+
+  if (!q || !*q)
+    return 0;
+  while (*q)
+  {
+    if (!isnum(*q))
+      return 0;
+    n = n * 10 + *q - '0';
+    ++q;
+  }
+  *value = n;
+  return 1;
 }
 
 static CachedInclude *
@@ -2683,14 +2798,32 @@ _line_num:
       n = n * 10 + *q - '0';
     }
     parse_flags &= ~PARSE_FLAG_TOK_STR; // don't parse escape sequences
+    if (c == 0)
+      parse_flags &= ~PARSE_FLAG_TOK_NUM;
     next();
     if (tok != TOK_LINEFEED)
     {
+      int marker_flags = 0;
+
       if (tok != TOK_PPSTR || tokc.str.data[0] != '"')
         goto _line_err;
       tokc.str.data[tokc.str.size - 2] = 0;
       cprimepp_putfile(tokc.str.data + 1);
       next();
+      if (c == 0)
+      {
+        /* Linemarkers carry flags after the file name.  Flag 3 marks the
+           following text as coming from a system header. */
+        while (tok == TOK_PPNUM)
+        {
+          int flag;
+          if (!parse_linemarker_flag(&flag))
+            break;
+          marker_flags |= flag;
+          next();
+        }
+        file->sys_header = (marker_flags & 3) != 0;
+      }
       // Skip Optional Level Number & Advance To Next Line
       skip_to_eol(c);
     }
@@ -3435,7 +3568,7 @@ redo_no_start:
 maybe_space:
     if (parse_flags & PARSE_FLAG_SPACES)
       goto keep_tok_flags;
-    while (isidnum_table[*p - CH_EOF] & IS_SPC)
+    while (ident_space[*p])
       ++p;
     goto redo_no_start;
   case '\f':
@@ -3571,8 +3704,8 @@ parse_ident_fast:
     p1 = p;
     h = TOK_HASH_INIT;
     h = TOK_HASH_FUNC(h, c);
-    while (c = *++p, isidnum_table[c - CH_EOF] & (IS_ID | IS_NUM))
-      h = TOK_HASH_FUNC(h, c);
+    while (t = ident_cont[c = *++p], t)
+      h = TOK_HASH_FUNC(h, t);
     len = p - p1;
     if (c != '\\')
     {
@@ -3628,6 +3761,7 @@ parse_ident_slow:
       ts = tok_alloc(tokcstr.data, tokcstr.size);
     }
     tok = ts->tok;
+    last_ident_sym = ts;
     break;
   case 'L':
     t = p[1];
@@ -4539,7 +4673,10 @@ redo:
   if (t >= TOK_IDENT && (parse_flags & PARSE_FLAG_PREPROCESS))
   {
     // if reading from file, try to substitute macros
-    Sym *s = define_find(t);
+    /* next_nomacro() has just interned this identifier, so its TokenSym is
+       the one define_find() would look up, and its fields are in cache. */
+    TokenSym *ts = last_ident_sym;
+    Sym *s = (ts && ts->tok == t) ? ts->sym_define : define_find(t);
     if (s)
     {
       Sym *nested_list = NULL;
@@ -4762,6 +4899,11 @@ ST_FUNC int set_idnum(int c, int val)
 {
   int prev = isidnum_table[c - CH_EOF];
   isidnum_table[c - CH_EOF] = val;
+  if ((unsigned)c < 256)
+  {
+    ident_cont[c] = (val & (IS_ID | IS_NUM)) ? c : 0;
+    ident_space[c] = (val & IS_SPC) ? 1 : 0;
+  }
   return prev;
 }
 
@@ -4780,6 +4922,18 @@ ST_FUNC void cprimepp_new(CPRIMEState *s)
 
   for (i = 128; i < 256; i++)
     set_idnum(i, IS_ID);
+
+  // Init Skip Stop Table
+  memset(pp_skip_stop, 0, sizeof(pp_skip_stop));
+  memset(pp_skip_stop_msg, 0, sizeof(pp_skip_stop_msg));
+  for (i = 0; i < 256; i++)
+  {
+    int stop = i == '\n' || i == '\\' || i == '#';
+    if (is_space(i))
+      stop = 1;
+    pp_skip_stop[i] = stop || i == '\"' || i == '\'' || i == '/';
+    pp_skip_stop_msg[i] = stop;
+  }
 
   // Init Allocators
   tal_new(&toksym_alloc, TOKSYM_TAL_SIZE);
@@ -4867,6 +5021,18 @@ ST_FUNC void cprimepp_delete(CPRIMEState *s)
   memset(&tokstr_buf, 0, sizeof tokstr_buf);
   memset(&unget_buf, 0, sizeof unget_buf);
   tok_ident = TOK_IDENT;
+  cpp_spelling_using_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_typename_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_static_assert_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_template_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_friend_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_wchar_t_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_index_op_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_static_cast_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_reinterpret_cast_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_const_cast_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_dynamic_cast_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_delete_tok = CPC_SPELLING_UNSEEN;
   pp_expr = 0;
   pp_debug_tok = 0;
   pp_debug_symv = 0;
@@ -5075,7 +5241,6 @@ ST_FUNC int cprime_preprocess(CPRIMEState *s1)
   }
   return 0;
 }
-
 
 
 

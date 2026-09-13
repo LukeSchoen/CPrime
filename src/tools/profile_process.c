@@ -44,6 +44,15 @@ static int unknown_module[65536];
 /* Histogram of symbol indices, reused by the unmapped-sample reports. */
 static int hits_by_symbol[65536];
 
+/* Optional instruction histogram inside one address range: samples are
+   counted in 32-byte buckets so a hot loop inside a large symbol (the
+   tokenizer is thousands of bytes) can be located without line tables. */
+#define HIST_BUCKET 32
+#define HIST_MAX 4096
+static unsigned long long hist_start;
+static unsigned long long hist_size;
+static unsigned hist_count[HIST_MAX];
+
 #define MAX_MODULES 128
 static struct {
     unsigned long long base, size;
@@ -146,9 +155,9 @@ int main(int argc,char **argv) {
        offset, to identify a caller that the frame chain cannot recover. */
     unsigned long long watch_base=0,watch_offset=0; const char *watch_module=NULL;
     int watch_dumps=0;
-    if(argc!=4 && argc!=6) {
+    if(argc!=4 && argc!=6 && argc!=7) {
         fprintf(stderr,"Usage: profile_process map-file executable response-file"
-                       " [module offset]\n");
+                       " [module offset] | -hist start size\n");
         return 2;
     }
     map=fopen(argv[1],"r"); if(!map)return 2;
@@ -159,10 +168,15 @@ int main(int argc,char **argv) {
     si.cb=sizeof si;
     if(!CreateProcessA(argv[2],command,NULL,NULL,FALSE,0,NULL,NULL,&si,&pi))return 2;
     load_modules(pi.dwProcessId);
+    if(argc==7 && !strcmp(argv[4],"-hist")) {
+        hist_start=strtoull(argv[5],NULL,0);
+        hist_size=strtoull(argv[6],NULL,0);
+        if(hist_size/HIST_BUCKET>HIST_MAX) hist_size=(unsigned long long)HIST_MAX*HIST_BUCKET;
+    }
     if(argc==6) {
         int m, tries;
         watch_module=argv[4];
-        sscanf(argv[5],"0x%llx",&watch_offset);
+        watch_offset=strtoull(argv[5],NULL,0);
         for(tries=0;tries<200;tries++) {
             unsigned long long found=0;
             for(m=0;m<module_count;m++)
@@ -232,6 +246,8 @@ int main(int argc,char **argv) {
                     unknown_leaf_count++;
                 }
             }
+            if(hist_size && ctx.Rip>=hist_start && ctx.Rip<hist_start+hist_size)
+                hist_count[(unsigned)(ctx.Rip-hist_start)/HIST_BUCKET]++;
             frame=ctx.Rbp;
             for(depth=0;depth<24 && frame;depth++) {
                 unsigned long long next;
@@ -310,6 +326,24 @@ int main(int argc,char **argv) {
                     w++;
                 }
               unknown_leaf_count=w; }
+        }
+    }
+    if(hist_size) {
+        int shown, i, j;
+        int idxs[HIST_MAX];
+        int n=(int)(hist_size/HIST_BUCKET);
+        for(i=0;i<n;i++) idxs[i]=i;
+        for(i=0;i<n;i++)
+            for(j=i+1;j<n;j++)
+                if(hist_count[idxs[j]]>hist_count[idxs[i]]) {
+                    int t=idxs[i];idxs[i]=idxs[j];idxs[j]=t;
+                }
+        printf("instruction histogram (32-byte buckets):\n");
+        for(shown=0;shown<n && shown<40;shown++) {
+            i=idxs[shown];
+            if(!hist_count[i]) break;
+            printf("    %5.2f%%  0x%llx\n",100.0*hist_count[i]/samples,
+                   hist_start+(unsigned long long)i*HIST_BUCKET);
         }
     }
     CloseHandle(pi.hProcess);

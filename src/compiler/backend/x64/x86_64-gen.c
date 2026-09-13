@@ -3186,5 +3186,3 @@ ST_FUNC void gen_struct_copy(int size)
 
 
 
-
-

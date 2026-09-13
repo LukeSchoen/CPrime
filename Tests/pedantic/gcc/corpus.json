@@ -13,29 +13,9 @@
                       "sha256":  "c558a09691c8a68aeaf7dc638d42df3f464e86881af4b7dc5869ac43214e5595"
                   },
                   {
-                      "path":  "g++.old-deja/g++.jason/template25.C",
-                      "role":  "case",
-                      "sha256":  "5364d41b82276d664bedc18bf95884b19d98f6a9a87bd0a59869bb5985f9c6df"
-                  },
-                  {
                       "path":  "g++.old-deja/g++.law/operators34.C",
                       "role":  "case",
                       "sha256":  "1038b9487e1001098baa4b541076c37f40498461af343d854aadf320a8a14660"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.jason/synth7.C",
-                      "role":  "case",
-                      "sha256":  "e352672b1d7b7267e42fcdfaeace2ec7d6af2e08f11c40668a67410a61e5b385"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ext/anon3.C",
-                      "role":  "case",
-                      "sha256":  "ec72d231d1dce80fcacd2bc39d8f077a7a38c14be6f695970b135f4ae863e0b1"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.ext/syshdr1.C",
-                      "role":  "case",
-                      "sha256":  "2bf8173b358e3ddcc04a2f22ad84e945005b1f31ef581625f3d50ab0b13925d4"
                   },
                   {
                       "path":  "g++.old-deja/g++.pt/instantiate11.C",
@@ -76,11 +56,6 @@
                       "path":  "g++.old-deja/g++.pt/ptrmem2.C",
                       "role":  "case",
                       "sha256":  "b567e69597517b1c4ddc5e359e5eca964d0ee3fefdf1862657ad133edfacedc3"
-                  },
-                  {
-                      "path":  "g++.old-deja/g++.martin/sts_iarr.C",
-                      "role":  "case",
-                      "sha256":  "7f0c8d06eeff5c10456684819a2638a46f8c3c01dfa4308e3f0414deb3fc19b9"
                   },
                   {
                       "path":  "g++.old-deja/g++.martin/bitset1.C",
@@ -198,99 +173,9 @@
                       "sha256":  "3b8754dafda7954726f120f03e70a98abc3037859a350a6a68e8feb5cf28c96d"
                   },
                   {
-                      "path":  "g++.dg/coroutines/pr102051.C",
-                      "role":  "case",
-                      "sha256":  "da1e8ea00bd68e2f24db881f62cba57fcf3a4ea428dbe509ef218444b20c2a18"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr100127.C",
-                      "role":  "case",
-                      "sha256":  "cd03cd061107ae5592131f0d993d21ba3014933060539793787f7bbc71a3180f"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr103328.C",
-                      "role":  "case",
-                      "sha256":  "649d17da1eba907d3c5169ef4c553d05151c7540cda5e24b7c15c08bb62f03ff"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr109283.C",
-                      "role":  "case",
-                      "sha256":  "c819c1f20ad0a58aaa8b683c86d5ead4ae21de765fabce7897bd1940bbb84db5"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr104981-preview-this.C",
-                      "role":  "case",
-                      "sha256":  "6232f2d34e5f9a8f0173c0b2fe85fd8b21b514933f0d97bb2d9bcdfc6ec904ce"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/co-return-syntax-10-movable.C",
-                      "role":  "case",
-                      "sha256":  "5b8d5231891e6d721d71115afa05f9c0e2747c9f0a42265c2485ebe5750d5f62"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/coro-function-decl.C",
-                      "role":  "case",
-                      "sha256":  "525f693b357e6c5e79341cccb877406951d688f292381974777d55acff23e9f9"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pmf-121094.C",
-                      "role":  "case",
-                      "sha256":  "d65a6afefe7c69da0b18bf1b8c4aef1f34e426ff33d0506b9fba37874486b371"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/coro-pre-proc.C",
-                      "role":  "case",
-                      "sha256":  "d08aa3e0cf126db71922d13ecdc8f19376424d56467c47463d67ab3af1f9850a"
-                  },
-                  {
                       "path":  "c-c++-common/pr60689.c",
                       "role":  "case",
                       "sha256":  "12953485ef4235010b89249210ef56442677b4c35f6a56abe6927fe1f8d77e41"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr109682.C",
-                      "role":  "case",
-                      "sha256":  "a98f9dae8431dd590016794f3f3fb98de33c5ba0ef386b6ced355339635cdbd1"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr99047.C",
-                      "role":  "case",
-                      "sha256":  "57604a1eb7a118bc06a9db9512e0bda79277510464a8c0109b7ce83c29dcdccc"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr98480.C",
-                      "role":  "case",
-                      "sha256":  "1e822015f051cf29e1662a6f69d96141558055991a83aa893f64cbf81ca499fe"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr99575.C",
-                      "role":  "case",
-                      "sha256":  "28c73756e21259eafaaa02cdc154459e4d6f7b0b70c2598b47e19d762188cad4"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr95824.C",
-                      "role":  "case",
-                      "sha256":  "9539c03b36b51f4fc458d65ac2930a50b34b565d34eb3ad638ed527e30e2353b"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr95823.C",
-                      "role":  "case",
-                      "sha256":  "622c429d16e3468b60f4d65569fe33024298d3e9821408fcc6d969d9762be09f"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr96251.C",
-                      "role":  "case",
-                      "sha256":  "43a511e0ae2f27c43d49ee73f2ab7aeeec97650358244b9a116697be8829522b"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr98118.C",
-                      "role":  "case",
-                      "sha256":  "73ff458577794f4435973bf70fc8893b378ee12b0c812a76353ba4410dbb64e8"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr96517.C",
-                      "role":  "case",
-                      "sha256":  "01bda68004195e7e299dcba1e22061ee9222ff524de037ddb96c9b16b8902c8e"
                   },
                   {
                       "path":  "g++.dg/cpp0x/nolinkage1a.cc",
@@ -303,114 +188,9 @@
                       "sha256":  "01b3de523bbeb50ced7ed0cdee00a723327e76a767e171c52012ba0a8882e75e"
                   },
                   {
-                      "path":  "g++.dg/coroutines/pr95822.C",
-                      "role":  "case",
-                      "sha256":  "efef920c13c3a51adbff0112dfc5c3e3fc1c2084b3be5f20502d7155267d769d"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr116327-preview-this.C",
-                      "role":  "case",
-                      "sha256":  "46b32ad8cc82ba103eb6ed0099e58bb181a42617b16371dc302ff6d23726a40f"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr115550-preview-this.C",
-                      "role":  "case",
-                      "sha256":  "b600b417f7416da9168839d593b7353f5873a2b89ba8f3c8abe22fcf5f7d9215"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr116502.C",
-                      "role":  "case",
-                      "sha256":  "77a0a73d1e34dccb8497ae427ff136f34d54ac6620578e0c723c35f1214b6145"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr116880.C",
-                      "role":  "case",
-                      "sha256":  "35eb605195b66d00c99c1ca6ad0e05a05b2cffba7f9a25a8208aa6edda8d1408"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr116793-1.C",
-                      "role":  "case",
-                      "sha256":  "dae71b484e7806960e0104cc9e78480138b6cba604bf476c1d3bf9346c9b17e8"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr112341-3.C",
-                      "role":  "case",
-                      "sha256":  "c65458ee14be867de0e1c4a410cc3ff711932064b11aec5601099dd93c937146"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr111728.C",
-                      "role":  "case",
-                      "sha256":  "719098369d749dafe9c838537b9d597b1be9bd63ce0ee122c4df21927fb3a74a"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr112341.C",
-                      "role":  "case",
-                      "sha256":  "549437527ea7ccff7b63b40fbecc12368d5ab1f0967b4ebead75a8f3be5703ec"
-                  },
-                  {
                       "path":  "g++.dg/coroutines/pr113457.C",
                       "role":  "case",
                       "sha256":  "a3e1fc44fb6dd139a87b45e9fc3c7c0bc9c9fbd29530fba66261bbddfcd68c07"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr113457-1.C",
-                      "role":  "case",
-                      "sha256":  "0d880eafed80cc410b46e8be6e65c8f0bab3ba2b9d8cd6b3dacea1973e12fd70"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr121643.C",
-                      "role":  "case",
-                      "sha256":  "928ea8828bfa3cfb5484f95b396d6147449dd70cbcb48c39085c2976580e4834"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr95346.C",
-                      "role":  "case",
-                      "sha256":  "a2ebe7e367978304290600039f118746a45cc85b4ad2a0bd22e4bdb4fad78a48"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr95345.C",
-                      "role":  "case",
-                      "sha256":  "f74d138bc1664d0916d6ed511a6da2132342cdb79d380dbfae7f969e646fff8b"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr95350.C",
-                      "role":  "case",
-                      "sha256":  "f1dfc3607bd185fc6f0f58c9db230ead201f58d1ba806877fc964417e1ab5845"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr95591.C",
-                      "role":  "case",
-                      "sha256":  "7eb8e9e8eae7527b8f0acba186b74b389812aa9181d17bc10064e7f9c0d9297c"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr95440.C",
-                      "role":  "case",
-                      "sha256":  "68f4243abed470fdf59b1bc0ceb2e5f0f24ce492449075e96a0e64f6ff805c73"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr94760-mismatched-traits-and-promise-prev.C",
-                      "role":  "case",
-                      "sha256":  "7a68e13681d8e6d09f786e2187cf6cccfbd7b31ee2732633d0a06f558788b06a"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr94682-preview-this.C",
-                      "role":  "case",
-                      "sha256":  "e69c35d31dc79b39594aa62c2580888eb2a360f51e473ae7b37f3d34270cc388"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr94883-folly-2.C",
-                      "role":  "case",
-                      "sha256":  "d3f43c62e932c6e0f5a70adcc77a0af13592b5bae47c1359ef0c423bb4c16486"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr95050.C",
-                      "role":  "case",
-                      "sha256":  "3990727bf957ea05734f47428eb141e1c11f1e2b912b781ba7961cd839a3e041"
-                  },
-                  {
-                      "path":  "g++.dg/coroutines/pr94886-folly-3.C",
-                      "role":  "case",
-                      "sha256":  "b6bab8fcae42826b93d99a5f59f4fb38d8d54da6deeef3ef5c921ad569017edd"
                   },
                   {
                       "path":  "g++.dg/overload/defarg4.C",
@@ -478,11 +258,6 @@
                       "sha256":  "e8fd008965eaef2163596443c7ccc0f400d26362982828c9b892b4f9321d931c"
                   },
                   {
-                      "path":  "g++.dg/template/access28.C",
-                      "role":  "case",
-                      "sha256":  "45d8d94f2efb42b72fb956ad08e639bfe1be7e1c7a48e6be97c4f0144f655e60"
-                  },
-                  {
                       "path":  "g++.dg/template/access37.C",
                       "role":  "case",
                       "sha256":  "f0f0e3e81431a212704d140dc033b7dd62bd1b54bfb0f3a93c0fde9b6e205eaf"
@@ -491,16 +266,6 @@
                       "path":  "g++.dg/template/access6.C",
                       "role":  "case",
                       "sha256":  "308686b5e80408dc6f1e2d51a90219338826b8086ab1b314d61ae3296a6addcc"
-                  },
-                  {
-                      "path":  "g++.dg/template/canon-type-3.C",
-                      "role":  "case",
-                      "sha256":  "7237c02c6cd57a0718d80eab05b8f9609a52182cd4710e63b75e166a58976857"
-                  },
-                  {
-                      "path":  "g++.dg/template/conv1.C",
-                      "role":  "case",
-                      "sha256":  "a01793336551002ac670596bd92a020eb2a40c4d3c0cfbe9bfecfa131b2c1307"
                   },
                   {
                       "path":  "g++.dg/template/access10.C",
@@ -521,11 +286,6 @@
                       "path":  "g++.dg/pr61033.C",
                       "role":  "case",
                       "sha256":  "b82c18e921e5840d881718c77f24a1446179b72d0f9f75eaad697482d91e4c05"
-                  },
-                  {
-                      "path":  "g++.dg/parse/redef1.C",
-                      "role":  "case",
-                      "sha256":  "74890dd6bf645e85e2444e7537d743ba246f6dc6b3c3185a9f329f4545acca46"
                   },
                   {
                       "path":  "g++.dg/init/pr25811-3.C",
@@ -598,11 +358,6 @@
                       "sha256":  "4c1912a63fe988ba8f580fca8f3892f114fcdda017be15faf083191a66c9b294"
                   },
                   {
-                      "path":  "g++.dg/opt/pr6713.C",
-                      "role":  "case",
-                      "sha256":  "a49a2532b90d15547e0a408d6b7f3ed076c1b1d8991f401858fb02f20d6ba3d8"
-                  },
-                  {
                       "path":  "g++.dg/opt/conj2.C",
                       "role":  "case",
                       "sha256":  "05969e568b36aaaf02f64aa227fbe76a9573c9f20f7fddaa590bbfe601cb2678"
@@ -624,20 +379,10 @@
                         "role":  "support",
                         "sha256":  "53f13f9ee08aa9c6b3e924329fac8f8280242a59a1ce5978465bab18937965c4"
                     },
-                    {
-                        "path":  "g++.dg/cpp0x/nolinkage1.h",
-                        "role":  "support",
-                        "sha256":  "542fa026d6630ace9503f89fb9a286798b47b3941dd705b69ef434923f9b9f15"
-                    },
-                    {
-                        "path":  "g++.dg/coroutines/coro.h",
-                        "role":  "support",
-                        "sha256":  "38d1ae7c5456e3dd3bfb2f86b14cb37620c112dc3f7240f0c0649fdb674ec76e"
-                    },
-                    {
-                        "path":  "g++.dg/coroutines/coro1-ret-int-yield-int.h",
-                        "role":  "support",
-                        "sha256":  "3d5506e2fb7806576a554e0ca7305c77431da9f14b28f6b866e23bcd2855c2d4"
-                    }
+                  {
+                      "path":  "g++.dg/cpp0x/nolinkage1.h",
+                      "role":  "support",
+                      "sha256":  "542fa026d6630ace9503f89fb9a286798b47b3941dd705b69ef434923f9b9f15"
+                  }
                 ]
 }

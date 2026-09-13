@@ -1165,23 +1165,32 @@ static int find_template_member_class_in_str(TokenString *str, int type_param_to
              && (i + 1 >= n || str->str[i + 1] != ':'))
       break;
     if (str->str[i] >= TOK_UIDENT
-        && str->str[i + 1] == ':' && str->str[i + 2] == ':'
-        && ((str->str[i + 3] >= TOK_UIDENT
-             && str->str[i + 4] == '(')
-            || (str->str[i + 3] == TOK_OPERATOR
-                && template_qualified_declarator_follows(str, i + 3))))
+        && str->str[i + 1] == ':' && str->str[i + 2] == ':')
     {
-      int class_tok = find_current_namespace_tok(str->str[i]);
-      /* A member function template of a non-template class has no
-         Class<T> qualifier, but it still needs the same staged declaration
-         and body replay as a class-template member. */
-      if (struct_find(class_tok))
+      int member_index = tok_str_next_non_linenum_index(str->str, n, i + 3);
+      int after_member = member_index < n
+                           ? tok_str_next_non_linenum_index(str->str, n,
+                                                            member_index + 1)
+                           : member_index;
+      if (member_index < n
+          && ((str->str[member_index] >= TOK_UIDENT
+               && after_member < n && str->str[after_member] == '(')
+              || (str->str[member_index] == TOK_OPERATOR
+                  && template_qualified_declarator_follows(str,
+                                                           member_index))))
       {
-        /* Saved namespace bodies retain the source's unqualified class
-           spelling.  Canonicalize the qualifier so later lookup and replay
-           refer to the same class token as the receiver. */
-        str->str[i] = class_tok;
-        return class_tok;
+        int class_tok = find_current_namespace_tok(str->str[i]);
+        /* A member function template of a non-template class has no
+           Class<T> qualifier, but it still needs the same staged declaration
+           and body replay as a class-template member. */
+        if (struct_find(class_tok))
+        {
+          /* Saved namespace bodies retain the source's unqualified class
+             spelling.  Canonicalize the qualifier so later lookup and replay
+             refer to the same class token as the receiver. */
+          str->str[i] = class_tok;
+          return class_tok;
+        }
       }
     }
     if (str->str[i] >= TOK_UIDENT
@@ -1204,16 +1213,17 @@ static int find_template_member_class_in_str(TokenString *str, int type_param_to
             --angle;
         }
       }
-      if (has_param && angle == 0 && j + 2 < n
-          && str->str[j] == ':' && str->str[j + 1] == ':'
-          && (str->str[j + 2] >= TOK_UIDENT
-              || str->str[j + 2] == TOK_OPERATOR)
-          && template_qualified_declarator_follows(str, j + 2))
-        return str->str[i];
-      if (has_param && angle == 0 && j + 3 < n
-          && str->str[j] == ':' && str->str[j + 1] == ':'
-          && str->str[j + 2] == '~' && str->str[j + 3] >= TOK_UIDENT)
-        return str->str[i];
+      if (has_param && angle == 0 && j + 1 < n
+          && str->str[j] == ':' && str->str[j + 1] == ':')
+      {
+        int member_index = tok_str_next_non_linenum_index(str->str, n, j + 2);
+        if (member_index < n
+            && (str->str[member_index] >= TOK_UIDENT
+                || str->str[member_index] == TOK_OPERATOR
+                || str->str[member_index] == '~')
+            && template_qualified_declarator_follows(str, member_index))
+          return str->str[i];
+      }
     }
   }
   return 0;
@@ -1614,6 +1624,8 @@ static int class_alias_storage_tok(int class_tok, int declared_tok)
   return make_static_member_tok(class_tok, declared_tok);
 }
 
+static int template_body_token_follows_scope(TokenString *str);
+
 static void tok_str_add_template_member_subst_scoped(TokenString *str,
     TemplateMemberDef *md, int class_mangled_tok, int type_param_tok,
     int type_tok, int member_type_param_tok, int member_type_arg_tok,
@@ -1653,6 +1665,14 @@ static void tok_str_add_template_member_subst_scoped(TokenString *str,
     int nested = make_static_member_tok(class_mangled_tok, tok);
     if (struct_find(nested) || find_class_template_def(nested)) alias_tok = nested;
   }
+  /* Replaying a class-template member body redirects every member name to the
+     instantiation's joined symbol, so an unqualified 'Inner' inside the class
+     body names Outer<2>::Inner.  The terminal name of a qualified id belongs
+     to the qualifier in front of it instead: `typename Outer<N-1>::Inner`
+     must keep the written member so the qualified lookup resolves it against
+     the specialization in front of it. */
+  if (alias_tok && template_body_token_follows_scope(str))
+    alias_tok = 0;
   if (alias_tok)
     tok_str_add(str, alias_tok);
   else
@@ -2234,38 +2254,53 @@ static int template_member_def_method_tok(TemplateMemberDef *md)
     if (md->def_str->str[i] == '{') break;
     if (md->def_str->str[i] == ':' && md->def_str->str[i + 1] == ':')
     {
+      int member_index = tok_str_next_non_linenum_index(
+        md->def_str->str, md->def_str->len, i + 2);
       int after_tok0;
-      tok0 = md->def_str->str[i + 2];
-      if (tok0 == TOK_OPERATOR && i + 3 < md->def_str->len)
+      tok0 = member_index < md->def_str->len
+               ? md->def_str->str[member_index] : 0;
+      if (tok0 == TOK_OPERATOR && member_index + 1 < md->def_str->len)
       {
-        int operator_tok = md->def_str->str[i + 3];
-        if (operator_tok == '[' && i + 4 < md->def_str->len
-            && md->def_str->str[i + 4] == ']')
+        int operator_index = tok_str_next_non_linenum_index(
+          md->def_str->str, md->def_str->len, member_index + 1);
+        int operator_tok = operator_index < md->def_str->len
+                             ? md->def_str->str[operator_index] : 0;
+        int after_operator = operator_index < md->def_str->len
+                               ? tok_str_next_non_linenum_index(
+                                   md->def_str->str, md->def_str->len,
+                                   operator_index + 1)
+                               : operator_index;
+        if (operator_tok == '[' && after_operator < md->def_str->len
+            && md->def_str->str[after_operator] == ']')
           return CPP_TOK_INDEX_OP;
-        if (operator_tok == '(' && i + 4 < md->def_str->len
-            && md->def_str->str[i + 4] == ')')
+        if (operator_tok == '(' && after_operator < md->def_str->len
+            && md->def_str->str[after_operator] == ')')
           return CPP_TOK_CALL_OP;
         if (operator_tok == TOK_BOOL || operator_tok == TOK_BOOL2)
           return CPP_TOK_BOOL_OP;
         return get_cpp_binary_operator_method_tok(operator_tok);
       }
-      if (tok0 == '~' && i + 3 < md->def_str->len)
+      if (tok0 == '~' && member_index + 1 < md->def_str->len)
       {
-        int destructor_tok = md->def_str->str[i + 3];
-        after_tok0 = i + 4;
-        while (after_tok0 + 1 < md->def_str->len
-               && md->def_str->str[after_tok0] == TOK_LINENUM)
-          after_tok0 += 2;
+        int destructor_index = tok_str_next_non_linenum_index(
+          md->def_str->str, md->def_str->len, member_index + 1);
+        int destructor_tok = destructor_index < md->def_str->len
+                               ? md->def_str->str[destructor_index] : 0;
+        after_tok0 = destructor_index < md->def_str->len
+                       ? tok_str_next_non_linenum_index(
+                           md->def_str->str, md->def_str->len,
+                           destructor_index + 1)
+                       : destructor_index;
         if (after_tok0 < md->def_str->len
             && md->def_str->str[after_tok0] == '(')
           return class_tok_matches_unqualified_name(md->class_tok, destructor_tok)
                  ? TOK_DESTRUCTOR1 : destructor_tok;
         continue;
       }
-      after_tok0 = i + 3;
-      while (after_tok0 + 1 < md->def_str->len
-             && md->def_str->str[after_tok0] == TOK_LINENUM)
-        after_tok0 += 2;
+      after_tok0 = member_index < md->def_str->len
+                     ? tok_str_next_non_linenum_index(
+                         md->def_str->str, md->def_str->len, member_index + 1)
+                     : member_index;
       /* A scoped identifier in the return type (Class<T>::Alias) is not
          the method.  Keep scanning until the scoped name that actually
          introduces the function parameter list. */
@@ -4934,6 +4969,12 @@ static TokenString *capture_template_pack_body(int type_pack, int value_pack,
   return expanded;
 }
 
+static void skip_template_member_line_numbers(void)
+{
+  while (tok == TOK_LINENUM)
+    next();
+}
+
 static void instantiate_template_member_if_needed(TemplateMemberDef *md,
                                                   int type_tok,
                                                   int class_mangled_tok,
@@ -5453,6 +5494,7 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
         int introduces_method;
         skip(':');
         skip(':');
+        skip_template_member_line_numbers();
         introduces_method = tok == expected_method_tok
           || (expected_method_tok == TOK_CONSTRUCTOR1
               && class_tok_matches_unqualified_name(md->class_tok, tok))
@@ -5523,6 +5565,7 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
           int introduces_method;
           skip(':');
           skip(':');
+          skip_template_member_line_numbers();
           introduces_method = tok == expected_method_tok
             || (expected_method_tok == TOK_CONSTRUCTOR1
                 && tok == md->class_tok)
@@ -5725,6 +5768,7 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
       next();
     }
   }
+  skip_template_member_line_numbers();
   skip('(');
   is_static_member = !is_lifecycle_member_tok(method_tok)
                      && (template_member_definition_is_static(md)
@@ -7646,9 +7690,29 @@ static int resolve_qualified_static_template_call(int class_tok, int method_tok)
   nb_template_member_call_arg_types = saved_count;
   memcpy(template_member_call_arg_types, saved_types, saved_count * sizeof(CType));
   base_tok = make_static_member_tok(class_tok, method_tok);
-  selected = address
-    ? (candidate_count == 1 ? global_symbol_find(candidates[0]) : NULL)
-    : resolve_free_func_by_arg_types_filtered(base_tok, argument_types,
+  if (address)
+  {
+    /* An address with explicit arguments has no call to rank candidates, so
+       the written argument list has to name one function.  A member declared
+       inside its class and defined out of line is two recorded members that
+       instantiate to the same function; that is one candidate, not an
+       ambiguity. */
+    selected = NULL;
+    for (i = 0; i < candidate_count; ++i)
+    {
+      Sym *candidate = candidates[i] > 1 ? global_symbol_find(candidates[i])
+                                         : NULL;
+      if (!candidate) continue;
+      if (selected && selected != candidate)
+      {
+        selected = NULL;
+        break;
+      }
+      selected = candidate;
+    }
+  }
+  else
+    selected = resolve_free_func_by_arg_types_filtered(base_tok, argument_types,
                      argument_count, 0, candidates, candidate_count, NULL,
                      /* A qualified dependent member call is not bound by the
                         unqualified name's definition-time overload set. */
@@ -11249,6 +11313,25 @@ static int template_body_name_is_qualified(TokenString *tokens)
   return scope >= 0 && tokens->str[scope] == ':';
 }
 
+/* Cheap predecessor test for the rule above.  A token a replay is about to
+   emit can follow a scope operator only when the words before it are the two
+   ':' of `::`, the `template` keyword of `::template`, or a line record that
+   separates them from it; the full scan runs only in those cases, which keeps
+   the common name out of it. */
+static int template_body_token_follows_scope(TokenString *str)
+{
+  int last;
+
+  if (str->len < 1)
+    return 0;
+  last = str->str[str->len - 1];
+  if (last != ':' && last != TOK_LINENUM
+      && (str->len < 2 || str->str[str->len - 2] != TOK_LINENUM)
+      && !(last >= TOK_UIDENT && is_template_keyword_tok(last)))
+    return 0;
+  return template_body_name_is_qualified(str);
+}
+
 static int template_subst_token(TemplateDef *td, TemplateArgList *args,
                                 int class_mangled_tok,
                                 int *alias_from, int *alias_to,
@@ -11265,6 +11348,37 @@ static int template_subst_token(TemplateDef *td, TemplateArgList *args,
   if (td->is_class && t == td->name_tok)
     return class_mangled_tok;
   return t;
+}
+
+/* True when `tok` names a type the enclosing class replay can resolve: a
+   member typedef already published for `class_tok`, one of the template's own
+   type parameters, a specialization alias built so far, a typedef, a
+   class/struct/enum, or a class template.  A saved typedef cannot say whether
+   the identifier before a `(` is its type or its name, so this decides
+   between `typedef T (name) ();` and `typedef int name(Arg);`. */
+static int template_body_declares_type_name(TemplateDef *td, int class_tok,
+                                            int *alias_from, int *alias_to,
+                                            int nb_aliases, int tok)
+{
+  Sym *sym;
+  int i;
+
+  if (tok < TOK_UIDENT)
+    return 0;
+  if (class_tok && template_member_scoped_alias_tok(class_tok, tok))
+    return 1;
+  if (template_alias_lookup(alias_from, alias_to, nb_aliases, tok))
+    return 1;
+  for (i = 0; i < td->nb_type_params; ++i)
+    if (td->type_param_toks[i] == tok
+        && !(td->value_param_mask & (1u << i)))
+      return 1;
+  sym = global_symbol_find(tok);
+  if (sym && (sym->type.t & VT_TYPEDEF))
+    return 1;
+  if (struct_find(tok))
+    return 1;
+  return find_class_template_def(tok) != NULL;
 }
 
 /* Resolve one nested typedef from a class specialization's saved definition.
@@ -11313,19 +11427,41 @@ static int materialize_template_class_typedef(int class_tok, int member_tok)
       int j = i, parens = 0, angles = 0, brackets = 0, braces = 0;
       int previous = 0, alias_tok = 0, pointer_alias_tok = 0, commas = 0;
       int has_array_bound = 0, declared_braces = 0, k, new_alias_tok;
+      int group_name_pending = 0;
       int alias_from[1], alias_to[1];
 
       for (; j < body->len; ++j)
       {
         int part = body->str[j];
         tok_str_add_record(typedef_str, body->str, body->len, &j);
-        if (part >= TOK_UIDENT && !parens && !angles && !brackets && !braces)
-          alias_tok = part;
-        if (part >= TOK_UIDENT && parens && !angles && !brackets && !braces
-            && (previous == '*' || previous == '&'
-                || previous == TOK_LAND))
-          pointer_alias_tok = part;
-        if (part == '(') ++parens;
+        if (part >= TOK_UIDENT && !angles && !brackets && !braces)
+        {
+          if (group_name_pending)
+          {
+            /* A parenthesized declarator is named by its own identifier. */
+            if (parens == 1) alias_tok = part;
+            group_name_pending = 0;
+          }
+          else if (!parens)
+            alias_tok = part;
+          if (parens && (previous == '*' || previous == '&'
+                         || previous == TOK_LAND))
+            pointer_alias_tok = part;
+        }
+        if (part == '(')
+        {
+          /* `typedef T (name) ();` puts the declared name inside the group;
+             the identifier before the `(` is the typedef's type. */
+          if (!parens && !angles && !brackets && !braces
+              && previous >= TOK_UIDENT
+              && template_body_declares_type_name(td, class_tok, NULL, NULL, 0,
+                                                  previous))
+          {
+            alias_tok = 0;
+            group_name_pending = 1;
+          }
+          ++parens;
+        }
         else if (part == ')') --parens;
         else if (part == TOK_LT) ++angles;
         else if (part == TOK_GT && angles > 0) --angles;
@@ -14357,9 +14493,17 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
             tok_str_add(spec, t);
             continue;
           }
-          tok_str_add(spec, template_subst_token(td, args, mangled_tok,
-                                                alias_from, alias_to,
-                                                nb_aliases, t));
+          /* A member body may name a nested type through a qualifier
+             (`typename Outer<N-1>::Inner`).  The terminal name belongs to
+             that qualifier, so the enclosing specialization's alias table
+             must not redirect it to its own joined member name. */
+          if (template_body_token_follows_scope(spec))
+            tok_str_add(spec, template_subst_token(td, args, mangled_tok,
+                                                   NULL, NULL, 0, t));
+          else
+            tok_str_add(spec, template_subst_token(td, args, mangled_tok,
+                                                   alias_from, alias_to,
+                                                   nb_aliases, t));
         }
         tok_str_free(body);
         continue;
@@ -15104,16 +15248,43 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
       TokenString *typedef_str = tok_str_alloc();
       TokenString *alias_decl = tok_str_alloc();
       int has_array_bound = 0;
+      int group_name_pending = 0;
 
       while (tok != TOK_EOF)
       {
         tok_str_add_tok(typedef_str);
-        if (tok >= TOK_UIDENT && !parens && !angles && !brackets && !braces)
-          alias_tok = tok;
-        if (tok >= TOK_UIDENT && parens && !angles && !brackets && !braces
-            && (previous == '*' || previous == '&' || previous == TOK_LAND))
-          pointer_alias_tok = tok;
-        if (tok == '(') ++parens;
+        if (tok >= TOK_UIDENT && !angles && !brackets && !braces)
+        {
+          if (group_name_pending)
+          {
+            /* A parenthesized declarator is named by its own identifier. */
+            if (parens == 1) alias_tok = tok;
+            group_name_pending = 0;
+          }
+          else if (!parens)
+            alias_tok = tok;
+          if (parens && (previous == '*' || previous == '&'
+                         || previous == TOK_LAND))
+            pointer_alias_tok = tok;
+        }
+        if (tok == '(')
+        {
+          /* `typedef T (name) ();` puts the declared name inside the group
+             and its type before the `(`; a name that is not a type opens an
+             ordinary parameter list (`typedef int name(Arg);`). */
+          if (!parens && !angles && !brackets && !braces
+              && previous >= TOK_UIDENT
+              && template_body_declares_type_name(
+                   td,
+                   class_replay_owner[class_brace_depth]
+                     ? class_replay_owner[class_brace_depth] : mangled_tok,
+                   alias_from, alias_to, nb_aliases, previous))
+          {
+            alias_tok = 0;
+            group_name_pending = 1;
+          }
+          ++parens;
+        }
         else if (tok == ')') --parens;
         else if (tok == TOK_LT) ++angles;
         else if (tok == TOK_GT) --angles;

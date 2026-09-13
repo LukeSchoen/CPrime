@@ -564,6 +564,7 @@ typedef struct BufferedFile {
     struct BufferedFile *prev;
     int line_num;
     int line_ref;
+    int sys_header;
     int ifndef_macro;
     int ifndef_macro_saved;
     int *ifdef_stack_ptr;
@@ -1893,6 +1894,4 @@ PUB_FUNC void cprime_exit_state(CPRIMEState *s1);
 # define CPRIME_SET_STATE(fn) (cprime_enter_state(s1),fn)
 # define _cprime_error use_cprime_error_noabort
 #endif
-
-
 
