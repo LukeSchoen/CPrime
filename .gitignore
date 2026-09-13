@@ -18,6 +18,7 @@
 /scripts/*.new.exe
 !/scripts/build.exe
 !/scripts/build-clang.exe
+!/scripts/seed-tcc.exe
 !/scripts/deploy.exe
 !/scripts/maintenance.exe
 !/scripts/performance.exe

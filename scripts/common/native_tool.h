@@ -18,6 +18,7 @@ typedef struct NtBuffer {
 
 typedef struct NtProcessResult {
     DWORD exit_code;
+    DWORD system_error;
     int started;
     int timed_out;
     double wall_seconds;
@@ -262,7 +263,10 @@ static NtProcessResult nt_run(const char *const *arguments, const char *cwd,
         if (i) nt_buffer_text(&command, " ");
         nt_quote(&command, arguments[i]);
     }
-    if (!CreatePipe(&output_read, &output_write, &security, 0)) goto cleanup;
+    if (!CreatePipe(&output_read, &output_write, &security, 0)) {
+        result.system_error = GetLastError();
+        goto cleanup;
+    }
     SetHandleInformation(output_read, HANDLE_FLAG_INHERIT, 0);
     startup.dwFlags = STARTF_USESTDHANDLES;
     startup.hStdInput = GetStdHandle(STD_INPUT_HANDLE);
@@ -272,9 +276,15 @@ static NtProcessResult nt_run(const char *const *arguments, const char *cwd,
     limits.BasicLimitInformation.LimitFlags = JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE;
     if (job) SetInformationJobObject(job, JobObjectExtendedLimitInformation,
                                      &limits, sizeof limits);
-    if (!CreateProcessA(arguments[0], command.data, NULL, NULL, TRUE,
+    /* A NULL application name gives a bare argv[0] the normal CreateProcess
+       executable search, including PATH.  A bare application name otherwise
+       fails for installed tools such as codex.exe. */
+    if (!CreateProcessA(NULL, command.data, NULL, NULL, TRUE,
                         CREATE_NO_WINDOW | CREATE_SUSPENDED, NULL, cwd,
-                        &startup, &process)) goto cleanup;
+                        &startup, &process)) {
+        result.system_error = GetLastError();
+        goto cleanup;
+    }
     result.started = 1;
     if (job) AssignProcessToJobObject(job, process.hProcess);
     ResumeThread(process.hThread);

@@ -500,7 +500,7 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
     else
       words[1] = (uint64_t)function_owner_offset * 2;
   }
-  if (cpp_member_address_target && !(words[1] & 1))
+  if (cpp_member_address_target)
   {
     /* The address is about to be converted to the contextual member-pointer
        type.  A global constant initializer cannot run the adjustment code
@@ -515,6 +515,10 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
              & (VT_CONSTANT | VT_VOLATILE))
         && class_subobject_offset(target->owner_tok, member_owner_tok, &adjust))
     {
+      /* The low bit describes virtual dispatch; the remaining bits are still
+         the receiver adjustment and can be folded for a constant initializer.
+         A base virtual member pointer converted to a derived owner otherwise
+         requires runtime code, which a global initializer never emits. */
       words[1] = (uint64_t)((long long)words[1] + (long long)adjust * 2);
       member_owner_tok = target->owner_tok;
     }
@@ -570,7 +574,31 @@ static void cpp_member_pointer_save_top(CType *type, int slot)
 
 static int cpp_member_pointer_address_slot(void)
 {
-  int slot = loc = (loc - PTR_SIZE) & -PTR_SIZE;
+  int slot;
+  cprime_warning("member-pointer address flags %x", vtop->r);
+  /* A member-pointer conversion may start from `&Derived::member`, which is
+     a prvalue in the lowered two-word representation.  Consumers below read
+     both words through an address, so give that prvalue ordinary temporary
+     storage before forming the address. */
+  if (!(vtop->r & VT_LVAL))
+  {
+    CType storage_type = vtop->type;
+    SValue value;
+    int align, size, address, r2;
+    storage_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+    size = type_size(&storage_type, &align);
+    address = get_temp_local_var(size, align, &r2);
+    cpp_temp_reserve_storage(address, size, r2);
+    value = *vtop--;
+    vset(&storage_type, VT_LOCAL | VT_LVAL, address);
+    vtop->r2 = r2;
+    vpushv(&value);
+    vstore();
+    vpop();
+    vset(&storage_type, VT_LOCAL | VT_LVAL, address);
+    vtop->r2 = r2;
+  }
+  slot = loc = (loc - PTR_SIZE) & -PTR_SIZE;
   mk_pointer(&vtop->type);
   gaddrof();
   vtop->type = char_pointer_type;

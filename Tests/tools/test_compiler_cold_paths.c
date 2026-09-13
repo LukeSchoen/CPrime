@@ -1,10 +1,24 @@
 /* Internal regression: one process covers lazy imports, provider precedence,
    missing names and translation-unit cache invalidation. This is a test,
-   never a build host. Run through scripts/windows/test-compiler-cold-paths.cmd. */
+   never a build host. Run through Tests/test.exe -Checks. */
 #include "../../src/compiler/middleend/libcprime.c"
+#include <process.h>
 
 static int failures;
 #define CHECK(c) do { if (!(c)) { fprintf(stderr, "FAIL line %d: %s\n", __LINE__, #c); ++failures; } } while (0)
+
+static int run_cpc(const char *a1, const char *a2, const char *a3,
+                   const char *a4, const char *a5, const char *a6) {
+  char compiler[MAX_PATH];
+  const char *args[8];
+  int n = 0;
+  if (!GetFullPathNameA("cpc.exe", sizeof compiler, compiler, NULL)) return -1;
+  args[n++] = compiler;
+  if (a1) args[n++] = a1; if (a2) args[n++] = a2; if (a3) args[n++] = a3;
+  if (a4) args[n++] = a4; if (a5) args[n++] = a5; if (a6) args[n++] = a6;
+  args[n] = NULL;
+  return (int)_spawnv(_P_WAIT, compiler, args);
+}
 
 static void compare_import(CPRIMEState *state, Section *expected, const char *name)
 {
@@ -30,7 +44,7 @@ static void archive_replay(void)
     "int left(void); int main(void) { return left()!=42; }"
   };
   const char *products[] = {"first.a", "second.a", "linked.exe"};
-  char path[128], command[256];
+  char path[128];
   int i;
   for (i = 0; i < 3; ++i) {
     sprintf(path, "build/cold-%s", products[i]);
@@ -45,14 +59,18 @@ static void archive_replay(void)
     fputs(sources[i], file);
     fclose(file);
     if (i < 3) {
-      sprintf(command, "cpc.exe -c %s -o build/cold-%s.o", path, names[i]);
-      CHECK(system(command) == 0);
+      char object[128];
+      sprintf(object, "build/cold-%s.o", names[i]);
+      CHECK(run_cpc("-c", path, "-o", object, NULL, NULL) == 0);
     }
   }
-  CHECK(system("cpc.exe -ar rcs build/cold-first.a build/cold-left.o build/cold-late.o") == 0);
-  CHECK(system("cpc.exe -ar rcs build/cold-second.a build/cold-right.o") == 0);
-  CHECK(system("cpc.exe build/cold-main.c build/cold-first.a build/cold-second.a -o build/cold-linked.exe") == 0);
-  CHECK(system("build\\cold-linked.exe") == 0);
+  CHECK(run_cpc("-ar", "rcs", "build/cold-first.a", "build/cold-left.o", "build/cold-late.o", NULL) == 0);
+  CHECK(run_cpc("-ar", "rcs", "build/cold-second.a", "build/cold-right.o", NULL, NULL) == 0);
+  CHECK(run_cpc("build/cold-main.c", "build/cold-first.a", "build/cold-second.a", "-o", "build/cold-linked.exe", NULL) == 0);
+  {
+    const char *args[] = {"build\\cold-linked.exe", NULL};
+    CHECK(_spawnv(_P_WAIT, args[0], args) == 0);
+  }
   for (i = 0; i < 4; ++i) {
     sprintf(path, "build/cold-%s.c", names[i]); remove(path);
     sprintf(path, "build/cold-%s.o", names[i]); remove(path);

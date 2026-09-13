@@ -1398,6 +1398,7 @@
                      "features/Templates/pass/test_nested_enum_array_bound.cpp",
                      "features/Templates/pass/test_nested_enum_type_identity.cpp",
                      "features/Templates/pass/test_nested_free_template_calls_in_replayed_member.cpp",
+                     "features/Templates/pass/test_lexical_operator_prefix_lookup.cpp",
                      "features/Templates/pass/test_nested_function_template_inline_body_survives_argument_replay.cpp",
                      "features/Templates/pass/test_nested_layout_parameter_scope.cpp",
                      "features/Templates/pass/test_nested_layout_preserves_member_definition_identity.cpp",

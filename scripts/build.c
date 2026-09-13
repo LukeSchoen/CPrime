@@ -53,6 +53,8 @@ typedef struct BuildPaths {
     char candidate[NT_PATH];
 } BuildPaths;
 
+static int build_map;
+
 static void batch_arg(NtBuffer *line, const char *argument) {
     const char *p;
     if (line->size && line->data[line->size - 1] != '\n') nt_buffer_text(line, " ");
@@ -122,6 +124,11 @@ static void add_runtime_jobs(NtBuffer *batch, const BuildPaths *paths,
     int i;
     char source[NT_PATH], output[NT_PATH], quickjs[NT_PATH + 4], runtime_inc[NT_PATH + 4];
     for (i = 0; i < (int)(sizeof runtime_sources / sizeof runtime_sources[0]); ++i) {
+        /* The seed compiler is a C program.  C++ library support is built only
+           after that compiler exists, so a C-only seed host (TCC) never has to
+           parse rtti.cpp or new_delete.cpp. */
+        if (bootstrap && (!strcmp(runtime_names[i], "rtti") ||
+                          !strcmp(runtime_names[i], "new_delete"))) continue;
         add_common_flags(batch, paths, host_runtime);
         batch_arg(batch, "-m64");
         batch_arg(batch, "-c");
@@ -149,6 +156,8 @@ static void add_runtime_jobs(NtBuffer *batch, const BuildPaths *paths,
     nt_join(output, sizeof output, library_dir, "libcprime1.a");
     batch_arg(batch, output);
     for (i = 0; i < (int)(sizeof runtime_names / sizeof runtime_names[0]); ++i) {
+        if (bootstrap && (!strcmp(runtime_names[i], "rtti") ||
+                          !strcmp(runtime_names[i], "new_delete"))) continue;
         nt_join(output, sizeof output, object_dir, runtime_names[i]);
         strcat(output, ".o"); batch_arg(batch, output);
     }
@@ -157,10 +166,13 @@ static void add_runtime_jobs(NtBuffer *batch, const BuildPaths *paths,
 
 static void add_candidate_job(NtBuffer *batch, const BuildPaths *paths) {
     char source[NT_PATH], output[NT_PATH], map[NT_PATH + 16];
-    add_common_flags(batch, paths, paths->bootstrap);
+    /* The fast compiler loop links against the last validated root runtime.
+       Runtime regeneration is a package-cache miss, not a prerequisite for
+       compiling this all-C compiler translation unit. */
+    add_common_flags(batch, paths, paths->root);
     batch_arg(batch, "-O2");
-    nt_join(map, sizeof map, paths->compiler, "cpc.map");
-    {
+    if (build_map) {
+        nt_join(map, sizeof map, paths->compiler, "cpc.map");
         char flag[NT_PATH + 16]; snprintf(flag, sizeof flag, "-Wl,-Map=%s", map); batch_arg(batch, flag);
     }
     absolute_path(source, sizeof source, paths, "src/compiler/driver/cprime.c");
@@ -425,7 +437,8 @@ static int publish_candidate(const BuildPaths *paths) {
         fprintf(stderr, "ERROR: could not back up root cpc.exe\n"); return 0;
     }
     if (!MoveFileExA(paths->candidate, paths->cpc, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        fprintf(stderr, "ERROR: could not publish candidate; restoring root cpc.exe\n");
+        fprintf(stderr, "ERROR: could not publish candidate (Win32 %lu); restoring root cpc.exe\n",
+                (unsigned long)GetLastError());
         MoveFileExA(backup, paths->cpc, MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH);
         return 0;
     }
@@ -433,52 +446,58 @@ static int publish_candidate(const BuildPaths *paths) {
     return 1;
 }
 
-static int build_compiler(const BuildPaths *paths, double *bootstrap_seconds,
-                          double *candidate_runtime_seconds) {
+static int build_compiler(const BuildPaths *paths, double *bootstrap_seconds) {
     NtBuffer batch = {0};
     NtProcessResult result;
-    char bootstrap_obj[NT_PATH], bootstrap_lib[NT_PATH], candidate_obj[NT_PATH],
-         candidate_lib[NT_PATH], response[NT_PATH];
+    char response[NT_PATH];
     double begin;
-    nt_join(bootstrap_obj, sizeof bootstrap_obj, paths->bootstrap, "obj");
-    nt_join(bootstrap_lib, sizeof bootstrap_lib, paths->bootstrap, "lib");
-    nt_join(candidate_obj, sizeof candidate_obj, paths->compiler, "obj");
-    nt_join(candidate_lib, sizeof candidate_lib, paths->compiler, "lib");
-    nt_mkdirs(bootstrap_obj); nt_mkdirs(bootstrap_lib);
-    nt_mkdirs(candidate_obj); nt_mkdirs(candidate_lib);
-    copy_definitions(paths, bootstrap_lib); copy_definitions(paths, candidate_lib);
-    add_runtime_jobs(&batch, paths, paths->root, bootstrap_obj, bootstrap_lib, 1);
     add_candidate_job(&batch, paths);
-    nt_join(response, sizeof response, paths->bootstrap, "jobs.txt");
+    nt_join(response, sizeof response, paths->compiler, "compiler-job.txt");
     begin = nt_seconds();
     result = run_batch(paths->cpc, paths->root, response, &batch);
     *bootstrap_seconds = nt_seconds() - begin;
     nt_buffer_free(&batch);
-    if (!checked_process("root CPC bootstrap and driver build", &result)) return 0;
-    add_runtime_jobs(&batch, paths, paths->compiler, candidate_obj, candidate_lib, 0);
-    add_extra_jobs(&batch, paths, candidate_obj, candidate_lib);
+    if (!checked_process("root CPC C compiler build", &result)) return 0;
+    return 1;
+}
+
+static int build_candidate_runtime(const BuildPaths *paths, double *seconds) {
+    NtBuffer batch = {0};
+    NtProcessResult result;
+    char object_dir[NT_PATH], library_dir[NT_PATH], archive[NT_PATH], response[NT_PATH];
+    double begin;
+    nt_join(object_dir, sizeof object_dir, paths->compiler, "obj");
+    nt_join(library_dir, sizeof library_dir, paths->compiler, "lib");
+    nt_mkdirs(object_dir); nt_mkdirs(library_dir);
+    copy_definitions(paths, library_dir);
+    nt_join(archive, sizeof archive, library_dir, "libcprime1.a"); DeleteFileA(archive);
+    add_runtime_jobs(&batch, paths, paths->compiler, object_dir, library_dir, 0);
+    add_extra_jobs(&batch, paths, object_dir, library_dir);
     nt_join(response, sizeof response, paths->compiler, "runtime-jobs.txt");
     begin = nt_seconds();
     result = run_batch(paths->candidate, paths->root, response, &batch);
-    *candidate_runtime_seconds = nt_seconds() - begin;
+    *seconds = nt_seconds() - begin;
     nt_buffer_free(&batch);
-    return checked_process("candidate runtime build", &result);
+    return checked_process("candidate packaged runtime build", &result);
 }
 
 static void usage(void) {
-    puts("build.exe [-NoPack] [-NoValidate] [-NoPublish]\n"
-         "Default: serial CPC self-host, runtime regeneration, package, validate and publish.\n"
+    puts("build.exe [-RebuildRuntime] [-Map] [-NoPack] [-NoValidate] [-NoPublish]\n"
+         "Default: serial C-only CPC self-host, cached package/runtime, validate and publish.\n"
+         "Runtime/SDK/package input changes automatically rebuild the packaged runtime.\n"
          "Diagnostic switches never publish unless packaging and validation remain enabled.");
 }
 
 int main(int argc, char **argv) {
     BuildPaths paths;
-    int pack = 1, validate = 1, publish = 1, i;
+    int pack = 1, validate = 1, publish = 1, rebuild_runtime = 0, packaged = 0, i;
     double total_begin, bootstrap = 0, candidate_runtime = 0, pack_begin, pack_seconds = 0,
            validate_begin, validate_seconds = 0, publish_begin, publish_seconds = 0;
     initialize_paths(&paths);
     for (i = 1; i < argc; ++i) {
         if (!_stricmp(argv[i], "-NoPack")) pack = 0;
+        else if (!_stricmp(argv[i], "-RebuildRuntime")) rebuild_runtime = 1;
+        else if (!_stricmp(argv[i], "-Map")) build_map = 1;
         else if (!_stricmp(argv[i], "-NoValidate")) validate = 0;
         else if (!_stricmp(argv[i], "-NoPublish")) publish = 0;
         else if (!_stricmp(argv[i], "-Help") || !_stricmp(argv[i], "--help")) { usage(); return 0; }
@@ -489,11 +508,19 @@ int main(int argc, char **argv) {
     nt_mkdirs(paths.build); nt_mkdirs(paths.compiler); nt_mkdirs(paths.bootstrap);
     total_begin = nt_seconds();
     printf("Building CPC with %s\n", paths.cpc);
-    if (!build_compiler(&paths, &bootstrap, &candidate_runtime)) return 1;
+    if (!build_compiler(&paths, &bootstrap)) return 1;
     if (pack) {
         pack_begin = nt_seconds();
-        if (!package_cached(&paths) && !prepare_package(&paths)) return 1;
+        if (!rebuild_runtime) packaged = package_cached(&paths);
         pack_seconds = nt_seconds() - pack_begin;
+    }
+    if (rebuild_runtime || (pack && !packaged)) {
+        if (!build_candidate_runtime(&paths, &candidate_runtime)) return 1;
+        if (pack) {
+            pack_begin = nt_seconds();
+            if (!prepare_package(&paths)) return 1;
+            pack_seconds += nt_seconds() - pack_begin;
+        }
     }
     if (validate) {
         validate_begin = nt_seconds();
@@ -506,7 +533,7 @@ int main(int argc, char **argv) {
         publish_seconds = nt_seconds() - publish_begin;
         printf("Success: rebuilt and replaced %s\n", paths.cpc);
     } else printf("Success: candidate retained at %s\n", paths.candidate);
-    printf("Timing: root-bootstrap-and-driver %.3fs; candidate-runtime %.3fs; pack %.3fs; regression %.3fs; publish %.3fs; total %.3fs\n",
+    printf("Timing: compiler %.3fs; packaged-runtime %.3fs; pack %.3fs; regression %.3fs; publish %.3fs; total %.3fs\n",
            bootstrap, candidate_runtime, pack_seconds, validate_seconds, publish_seconds,
            nt_seconds() - total_begin);
     return 0;

@@ -765,6 +765,22 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
     end = tok_str_prev_token_index(expression->str, expression->len, end);
   }
   if (first >= end) return 0;
+  if (expression->str[first] == '(')
+  {
+    int compound_close = saved_initializer_close(expression, first, '(', ')');
+    int compound_next = compound_close < 0 ? -1
+      : tok_str_next_non_linenum_index(expression->str, expression->len,
+                                       compound_close + 1);
+    int compound_type = tok_str_next_non_linenum_index(expression->str,
+                                                        expression->len,
+                                                        first + 1);
+    if (compound_close >= 0 && compound_next <= end
+        && expression->str[compound_next] == '{'
+        && compound_type <= end
+        && class_tok_matches_unqualified_name(get_struct_type_name_tok(type),
+                                               expression->str[compound_type]))
+      return 1;
+  }
   /* A comma expression's result is its final operand's value, so only that
      operand can construct the result object.  Earlier operands are only
      evaluated and discarded. */
@@ -1216,6 +1232,45 @@ static int initializer_integral_constant_value(SValue *value, int64_t *result)
   return 1;
 }
 
+/* Default member initializers are stored as source tokens.  When an omitted
+   member is replayed as part of an aggregate initializer, make references to
+   the aggregate's non-static fields explicit on the object being initialized.
+   This preserves ordinary lookup for names that are not fields (types,
+   functions, namespace constants, and qualified members). */
+static TokenString *bind_aggregate_default_initializer(TokenString *source,
+                                                        CType *aggregate,
+                                                        Sym *target)
+{
+  TokenString *bound = tok_str_alloc();
+  int i, previous = 0;
+
+  for (i = 0; i < source->len; )
+  {
+    int current = source->str[i];
+    if (current >= TOK_UIDENT && previous != '.' && previous != TOK_ARROW
+        && previous != ':')
+    {
+      int offset;
+      Sym *field = find_field_try(aggregate, current, &offset);
+      if (field && !(field->type.t & (VT_TYPEDEF | VT_STATIC))
+          && (field->type.t & VT_BTYPE) != VT_FUNC)
+      {
+        tok_str_add(bound, target->v);
+        tok_str_add(bound, '.');
+      }
+    }
+    if (TOK_HAS_VALUE(current))
+      tok_str_add_record(bound, source->str, source->len, &i);
+    else
+    {
+      tok_str_add(bound, current);
+      ++i;
+    }
+    previous = current;
+  }
+  return bound;
+}
+
 /* 't' contains the type and storage info. 'c' is the offset of the
    object in section 'sec'. If 'sec' is NULL, it means stack based
    allocation. 'flags & DIF_FIRST' is true if array '{' must be read (multi
@@ -1438,17 +1493,29 @@ do_init_list:
       }
     }
     if ((type->t & VT_BTYPE) == VT_STRUCT && !IS_UNION(type->t)
-        && !p->sec && !(flags & DIF_SIZE_ONLY) && is_cpp_translation_unit()) {
+        && !(flags & DIF_SIZE_ONLY) && is_cpp_translation_unit()) {
       for (; f; f = f->next) {
         TokenString *initializer;
+        TokenString *parent;
+        const int *parent_ptr;
+        int saved_tok;
+        CValue saved_tokc;
         if ((f->type.t & VT_BTYPE) != VT_STRUCT && !(f->type.t & VT_ARRAY)
             && !f->default_arg) continue;
-        initializer = tok_str_alloc();
-        if (f->default_arg) tok_str_append_without_eof(initializer, f->default_arg);
+        initializer = f->default_arg && p->aggregate_target_sym
+          ? bind_aggregate_default_initializer(f->default_arg, type,
+                                               p->aggregate_target_sym)
+          : tok_str_alloc();
+        if (f->default_arg && !p->aggregate_target_sym)
+          tok_str_append_without_eof(initializer, f->default_arg);
         else { tok_str_add(initializer, '{'); tok_str_add(initializer, '}'); }
         tok_str_add(initializer, tok); tok_str_add(initializer, 0);
+        parent = macro_stack; parent_ptr = macro_ptr;
+        saved_tok = tok; saved_tokc = tokc;
         begin_macro(initializer, 1); next();
         decl_initializer(p, &f->type, c + f->c, DIF_FIRST | DIF_CLEAR);
+        while (macro_stack && macro_stack != parent) end_macro();
+        macro_ptr = parent_ptr; tok = saved_tok; tokc = saved_tokc;
       }
     }
     if ((type->t & VT_ARRAY) && !p->sec && !(flags & DIF_SIZE_ONLY)
@@ -2385,6 +2452,9 @@ err_size:
     Sym *initial_cleanup = cur_scope ? cur_scope->cl.s : NULL;
     int initial_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
     p.sec = sec;
+    p.aggregate_target_sym = sym && sec
+                             && (type->t & VT_BTYPE) == VT_STRUCT
+                             ? sym : NULL;
     p.track_partial_cleanups = cur_scope && is_cpp_translation_unit() && !sec
                                && (r & VT_VALMASK) == VT_LOCAL
                                && (type->t & VT_BTYPE) == VT_STRUCT && type->ref

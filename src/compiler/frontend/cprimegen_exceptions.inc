@@ -17,6 +17,7 @@ typedef struct CppEhFunction {
   CpcEhState *states;
   int state_count;
   int state_capacity;
+  int throw_count;
   CppEhNode *nodes;
   int node_count;
   int node_capacity;
@@ -554,6 +555,9 @@ static void cpp_eh_note_call(void)
   CppEhFunction *eh = &cpp_eh_function;
   CpcEhState *state;
   int cleanup;
+  if (vtop && (vtop->type.t & VT_BTYPE) == VT_FUNC && vtop->type.ref
+      && vtop->type.ref->f.func_noexcept)
+    return;
   if (!eh->enabled || nocode_wanted || !cur_scope) return;
   cleanup = cpp_eh_cleanup_index(eh->has_cleanup_override
       ? eh->cleanup_override : cur_scope->cl.s);
@@ -678,6 +682,8 @@ static void cpp_eh_throw_expression(void)
   int source_reg;
   TokenString *operand;
   int direct = 0;
+  if (!nocode_wanted)
+    ++cpp_eh_function.throw_count;
   next();
   /* A saved conditional arm is replayed from its own token stream, so a
      rethrow is terminated by the end of that stream rather than by the
@@ -1248,16 +1254,21 @@ static void cpp_eh_parse_try(void)
 {
   CppEhFunction *eh = &cpp_eh_function;
   int start, end, done = 0, saved_nocode = nocode_wanted;
-  int context_offset, cleanup_stop, saw_catch_all = 0;
+  int context_offset, cleanup_stop, saw_catch_all = 0, state_start, throw_start;
+  int handler_nocode;
   if (!is_cpp_translation_unit()) cprime_error("try requires C++");
   if (tok != '{') expect("compound statement after try");
   loc = (loc - sizeof(CpcEhCatchContext)) & -PTR_SIZE;
   context_offset = loc;
   cleanup_stop = cpp_eh_cleanup_index(cur_scope->cl.s);
+  state_start = eh->state_count;
+  throw_start = eh->throw_count;
   start = ind;
   block(0);
   end = ind;
-  nocode_wanted = saved_nocode;
+  handler_nocode = saved_nocode || (eh->state_count == state_start
+                                    && eh->throw_count == throw_start);
+  nocode_wanted = handler_nocode;
   done = gjmp(done);
   if (tok != TOK_CATCH) expect("catch after try block");
   while (tok == TOK_CATCH) {
@@ -1270,7 +1281,7 @@ static void cpp_eh_parse_try(void)
     int name = 0, size, align, variable_offset, reference = 0;
     int class_copy = 0, boundary_slot = 0;
     int landing = ind, catch_all = 0;
-    nocode_wanted = saved_nocode;
+    nocode_wanted = handler_nocode;
     if (saw_catch_all) cprime_error("catch (...) must be the last handler");
     next(); skip('(');
     new_scope(&handler_scope);
@@ -1285,7 +1296,7 @@ static void cpp_eh_parse_try(void)
     }
     skip(')');
     entry = NULL;
-    if (!saved_nocode) {
+    if (!handler_nocode) {
       eh->catches = cprime_realloc(eh->catches, (eh->catch_count + 1) * sizeof(*eh->catches));
       entry = eh->catches + eh->catch_count++;
       memset(entry, 0, sizeof(*entry));
@@ -1360,7 +1371,8 @@ static void cpp_eh_parse_try(void)
     block(0);
     prev_scope(&handler_scope, 0);
     done = gjmp(done);
-    nocode_wanted = saved_nocode;
+    nocode_wanted = handler_nocode;
   }
+  nocode_wanted = saved_nocode;
   gsym(done);
 }

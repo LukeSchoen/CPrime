@@ -479,6 +479,9 @@ typedef struct Sym {
     struct Sym *lexical_reference_target;
     int lexical_reference_offset;
     int template_address_arguments;
+    /* Owning class for a bare static member-template address awaiting
+       contextual function-pointer deduction. */
+    int unresolved_static_template_owner;
     int cpp_member_address_tok;
     int cpp_using_target;
     unsigned char cpp_hidden_friend;

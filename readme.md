@@ -27,4 +27,6 @@ Use root `cpc.exe` for development. `scripts/build.exe` rebuilds it serially wit
 that same CPC host and replaces root `cpc.exe` after validation. There are no
 host-selection flags or alternate working compiler copies. Failure preserves
 the working compiler and stops the build.
+The C-only seed proof is `scripts/seed-tcc.exe -RunExternal`; the resulting CPC
+is built before any packaged C++ runtime source is compiled.
 Agents must not switch to Clang, GCC, MSVC, or another compiler for builds,

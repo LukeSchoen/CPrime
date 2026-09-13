@@ -1,3 +1,4 @@
+// EXPECT_COMPILE_ARGS: -Iinclude/runtime -Ithird-party/win32-sdk/include
 #include <typeinfo>
 
 struct Flags {

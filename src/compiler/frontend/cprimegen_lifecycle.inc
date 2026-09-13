@@ -1721,6 +1721,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   Sym *ctor_func, *func_type, *sa;
   CType call_arg_types[CPC_MAX_CALL_ARGUMENTS], ptr_type;
   int nb_args, ai, saved_tok, use_implicit_memberwise_copy = 0;
+  int conversion_memberwise_copy = 0;
   CValue saved_tokc;
 
   if (call_arg_count == 1 && saved_arg_is_braced(call_args[0])
@@ -1786,6 +1787,16 @@ static void call_placement_constructor(CType *type, TokenString *placement,
       ctor_func = copy_constructor;
       use_implicit_memberwise_copy = !copy_constructor;
     }
+    else if ((source.t & VT_BTYPE) == VT_STRUCT
+             && find_cpp_conversion_operator(&source, type, 0, NULL, NULL))
+    {
+      /* An implicitly declared copy constructor still accepts a source that
+         converts to the destination class (including a const reference).
+         Lower the conversion below, then retain the ordinary memberwise-copy
+         path rather than inventing a synthetic constructor symbol. */
+      use_implicit_memberwise_copy = 1;
+      conversion_memberwise_copy = 1;
+    }
   }
   if (!ctor_func && !use_implicit_memberwise_copy)
     ctor_func = resolve_member_func_by_arg_types(type, TOK_CONSTRUCTOR1,
@@ -1832,7 +1843,8 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   if (ctor_func
       && ((ctor_func->type.t & VT_BTYPE) != VT_FUNC || !ctor_func->type.ref))
     cprime_error("placement constructor target is not a function");
-  if (!ctor_func && !call_arg_count && type->ref && type->ref->a.cpp_user_constructor)
+  if (!ctor_func && !call_arg_count && type->ref
+      && !cpp_type_constructible_from(type, NULL, 0))
     cprime_error("new requires a viable default constructor for '%s'",
                  get_tok_str(get_struct_type_name_tok(type), NULL));
 
@@ -1868,13 +1880,18 @@ static void call_placement_constructor(CType *type, TokenString *placement,
       if (is_reference_type(&source_value_type))
         source_value_type = *pointed_type(&source_value_type);
       if ((source_value_type.t & VT_BTYPE) == VT_STRUCT
-          && is_compatible_unqualified_types(type, &source_value_type))
+          && (is_compatible_unqualified_types(type, &source_value_type)
+              || conversion_memberwise_copy))
       {
         saved_tok = tok;
         saved_tokc = tokc;
         replay_saved_placement_expr(call_args[0]);
         tok = saved_tok;
         tokc = saved_tokc;
+
+        if (conversion_memberwise_copy
+            && !try_call_cpp_conversion_operator(type, 0))
+          cprime_error("no conversion available for implicit copy construction");
 
         source = *vtop;
         vtop--;
@@ -2143,8 +2160,10 @@ static int try_parse_cpp_placement_new_after_name(int global_scope,
     CValue size_value;
 
     memset(&ad, 0, sizeof(ad));
+    ++cpp_new_type_context;
     if (!parse_btype(&type, &ad, 0))
       cprime_error("type expected after new, got '%s'", get_tok_str(tok, &tokc));
+    --cpp_new_type_context;
     while (tok == '*')
     {
       mk_pointer(&type);
@@ -2234,8 +2253,10 @@ static int try_parse_cpp_placement_new_after_name(int global_scope,
     }
 
     memset(&ad, 0, sizeof(ad));
+    ++cpp_new_type_context;
     if (!parse_btype(&type, &ad, 0))
       cprime_error("placement new requires a type before '%s'", get_tok_str(tok, &tokc));
+    --cpp_new_type_context;
     while (tok == '*')
     {
       mk_pointer(&type);
@@ -4815,6 +4836,29 @@ static int split_saved_array_initializer(TokenString *initializer,
   if (!initializer) return 0;
   i = tok_str_next_non_linenum_index(initializer->str, initializer->len, 0);
   if (i >= initializer->len || initializer->str[i] == TOK_EOF) return 0;
+  if (initializer->str[i] == '(')
+  {
+    int nested = tok_str_next_non_linenum_index(initializer->str,
+                                                 initializer->len, i + 1);
+    if (nested < initializer->len && initializer->str[nested] == '(')
+      i = nested;
+  }
+  if (initializer->str[i] == '(')
+  {
+    int at = i, depth = 0;
+    do
+    {
+      int token = initializer->str[at];
+      if (token == '(') ++depth;
+      else if (token == ')') --depth;
+      if (TOK_HAS_VALUE(token))
+        at += tok_str_value_extra_words(initializer->str, initializer->len, at);
+      ++at;
+    }
+    while (at < initializer->len && depth > 0);
+    if (!depth)
+      i = tok_str_next_non_linenum_index(initializer->str, initializer->len, at);
+  }
   if (initializer->str[i] != '{')
     cprime_error("array initializer requires braces");
   element = tok_str_alloc();
@@ -4911,6 +4955,9 @@ static int can_lower_global_dynamic_init(CType *type, int l, int has_init)
   int bt;
 
   if (!is_cpp_translation_unit() || l != VT_CONST || !has_init)
+    return 0;
+  if ((type->t & VT_BTYPE) == VT_STRUCT && type->ref
+      && !type->ref->a.cpp_user_constructor)
     return 0;
   if (type_requires_class_construction(type))
     return 1;
@@ -5968,6 +6015,19 @@ static void complete_defaulted_constructor_body(PendingMemberFunc *pm,
   pm->token_filter_valid = 0;
 }
 
+/* Saved member bodies lower operator-ids to interned spellings such as
+   `operator()` and `operator=`.  An ordinary identifier may legally begin
+   with the same letters (`operatorY`), so recognize the operator boundary
+   rather than a prefix before inserting an implicit receiver. */
+static int is_cpp_operator_spelling_tok(int t)
+{
+  const char *name;
+  if (t < TOK_UIDENT) return 0;
+  name = get_tok_str(t, NULL);
+  return !strncmp(name, "operator", 8) && name[8]
+      && !isid((unsigned char)name[8]) && !isnum((unsigned char)name[8]);
+}
+
 static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
 {
   int i, in_body = 0, this_tok;
@@ -6129,8 +6189,7 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
         continue;
       }
     }
-    if (t >= TOK_UIDENT
-        && !strncmp(get_tok_str(t, NULL), "operator", 8)
+    if (is_cpp_operator_spelling_tok(t)
         && (i == 0 || (pm->str->str[i - 1] != '.'
                        && pm->str->str[i - 1] != TOK_ARROW))
         && i + 1 < pm->str->len && pm->str->str[i + 1] == '(')

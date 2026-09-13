@@ -590,6 +590,24 @@ static int run_checks(const char *compiler, const char *runtime, unsigned timeou
         }
     }
     if (run_regressions(compiler, runtime, timeout_ms)) failed = 1;
+    nt_join(helper_source, sizeof helper_source, root, "Tests\\tools\\test_process_path.c");
+    nt_join(helper_exe, sizeof helper_exe, root, "build\\test-process-path.exe");
+    {
+        const char *compile[] = {compiler, "-O2", helper_source, "-o", helper_exe, NULL};
+        const char *run[] = {helper_exe, NULL};
+        int helper_ok = 1;
+        result = nt_run(compile, root, 120000, 0);
+        if (!result.started || result.timed_out || result.exit_code) {
+            fprintf(stderr, "FAIL native process PATH helper build: %s\n", result.output);
+            helper_ok = 0; failed = 1;
+        }
+        nt_process_free(&result);
+        if (helper_ok) {
+            result = nt_run(run, root, 30000, 1);
+            if (!result.started || result.timed_out || result.exit_code) failed = 1;
+            nt_process_free(&result);
+        }
+    }
     if (run_all_suites(compiler, runtime, "fast", timeout_ms, 0)) failed = 1;
     return failed;
 }

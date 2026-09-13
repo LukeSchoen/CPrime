@@ -480,6 +480,7 @@ static void parse_explicit_specialization_body(int instantiation)
   TemplateArgList explicit_args = {{0}, 0};
   int name, qualified, owner = 0, qualifier = 0, cv, exception_spec;
   int count = 0, depth = 0, function_tok = 0, i, saved_tok, is_inline;
+  int parenthesized_global_operator = 0;
   int saved_class_depth = nb_defining_class_stack;
   int saved_namespace = current_namespace_scope_tok();
   CValue saved_tokc;
@@ -522,6 +523,18 @@ static void parse_explicit_specialization_body(int instantiation)
     }
   }
   if (!conversion_member)
+  {
+    /* A friend can use the parenthesized operator declarator spelling
+       `R (::operator+<>)(...)`.  The parentheses disambiguate the operator
+       name from the result type; they are not the function parameter list. */
+    if (tok == '(') {
+      next();
+      if (tok != ':') cprime_error("parenthesized specialization name expected");
+      next(); skip(':');
+      if (tok != TOK_OPERATOR)
+        cprime_error("parenthesized specialization requires global operator name");
+      parenthesized_global_operator = 1;
+    }
     for (;;) {
       TemplateArgList component_args = {{0}, 0};
       int has_args = 0;
@@ -573,6 +586,9 @@ static void parse_explicit_specialization_body(int instantiation)
         }
       }
     }
+  }
+  if (parenthesized_global_operator)
+    skip(')');
   if (lifecycle) {
     if (!owner || !class_tok_matches_unqualified_name(owner, name))
       cprime_error("lifecycle specialization requires its class name");
@@ -630,6 +646,15 @@ static void parse_explicit_specialization_body(int instantiation)
   skip(')'); tok_str_add(parameters, TOK_EOF);
   cv = skip_member_func_cv_qualifiers();
   exception_spec = last_member_noexcept_spec;
+  if (owner)
+    for (i = 0; i < parameters->len; ++i)
+      if (parameters->str[i] >= TOK_UIDENT)
+      {
+        int alias_tok = template_member_scoped_alias_tok(owner,
+                                                          parameters->str[i]);
+        if (alias_tok)
+          parameters->str[i] = alias_tok;
+      }
   if (owner) defining_class_stack[nb_defining_class_stack++] = owner;
   function = make_func_type_from_saved_params(&result, parameters);
   nb_defining_class_stack = saved_class_depth;

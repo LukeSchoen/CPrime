@@ -37,9 +37,8 @@ Keep these implementation decisions when extending C++ support:
   opens for small inputs. Built-in declarations must retain their types and
   linkage while avoiding repetitive declaration-generating macros.
 
-The combined cold-path gate is
-`scripts/windows/test-compiler-cold-paths.cmd` (catalog name
-`test_compiler_cold_paths`). It covers import precedence, missing/lazy symbols,
+The combined cold-path gate is part of `Tests/test.exe -Checks`. It covers
+import precedence, missing/lazy symbols,
 C++/C/C++ reset and a dependency discovered in a later archive. Keep this gate
 under a few seconds. Use the existing include-search gate and focused C tests
 when changing these paths. Diagnostic metadata under
@@ -67,8 +66,8 @@ explicit C and C++ modes, with the complete driver in its separate heavy row.
    records taken around validated publication. Do not update the
    baseline, enable alternate hosts, or compensate with a tolerance increase.
 5. Completed 2026-09-13: helper implementations moved to `src/tools/` and the
-   shared inputs to `Tests/benchmarks/compile/`; `PerformanceTests.cmd` is the
-   thin retained entry point and builds all native helpers with root CPC. Cost
+   shared inputs to `Tests/benchmarks/compile/`; `scripts/performance.exe` is the
+   CPC-only native entry point. Cost
    metadata and the preprocessing include path moved with the cases. The
    baseline/progress data remains here and generated results remain under
    `build/`; `-Out` creates nested evidence directories. There is no second
@@ -121,7 +120,7 @@ language tiers once after the completed performance package. Required outcomes:
   every per-case ratio reported so a large case cannot hide startup regressions.
 - Full driver compilation restored to the historical target under comparable
   conditions, then improved; no unsupported claim that TCC compiled this source.
-- Full Build.cmd succeeds and its phase times are recorded. Root cpc.exe is
+- Full `scripts/build.exe` succeeds and its phase times are recorded. Root cpc.exe is
   replaced only by the normal validated self-host publication path.
 - No correctness baseline weakening, missing case, raised timeout, compiler
   parallelism or redefined workload. Passing the existing 25% drift gate alone
@@ -162,6 +161,12 @@ only and does not change the matched-C or self-driver acceptance evidence.
 TCC was not invoked because external compiler invocation remains unauthorized.
 
 Current cycle (2026-09-13): no performance measurement was run for the T1
+friend operator template-id repair. Its serial root-CPC publication passed;
+this correctness publication does not change matched-C or self-driver
+acceptance. TCC was not invoked because external compiler invocation remains
+unauthorized.
+
+Current cycle (2026-09-13): no performance measurement was run for the T1
 anonymous-typedef linkage repair. Its serial root-CPC publication passed at
 `build/package3-t1-nolinkage/build-final.log`; this is correctness publication only
 and does not change matched-C or self-driver acceptance. TCC was not invoked
@@ -172,3 +177,54 @@ variable-template linkage repair. The serial root-CPC publication passed at
 `build/package3-t1-dr2387/build-merge-definition.log`; this is correctness
 publication only and does not change matched-C or self-driver acceptance.
 TCC was not invoked because external compiler invocation remains unauthorized.
+
+Current cycle (2026-09-13): no performance measurement was run for the T1
+qualified-friend specialization repair. Its serial root-CPC publication passed
+at `build/package3-t1-ttp53/build.log`; this correctness publication does not
+change matched-C or self-driver acceptance. TCC was not invoked because
+external compiler invocation remains unauthorized.
+
+Current cycle (2026-09-13): the T2 dependent-primary lookup repair made no
+performance change or measurement. Its serial root-CPC publication passed at
+`build/package3-t2-vararg-final-build.log`; matched-C and self-driver evidence
+is unchanged. TCC was not invoked because external compiler invocation remains
+unauthorized.
+
+Current cycle (2026-09-13): no performance measurement was run for the T2
+global-allocation lookup repair. Its serial root-CPC publication passed at
+`build/package3-t2-pr98075/build-final.log`; this correctness publication does
+not change matched-C or self-driver acceptance. TCC was not invoked because
+external compiler invocation remains unauthorized.
+
+Current cycle (2026-09-13): no performance measurement was run for the T2
+lexical operator-lookup repair. Its serial root-CPC publication passed at
+`build/package3-t2-pr96818-build-final2.log`; this correctness publication does
+not change matched-C or self-driver acceptance. TCC was not invoked because
+external compiler invocation remains unauthorized.
+
+Current cycle (2026-09-14): the T4 pointer-to-member linkage and namespace
+repair was validated and published through the serial root-CPC build. It made
+no performance measurement or workload change; matched-C and self-driver
+acceptance evidence remains unchanged, and TCC was not invoked because external
+compiler invocation is unauthorized.
+
+Current cycle (2026-09-14): the T3 pointer-pattern and nested-specialization
+lookup repair was correctness-only. Its serial root-CPC publication passed 28
+native regressions; no performance measurement or workload change occurred.
+Matched-C and self-driver acceptance evidence is unchanged, and TCC was not
+invoked because external compiler invocation remains unauthorized.
+
+Current cycle (2026-09-14): the Templates runner header-context correction was
+correctness-only. The serial publication passed 28 native regressions and the
+42-row Templates gate; no performance measurement or workload change occurred.
+
+Current cycle (2026-09-14): the O1 no-throw catch-reachability repair was
+correctness-only. Its serial publication passed 28 native regressions and the
+Exceptions gate; no performance measurement or workload change occurred.
+
+Current cycle (2026-09-14): the T4 qualified virtual member-address repair was
+correctness-only. Validated publication passed 28 native regressions and the
+OperatorOverloads (8/8) plus Constructors (6/6) gates; no performance
+measurement or workload change occurred. Matched-C and self-driver evidence is
+unchanged, and TCC was not invoked because external compiler invocation remains
+unauthorized.

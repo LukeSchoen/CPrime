@@ -123,7 +123,7 @@ static int make_namespace_tok_from_parts(const int *parts, int nb_parts)
     result = cpp_namespace_prefix_tok;
   }
   for (; i < nb_parts; ++i) {
-    result = make_member_func_tok(result, parts[i]);
+    result = make_static_member_tok(result, parts[i]);
     if (is_namespace_tok(result)) {
       Sym *alias = global_symbol_find(result);
       if (alias && alias->cpp_using_target) result = alias->cpp_using_target;
@@ -2779,7 +2779,12 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
       return 1;
     }
     if (class_value_is_derived_from(&arg_value_type, param_pointed))
-      return 3;
+    {
+      int distance = class_base_distance(
+        get_struct_type_name_tok(&arg_value_type),
+        get_struct_type_name_tok(param_pointed), 0);
+      return distance > 0 ? 3 + distance : 3;
+    }
     if (!(param_type->t & VT_RVALUE_REFERENCE)
         && (param_pointed->t & (VT_CONSTANT | VT_VOLATILE)) == VT_CONSTANT
         && (param_pointed->t & VT_BTYPE) == VT_PTR
@@ -5036,10 +5041,14 @@ static int try_call_cpp_assignment_operator(void)
   Sym *func_type;
   Sym *sa, *this_arg, *value_arg;
   CType receiver_type;
+  int null_pointer_rhs;
 
   if ((vtop[-1].type.t & VT_BTYPE) != VT_STRUCT)
     return 0;
   receiver_type = vtop[-1].type;
+  null_pointer_rhs = is_null_pointer(vtop)
+    && (vtop->type.t & VT_BTYPE) != VT_PTR
+    && (vtop->type.t & VT_BTYPE) != VT_NULLPTR;
   if (!(vtop[-1].r & VT_LVAL)
       || ((vtop[-1].r & VT_VALMASK) < VT_CONST))
     receiver_type.t &= ~VT_CONSTANT;
@@ -5054,6 +5063,7 @@ static int try_call_cpp_assignment_operator(void)
      Drop such a candidate and let the store of the subobject happen. */
   if (func_sym
       && is_compatible_unqualified_types(&receiver_type, &vtop->type)
+      && !(receiver_type.t & VT_CONSTANT)
       && !lowered_member_func_single_param_is_self(&receiver_type, func_sym))
     func_sym = NULL;
   if (!func_sym)
@@ -5072,9 +5082,17 @@ static int try_call_cpp_assignment_operator(void)
     return try_call_cpp_assignment_operator();
   }
   if (!func_sym
-      && !is_compatible_unqualified_types(&receiver_type, &vtop->type)
-      && try_materialize_constructor_conversion(&receiver_type))
-    return try_call_cpp_assignment_operator();
+      && !is_compatible_unqualified_types(&receiver_type, &vtop->type))
+  {
+    if (null_pointer_rhs)
+      vtop->type.t |= VT_NULLPTR_TYPE;
+    if (try_materialize_constructor_conversion(&receiver_type))
+    {
+      vtop->type.t &= ~VT_NULLPTR_TYPE;
+      return try_call_cpp_assignment_operator();
+    }
+    vtop->type.t &= ~VT_NULLPTR_TYPE;
+  }
   if (!func_sym && receiver_type.ref
       && receiver_type.ref->a.cpp_nontrivial_copy_assignment)
     cprime_error("no matching user-declared copy assignment operator");

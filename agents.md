@@ -42,9 +42,16 @@ reference tests, or benchmarks without explicit user authorization.
 Clang builds are available only through explicitly Clang-named entry points.
 Investigate CPC failures using CPC; do not change the default host.
 
-Builds regenerate the runtime, package the candidate, and run the regression
-gate before replacing root `cpc.exe`. Preserve that executable and `lib/` for
-bootstrapping. Generated output belongs in `build/`.
+Builds create the compiler from the C/assembly bootstrap runtime first. The
+candidate compiler builds the packaged C++ runtime only when runtime, SDK, or
+package inputs invalidate the cache; use `scripts/build.exe -RebuildRuntime`
+for an explicit ABI/code-generation refresh. Packaging and the regression gate
+must pass before replacing root `cpc.exe`. Preserve that executable and `lib/`
+for bootstrapping. Generated output belongs in `build/`.
+
+The explicit seed-host proof is `scripts/seed-tcc.exe -RunExternal`. It builds
+the compiler translation unit as C with TCC and proves the resulting CPC can
+compile and run C. TCC execution still requires explicit authorization.
 
 For solution builds, use an exported build manifest and
 `scripts/project.exe -ProjectRoot <root>`. The serial CPC driver is native C.

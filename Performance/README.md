@@ -10,10 +10,10 @@ helpers. TCC measurements require the task's explicit authorization; other
 external compiler/ABI gates also remain blocked. Normal runs never extract a
 reference compiler or update baselines.
 
-Generated tools/logs/results belong in build/perf/. Baseline and progress data
-live here. The planned source/script/input migration into src/, scripts/ and
-Native helpers live in src/tools/ and shared compile inputs in
-Tests/benchmarks/compile/. Generated data stays in build/perf/.
+Native helper implementation lives in `src/tools/`, workflow entry points live
+in `scripts/`, and shared compile inputs live in `Tests/benchmarks/compile/`.
+Generated tools, logs, and results stay in `build/perf/`; baseline and progress
+data live here.
 
 The existing drift gate can pass while CPC remains slower than TCC. Use per-case
 results and the matched shared-C aggregate; the CPC-only self-driver never enters
