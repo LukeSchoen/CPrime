@@ -483,6 +483,9 @@ static int run_regressions(const char *compiler, const char *runtime, unsigned t
         {"features/Includes", {"test_chrono_header_standalone.cpp", NULL}},
         {"features/StdConcurrency", {"test_async_template_member_pointer_result.cpp", NULL}},
         {"features/Templates", {"test_out_of_class_member_read_overloads.cpp", NULL}},
+        /* Each pair must stay ordered in one compiler batch: declarations in
+           the first input must not leave token identities in the second. */
+        {"features/Templates", {"test_deduction_guide_functional_construction.cpp", "test_function_address_linkage_across_inputs.cpp", "test_explicit_static_member_initialization.cpp", "test_static_member_parenthesized_initializer.cpp", NULL}},
         {"features/Templates", {"test_member_template_deduction_scaling.cpp", "test_bound_member_function_decltype_sfinae.cpp", "test_conversion_template_owner_lookup.cpp", "test_conversion_probe_constructor_selection.cpp", "test_member_call_argument_storage.cpp", "test_member_deduction_signature_blocks.cpp", "test_member_reference_overload_converted_key.cpp", "test_nested_layout_parameter_scope.cpp", "test_static_member_template_unqualified_specializations.cpp", "test_inherited_variadic_member_linkage.cpp", "test_indirect_default_value_template_nested_alias.cpp", "test_private_dependent_alias_out_of_class_member.cpp", "test_detection_idiom_two_argument_member_enable_if.cpp", "test_member_template_detection_overload_dependent_value.cpp", "test_template_member_scoped_enum_operator_lookup.cpp", NULL}},
         {"features/OperatorOverloads", {"test_braced_argument_reference_overload.cpp", "test_derived_memberwise_move_assignment.cpp", "test_template_braced_reference_overload.cpp", "test_braced_reference_unrelated_types_ambiguous.cpp", "test_braced_reference_conflicting_preferences.cpp", "test_braced_argument_constructor_viability.cpp", "test_braced_argument_requires_viable_constructor.cpp", "test_enum_integral_promotion_ranking.cpp", NULL}}
     };
@@ -520,6 +523,7 @@ static int run_regressions(const char *compiler, const char *runtime, unsigned t
             extra_count = split_arguments(args_copy, extra, 128);
             for (k = 0; k < extra_count; ++k) job_argument(&batch, extra[k]);
             job_argument(&batch, item->path);
+            append_additional_job_sources(&batch, item->path, item->meta.sources);
             if (item->meta.compile_only) job_argument(&batch, "-c");
             job_argument(&batch, "-o"); job_argument(&batch, item->output);
             nt_buffer_text(&batch, "\n");

@@ -1,5 +1,10 @@
 ﻿{
     "schema":  1,
+    "repairCheckpoint": {
+        "compilerSHA256": "02536B5F825EB14302F8D15570191BB74F7642C91697D37AC99B5012F40219AD",
+        "evidence": "build/cpp17-repaired-verification.json",
+        "scope": "All 15 original reproducers passed individually; regression passed; fast gate found two additional constructor failures. Broader coverage remains incomplete."
+    },
     "date":  "2026-09-14",
     "complete":  false,
     "policy":  "One repository suite, independent minimal reductions, duplicate behaviors map to existing cases, CPC only and serial. Failed valid cases stay in pass/, never relabeled expected failures.",
@@ -108,8 +113,8 @@
                                             "features/Declarations/pass/test_cpp17_structured_binding_array.cpp",
                                             "features/Declarations/fail/test_cpp17_structured_binding_count.cpp"
                                         ],
-                         "verification":  "failing",
-                         "notes":  "Valid array decomposition fails. Count rejection alone is not evidence of correct count validation while all array bindings fail. Tuple protocol, aggregate, cv and access cases remain."
+                         "verification":  "partial-passed",
+                         "notes":  "Array copy/reference and count cases passed at repairCheckpoint. Tuple protocol, aggregate, cv, decltype identity and access cases remain."
                      },
                      {
                          "set":  "GCC 14.2.0",
@@ -118,8 +123,8 @@
                          "localTests":  [
                                             "features/Declarations/pass/test_cpp17_structured_binding_array.cpp"
                                         ],
-                         "verification":  "failing",
-                         "notes":  "Reuse Clang-mapped array case. Aggregate portion remains unverified."
+                         "verification":  "partial-passed",
+                         "notes":  "Array case passed at repairCheckpoint. Aggregate portion remains unverified."
                      },
                      {
                          "set":  "LLVM/Clang 18.1.8",
@@ -129,8 +134,8 @@
                                             "features/Statements/pass/test_cpp17_selection_init.cpp",
                                             "features/Statements/fail/test_cpp17_selection_init_scope.cpp"
                                         ],
-                         "verification":  "failing",
-                         "notes":  "Expression initializer rejected at semicolon. Out-of-scope diagnostic passed. Candidate fix did not pass publication; no passing claim."
+                         "verification":  "partial-passed",
+                         "notes":  "Expression/declaration initializer and lifetime case passed at repairCheckpoint. A new empty-initializer and expression-temporary lifetime regression also passed. Scope rejection requires fresh gate verification."
                      },
                      {
                          "set":  "LLVM/Clang 18.1.8",
@@ -149,8 +154,8 @@
                          "localTests":  [
                                             "features/Includes/pass/test_cpp17_optional_lifetime.cpp"
                                         ],
-                         "verification":  "failing",
-                         "notes":  "Packaged optional currently stores a live T even when disengaged and requires a default constructor. Retained valid test has no default constructor."
+                         "verification":  "partial-passed",
+                         "notes":  "Contained lifetime case passed at repairCheckpoint. Constexpr, conditional special-member availability/triviality, complete overloads and remaining exception contracts still require implementation and validation."
                      },
                      {
                          "set":  "MSVC STL vs-2022-17.10",

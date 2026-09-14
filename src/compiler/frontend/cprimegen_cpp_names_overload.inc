@@ -1578,6 +1578,33 @@ static int prepare_free_func_declarator(int name_tok, CType *func_type,
   int mangled_tok;
   Sym *base;
 
+  /* CPC's explicit lifecycle entry points use the lowered receiver as their
+     first parameter. Bind their declarations to the registered lifecycle
+     function, so C++ free-function mangling cannot create a second symbol. */
+  if (func_type->ref && func_type->ref->next)
+  {
+    CType *receiver = &func_type->ref->next->type;
+    if ((receiver->t & VT_BTYPE) == VT_PTR && !is_reference_type(receiver))
+    {
+      int owner = get_struct_type_name_tok(pointed_type(receiver));
+      int methods[2] = {TOK_CONSTRUCTOR1, TOK_DESTRUCTOR1}, i;
+      for (i = 0; owner && i < 2; ++i)
+        if (name_tok == make_joined_name_tok(owner, methods[i], "_", ""))
+        {
+          MemberFuncOverload *member;
+          for (member = member_func_candidates(owner, methods[i]); member;
+               member = member->bucket_next)
+            if (member->struct_tok == owner && member->method_tok == methods[i]
+                && member->func_type.ref
+                && same_func_param_signature(&member->func_type, func_type))
+            {
+              note_free_func_overload(name_tok, member->mangled_tok, func_type);
+              return member->mangled_tok;
+            }
+        }
+    }
+  }
+
   cpp_prepare_free_function_linkage(name_tok, func_type, ad);
 
   base = find_global_symbol(name_tok);
@@ -1987,7 +2014,7 @@ static void infer_saved_arg_type_and_category(TokenString *arg, CType *type,
   const int *saved_macro_ptr = macro_ptr;
   int is_null_pointer_constant;
   TokenString macro;
-  SValue saved_values[VSTACK_SIZE];
+  SValue *saved_values;
   struct temp_local_variable saved_temps[MAX_TEMP_LOCAL_VARIABLE_NUMBER];
   int value_count = (int)(vtop - vstack + 1);
   int saved_loc = loc, saved_temp_count = nb_temp_local_vars;
@@ -2013,6 +2040,7 @@ static void infer_saved_arg_type_and_category(TokenString *arg, CType *type,
   /* A semantic call probe can spill values already on the evaluation stack.
      Restore their descriptors as well as the stack pointer: those spills
      emit no code and cannot become the enclosing expression's live values. */
+  saved_values = cprime_malloc((value_count + 1) * sizeof(SValue));
   memcpy(saved_values, vstack, value_count * sizeof(SValue));
   memcpy(saved_temps, arr_temp_local_vars, sizeof(saved_temps));
   nocode_wanted++;
@@ -2043,6 +2071,7 @@ static void infer_saved_arg_type_and_category(TokenString *arg, CType *type,
     type->t |= VT_NULLPTR_TYPE;
   vtop = saved_vtop;
   memcpy(vstack, saved_values, value_count * sizeof(SValue));
+  cprime_free(saved_values);
   memcpy(arr_temp_local_vars, saved_temps, sizeof(saved_temps));
   loc = saved_loc;
   nb_temp_local_vars = saved_temp_count;

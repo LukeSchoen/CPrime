@@ -5187,7 +5187,8 @@ static int template_member_non_type_argument(int arg_tok)
   if (template_arg_const_int64(arg_tok, &ignored)) return 1;
   symbol = sym_find(arg_tok);
   if (!symbol) symbol = global_symbol_find(arg_tok);
-  return symbol && (symbol->template_address_target
+  return symbol && !(symbol->type.t & VT_TYPEDEF)
+                && (symbol->template_address_target
                     || (symbol->type.t & VT_BTYPE) == VT_FUNC);
 }
 
@@ -8918,6 +8919,11 @@ static int save_template_parameter_default(TokenString **default_str, int type_d
 static int concept_name_toks[CPC_MAX_CONCEPT_NAMES];
 static int nb_concept_name_toks;
 
+static void reset_cpp_concept_names(void)
+{
+  nb_concept_name_toks = 0;
+}
+
 static int token_names_concept(int name_tok)
 {
   int i, qualified;
@@ -11616,7 +11622,7 @@ static int template_arg_const_int64(int arg_tok, int64_t *out)
   }
   if (!s)
     s = global_symbol_find(arg_tok);
-  if (!s || (s->r & VT_VALMASK) != VT_CONST
+  if (!s || (s->type.t & VT_TYPEDEF) || (s->r & VT_VALMASK) != VT_CONST
       || !is_integer_btype(s->type.t & VT_BTYPE))
     return 0;
   *out = IS_ENUM_VAL(s->type.t) ? s->enum_val : s->c;

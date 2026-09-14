@@ -21,6 +21,14 @@ static int nb_explicit_static_data_specializations;
    the specialization is the definition. */
 static int parsing_explicit_specialization;
 
+static void reset_cpp_specialization_state(void)
+{
+  cprime_free(explicit_static_data_specializations);
+  explicit_static_data_specializations = NULL;
+  nb_explicit_static_data_specializations = 0;
+  parsing_explicit_specialization = 0;
+}
+
 static int is_explicit_static_data_specialization(int member_tok)
 {
   int i;

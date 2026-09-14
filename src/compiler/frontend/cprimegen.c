@@ -830,6 +830,8 @@ static int template_integer_expression_arg_tok(int64_t value);
 static int get_explicit_member_arguments(int key, TemplateArgList *args);
 static void free_explicit_member_arguments(void);
 static void free_template_body_return_cache(void);
+static void reset_cpp_concept_names(void);
+static void reset_cpp_specialization_state(void);
 static void prepare_saved_cpp_lambdas(TokenString *expression);
 static void parse_cpp_lambda_expression(void);
 static int is_cpp_lambda_marker(int token);
@@ -2515,6 +2517,8 @@ static void ptype(const char *msg, CType *type, int v)
 // initialize vstack and types.  This must be done also for cpc -E
 ST_FUNC void cprimegen_init(CPRIMEState *s1)
 {
+  reset_cpp_concept_names();
+  reset_cpp_specialization_state();
   /* A response file runs several independent translation units in one
      process.  Class-scope state is parser-owned, not part of CPRIMEState, so
      it must never let an unfinished anonymous aggregate in one job qualify
@@ -9781,6 +9785,8 @@ static TokenString *parse_constructor_member_initializers(CType *struct_type)
     if ((!is_base && (field_tok < TOK_UIDENT || field_tok >= SYM_FIRST_ANOM))
         || constructor_field_was_explicitly_initialized(initialized_fields,
                                                         field_tok)
+        || (IS_UNION(struct_type->t)
+            && (initialized_fields->len || !field->default_arg))
         || (!field->default_arg && !needs_default_init))
       continue;
 
@@ -16792,6 +16798,7 @@ ST_FUNC void indir(void)
      indexed scalar elements remain constant expressions. */
   if ((CONST_WANTED || integral_constant_expression_wanted
        || static_initializer_constant_fold)
+      && !suppress_integral_constexpr_fold
       && (vtop->r & (VT_CONST | VT_SYM)) == (VT_CONST | VT_SYM)
       && vtop->sym && (vtop->sym->string_literal
                         || ((vtop->sym->type.t & (VT_CONSTANT | VT_ARRAY))
@@ -24770,7 +24777,9 @@ static void expr_eq(void)
     assignment_guard.prev = active_assignment_lvalues;
     active_assignment_lvalues = &assignment_guard;
     next();
-    if (t == TOK_INIT_MEMBER && tok == '{') {
+    if (t == TOK_INIT_MEMBER
+        && (tok == '{' || ((vtop->type.t & VT_ARRAY)
+                           && (tok == TOK_STR || tok == TOK_LSTR)))) {
       init_params initialization = {0};
       CType member_type = vtop->type;
       int alignment;
@@ -25278,11 +25287,16 @@ static int try_gfunc_return_copy_construct(CType *func_type)
     gfunc_param_typed(ctor_type, sa);
     if (sa)
       sa = sa->next;
-    if (sa)
-      cprime_error("too few arguments to copy constructor");
-
-    vcheck_cmp();
-    gfunc_call(2);
+    {
+      int argument_count = 2;
+      while (sa) {
+        emit_default_arg(ctor_type, sa);
+        ++argument_count;
+        sa = sa->next;
+      }
+      vcheck_cmp();
+      gfunc_call(argument_count);
+    }
   }
   else
   {
@@ -27480,19 +27494,22 @@ static int decl_context(int l, int condition)
     btype_was_typedef = last_btype_was_typedef;
 
     if ((l == VT_LOCAL || l == VT_JMP) && is_cpp_translation_unit()
-        && btype_is_auto && (tok == '&' || tok == TOK_LAND))
+        && btype_is_auto && (tok == '[' || tok == '&' || tok == TOK_LAND))
     {
-      int saved_binding_tok = tok;
-      next();
+      int saved_binding_tok = tok == '[' ? 0 : tok;
+      if (saved_binding_tok) next();
       if (tok == '[')
       {
-        int binding_names[16], binding_count = 0;
+        TokenString *binding_names = tok_str_alloc();
+        int binding_count = 0;
         TokenString *binding_init = NULL;
         TokenString *binding_replay;
         TokenString *saved_macro_stack;
         const int *saved_macro_ptr;
         int saved_delimiter_tok, hidden_tok, i;
         CValue saved_tokc;
+        CType binding_type;
+        int array_binding, source_tok;
         char hidden_name[64];
 
         next();
@@ -27500,10 +27517,8 @@ static int decl_context(int l, int condition)
         {
           if (tok < TOK_UIDENT)
             expect("structured binding name");
-          if (binding_count == (int)(sizeof(binding_names)
-                                     / sizeof(binding_names[0])))
-            cprime_error("too many structured binding names");
-          binding_names[binding_count++] = tok;
+          tok_str_add(binding_names, tok);
+          ++binding_count;
           next();
           if (tok == ',')
             next();
@@ -27519,19 +27534,60 @@ static int decl_context(int l, int condition)
                  "__cpc_structured_binding_%u", ++anon_sym);
         hidden_tok = tok_alloc_const(hidden_name);
 
+        infer_saved_arg_type(binding_init, &binding_type);
+        if (is_reference_type(&binding_type))
+          binding_type = *pointed_type(&binding_type);
+        binding_type.t &= ~(VT_STORAGE | VT_RVALUE_REFERENCE);
+        array_binding = (binding_type.t & VT_ARRAY) != 0;
+        if (array_binding && binding_type.ref->c != binding_count)
+          cprime_error("structured binding has %d names but array has %d elements",
+                       binding_count, (int)binding_type.ref->c);
+        source_tok = hidden_tok;
+
         binding_replay = tok_str_alloc();
+        if (saved_binding_tok || !array_binding) {
+          if (btype.t & VT_CONSTANT) tok_str_add(binding_replay, TOK_CONST1);
+          if (btype.t & VT_VOLATILE) tok_str_add(binding_replay, TOK_VOLATILE1);
+        }
         tok_str_add(binding_replay, TOK_AUTO);
-        tok_str_add(binding_replay, TOK_LAND);
+        if (saved_binding_tok || array_binding)
+          tok_str_add(binding_replay, saved_binding_tok ? saved_binding_tok : TOK_LAND);
         tok_str_add(binding_replay, hidden_tok);
         tok_str_add(binding_replay, '=');
         tok_str_append_without_eof(binding_replay, binding_init);
         tok_str_add(binding_replay, ';');
+        if (array_binding && !saved_binding_tok)
+        {
+          snprintf(hidden_name, sizeof(hidden_name),
+                   "__cpc_structured_binding_%u", ++anon_sym);
+          hidden_tok = tok_alloc_const(hidden_name);
+          if (btype.t & VT_CONSTANT) tok_str_add(binding_replay, TOK_CONST1);
+          if (btype.t & VT_VOLATILE) tok_str_add(binding_replay, TOK_VOLATILE1);
+          add_ctype_declarator_tokens(binding_replay, &binding_type, hidden_tok);
+          tok_str_add(binding_replay, '=');
+          tok_str_add(binding_replay, '{');
+          for (i = 0; i < binding_count; ++i) {
+            if (i) tok_str_add(binding_replay, ',');
+            tok_str_add(binding_replay, source_tok);
+            tok_str_add(binding_replay, '[');
+            tok_str_add_cint(binding_replay, i);
+            tok_str_add(binding_replay, ']');
+          }
+          tok_str_add(binding_replay, '}');
+          tok_str_add(binding_replay, ';');
+        }
         for (i = 0; i < binding_count; ++i)
         {
           tok_str_add(binding_replay, TOK_AUTO);
           tok_str_add(binding_replay, TOK_LAND);
-          tok_str_add(binding_replay, binding_names[i]);
+          tok_str_add(binding_replay, binding_names->str[i]);
           tok_str_add(binding_replay, '=');
+          if (array_binding) {
+            tok_str_add(binding_replay, hidden_tok);
+            tok_str_add(binding_replay, '[');
+            tok_str_add_cint(binding_replay, i);
+            tok_str_add(binding_replay, ']');
+          } else {
           tok_str_add(binding_replay, tok_alloc_const("std"));
           tok_str_add(binding_replay, ':');
           tok_str_add(binding_replay, ':');
@@ -27542,10 +27598,12 @@ static int decl_context(int l, int condition)
           tok_str_add(binding_replay, '(');
           tok_str_add(binding_replay, hidden_tok);
           tok_str_add(binding_replay, ')');
+          }
           tok_str_add(binding_replay, ';');
         }
         tok_str_add(binding_replay, TOK_EOF);
         tok_str_free(binding_init);
+        tok_str_free(binding_names);
 
         saved_macro_stack = macro_stack;
         saved_macro_ptr = macro_ptr;

@@ -485,6 +485,16 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
        )
       cprime_error("initializer element is not computable at load time");
 
+    /* A dry run must enforce the same load-time value requirement as data
+       emission. A register result from a call is never an initializer byte. */
+    if ((vtop->r & (VT_VALMASK | VT_NONCONST)) != VT_CONST
+        || ((vtop->r & VT_LVAL)
+            && !(bt == VT_STRUCT && (vtop->r & VT_SYM)
+                 && vtop->sym
+                 && (vtop->sym->v >= SYM_FIRST_ANOM
+                     || (vtop->sym->type.t & VT_CONSTANT)))))
+      cprime_error("initializer element is not constant");
+
     if (NODATA_WANTED)
     {
       vtop--;
@@ -1234,7 +1244,8 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
     free_saved_array_elements(arguments, count);
     tok_str_free(initializer);
     if (ambiguous) cprime_error("ambiguous constructor in list-initialization");
-    if (!constructor) cprime_error("no matching constructor in list-initialization");
+    if (!constructor) cprime_error("no matching constructor for '%s' with %d list-initializer elements",
+                                   get_tok_str(class_tok, NULL), count);
     cprime_error("copy-list-initialization selects an explicit constructor");
   }
   if (!nocode_wanted && implicit_copy) {
@@ -1603,6 +1614,11 @@ do_init_list:
               The source type might have VT_CONSTANT set, which is
               of course assignable to non-const elements.  */
            && (is_compatible_unqualified_types(type, &vtop->type)
+               || (!p->sec && is_cpp_translation_unit()
+                   && (type->t & VT_BTYPE) == VT_STRUCT
+                   && type->ref && !type->ref->a.cpp_user_constructor
+                   && (vtop->type.t & VT_BTYPE) == VT_STRUCT
+                   && try_call_cpp_conversion_operator(type, 0))
                || (!p->sec && is_cpp_translation_unit()
                    && (type->t & VT_BTYPE) == VT_STRUCT && type->ref
                    && type->ref->a.cpp_user_constructor)))

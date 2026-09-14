@@ -516,7 +516,7 @@ static void probe_lambda_body(LambdaExpression *lambda, TokenString *parameters,
   Sym *saved_locals, *saved_cleanups = all_cleanups, *saved_gotos = pending_gotos;
   Sym *saved_labels = local_label_stack, *scope_sym;
   Sym *saved_outer_locals = local_stack;
-  SValue saved_values[VSTACK_SIZE];
+  SValue *saved_values;
   int saved_scope, saved_outer_scope = local_scope, i, saved_tok = tok, saved_loc = loc;
   int saved_nocode = nocode_wanted, saved_temp_count = nb_temp_local_vars;
   int saved_unevaluated_depth = cpp_unevaluated_expression_depth;
@@ -533,6 +533,9 @@ static void probe_lambda_body(LambdaExpression *lambda, TokenString *parameters,
   const int *parent_ptr = macro_ptr;
   LambdaExpression *saved_probe = lambda_probe;
 
+  /* Nested return deduction suspends only the live values, not an entire
+     maximum-sized expression stack at every level. */
+  saved_values = cprime_malloc((value_count + 1) * sizeof(SValue));
   memcpy(saved_values, vstack, value_count * sizeof(SValue));
   memcpy(saved_temps, arr_temp_local_vars, sizeof(saved_temps));
   vtop = vstack - 1;
@@ -622,6 +625,7 @@ static void probe_lambda_body(LambdaExpression *lambda, TokenString *parameters,
   debug_modes = saved_debug;
   memcpy(arr_temp_local_vars, saved_temps, sizeof(saved_temps));
   memcpy(vstack, saved_values, value_count * sizeof(SValue));
+  cprime_free(saved_values);
   vtop = vstack + value_count - 1;
   tok = saved_tok;
   tokc = saved_tokc;

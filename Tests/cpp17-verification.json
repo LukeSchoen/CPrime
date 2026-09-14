@@ -1,5 +1,13 @@
 ﻿{
     "schema":  1,
+    "repairCheckpoint": {
+        "compilerSHA256": "02536B5F825EB14302F8D15570191BB74F7642C91697D37AC99B5012F40219AD",
+        "originalFailuresPassed": 15,
+        "evidence": "build/cpp17-repaired-verification.json",
+        "regression": "passed: build/cpp17-repaired-regression.log",
+        "fast": "failed: two additional constructor tests; build/cpp17-repaired-fast.log",
+        "complete": false
+    },
     "date":  "2026-09-14",
     "compiler":  "root cpc.exe; hash not captured; concurrent session caveat in cpp17-coverage.json",
     "runs":  [

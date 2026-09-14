@@ -711,6 +711,25 @@ static void gexpr_decl(int for_condition)
   }
 }
 
+static void gexpr_selection(void)
+{
+  int temporary_mark = cpp_temp_mark();
+  if (is_cpp_translation_unit() && tok == ';')
+    next();
+  else
+  {
+    gexpr_decl(0);
+    if (!is_cpp_translation_unit() || tok != ';')
+      return;
+    /* An expression init-statement finishes before the condition starts.
+       Its temporaries die here; declarations remain in the selection scope. */
+    vpop();
+    cpp_temp_end(temporary_mark);
+    next();
+  }
+  gexpr_decl(1);
+}
+
 static void block(int flags)
 {
   int a, b, c, d, e, t;
@@ -864,7 +883,7 @@ if_chain:
     new_scope(&o);
     skip('(');
     cpp_range_condition_begin();
-    gexpr_decl(0);
+    gexpr_selection();
     cpp_temp_end_condition(temporary_mark);
     cpp_range_condition_push();
     a = gvtst(1, 0);
@@ -1367,7 +1386,7 @@ if_chain:
 
     new_scope(&o);
     skip('(');
-    gexpr_decl(0);
+    gexpr_selection();
     cpp_temp_end(temporary_mark);
     if ((vtop->type.t & VT_BTYPE) == VT_STRUCT)
       try_call_cpp_conversion_operator(&int_type, 0);

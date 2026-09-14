@@ -1042,11 +1042,16 @@ static void copy_construct_one_lvalue_pair(CType *type, SValue *dst_ptr,
   gfunc_param_typed(ctor_type, sa);
   if (sa)
     sa = sa->next;
-  if (sa)
-    cprime_error("too few arguments to copy constructor");
-
-  vcheck_cmp();
-  gfunc_call(2);
+  {
+    int argument_count = 2;
+    while (sa) {
+      emit_default_arg(ctor_type, sa);
+      ++argument_count;
+      sa = sa->next;
+    }
+    vcheck_cmp();
+    gfunc_call(argument_count);
+  }
   vtop = saved_vtop;
 }
 
@@ -1142,6 +1147,10 @@ static void register_struct_cleanups(CType *type, Sym *sym)
     return;
 
   if (type->ref->a.cpp_trivial_destruction && !type->ref->a.lifecycle_dtor)
+    return;
+
+  /* A union destructor's body owns the active member's destruction. */
+  if (IS_UNION(type->t))
     return;
 
   for (field = type->ref->next; field; field = field->next)
@@ -1481,7 +1490,10 @@ static int try_parse_cpp_functional_constructor(int type_tok)
   next();
   skip_line_markers();
   call_arg_count = count_saved_call_args(call_args, CPC_MAX_CALL_ARGUMENTS);
+  infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
   if (call_arg_count == 1 && saved_arg_is_braced(call_args[0])
+      && !resolve_member_func_by_arg_types(&type, TOK_CONSTRUCTOR1,
+                                           call_arg_types, call_arg_count)
       && !class_has_initializer_list_constructor_candidate(&type))
   {
     TokenString macro = *call_args[0];
@@ -1510,7 +1522,6 @@ static int try_parse_cpp_functional_constructor(int type_tok)
       skip(')');
     return 1;
   }
-  infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
   if (call_arg_count == 1)
   {
     CType source_type = call_arg_types[0];
@@ -5810,6 +5821,11 @@ static void inject_omitted_constructor_member_initializers(
   int new_tok = tok_alloc_const("new");
 
   if (!pending_lifecycle_is_constructor(pm))
+    return;
+
+  /* Unmentioned union variants are inactive. Default member initializers
+     are handled when the constructor's initialization prefix is parsed. */
+  if (IS_UNION(class_type->t))
     return;
 
   for (i = 0; i < pm->str->len; ++i)

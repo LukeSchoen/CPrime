@@ -143,6 +143,8 @@ static int lambda_is_enclosing_member(int class_tok, int name)
     return 0;
   class_type.t = class_sym->type.t;
   class_type.ref = class_sym;
+  if (class_has_instance_member_func(class_tok, name))
+    return 1;
   {
     Sym *member = find_field_try(&class_type, name, &offset);
     if (member && !(member->type.t & VT_TYPEDEF)
@@ -584,6 +586,8 @@ static int lambda_lexical_owner(void)
      across both parses, including separate function-template instances. */
   for (enclosing = lambda_expressions; enclosing; enclosing = enclosing->next)
   {
+    if (enclosing->class_tok == active_member_class_tok)
+      return enclosing->owner;
     const char *class_name = get_tok_str(enclosing->class_tok, NULL);
     size_t length = strlen(class_name);
     if (!strncmp(function_name, class_name, length)
@@ -729,6 +733,25 @@ static void parse_cpp_lambda_expression(void)
                        get_tok_str(name_tok, NULL));
       source = name_tok == tok_alloc_const("this")
                  ? current.outer_this : sym_find(name_tok);
+      if (!source && name_tok != tok_alloc_const("this"))
+      {
+        LambdaExpression *enclosing;
+        for (enclosing = lambda_expressions; enclosing; enclosing = enclosing->next)
+          if (enclosing->class_tok == enclosing_class) break;
+        if (enclosing)
+          for (i = 0; i < enclosing->count; ++i)
+            if (enclosing->captures[i].name == name_tok) {
+              CType captured = enclosing->captures[i].type;
+              if (!enclosing->captures[i].by_reference && !enclosing->mutable_call)
+                captured.t |= VT_CONSTANT;
+              /* The enclosing closure member supplies the initializer. Keep
+                 a descriptor without installing a local that shadows it. */
+              source = sym_push2(&global_stack, name_tok, captured.t, 0);
+              source->type = captured;
+              source->sym_scope = local_scope;
+              break;
+            }
+      }
       if (name_tok == tok_alloc_const("this") && by_reference)
         cprime_error("this must be captured by value");
       if (!source || !source->sym_scope)
