@@ -10,6 +10,7 @@ static const ToolSpec tools[] = {
     {"scripts\\build.c", "scripts\\build.exe", NULL},
     {"scripts\\project.c", "scripts\\project.exe", "-ladvapi32"},
     {"scripts\\project-clang.c", "scripts\\project-clang.exe", "-ladvapi32"},
+    {"src\\tools\\check_project_build.c", "scripts\\check_project_build.exe", NULL},
     {"scripts\\performance.c", "scripts\\performance.exe", NULL},
     {"scripts\\performance-tcc.c", "scripts\\performance-tcc.exe", NULL},
     {"scripts\\profile.c", "scripts\\profile.exe", "-lwinmm"},

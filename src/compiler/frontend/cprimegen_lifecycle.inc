@@ -6167,8 +6167,8 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
     }
     if (append_nested_lambda_tokens(dst, pm->str, &i))
       continue;
-    prev_i = tok_str_prev_token_index(pm->str, pm->str->len, i);
-    next_i = tok_str_next_non_linenum_index(pm->str, pm->str->len, i + 1);
+    prev_i = tok_str_prev_token_index(pm->str->str, pm->str->len, i);
+    next_i = tok_str_next_non_linenum_index(pm->str->str, pm->str->len, i + 1);
     if (nested_type_depth)
     {
       tok_str_add(dst, t);

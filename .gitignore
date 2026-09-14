@@ -26,6 +26,7 @@
 !/scripts/profile.exe
 !/scripts/project.exe
 !/scripts/project-clang.exe
+!/scripts/check_project_build.exe
 !/scripts/tool-build.exe
 /*.o
 /*.obj

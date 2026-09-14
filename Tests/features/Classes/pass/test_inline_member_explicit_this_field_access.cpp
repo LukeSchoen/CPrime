@@ -10,5 +10,7 @@ struct CameraExplicitThis
 
 int main()
 {
-  return 0;
+  CameraExplicitThis camera;
+  camera.Set(42);
+  return camera.value != 42;
 }
