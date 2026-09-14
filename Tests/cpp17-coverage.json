@@ -1,0 +1,199 @@
+﻿{
+    "schema":  1,
+    "date":  "2026-09-14",
+    "complete":  false,
+    "policy":  "One repository suite, independent minimal reductions, duplicate behaviors map to existing cases, CPC only and serial. Failed valid cases stay in pass/, never relabeled expected failures.",
+    "verificationLimits":  "Another session modified sources, committed changes and replaced root cpc.exe during this run. Earlier results are historical observations, not certification of the current executable. Compiler hashes were not captured for earlier runs; final stable-build verification is pending.",
+    "sources":  [
+                    {
+                        "set":  "LLVM/Clang 18.1.8",
+                        "root":  "https://github.com/llvm/llvm-project/tree/llvmorg-18.1.8",
+                        "scope":  "Selected clang/test/SemaCXX cxx1z cases; mixed positive/negative verify files require reductions"
+                    },
+                    {
+                        "set":  "GCC 14.2.0",
+                        "root":  "https://github.com/gcc-mirror/gcc/tree/releases/gcc-14.2.0",
+                        "scope":  "Inspected cpp1z directory and selected fold/decomposition/initializer/inline-variable cases; DejaGNU harness not executed"
+                    },
+                    {
+                        "set":  "MSVC STL vs-2022-17.10",
+                        "root":  "https://github.com/microsoft/STL/tree/vs-2022-17.10",
+                        "scope":  "Public STL tests; not the private MSVC compiler test suite"
+                    },
+                    {
+                        "set":  "Turbo C++ 3",
+                        "root":  "https://github.com/COVYGARMIN/TURBOCPP3/tree/2d6131564cbe07084c09e840ef179b23145a851c",
+                        "scope":  "Historical distribution mirror: inspected EX1.CPP and VPOINT.CPP; examples, not modern conformance tests"
+                    }
+                ],
+    "coverage":  [
+                     {
+                         "set":  "GCC 14.2.0",
+                         "upstream":  "gcc/testsuite/g++.dg/cpp1z/fold1.C",
+                         "behavior":  "All four fold directions; non-associative subtraction; empty seeded folds",
+                         "localTests":  [
+                                            "features/Templates/pass/test_cpp17_fold_association.cpp"
+                                        ],
+                         "verification":  "passed",
+                         "notes":  "Independent reduction, not an unmodified upstream run."
+                     },
+                     {
+                         "set":  "GCC 14.2.0",
+                         "upstream":  "gcc/testsuite/g++.dg/cpp1z/fold2.C",
+                         "behavior":  "Arithmetic, comparisons, assignments, shifts, bitwise, comma, logical, member-pointer folds",
+                         "localTests":  [
+                                            "features/Templates/pass/test_cpp17_fold_operators.cpp",
+                                            "features/Templates/pass/test_cpp17_fold_member_pointer.cpp",
+                                            "features/Templates/pass/test_cpp17_fold_short_circuit.cpp"
+                                        ],
+                         "verification":  "passed",
+                         "notes":  "Runtime checks replace upstream compile-only checks. Binary member-pointer forms and overloaded operators still need additional coverage."
+                     },
+                     {
+                         "set":  "GCC 14.2.0",
+                         "upstream":  "gcc/testsuite/g++.dg/cpp1z/fold3.C",
+                         "behavior":  "Empty logical/comma identities; reject empty unary addition",
+                         "localTests":  [
+                                            "features/Templates/pass/test_cpp17_fold_short_circuit.cpp",
+                                            "features/Templates/fail/test_cpp17_fold_empty_add.cpp"
+                                        ],
+                         "verification":  "partial-passed",
+                         "notes":  "Other invalid empty operators and constexpr identities are not yet verified."
+                     },
+                     {
+                         "set":  "GCC 14.2.0",
+                         "upstream":  "gcc/testsuite/g++.dg/cpp1z/fold8.C",
+                         "behavior":  "Parenthesized compound pack operand",
+                         "localTests":  [
+                                            "features/Templates/pass/test_cpp17_fold_association.cpp"
+                                        ],
+                         "verification":  "passed",
+                         "notes":  "Reuse squares fold; no duplicate fixture."
+                     },
+                     {
+                         "set":  "GCC 14.2.0",
+                         "upstream":  "gcc/testsuite/g++.dg/cpp1z/fold6.C",
+                         "behavior":  "Require cast-expression operands",
+                         "localTests":  [
+
+                                        ],
+                         "verification":  "unverified",
+                         "notes":  "Token expansion needs grammar validation for unparenthesized binary expressions."
+                     },
+                     {
+                         "set":  "GCC 14.2.0",
+                         "upstream":  "gcc/testsuite/g++.dg/cpp1z/fold4.C;fold10.C;fold11.C;fold13.C",
+                         "behavior":  "Constexpr dereference; multiple packs; non-type packs; large folds",
+                         "localTests":  [
+
+                                        ],
+                         "verification":  "unverified",
+                         "notes":  "Sources inspected; these behaviors are not certified by the scalar runtime matrix."
+                     },
+                     {
+                         "set":  "GCC 14.2.0",
+                         "upstream":  "gcc/testsuite/g++.dg/cpp1z/fold5.C",
+                         "behavior":  "Reject C++17 folds in C++11/14 mode",
+                         "localTests":  [
+
+                                        ],
+                         "verification":  "excluded-from-cpp17-run",
+                         "notes":  "Older-language diagnostic coverage, not a C++17 positive test."
+                     },
+                     {
+                         "set":  "LLVM/Clang 18.1.8",
+                         "upstream":  "clang/test/SemaCXX/cxx1z-decomposition.cpp",
+                         "behavior":  "Array copy/reference decomposition and element count",
+                         "localTests":  [
+                                            "features/Declarations/pass/test_cpp17_structured_binding_array.cpp",
+                                            "features/Declarations/fail/test_cpp17_structured_binding_count.cpp"
+                                        ],
+                         "verification":  "failing",
+                         "notes":  "Valid array decomposition fails. Count rejection alone is not evidence of correct count validation while all array bindings fail. Tuple protocol, aggregate, cv and access cases remain."
+                     },
+                     {
+                         "set":  "GCC 14.2.0",
+                         "upstream":  "gcc/testsuite/g++.dg/cpp1z/decomp1.C",
+                         "behavior":  "Array decomposition versus reference identity",
+                         "localTests":  [
+                                            "features/Declarations/pass/test_cpp17_structured_binding_array.cpp"
+                                        ],
+                         "verification":  "failing",
+                         "notes":  "Reuse Clang-mapped array case. Aggregate portion remains unverified."
+                     },
+                     {
+                         "set":  "LLVM/Clang 18.1.8",
+                         "upstream":  "clang/test/SemaCXX/cxx1z-init-statement.cpp",
+                         "behavior":  "if/switch expression and declaration initializers; lifetime; scope",
+                         "localTests":  [
+                                            "features/Statements/pass/test_cpp17_selection_init.cpp",
+                                            "features/Statements/fail/test_cpp17_selection_init_scope.cpp"
+                                        ],
+                         "verification":  "failing",
+                         "notes":  "Expression initializer rejected at semicolon. Out-of-scope diagnostic passed. Candidate fix did not pass publication; no passing claim."
+                     },
+                     {
+                         "set":  "LLVM/Clang 18.1.8",
+                         "upstream":  "clang/test/SemaCXX/cxx1z-copy-omission.cpp",
+                         "behavior":  "Deleted copy/move constructors; required prvalue elision and lifetime",
+                         "localTests":  [
+                                            "features/Constructors/pass/test_required_prvalue_elision.cpp"
+                                        ],
+                         "verification":  "baseline-passed",
+                         "notes":  "Existing regression reused. This does not cover every upstream conversion, aggregate, or deleted-destructor case."
+                     },
+                     {
+                         "set":  "MSVC STL vs-2022-17.10",
+                         "upstream":  "tests/std/tests/P0220R1_optional/test.cpp",
+                         "behavior":  "Disengaged optional does not construct T; emplace/reset destroy exactly once",
+                         "localTests":  [
+                                            "features/Includes/pass/test_cpp17_optional_lifetime.cpp"
+                                        ],
+                         "verification":  "failing",
+                         "notes":  "Packaged optional currently stores a live T even when disengaged and requires a default constructor. Retained valid test has no default constructor."
+                     },
+                     {
+                         "set":  "MSVC STL vs-2022-17.10",
+                         "upstream":  "tests/std/tests/P0220R1_any/test.cpp;tests/std/tests/P0088R3_variant/test.cpp",
+                         "behavior":  "any/variant lifetime, assignment, get_if, exception contracts",
+                         "localTests":  [
+
+                                        ],
+                         "verification":  "unavailable",
+                         "notes":  "Packaged runtime has neither any nor variant. Upstream files incorporate libc++ tests; importing both would duplicate coverage. No full MSVC frontend suite was available."
+                     },
+                     {
+                         "set":  "Turbo C++ 3 mirror 2d6131564cbe07084c09e840ef179b23145a851c",
+                         "upstream":  "EX1.CPP",
+                         "behavior":  "Stream output",
+                         "localTests":  [
+                                            "features/All/pass/test_runtime_iostream_output.cpp"
+                                        ],
+                         "verification":  "baseline-passed",
+                         "notes":  "Historical vendor example, not a C++17 conformance suite. Existing standard-header test reuses behavior; obsolete iostream.h and implicit-int main are excluded."
+                     },
+                     {
+                         "set":  "Turbo C++ 3 mirror 2d6131564cbe07084c09e840ef179b23145a851c",
+                         "upstream":  "VPOINT.CPP",
+                         "behavior":  "Out-of-class derived constructor initializes base",
+                         "localTests":  [
+                                            "features/Constructors/pass/test_base_constructor_initializer_out_of_class.cpp"
+                                        ],
+                         "verification":  "baseline-passed",
+                         "notes":  "Reuse existing portable regression. DOS graphics/BGI calls are outside C++17 language coverage."
+                     }
+                 ],
+    "additionalRegressions":  [
+                                  "features/Templates/fail/test_cpp17_fold_both_operands_pack.cpp",
+                                  "features/Templates/fail/test_cpp17_fold_mismatched_operators.cpp"
+                              ],
+    "remaining":  [
+                      "Stabilize exclusive compiler/build access and rerun publication and retained cases.",
+                      "Fix array structured bindings and optional contained-object lifetime.",
+                      "Complete selection expression initializer fix and validation.",
+                      "Investigate four isolated template failures and other baseline failures.",
+                      "Audit fold operand grammar, nested folds, constexpr, multiple/non-type packs and feature macro before claiming complete support.",
+                      "Audit if constexpr, constexpr lambdas, CTAD, inline variables across translation units, noexcept function type, over-aligned allocation, sequencing, attributes, and C++17 library facilities.",
+                      "Add unique cases from inspected but unmapped upstream inputs. No claim of exhaustive upstream execution."
+                  ]
+}

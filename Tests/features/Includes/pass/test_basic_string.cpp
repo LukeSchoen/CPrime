@@ -21,5 +21,8 @@ int main() {
   a.assign(b.begin()+1,b.end());
   if(a.size()!=3||a.front()!=b[1]||a.back()!=b.back())return 7;
   a='q'; if(a!="q")return 8;
+  std::string tail("tail");
+  std::string joined = "head " + tail + " end";
+  if (joined != "head tail end" || joined.size() != 13) return 9;
   return 0;
 }

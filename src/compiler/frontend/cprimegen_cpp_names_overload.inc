@@ -4977,6 +4977,37 @@ static int try_call_cpp_index_operator(void)
   return 1;
 }
 
+/* `object[{...}]`: a braced-init-list index initializes the operator[]
+   parameter, so the overload is selected by argument count and the list is
+   materialized against that parameter type.  Returns 1 once the argument is
+   on the stack, mirroring the layout try_call_cpp_index_operator expects. */
+static int emit_braced_index_operator_argument(void)
+{
+  Sym *func_sym, *sa, *param;
+  TokenString *braced = NULL;
+
+  if ((vtop->type.t & VT_BTYPE) != VT_STRUCT)
+    return 0;
+  materialize_incomplete_template_type(&vtop->type);
+  func_sym = resolve_member_func_by_arg_count(&vtop->type, CPP_TOK_INDEX_OP, 1);
+  if (!func_sym || (func_sym->type.t & VT_BTYPE) != VT_FUNC
+      || !func_sym->type.ref)
+    return 0;
+  sa = func_sym->type.ref->next;
+  if (!sa || !sa->next || sa->next->next)
+    return 0;
+  param = sa->next;
+  if ((param->type.t & VT_BTYPE) != VT_STRUCT && !(param->type.t & VT_ARRAY)
+      && !(is_reference_type(&param->type)
+           && (((pointed_type(&param->type)->t & VT_BTYPE) == VT_STRUCT)
+               || (pointed_type(&param->type)->t & VT_ARRAY))))
+    return 0;
+  skip_or_save_block(&braced);
+  emit_saved_arg_for_param(braced, param);
+  tok_str_free(braced);
+  return 1;
+}
+
 static int try_call_cpp_call_operator(void)
 {
   const int method_tok = CPP_TOK_CALL_OP;

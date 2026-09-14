@@ -4915,7 +4915,8 @@ static int expand_template_fold(TokenString *source, int start, TokenString *res
     int type_pack, int value_pack, int first_value_tok, int *types, int count)
 {
   int i, depth = 0, dots = -1, end = -1, previous = -1, before = -1;
-  int first, after, left_op, right_op, left_pack, right_pack, op;
+  int first, after, left_op, right_op, left_pack, right_pack, op, member_op = 0;
+  int right_operand;
   int pattern_begin, pattern_end, seed_begin = 0, seed_end = 0, left, terms, n;
   for (i = start + 1; i < source->len; ++i) {
     int t = source->str[i];
@@ -4933,11 +4934,26 @@ static int expand_template_fold(TokenString *source, int start, TokenString *res
   if (dots < 0 || end < 0) return -1;
   first = tok_str_next_non_linenum_index(source->str, source->len, start + 1);
   after = tok_str_next_non_linenum_index(source->str, source->len, dots + 1);
+  if (before >= first && source->str[before] == '*') {
+    int p = tok_str_prev_token_index(source->str, source->len, before);
+    if (p >= first && (source->str[p] == '.' || source->str[p] == TOK_ARROW))
+      before = p;
+  }
   left_op = before >= first && template_fold_operator(source->str[before]);
   right_op = after < end && template_fold_operator(source->str[after]);
+  if (before >= first && (source->str[before] == '.' || source->str[before] == TOK_ARROW))
+    left_op = member_op = 1;
+  right_operand = after + 1;
+  if (after < end && (source->str[after] == '.' || source->str[after] == TOK_ARROW)) {
+    int star = tok_str_next_non_linenum_index(source->str, source->len, after + 1);
+    if (star < end && source->str[star] == '*') {
+      right_op = member_op = 1;
+      right_operand = star + 1;
+    }
+  }
   if (!left_op && !right_op) return -1; /* f(x...) is not a fold */
   if (dots == first && right_op) {
-    left = 1; op = source->str[after]; pattern_begin = after + 1; pattern_end = end;
+    left = 1; op = source->str[after]; pattern_begin = right_operand; pattern_end = end;
   } else if (after == end && left_op) {
     left = 0; op = source->str[before]; pattern_begin = first; pattern_end = before;
   } else if (left_op && right_op) {
@@ -4945,12 +4961,12 @@ static int expand_template_fold(TokenString *source, int start, TokenString *res
       cprime_error("binary fold operators must match");
     op = source->str[before];
     left_pack = template_fold_uses_pack(source, first, before, type_pack, value_pack);
-    right_pack = template_fold_uses_pack(source, after + 1, end, type_pack, value_pack);
+    right_pack = template_fold_uses_pack(source, right_operand, end, type_pack, value_pack);
     if (left_pack == right_pack) cprime_error("binary fold requires exactly one unexpanded pack operand");
     left = right_pack;
-    pattern_begin = left ? after + 1 : first;
+    pattern_begin = left ? right_operand : first;
     pattern_end = left ? end : before;
-    seed_begin = left ? first : after + 1;
+    seed_begin = left ? first : right_operand;
     seed_end = left ? before : end;
   } else return -1;
   if (!template_fold_uses_pack(source, pattern_begin, pattern_end, type_pack, value_pack))
@@ -4980,7 +4996,10 @@ static int expand_template_fold(TokenString *source, int start, TokenString *res
                                 type_pack, value_pack, first_value_tok, types,
                                 n - (left && seed_end != 0));
     if (left && n) tok_str_add(result, ')');
-    if (n < terms - 1) tok_str_add(result, op);
+    if (n < terms - 1) {
+      tok_str_add(result, op);
+      if (member_op) tok_str_add(result, '*');
+    }
   }
   if (!left) for (n = 1; n < terms; ++n) tok_str_add(result, ')');
   return end;

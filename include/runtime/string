@@ -133,6 +133,7 @@ _CPC_STRING_POINTER_COMPARISON(>=)
 template<class C,class T,class A> basic_string<C,T,A> operator+(basic_string<C,T,A> a,const basic_string<C,T,A>& b) { a+=b; return a; }
 template<class C,class T,class A> basic_string<C,T,A> operator+(basic_string<C,T,A> a,C c) { a+=c; return a; }
 template<class C,class T,class A> basic_string<C,T,A> operator+(basic_string<C,T,A> a,const C* b) { a+=b; return a; }
+template<class C,class T,class A> basic_string<C,T,A> operator+(const C* a,const basic_string<C,T,A>& b) { basic_string<C,T,A> r(a); r+=b; return r; }
 inline string to_string(int v) { char b[32]; snprintf(b,sizeof(b),"%d",v); return string(b); }
 inline string to_string(unsigned int v) { char b[32]; snprintf(b,sizeof(b),"%u",v); return string(b); }
 inline string to_string(long v) { char b[32]; snprintf(b,sizeof(b),"%ld",v); return string(b); }

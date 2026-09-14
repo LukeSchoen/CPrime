@@ -13356,7 +13356,20 @@ static void struct_decl(CType *type, int u, int is_class_tag)
              && (nb_namespace_stack || unnamed_namespace_tok))
     {
       if (tok != '{' && tok != ':' && tok != ';')
-        v = find_current_namespace_tok(v);
+      {
+        int qualified = find_current_namespace_tok(v);
+        /* A tag named without a body (an elaborated type specifier, as in
+           `typedef struct Tag Alias;`) introduces the namespace member when
+           nothing of that name is declared yet - otherwise the later
+           `struct Tag { ... }` in the same namespace would declare a second
+           tag and complete that one, leaving the typedef bound to the
+           incomplete type.  A name that already resolves to a tag keeps that
+           type: an elaborated specifier refers to a visible class instead of
+           hiding it with a fresh namespace member. */
+        if (qualified == v && nb_namespace_stack && !struct_find(v))
+          qualified = make_current_namespace_tok(v);
+        v = qualified;
+      }
       else if (nb_namespace_stack)
         v = make_current_namespace_tok(v);
     }
@@ -23575,7 +23588,11 @@ cpp_object_member_destructor:
       int object_size_is_vector = 0;
 
       next();
-      gexpr();
+      /* A braced-init-list index initializes the operator[] parameter; the
+         list is materialized before the ordinary subscript path runs. */
+      if (!(is_cpp_translation_unit() && tok == '{'
+            && emit_braced_index_operator_argument()))
+        gexpr();
       object_size_is_vector = is_vector_type(&vtop[-1].type);
       if (!object_size_is_vector
           && ((object_size_base_type.t & (VT_ARRAY | VT_VLA))
