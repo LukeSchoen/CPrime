@@ -1,7 +1,7 @@
 #include "common/native_tool.h"
 
 static void usage(void) {
-    puts("build-clang.exe -RunExternal [-ClangPath PATH] [-OutDir DIR] [-O 0|1|2|3|s|z] [-SystemCRT] [-Map]\n"
+    puts("build-clang.exe -RunExternal [-ClangPath PATH] [-SourceRoot DIR] [-OutDir DIR] [-O 0|1|2|3|s|z] [-SystemCRT] [-Map]\n"
          "Clang is never invoked without the explicit -RunExternal authorization switch.");
 }
 
@@ -18,6 +18,7 @@ int main(int argc, char **argv) {
         else if (!_stricmp(argv[i], "-SystemCRT")) system_crt = 1;
         else if (!_stricmp(argv[i], "-Map")) map = 1;
         else if (!_stricmp(argv[i], "-ClangPath") && i + 1 < argc) strcpy(clang, argv[++i]);
+        else if (!_stricmp(argv[i], "-SourceRoot") && i + 1 < argc) strcpy(root, argv[++i]);
         else if (!_stricmp(argv[i], "-OutDir") && i + 1 < argc) strcpy(out, argv[++i]);
         else if (!_stricmp(argv[i], "-O") && i + 1 < argc) opt = argv[++i];
         else if (!_stricmp(argv[i], "-Help") || !_stricmp(argv[i], "--help")) { usage(); return 0; }

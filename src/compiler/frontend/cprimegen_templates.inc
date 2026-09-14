@@ -4864,6 +4864,128 @@ static int deduce_direct_template_type(TokenString *definition, int start,
                                        int parameter, int end, CType *argument,
                                        int parameter_argument);
 
+static int template_fold_operator(int token)
+{
+  return token == '+' || token == '-' || token == '*' || token == '/'
+      || token == '%' || token == '^' || token == '&' || token == '|'
+      || token == TOK_SHL || token == TOK_SAR || token == '=' || token == ','
+      || token == TOK_LT || token == TOK_GT || token == TOK_LE || token == TOK_GE
+      || token == TOK_EQ || token == TOK_NE || token == TOK_LAND || token == TOK_LOR
+      || TOK_ASSIGN(token);
+}
+
+static int template_fold_uses_pack(TokenString *source, int begin, int end,
+                                   int type_pack, int value_pack)
+{
+  int i;
+  for (i = begin; i < end; i += 1 + tok_str_value_extra_words(source->str, source->len, i))
+    if (source->str[i] == type_pack || (value_pack && source->str[i] == value_pack))
+      return 1;
+  return 0;
+}
+
+static void template_fold_operand(TokenString *result, TokenString *source,
+    int begin, int end, int type_pack, int value_pack, int first_value_tok,
+    int *types, int element)
+{
+  int i;
+  char name[256];
+  tok_str_add(result, '(');
+  for (i = begin; i < end; ++i) {
+    int t = source->str[i];
+    if (element >= 0 && t == type_pack) tok_str_add(result, types[element]);
+    else if (element >= 0 && value_pack && t == value_pack) {
+      int previous = tok_str_prev_token_index(source->str, source->len, i);
+      int next = tok_str_next_non_linenum_index(source->str, source->len, i + 1);
+      int qualified = previous >= 0 && (source->str[previous] == '.'
+          || source->str[previous] == TOK_ARROW || source->str[previous] == ':');
+      if (next < end && source->str[next] == ':') qualified = 1;
+      snprintf(name, sizeof name, "%s__pack%d", get_tok_str(value_pack, NULL), element);
+      tok_str_add(result, qualified ? t : element == 0 && first_value_tok
+                  ? first_value_tok : tok_alloc_const(name));
+    } else tok_str_add_record(result, source->str, source->len, &i);
+  }
+  tok_str_add(result, ')');
+}
+
+/* Recognize a fold at its enclosing parentheses, not at the ellipsis: an
+   ordinary pack expansion is comma separated, whereas folds preserve both
+   their operator and their explicitly specified association. */
+static int expand_template_fold(TokenString *source, int start, TokenString *result,
+    int type_pack, int value_pack, int first_value_tok, int *types, int count)
+{
+  int i, depth = 0, dots = -1, end = -1, previous = -1, before = -1;
+  int first, after, left_op, right_op, left_pack, right_pack, op;
+  int pattern_begin, pattern_end, seed_begin = 0, seed_end = 0, left, terms, n;
+  for (i = start + 1; i < source->len; ++i) {
+    int t = source->str[i];
+    if (TOK_HAS_VALUE(t)) { i += tok_str_value_extra_words(source->str, source->len, i); continue; }
+    if (t == TOK_EOF) return -1;
+    if (!depth && t == ')') { end = i; break; }
+    if (!depth && t == TOK_DOTS) {
+      if (dots >= 0) return -1;
+      dots = i; before = previous;
+    }
+    if (t == '(' || t == '[' || t == '{') ++depth;
+    else if (t == ')' || t == ']' || t == '}') --depth;
+    previous = i;
+  }
+  if (dots < 0 || end < 0) return -1;
+  first = tok_str_next_non_linenum_index(source->str, source->len, start + 1);
+  after = tok_str_next_non_linenum_index(source->str, source->len, dots + 1);
+  left_op = before >= first && template_fold_operator(source->str[before]);
+  right_op = after < end && template_fold_operator(source->str[after]);
+  if (!left_op && !right_op) return -1; /* f(x...) is not a fold */
+  if (dots == first && right_op) {
+    left = 1; op = source->str[after]; pattern_begin = after + 1; pattern_end = end;
+  } else if (after == end && left_op) {
+    left = 0; op = source->str[before]; pattern_begin = first; pattern_end = before;
+  } else if (left_op && right_op) {
+    if (source->str[before] != source->str[after])
+      cprime_error("binary fold operators must match");
+    op = source->str[before];
+    left_pack = template_fold_uses_pack(source, first, before, type_pack, value_pack);
+    right_pack = template_fold_uses_pack(source, after + 1, end, type_pack, value_pack);
+    if (left_pack == right_pack) cprime_error("binary fold requires exactly one unexpanded pack operand");
+    left = right_pack;
+    pattern_begin = left ? after + 1 : first;
+    pattern_end = left ? end : before;
+    seed_begin = left ? first : after + 1;
+    seed_end = left ? before : end;
+  } else return -1;
+  if (!template_fold_uses_pack(source, pattern_begin, pattern_end, type_pack, value_pack))
+    cprime_error("fold expression requires an unexpanded parameter pack");
+  terms = count + (seed_end != 0);
+  if (!terms) {
+    if (op == TOK_LAND || op == TOK_LOR) {
+      tok_str_add(result, '(');
+      tok_str_add(result, TOK_BOOL);
+      tok_str_add(result, ')');
+      tok_str_add_cint(result, op == TOK_LAND);
+    } else if (op == ',') {
+      tok_str_add(result, '('); tok_str_add(result, TOK_VOID); tok_str_add(result, ')');
+      tok_str_add_cint(result, 0);
+    } else cprime_error("empty unary fold has no identity for this operator");
+    return end;
+  }
+  /* Emit in linear space even for large packs. Each binary operation gets
+     parentheses so precedence and right folds cannot silently change meaning. */
+  if (left) for (n = 1; n < terms; ++n) tok_str_add(result, '(');
+  for (n = 0; n < terms; ++n) {
+    int seed = seed_end && (left ? n == 0 : n == terms - 1);
+    if (!left && n < terms - 1) tok_str_add(result, '(');
+    if (seed) template_fold_operand(result, source, seed_begin, seed_end,
+                                    type_pack, value_pack, first_value_tok, types, -1);
+    else template_fold_operand(result, source, pattern_begin, pattern_end,
+                                type_pack, value_pack, first_value_tok, types,
+                                n - (left && seed_end != 0));
+    if (left && n) tok_str_add(result, ')');
+    if (n < terms - 1) tok_str_add(result, op);
+  }
+  if (!left) for (n = 1; n < terms; ++n) tok_str_add(result, ')');
+  return end;
+}
+
 /* Expand the saved source pattern before ordinary substitution can erase which
    names belong to the pack. Every element must replay the entire expression,
    including casts, calls, subscripts and operators, with its own deduced type. */
@@ -4884,6 +5006,11 @@ static TokenString *expand_template_expression_packs(TokenString *source,
     if (skip_separator) {
       skip_separator = 0;
       if (token == ',') continue;
+    }
+    if (token == '(') {
+      int end = expand_template_fold(source, i, result, type_pack,
+                                    declared_value_pack, first_value_tok, types, count);
+      if (end >= 0) { i = end; continue; }
     }
     if (token == TOK_DOTS)
     {

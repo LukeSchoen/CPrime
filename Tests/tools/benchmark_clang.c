@@ -172,6 +172,7 @@ int main(int argc, char **argv) {
     strcpy(fast_cpc, "C:/Luke/Src/CL/cpc.exe"); strcpy(clang, "C:/Luke/Src/Clang/clang.exe");
     for (i=1; i<argc; ++i) {
         if (!strcmp(argv[i], "-RunExternal")) authorized=1;
+        else if (!strcmp(argv[i], "-Root") && i+1<argc) snprintf(root, sizeof root, "%s", argv[++i]);
         else if (!strcmp(argv[i], "-Runs") && i+1<argc) runs=atoi(argv[++i]);
         else if (!strcmp(argv[i], "-Clang") && i+1<argc) snprintf(clang, sizeof clang, "%s", argv[++i]);
         else if (!strcmp(argv[i], "-MinimalClang") && i+1<argc) snprintf(minimal, sizeof minimal, "%s", argv[++i]);
@@ -179,7 +180,7 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-FastCpc") && i+1<argc) snprintf(fast_cpc, sizeof fast_cpc, "%s", argv[++i]);
         else if (!strcmp(argv[i], "-Out") && i+1<argc) snprintf(out, sizeof out, "%s", argv[++i]);
         else if (!strcmp(argv[i], "-Case") && i+1<argc) only=argv[++i];
-        else { fprintf(stderr, "benchmark-clang.exe -RunExternal [-Runs N] [-Clang EXE] [-MinimalClang EXE] [-Cpc EXE] [-FastCpc EXE] [-Out DIR] [-Case NAME]\n"); return 2; }
+        else { fprintf(stderr, "benchmark-clang.exe -RunExternal [-Runs N] [-Root SOURCE_ROOT] [-Clang EXE] [-MinimalClang EXE] [-Cpc EXE] [-FastCpc EXE] [-Out DIR] [-Case NAME]\n"); return 2; }
     }
     if (!authorized || runs<1 || runs>30) { fputs("Requires -RunExternal and 1..30 runs\n", stderr); return 2; }
     if (!GetProcessAffinityMask(GetCurrentProcess(), &available, &system_mask)) nt_die("read affinity", NULL);
