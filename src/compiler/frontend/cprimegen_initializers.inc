@@ -355,7 +355,20 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
   if (is_reference_type(&dtype))
   {
     CType target = *pointed_type(&dtype);
-    if (!sec && (target.t & VT_BTYPE) == VT_STRUCT
+    int derived_lvalue_to_base = 0;
+    /* Binding a reference to a base subobject of a derived object is a
+       standard conversion: the reference aliases that subobject.  Running the
+       constructor-conversion probe first would slice the object into a
+       temporary and bind the reference, and every data pointer read through
+       it, to that copy instead. */
+    if (!sec
+        && (target.t & VT_BTYPE) == VT_STRUCT
+        && (vtop->type.t & VT_BTYPE) == VT_STRUCT
+        && (vtop->r & VT_LVAL)
+        && !is_compatible_unqualified_types(&target, &vtop->type)
+        && class_value_is_derived_from(&vtop->type, &target))
+      derived_lvalue_to_base = 1;
+    if (!derived_lvalue_to_base && !sec && (target.t & VT_BTYPE) == VT_STRUCT
         && ((target.t & VT_CONSTANT) || (dtype.t & VT_RVALUE_REFERENCE))
         && !is_compatible_unqualified_types(&target, &vtop->type))
     {
@@ -396,6 +409,13 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
         test_lvalue();
       mk_pointer(&vtop->type);
       gaddrof();
+      if (derived_lvalue_to_base)
+      {
+        CType base_pointer = target;
+        base_pointer.t &= ~(VT_CONSTANT | VT_VOLATILE);
+        mk_pointer(&base_pointer);
+        try_adjust_derived_pointer_to_base(&base_pointer);
+      }
     }
     /* An automatic reference whose address is a link-time constant is not
        frame state.  Record the referent so a deferred local class member body

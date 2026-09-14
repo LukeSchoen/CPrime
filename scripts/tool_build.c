@@ -7,6 +7,8 @@ typedef struct ToolSpec {
 } ToolSpec;
 
 static const ToolSpec tools[] = {
+    {"Tests\\tools\\benchmark_clang.c", "scripts\\benchmark-clang.exe", NULL},
+    {"scripts\\build-clang-minimal.c", "scripts\\build-clang-minimal.exe", NULL},
     {"scripts\\build.c", "scripts\\build.exe", NULL},
     {"scripts\\project.c", "scripts\\project.exe", "-ladvapi32"},
     {"scripts\\project-clang.c", "scripts\\project-clang.exe", "-ladvapi32"},
@@ -30,7 +32,17 @@ static void replace_file(const char *from, const char *to) {
 int main(int argc, char **argv) {
     char scripts[NT_PATH], root[NT_PATH], cpc[NT_PATH];
     int i, failures = 0;
-    (void)argc; (void)argv;
+    const char *selected = NULL;
+    if (argc == 3 && !strcmp(argv[1], "-Tool")) selected = argv[2];
+    else if (argc != 1) { fputs("tool-build.exe [-Tool executable-name]\n", stderr); return 2; }
+    if (selected) {
+        int found = 0;
+        for (i = 0; i < (int)(sizeof tools / sizeof tools[0]); ++i) {
+            const char *name = strrchr(tools[i].output, '\\');
+            if (!strcmp(selected, name ? name + 1 : tools[i].output)) found = 1;
+        }
+        if (!found) { fprintf(stderr, "Unknown workflow tool: %s\n", selected); return 2; }
+    }
     nt_module_directory(scripts, sizeof scripts);
     strcpy(root, scripts); nt_parent(root);
     nt_join(cpc, sizeof cpc, root, "cpc.exe");
@@ -40,6 +52,10 @@ int main(int argc, char **argv) {
         const char *command[8];
         NtProcessResult result;
         int n = 0;
+        if (selected) {
+            const char *name = strrchr(tools[i].output, '\\');
+            if (strcmp(selected, name ? name + 1 : tools[i].output)) continue;
+        }
         nt_join(source, sizeof source, root, tools[i].source);
         nt_join(output, sizeof output, root, tools[i].output);
         snprintf(staged, sizeof staged, "%s.new.exe", output);
