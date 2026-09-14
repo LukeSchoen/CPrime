@@ -1,4 +1,0 @@
-# Known current first-party failures, relative to Tests/.
-# Pending programs must pass after repair.
-# Native ABI/assembly and historical batch issues remain separately in task.md
-# until their exact current reproductions are established.

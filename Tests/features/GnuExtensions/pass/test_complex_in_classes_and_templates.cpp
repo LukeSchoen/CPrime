@@ -1,7 +1,4 @@
-/* Complex members inside classes, templates and variadic calls, reduced from
-   the retired external corpus rows (g++.dg/ext/complex9.C,
-   g++.dg/opt/pr83608.C, g++.dg/expr/stdarg2.C,
-   g++.old-deja/g++.other/debug9.C). */
+/* Complex members inside classes, templates and variadic calls. */
 
 #include <stdarg.h>
 

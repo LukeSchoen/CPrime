@@ -3,8 +3,7 @@
 // inside its class and defined out of line: the declaration and the definition
 // are two member records that instantiate the same specialization.  The
 // address is also formed in a class-template member-initializer and the
-// resulting callback is called through the pointer, which is the shape of
-// PR c++/49663 (g++.dg/template/access28.C).
+// resulting callback is called through the pointer.
 
 namespace dx
 {

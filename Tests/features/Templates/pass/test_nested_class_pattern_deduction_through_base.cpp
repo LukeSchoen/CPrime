@@ -15,5 +15,6 @@ int main()
 {
   Derived value;
   int *selected = select(&value);
-  return selected == 0 ? 0 : 1;
+  mp_list<Wrap<int>::type, int> direct;
+  return selected != 0 || select(&direct) != 0;
 }

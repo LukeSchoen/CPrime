@@ -4,8 +4,7 @@
 // specialization's Inner; it used to be redirected to Outer<N>'s own joined
 // member name, so the qualified lookup searched Outer<1> for the name of
 // Outer<2>::Inner and reported `nested template type member ... must be a
-// typedef`.  This is the shape of the egcs-bugs report recorded as
-// g++.old-deja/g++.martin/sts_iarr.C.
+// typedef`.
 
 template <int N>
 struct Outer

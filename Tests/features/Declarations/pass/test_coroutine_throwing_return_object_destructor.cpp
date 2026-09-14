@@ -3,7 +3,6 @@
 
 // The coroutine's own return object can have a destructor that is not
 // noexcept; the promise type is still found in the class that declares it.
-// This is the shape retained GCC row pr102051.C compiles.
 
 #include <coroutine>
 

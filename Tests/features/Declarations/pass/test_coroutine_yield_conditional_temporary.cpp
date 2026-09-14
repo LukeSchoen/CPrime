@@ -3,8 +3,7 @@
 
 // `yield_value` takes its argument by value, so a conditional expression that
 // produces one of two prvalue temporaries has to be materialized for the
-// promise without an internal compiler error.  This is the shape retained GCC
-// row pr109283.C compiles.
+// promise without an internal compiler error.
 
 #include <coroutine>
 

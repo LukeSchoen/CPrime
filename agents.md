@@ -74,10 +74,6 @@ See [test commands and layout](Tests/README.md) and the
 [development loop](Tests/DEVELOPMENT.md). Bug reports should include a standalone
 reproducer, the command, and expected versus actual behavior.
 
-The retained GCC corpus under `Tests/pedantic/gcc/` holds only unresolved rows:
-a repaired row becomes a first-party regression and is then deleted from the
-corpus. See [remaining work](task.md) for the current state and ordered work.
-
 `Tests/test-msvc.exe -RunExternal` includes cross-compiler ABI gates and requires
 explicit authorization. Use `Tests/test.exe -All -Tier pedantic` only after a
 large change that warrants deeper language, packaging, or self-host testing.

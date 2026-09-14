@@ -140,6 +140,8 @@ struct construct_task
 construct_task construct_from_await()
 {
   noncopyable value{co_await noncopyable_awaiter{}};
+  noncopyable parenthesized(co_await noncopyable_awaiter{});
+  noncopyable copied = co_await noncopyable_awaiter{};
 }
 
 struct comma_task

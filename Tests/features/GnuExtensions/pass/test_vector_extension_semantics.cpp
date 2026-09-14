@@ -1,4 +1,4 @@
-// GNU vector extension semantics consolidated from the retired external corpus.
+// GNU vector extension semantics.
 
 typedef int v4si __attribute__((vector_size(16)));
 typedef int v2si __attribute__((vector_size(8)));

@@ -635,7 +635,7 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       vpop();
       return;
     }
-    if ((dtype.t & VT_BTYPE) == VT_STRUCT
+    if (!p->indirect_base && (dtype.t & VT_BTYPE) == VT_STRUCT
         && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_LOCAL | VT_LVAL)
         && (int)vtop->c.i == (int)c
         && is_compatible_unqualified_types(&dtype, &vtop->type))
@@ -1021,6 +1021,21 @@ static void emit_class_initializer_expression(TokenString *expression,
 {
   emit_class_initializer_expression_at(expression, type, address,
                                         VT_LOCAL | VT_LVAL);
+}
+
+static void initialize_lifecycle_copy(CType *type, int r, int addr,
+                                      TokenString *expression)
+{
+  init_params p = {0};
+  int align, size = type_size(type, &align);
+  /* A named return object can live behind the caller's result pointer.
+     Its frame slot stores an address, not the object's bytes. */
+  p.indirect_base = (r & VT_VALMASK) == VT_LLOCAL ? addr : 0;
+  p.local_offset = (p.indirect_base ? 0 : addr) + size;
+  if (expression)
+    p.elided_value = emit_class_initializer_expression_at(expression, type,
+                                                          addr, r);
+  init_putv(&p, type, p.indirect_base ? 0 : addr);
 }
 
 static int parse_direct_class_initializer(init_params *p, CType *type,

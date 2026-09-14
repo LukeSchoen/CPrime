@@ -2,7 +2,7 @@
    not a lambda introducer.  The body rewrite marks every `[` that follows
    `{`, `,`, `(` or `=` as a lambda introducer, so replaying `{ [e] = 0 }`
    analyzed a capture named `e` and reported `lambda capture 'e' must name an
-   automatic variable` (g++.dg/ext/desig11.C). */
+   automatic variable`. */
 
 enum { e = 2 };
 

@@ -169,14 +169,15 @@ static int selected(const char *name, char **selection, int count) {
 static int tier_contains(const char *relative) {
     char path[NT_PATH], needle[NT_PATH + 8];
     size_t size;
-    unsigned char *data;
-    nt_join(path, sizeof path, tests_root, "tiers.json");
-    data = nt_read_file(path, &size);
+    static unsigned char *data;
+    if (!data) {
+        nt_join(path, sizeof path, tests_root, "tiers.json");
+        data = nt_read_file(path, &size);
+    }
     if (!data) return 0;
     snprintf(needle, sizeof needle, "\"%s\"", relative);
     {
         int found = strstr((char *)data, needle) != NULL;
-        free(data);
         return found;
     }
 }
@@ -314,6 +315,7 @@ static int run_suite(const char *suite, const char *compiler, const char *runtim
     DWORD pid = GetCurrentProcessId();
     unsigned tick = GetTickCount();
     int i, count = 0, passed = 0, failed = 0;
+    double compile_seconds = 0, run_seconds = 0;
     nt_join(suite_path, sizeof suite_path, tests_root, suite);
     nt_join(pass_path, sizeof pass_path, suite_path, "pass");
     nt_join(fail_path, sizeof fail_path, suite_path, "fail");
@@ -367,9 +369,19 @@ static int run_suite(const char *suite, const char *compiler, const char *runtim
     nt_join(batch_path, sizeof batch_path, work, "jobs.txt"); nt_write_file(batch_path, batch.data, batch.size);
     command[0] = compiler; command[1] = "--batch-continue"; command[2] = batch_path; command[3] = NULL;
     compile = nt_run(command, root, timeout_ms * count, 0);
+    compile_seconds = compile.wall_seconds;
     printf("Using compiler: %s\nRunning suite: %s\n\n", compiler, suite);
     for (i = 0; i < count; ++i) {
         DWORD code;
+        char marker[80];
+        const char *timing;
+        unsigned elapsed;
+        unsigned long job_code;
+        snprintf(marker, sizeof marker, "# cprime batch end %d ", i + 1);
+        timing = strstr(compile.output, marker);
+        if (timing && sscanf(timing + strlen(marker), "%lu %u", &job_code, &elapsed) == 2
+            && elapsed >= 100)
+            printf("SLOW %s: compile %.3fs\n", cases[i].name, elapsed / 1000.0);
         int ok = find_batch_exit(compile.output, i + 1, &code);
         if (!ok || (cases[i].meta.compile_fail ? code == 0 : code != 0) ||
             (!cases[i].meta.compile_fail && !nt_exists(cases[i].output))) {
@@ -379,6 +391,7 @@ static int run_suite(const char *suite, const char *compiler, const char *runtim
         if (!cases[i].meta.compile_fail && !cases[i].meta.compile_only) {
             const char *run_command[2] = {cases[i].output, NULL};
             NtProcessResult run = nt_run(run_command, root, timeout_ms, 0);
+            run_seconds += run.wall_seconds;
             normalize_output(run.output);
             if (!run.started || run.timed_out || (int)run.exit_code != cases[i].meta.expected_exit ||
                 (*cases[i].meta.expected_stdout && strcmp(run.output, cases[i].meta.expected_stdout))) {
@@ -390,9 +403,16 @@ static int run_suite(const char *suite, const char *compiler, const char *runtim
         }
         printf("PASS %s\n", cases[i].name); passed++;
     }
-    nt_remove_tree(work);
+    if (failed) {
+        char log[NT_PATH];
+        nt_join(log, sizeof log, work, "compiler.log");
+        nt_write_file(log, compile.output, strlen(compile.output));
+        printf("Failure evidence: %s (compiler exit %lu)\n", work,
+               (unsigned long)compile.exit_code);
+    } else nt_remove_tree(work);
     nt_process_free(&compile); nt_buffer_free(&batch); free(cases); free(list.items);
     printf("\nSummary: %d passed, %d failed\n", passed, failed);
+    printf("Time: compile %.3fs, run %.3fs\n", compile_seconds, run_seconds);
     if (selection_count && passed + failed != selection_count)
         nt_die("one or more selected tests were not found", suite);
     return failed ? 1 : 0;
@@ -400,7 +420,7 @@ static int run_suite(const char *suite, const char *compiler, const char *runtim
 
 typedef struct RegressionGroup {
     const char *suite;
-    const char *names[12];
+    const char *names[16];
 } RegressionGroup;
 
 static void job_argument(NtBuffer *batch, const char *argument) {
@@ -458,9 +478,12 @@ static int run_regressions(const char *compiler, const char *runtime, unsigned t
     static const RegressionGroup groups[] = {
         {"c_compat", {"test_abstract_function_pointer_cast.c", "test_winapi_function_pointer_cast.c", "test_nested_pointer_cast_argument.c", "test_fast_unsigned_range_masked_unreachable.c", NULL}},
         {"features/Expressions", {"test_abstract_function_pointer_cast.cpp", "test_parenthesized_functional_construction.cpp", NULL}},
-        {"features/Constructors", {"test_implicit_derived_copy_with_base_constructors.cpp", "test_initializer_list_backing_lifetime.cpp", "test_array_before_explicit_member_initializers.cpp", NULL}},
-        {"features/Statements", {"test_static_string_array_in_branch.cpp", "test_static_string_array_too_long.cpp", NULL}},
-        {"features/Templates", {"test_member_template_deduction_scaling.cpp", "test_bound_member_function_decltype_sfinae.cpp", "test_conversion_template_owner_lookup.cpp", "test_conversion_probe_constructor_selection.cpp", "test_member_call_argument_storage.cpp", "test_member_deduction_signature_blocks.cpp", "test_member_reference_overload_converted_key.cpp", "test_nested_layout_parameter_scope.cpp", "test_static_member_template_unqualified_specializations.cpp", "test_inherited_variadic_member_linkage.cpp", NULL}},
+        {"features/Constructors", {"test_implicit_derived_copy_with_base_constructors.cpp", "test_initializer_list_backing_lifetime.cpp", "test_array_before_explicit_member_initializers.cpp", "test_nrvo_member_template_implicit_move.cpp", NULL}},
+        {"features/Statements", {"test_static_string_array_in_branch.cpp", "test_static_string_array_too_long.cpp", "test_namespace_const_unsigned_alias.cpp", NULL}},
+        {"features/Includes", {"test_chrono_header_standalone.cpp", NULL}},
+        {"features/StdConcurrency", {"test_async_template_member_pointer_result.cpp", NULL}},
+        {"features/Templates", {"test_out_of_class_member_read_overloads.cpp", NULL}},
+        {"features/Templates", {"test_member_template_deduction_scaling.cpp", "test_bound_member_function_decltype_sfinae.cpp", "test_conversion_template_owner_lookup.cpp", "test_conversion_probe_constructor_selection.cpp", "test_member_call_argument_storage.cpp", "test_member_deduction_signature_blocks.cpp", "test_member_reference_overload_converted_key.cpp", "test_nested_layout_parameter_scope.cpp", "test_static_member_template_unqualified_specializations.cpp", "test_inherited_variadic_member_linkage.cpp", "test_indirect_default_value_template_nested_alias.cpp", "test_private_dependent_alias_out_of_class_member.cpp", "test_detection_idiom_two_argument_member_enable_if.cpp", "test_member_template_detection_overload_dependent_value.cpp", "test_template_member_scoped_enum_operator_lookup.cpp", NULL}},
         {"features/OperatorOverloads", {"test_braced_argument_reference_overload.cpp", "test_derived_memberwise_move_assignment.cpp", "test_template_braced_reference_overload.cpp", "test_braced_reference_unrelated_types_ambiguous.cpp", "test_braced_reference_conflicting_preferences.cpp", "test_braced_argument_constructor_viability.cpp", "test_braced_argument_requires_viable_constructor.cpp", "test_enum_integral_promotion_ranking.cpp", NULL}}
     };
     RegressionCase *cases = nt_alloc(64 * sizeof *cases);

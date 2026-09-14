@@ -1,9 +1,5 @@
 /* _Complex and __complex__ declarations, element types, layout and imaginary
-   constants, reduced from the retired external corpus rows
-   (g++.dg/ext/complex1.C, complex2.C, complex5.C, complex6.C,
-   g++.dg/init/complex1.C, g++.dg/opt/complex1.C, complex2.C, complex4.C).
-
-   A complex type is the aggregate of its real and imaginary parts: the size
+   constants. A complex type is the aggregate of its real and imaginary parts: the size
    is twice the element size, the alignment is the element's, and a
    functional-style conversion or an imaginary constant produces a whole
    value. */

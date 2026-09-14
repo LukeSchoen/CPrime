@@ -2,8 +2,7 @@
 // EXPECT_COMPILE_ONLY: 1
 
 // A function declaration is a statement, so a coroutine body may declare one
-// before its co_return.  This is the shape retained GCC row
-// coro-function-decl.C compiles.
+// before its co_return.
 
 #include <coroutine>
 

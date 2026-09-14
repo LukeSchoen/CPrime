@@ -1,5 +1,5 @@
 // EXPECT_EXIT: 0
-// GCC g++.dg/init/new3.C and new4.C exposed a crash in the constant probe.
+// Global array-new expressions must not crash the constant probe.
 struct Owner { static char *bytes; };
 int count = 3;
 char *Owner::bytes = new char[count];

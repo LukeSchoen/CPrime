@@ -2265,7 +2265,8 @@ static int template_member_def_method_tok(TemplateMemberDef *md)
     /* Qualified calls in an inline body or constructor initializer are
        expressions, not the declaration's member name. */
     if (md->def_str->str[i] == '{'
-        || (md->def_str->str[i] == ':' && md->def_str->str[i + 1] != ':')) break;
+        || (md->def_str->str[i] == ':' && md->def_str->str[i + 1] != ':'
+            && (i == 0 || md->def_str->str[i - 1] != ':'))) break;
     if (md->def_str->str[i] == ':' && md->def_str->str[i + 1] == ':')
     {
       int member_index = tok_str_next_non_linenum_index(
@@ -12618,21 +12619,11 @@ static int parse_one_template_type_arg(void)
       if (!struct_find(nested_mangled_tok))
         cprime_error("template class instantiation failed for '%s'",
                   get_tok_str(td->name_tok, NULL));
-      if (tok == ':')
-      {
-        Sym *nested_alias = parse_template_nested_typedef(
-          struct_find(nested_mangled_tok));
-        if (nested_alias && (nested_alias->type.t & VT_TYPEDEF))
-        {
-          CType nested_type = nested_alias->type;
-          nested_type.t &= ~VT_TYPEDEF;
-          type_tok = template_exact_type_tok_from_ctype(&nested_type);
-          if (!type_tok)
-            type_tok = get_struct_type_name_tok(&nested_type);
-          if (type_tok)
-            return finish_template_type_argument(type_tok, qualifiers);
-        }
-      }
+      /* Resolve the specialization's qualified suffix in the common
+         finisher below.  Besides nested typedefs, it can be a static
+         integral member used as an enclosing template's non-type argument.
+         Consuming that suffix here and then retaining the class token turns
+         Trait<T>::value into Trait<T> and selects the wrong specialization. */
       type_tok = nested_mangled_tok;
     }
     else
@@ -17505,6 +17496,9 @@ static int infer_template_args_from_call_pattern(TemplateDef *td,
   }
 
   args->nb = td->nb_required_type_params;
+  /* Deduction produces argument kinds as well as spellings. An uninitialized
+     mask gives identical calls different member-specialization cache keys. */
+  args->value_mask = td->value_param_mask;
   if (pack_param_index >= 0 && pack_arg_start < arg_count
       && args->nb + (arg_count - pack_arg_start) <= CPC_MAX_TEMPLATE_ARGUMENTS)
     args->nb += arg_count - pack_arg_start;

@@ -39,6 +39,15 @@ int measure_value (sized<R> value)
 }
 }
 
+using namespace lib;
+template<class T> bool array_guide(T &range) {
+  auto qualified = lib::elements_of(range);
+  auto unqualified = elements_of(range);
+  return sizeof(qualified.range) == sizeof(range)
+      && &qualified.range[0] == &range[0]
+      && &unqualified.range[0] == &range[0];
+}
+
 int main ()
 {
   int lvalue = 3;
@@ -61,5 +70,9 @@ int main ()
   /* A guide that names the deduced argument by value. */
   if (lib::measure_value (lib::sized (5)) != 5)
     return 4;
+  const int array[6] = {1, 2, 3, 4, 5, 6};
+  const int *pointer = array;
+  auto pointer_view = elements_of(pointer);
+  if (!array_guide(array) || pointer_view.range != array) return 5;
   return 0;
 }

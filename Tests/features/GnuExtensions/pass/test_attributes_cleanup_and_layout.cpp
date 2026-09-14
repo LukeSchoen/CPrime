@@ -1,5 +1,4 @@
-// Attribute, cleanup-order and layout extensions consolidated from the retired
-// external corpus.
+// Attribute, cleanup-order and layout extensions.
 
 namespace empty_attribute
 {

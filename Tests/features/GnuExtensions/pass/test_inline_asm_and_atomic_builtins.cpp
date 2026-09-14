@@ -1,4 +1,4 @@
-// GNU asm and atomic/sync builtins consolidated from the retired external corpus.
+// GNU asm and atomic/sync builtin semantics.
 
 struct MemoryOperand
 {

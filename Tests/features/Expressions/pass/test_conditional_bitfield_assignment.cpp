@@ -48,5 +48,8 @@ int main () {
   low.field = 0;
   counter = 0;
   if (((false ? low.plain : low.field) = step ()) != 2) return 5;
-  return low.field != 2 || low.plain != 0 || counter != 1;
+  if (low.field != 2 || low.plain != 0 || counter != 1) return 6;
+  counter = 0;
+  (low.field = step()) += addend();
+  return low.field != 42 || counter != 2;
 }

@@ -2,8 +2,7 @@
 // EXPECT_COMPILE_ONLY: 1
 
 // A coroutine parameter is copied or moved into the frame before the body is
-// entered, so a by-value move-only parameter has to be accepted.  This is the
-// shape retained GCC row pr95350.C compiles.
+// entered, so a by-value move-only parameter has to be accepted.
 
 #include <coroutine>
 #include <utility>

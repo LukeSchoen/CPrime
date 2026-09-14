@@ -27,7 +27,6 @@
 !/scripts/project.exe
 !/scripts/project-clang.exe
 !/scripts/tool-build.exe
-!/scripts/worker.exe
 /*.o
 /*.obj
 /*.pdb

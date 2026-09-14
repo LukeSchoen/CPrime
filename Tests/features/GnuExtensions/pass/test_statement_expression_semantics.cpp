@@ -1,4 +1,4 @@
-// Statement-expression semantics consolidated from the retired external corpus.
+// Statement-expression semantics.
 
 static int check_array_decay()
 {

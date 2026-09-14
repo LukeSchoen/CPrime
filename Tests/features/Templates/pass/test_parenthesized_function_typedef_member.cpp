@@ -3,8 +3,7 @@
 // its return type, so instantiating the class must publish FP itself; reading
 // the identifier in front of the group as the declared name made the replayed
 // member a reference to an undeclared typedef.  The dependent default
-// template argument of B and the incomplete A keep the row's shape
-// (g++.dg/template/canon-type-3.C).
+// template argument of B and the incomplete A preserve the relevant shape.
 
 template <typename> struct A;
 template <typename T, typename = A<T> > struct B { };

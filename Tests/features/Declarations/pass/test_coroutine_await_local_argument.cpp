@@ -4,8 +4,7 @@
 // A `co_await` operand built from a live local has to be complete before the
 // suspension point: an object whose destructor is not noexcept, an argument
 // reached through a smart-pointer dereference, and an argument produced by a
-// virtual member call.  These are the shapes retained GCC rows pr95822.C,
-// pr95823.C and pr95824.C compile.
+// virtual member call.
 
 #include <coroutine>
 #include <memory>

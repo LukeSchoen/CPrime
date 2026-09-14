@@ -1,5 +1,4 @@
-// __has_feature / __has_extension / __has_builtin queries consolidated from the
-// retired external corpus.
+// __has_feature / __has_extension / __has_builtin query semantics.
 
 #define FEAT(x) (__has_feature(x) && __has_extension(x))
 

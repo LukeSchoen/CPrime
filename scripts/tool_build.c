@@ -14,7 +14,6 @@ static const ToolSpec tools[] = {
     {"scripts\\performance-tcc.c", "scripts\\performance-tcc.exe", NULL},
     {"scripts\\profile.c", "scripts\\profile.exe", "-lwinmm"},
     {"scripts\\deploy.c", "scripts\\deploy.exe", NULL},
-    {"scripts\\worker.c", "scripts\\worker.exe", NULL},
     {"scripts\\maintenance.c", "scripts\\maintenance.exe", NULL},
     {"scripts\\build-clang.c", "scripts\\build-clang.exe", NULL},
     {"scripts\\seed-tcc.c", "scripts\\seed-tcc.exe", NULL},

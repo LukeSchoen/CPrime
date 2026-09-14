@@ -1,4 +1,4 @@
-// GCC trait builtins consolidated from the retired external corpus.
+// GCC trait builtin behavior.
 // Each namespace preserves one distinct incomplete-type or argument-order case.
 
 namespace has_nothrow_assign_default

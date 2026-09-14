@@ -1,8 +1,4 @@
-/* Complex arithmetic, conversions and the real/imaginary part operators,
-   reduced from the retired external corpus rows (g++.dg/ext/complex3.C,
-   g++.dg/opt/complex3.C, complex5.C, complex6.C, conj1.C, conj2.C,
-   g++.dg/other/complex1.C, g++.old-deja/g++.brendan/complex1.C,
-   g++.dg/tree-ssa/pr50622.C). */
+/* Complex arithmetic, conversions and the real/imaginary part operators. */
 
 typedef __complex__ double cdouble;
 typedef __complex__ float cfloat;

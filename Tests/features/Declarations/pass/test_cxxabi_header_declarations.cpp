@@ -1,6 +1,5 @@
-// The Itanium ABI header must declare the names the retained GCC cases
-// include. The runtime keeps its own type_info representation, so only the
-// declaration set is required here.
+// The Itanium ABI header must provide the declaration set used here. The
+// runtime keeps its own type_info representation.
 #include <cxxabi.h>
 #include <typeinfo>
 

@@ -218,6 +218,8 @@ static int make_type_from_type_arg_tok(CType *type, int type_tok);
 static void struct_decl(CType *type, int u, int is_class_tag);
 static void complete_deferred_nested_layouts(int owner_tok);
 static void init_putv(init_params *p, CType *type, unsigned long c);
+static void initialize_lifecycle_copy(CType *type, int r, int addr,
+                                      TokenString *expression);
 static void decl_initializer(init_params *p, CType *type, unsigned long c, int flags);
 static void probe_static_aggregate_initializer(CType *type);
 /* A saved initializer is probed with the real parser before the emitting
@@ -2532,6 +2534,14 @@ ST_FUNC void cprimegen_init(CPRIMEState *s1)
   cpp_operator_overload_seen = 0;
   cpp_using_binding_seen = 0;
   cpp_this_binding_seen = 0;
+
+  /* An error can leave an initializer before its expression context is
+     restored. Each batch translation unit starts with neutral folding state,
+     including reference initializers that must retain object identity. */
+  suppress_integral_constexpr_fold = 0;
+  static_initializer_constant_fold = 0;
+  static_initializer_conversion_wanted = 0;
+  integral_constant_expression_wanted = 0;
 
   profile_scans_enabled = getenv("CPC_PROFILE_SCANS") != NULL;
   cpp_trace_incomplete_state = cpp_dump_autoret_state = cpp_trace_return_state = 0;
@@ -11713,8 +11723,15 @@ static int local_paren_starts_direct_initializer(void)
       default_arg = 0;
       qualifier = 0;
     }
-    tok_str_add_tok(replay);
-    next();
+    /* Adjacent type and parameter identifiers are not a qualified-id.
+       Only carry the owner across an actual scope operator. */
+    {
+      int previous = tok;
+      tok_str_add_tok(replay);
+      next();
+      if (previous != ':' && tok != ':')
+        qualifier = 0;
+    }
   }
   restore_cpp_lifecycle_probe(replay);
   return is_initializer;
@@ -17433,8 +17450,8 @@ static void parse_builtin_params(int nc, const char *args)
 }
 
 /* Builtin type traits spelled `__is_XXX(...)`.  The runtime headers do not
-   provide these GCC/Clang builtins, so the frontend answers the spellings
-   used by the compatibility corpus directly.  Argument types are parsed the
+   provide these GCC/Clang builtins, so the frontend answers them directly.
+   Argument types are parsed the
    same way `__builtin_types_compatible_p` parses its type parameters. */
 
 static int cpp_type_trait_name_tok(int name_tok)
@@ -20998,8 +21015,8 @@ str_init:
     if (r != VT_LOCAL)
     {
       /* The last named parameter may be spelled through an address-valued
-         expression, as in g++.dg/other/vararg-2.C.  In that case the
-         expression already yields the local address; add the register home
+         expression. In that case the expression already yields the local address;
+         add the register home
          slot offset as an ordinary pointer operation. */
       vtop->type = char_pointer_type;
       vpushi(8);
@@ -21450,6 +21467,9 @@ tok_identifier:
                                                  &qualified_conversion_type);
           if (qualified_member_tok)
           {
+            CType qualified_type;
+            if (make_class_type_from_tok(&qualified_type, t))
+              materialize_incomplete_template_type(&qualified_type);
             qualified_instance_class_tok = t;
             qualified_instance_member_tok = qualified_member_tok;
             instantiate_static_template_member_for_call(t,
@@ -21706,6 +21726,9 @@ tok_identifier:
           compile_pending_template_specs_without_member_flush();
           if (qualified_member_tok)
           {
+            CType qualified_type;
+            if (make_class_type_from_tok(&qualified_type, t))
+              materialize_incomplete_template_type(&qualified_type);
             qualified_instance_class_tok = t;
             qualified_instance_member_tok = qualified_member_tok;
             instantiate_static_template_member_for_call(t,
@@ -22818,6 +22841,7 @@ ordinary_identifier:
                   && (s->type.t & VT_EXTERN))
                 || (s->a.integral_constexpr
                     && (CONST_WANTED || integral_constant_expression_wanted
+                        || static_initializer_constant_fold
                         || (s->type.t & VT_EXTERN))
                     && (!suppress_integral_constexpr_fold
                         || CONST_WANTED || integral_constant_expression_wanted)))
@@ -23700,6 +23724,27 @@ cpp_object_member_destructor:
                                                     saved_call_arg_count,
                                                     template_deduction_failed);
         if (func_sym && !adl_call_name && func_sym->cpp_hidden_friend) func_sym = NULL;
+        if (!func_sym && adl_call_name
+            && (!vtop->sym
+                || ((vtop->type.t & VT_BTYPE) == VT_FUNC && vtop->type.ref
+                    && vtop->type.ref->f.func_type == FUNC_OLD)))
+        {
+          /* The name has no visible declaration and argument-dependent lookup
+             found no candidate, so the call names an external function this
+             translation unit never declared.  Publish the same implicit
+             declaration the C frontend tolerates instead of reporting an
+             overload failure, which is what CL sources rely on when they call
+             printf, clock or getchar without the matching system header. */
+          if (vtop->sym)
+            func_sym = vtop->sym;
+          else
+          {
+            cprime_warning_c(warn_implicit_function_declaration)(
+              "implicit declaration of function '%s'",
+              get_tok_str(adl_call_name, NULL));
+            func_sym = external_global_sym(adl_call_name, &func_old_type);
+          }
+        }
         if (!func_sym)
           cprime_error("no matching overloaded function '%s'",
                     get_tok_str(overload_name_tok, NULL));
@@ -26384,6 +26429,10 @@ static void gen_function(Sym *sym)
   enter_symbol_namespace(sym->v);
   active_member_class_tok = member_function_class_tok(sym->v);
   if (!active_member_class_tok) active_member_class_tok = sym->cpp_friend_owner;
+  /* Lowered member names start with the member prefix, so the function name
+     alone cannot restore the namespace when an inline body is emitted later. */
+  if (active_member_class_tok)
+    enter_symbol_namespace(active_member_class_tok);
 
   cur_scope = root_scope = &f;
   nocode_wanted = 0;

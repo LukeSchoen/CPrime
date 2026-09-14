@@ -400,9 +400,7 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
     /* A single class prvalue argument to the implicit or user-declared copy
        constructor is eligible for copy elision. Construct it directly in
        this object's storage instead of making a temporary for init_putv. */
-    init_params p = {0};
-    emit_class_initializer_expression(call_args[0], type, addr);
-    init_putv(&p, type, addr);
+    initialize_lifecycle_copy(type, r, addr, call_args[0]);
     next();
     return;
   }
@@ -410,7 +408,6 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
   if (call_arg_count == 1
       && (implicit_copy || is_defaulted_lifecycle_constructor(type, ctor_func)))
   {
-    init_params p = {0};
     TokenString macro = *call_args[0];
     TokenString *saved_macro_stack = macro_stack;
     const int *saved_macro_ptr = macro_ptr;
@@ -420,7 +417,7 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
     while (macro_stack && macro_stack != saved_macro_stack)
       end_macro();
     macro_ptr = saved_macro_ptr;
-    init_putv(&p, type, addr);
+    initialize_lifecycle_copy(type, r, addr, NULL);
     next();
     return;
   }
@@ -783,15 +780,42 @@ static int struct_needs_memberwise_assignment(CType *type)
 
 /* The implicit copy parameter is const T& only when every class subobject
    can be copied that way; a non-const-only subobject instead requires T&. */
-static int class_copy_accepts_const_impl(CType *type, int assignment)
+typedef struct CopyConstEntry {
+  Sym *tag;
+  int flags, result;
+} CopyConstEntry;
+
+typedef struct CopyConstQuery {
+  CopyConstEntry *entries;
+  unsigned capacity, count;
+  int assignment;
+} CopyConstQuery;
+
+static unsigned copy_const_slot(CopyConstEntry *entries, unsigned capacity,
+                                Sym *tag, int flags)
+{
+  unsigned index = (((uintptr_t)tag >> 4) ^ (unsigned)flags) & (capacity - 1);
+  while (entries[index].tag
+      && (entries[index].tag != tag || entries[index].flags != flags))
+    index = (index + 1) & (capacity - 1);
+  return index;
+}
+
+static int class_copy_accepts_const_impl(CType *type, CopyConstQuery *query)
 {
   CType source = *type;
   Sym *field, *constant_function, *mutable_function;
+  unsigned index;
+  int result = 1, cacheable;
   if (type->t & VT_ARRAY)
-    return class_copy_accepts_const_impl(pointed_type(type), assignment);
+    return class_copy_accepts_const_impl(pointed_type(type), query);
   if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref) return 1;
+  cacheable = type->ref->c >= 0
+      && !is_currently_defining_class(get_struct_type_name_tok(type));
+  index = copy_const_slot(query->entries, query->capacity, type->ref, type->t);
+  if (cacheable && query->entries[index].tag) return query->entries[index].result;
   source.t |= VT_CONSTANT;
-  if (assignment) {
+  if (query->assignment) {
     int operation = CPP_TOK_ASSIGN;
     constant_function = resolve_member_func_by_arg_types(type, operation, &source, 1);
     mutable_function = resolve_member_func_by_arg_types(type, operation, type, 1);
@@ -799,19 +823,46 @@ static int class_copy_accepts_const_impl(CType *type, int assignment)
     constant_function = resolve_copy_constructor_func(type, &source);
     mutable_function = resolve_copy_constructor_func(type, type);
   }
-  if (constant_function) return 1;
-  if (mutable_function) return 0;
-  for (field = type->ref->next; field; field = field->next)
-    if (!class_copy_accepts_const_impl(&field->type, assignment)) return 0;
-  return 1;
+  if (!constant_function) {
+    if (mutable_function) result = 0;
+    else for (field = type->ref->next; field; field = field->next)
+      if (!class_copy_accepts_const_impl(&field->type, query)) { result = 0; break; }
+  }
+  if (cacheable) {
+    if (query->count * 2 >= query->capacity) {
+      unsigned i, capacity = query->capacity * 2;
+      CopyConstEntry *entries = cprime_mallocz(capacity * sizeof(*entries));
+      for (i = 0; i < query->capacity; ++i) {
+        CopyConstEntry *entry = &query->entries[i];
+        if (entry->tag)
+          entries[copy_const_slot(entries, capacity, entry->tag, entry->flags)] = *entry;
+      }
+      cprime_free(query->entries);
+      query->entries = entries;
+      query->capacity = capacity;
+    }
+    /* Descending into subobjects may grow or populate the table. */
+    index = copy_const_slot(query->entries, query->capacity, type->ref, type->t);
+    if (!query->entries[index].tag) ++query->count;
+    query->entries[index].tag = type->ref;
+    query->entries[index].flags = type->t;
+    query->entries[index].result = result;
+  }
+  return result;
 }
 
 static int class_copy_accepts_const(CType *type, int assignment)
 {
   int result;
+  CopyConstQuery query;
+  query.capacity = 64;
+  query.count = 0;
+  query.assignment = assignment;
+  query.entries = cprime_mallocz(query.capacity * sizeof(*query.entries));
   ++suppress_template_member_body_demand;
-  result = class_copy_accepts_const_impl(type, assignment);
+  result = class_copy_accepts_const_impl(type, &query);
   --suppress_template_member_body_demand;
+  cprime_free(query.entries);
   return result;
 }
 
@@ -1277,7 +1328,6 @@ static void call_lifecycle_constructor_saved_args_ex(CType *type, int r, int add
         || (call_arg_count == 1 && overload
             && is_defaulted_lifecycle_constructor(type, overload)))
     {
-      init_params p = {0};
       TokenString macro = *call_args[0];
       TokenString *saved_macro_stack = macro_stack;
       const int *saved_macro_ptr = macro_ptr;
@@ -1287,7 +1337,7 @@ static void call_lifecycle_constructor_saved_args_ex(CType *type, int r, int add
       while (macro_stack && macro_stack != saved_macro_stack)
         end_macro();
       macro_ptr = saved_macro_ptr;
-      init_putv(&p, type, addr);
+      initialize_lifecycle_copy(type, r, addr, NULL);
       if (tok == TOK_EOF)
       {
         next();

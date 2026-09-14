@@ -1,7 +1,6 @@
 // EXPECT_EXIT: 0
 // EXPECT_COMPILE_ARGS: -Werror
-// A volatile member function releases a lock flag through the object it was
-// called on (g++.dg/ext/sync-3.C).
+// A volatile member function releases a lock flag through its object.
 struct T {
     bool t;
     void foo() volatile {

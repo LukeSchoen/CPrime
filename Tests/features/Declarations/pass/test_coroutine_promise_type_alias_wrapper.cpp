@@ -3,8 +3,7 @@
 
 // The return type of a coroutine names its promise through `promise_type`, and
 // the promise's `get_return_object()` result converts to that return type, so
-// an alias plus a converting constructor is enough.  This is the shape
-// retained GCC row pr95346.C compiles.
+// an alias plus a converting constructor is enough.
 
 #include <coroutine>
 #include <utility>
