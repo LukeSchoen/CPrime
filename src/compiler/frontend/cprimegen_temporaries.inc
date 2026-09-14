@@ -115,6 +115,8 @@ static void cpp_register_class_temporary(SValue *value)
       || !is_cpp_translation_unit()) return;
   value->r |= VT_CXX_PRVALUE;
   value->type.t |= VT_RVALUE_REFERENCE;
+  if (cpp_noexcept_query_depth && !class_destructor_is_noexcept(&value->type))
+    cpp_noexcept_note_throw();
   if (nocode_wanted || !cur_scope) return;
   storage = value->r & (VT_VALMASK | VT_LVAL | VT_SYM);
   if (storage != (VT_LOCAL | VT_LVAL)

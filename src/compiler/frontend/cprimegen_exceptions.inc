@@ -98,6 +98,7 @@ static int cpp_parse_class_return_expression(void)
   construction.address = func_vc;
   construction.available = saved_initializer_is_direct_constructor(expression, &func_vt);
   construction.conditional_marker = cpp_prepare_expression_destination(expression);
+  construction.extend_backing_array_lifetime = 0;
   saved_destination = cpp_construction_destination;
   cpp_construction_destination = &construction;
   saved_tok = tok; saved_tokc = tokc;
@@ -677,6 +678,7 @@ static Sym *cpp_eh_type_descriptor(CType *original, int nested)
 
 static void cpp_eh_throw_expression(void)
 {
+  cpp_noexcept_note_throw();
   CType type, pointer_type;
   Sym *descriptor, *destructor, *discard_object, *discard_cleanup;
   SValue source, destination;
@@ -769,6 +771,7 @@ allocate_exception:
     construction.address = object_slot;
     construction.available = 1;
     construction.conditional_marker = cpp_prepare_conditional_destination(operand);
+    construction.extend_backing_array_lifetime = 0;
     cpp_construction_destination = &construction;
     cpp_eh_replay_operand(operand);
     cpp_construction_destination = saved;
@@ -937,6 +940,9 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment,
       && type->ref->a.cpp_user_constructor && !resolve_autoctor_func(type))
     cprime_error("array new requires a viable default constructor");
   if (NOEVAL_WANTED) {
+    cpp_noexcept_note_call(&allocation->type);
+    constructor = resolve_autoctor_func(type);
+    if (constructor) cpp_noexcept_note_call(&constructor->type);
     if (tok == '(' || tok == '{') {
       int end = tok == '(' ? ')' : '}';
       next(); skip(end);
@@ -1093,6 +1099,8 @@ static void cpp_delete_pointer(int array_delete)
   }
   destructor = resolve_autodtor_func(&object_type);
   cookie = array_delete ? cpp_array_cookie_size(&object_type, destructor) : 0;
+  if (!class_destructor_is_noexcept(&object_type)) cpp_noexcept_note_throw();
+  if (free_function) cpp_noexcept_note_call(&free_function->type);
   if (!array_delete && destructor && class_has_virtual_destructor(&object_type))
     virtual_destructor = find_virtual_method_for_symbol(
         get_struct_type_name_tok(&object_type), destructor->v);

@@ -256,6 +256,7 @@ static int namespace_member_exists(int t)
   identifier = sym_find(t);
   if (!identifier) identifier = global_symbol_find(t);
   return (identifier && !identifier->cpp_hidden_friend) || struct_find(t)
+         || find_qualified_template_variable(t)
          || find_class_template_def(t) || find_function_template_def(t);
 }
 
@@ -2008,6 +2009,7 @@ static void infer_saved_arg_type_and_category(TokenString *arg, CType *type,
 {
   SValue *saved_vtop = vtop;
   int saved_nocode_wanted = nocode_wanted;
+  int saved_noexcept_throws = cpp_noexcept_query_throws;
   int saved_tok = tok;
   CValue saved_tokc = tokc;
   TokenString *saved_macro_stack = macro_stack;
@@ -2076,6 +2078,7 @@ static void infer_saved_arg_type_and_category(TokenString *arg, CType *type,
   loc = saved_loc;
   nb_temp_local_vars = saved_temp_count;
   nocode_wanted = saved_nocode_wanted;
+  cpp_noexcept_query_throws = saved_noexcept_throws;
   tok = saved_tok;
   tokc = saved_tokc;
 }
@@ -4087,6 +4090,7 @@ static void finish_cpp_member_func_call_to(Sym *func_type, int nb_args,
   }
 
   vcheck_cmp();
+  cpp_noexcept_note_call(&vtop[-nb_args].type);
   if (nb_args && vtop[-nb_args].sym && static_initializer_constant_fold
       && (func_type->type.t & VT_BTYPE) != VT_STRUCT) {
     SValue constant;

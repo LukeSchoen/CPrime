@@ -4,14 +4,16 @@ Make the remaining confirmed non-passing tests below pass with root `cpc.exe`, t
 
 ## Remaining confirmed failures
 
-Complete the pedantic audit and reduce any new failures individually. Investigate compiler batch error recovery: an earlier Classes batch stalled after a constructor diagnostic, while the next test passed alone. The historical batch crash cascade is not an inventory of independent defects.
+Continue adding independent coverage and reduce new failures individually. Keep batch-state recovery regressions passing when expanding the language implementation. The historical batch crash cascade is not an inventory of independent defects.
 
 ## Remaining coverage before claiming C++17 support
 
-- Extend structured bindings to aggregate and tuple protocols, cv/reference identity, access checks, and meaningful invalid-count diagnostics.
+- Complete structured-binding initializer forms, tuple member/ADL protocols, cv/reference identity, lifetime, access and invalid-declaration checks; extend the retained array and aggregate cases.
+- Complete variable-template specialization declarations, namespace lookup, packs, conditional substitution, redeclaration checks and cross-translation-unit identity beyond the retained partial-specialization tests.
 - Finish selection initializer scope/lifetime validation. Complete optional constexpr behavior, conditional special-member availability/triviality, API overloads, and exception contracts.
 - Complete fold coverage: operand grammar, nested folds, constexpr identities/dereference, multiple and non-type packs, binary member-pointer folds, overloaded operators, larger folds, and the feature macro.
 - Audit `if constexpr`, constexpr lambdas, CTAD, inline variables across translation units, noexcept function types, over-aligned allocation, sequencing, and attributes.
+- Complete lambda constexpr behavior and closure special-member/aggregate rules. Extend noexcept coverage beyond the retained call/conversion, conditional generic, unevaluated-expression, allocation and RTTI cases: implicit/defaulted special members, overload/conversion paths, substitution recovery, and generic closure conversion need further auditing. Extend scope/cv/access, copy, move, reference, nested capture and backing-array lifetime coverage beyond the retained initializer forms, name-conflict/shadowing and `*this` tests. Audit advertised builtin/feature support against actual semantics and remove remaining name-based behavior overrides.
 - Audit C++17 library facilities, including the recorded missing `any` and `variant` support; add minimal local lifetime, assignment, access, and exception-contract tests.
 - Reduce distinct cases from inspected upstream inputs into `Tests/`, reuse existing equivalent regressions, and track unverified behaviors explicitly. Passing this failure list alone does not establish exhaustive C++17 conformance.
 

@@ -463,6 +463,11 @@ static void cpp_typeid_expression(void)
   if ((type.t & VT_BTYPE) == VT_STRUCT && type_size(&type, &alignment) < 0)
     cprime_error("typeid requires a complete class type");
   info_type.t |= VT_CONSTANT;
+  if (!type_operand && (expression_flags & VT_LVAL)
+      && !(expression_flags & VT_CXX_PRVALUE)
+      && (type.t & VT_BTYPE) == VT_STRUCT
+      && cpp_class_is_polymorphic(get_struct_type_name_tok(&type)))
+    cpp_noexcept_note_throw();
   if (NOEVAL_WANTED) {
     tok_str_free(operand);
     vset(&info_type, VT_CONST | VT_LVAL, 0);
@@ -524,6 +529,7 @@ static void cpp_dynamic_cast(CType *target)
     {
       CType pointer = target_class;
       int checked = !cpp_rtti_public_base_offset(source_tok, target_tok, &offset);
+      if (checked) cpp_noexcept_note_throw();
       mk_pointer(&pointer);
       cpp_dynamic_cast(&pointer);
       if (checked && !NODATA_WANTED) {

@@ -1,9 +1,9 @@
 /* Lambda expressions have distinct closure types, including when an
    expression is first replayed for deduction and later for code emission. */
 typedef struct LambdaCapture {
-  int name, by_reference;
+  int name, by_reference, init_capture, star_this;
   CType type;
-  Sym *source;
+  Sym *source, *probe_symbol;
 } LambdaCapture;
 
 typedef struct LambdaBodyDeclaration {
@@ -13,6 +13,7 @@ typedef struct LambdaBodyDeclaration {
 typedef struct LambdaExpression {
   int marker, owner, class_tok, body_owner_tok, count, default_capture, mutable_call;
   int return_seen, explicit_return, outer_scope, enclosing_class_tok;
+  int noexcept_call;
   int return_deduction_kind, generic, generic_param_count;
   int generic_param_toks[16], generic_param_is_pack[16];
   int body_declaration_count;
@@ -225,19 +226,18 @@ static void prepare_saved_cpp_lambdas(TokenString *expression)
                     || previous == ',' || previous == TOK_RETURN
                     || previous == '{' || previous == '?' || previous == ':'))
     {
-      int j = i + 1;
+      int j = i + 1, captures_depth = 1;
       for (; j < expression->len; ++j)
       {
         int capture = expression->str[j];
         if (capture == TOK_LINENUM) { ++j; continue; }
-        if (capture == ']') break;
+        if (capture == ']' && !--captures_depth) break;
+        if (capture == '[' || is_cpp_lambda_marker(capture)) ++captures_depth;
         if (TOK_HAS_VALUE(capture))
         {
           j += tok_str_value_extra_words(expression->str, expression->len, j);
           continue;
         }
-        if (capture < TOK_UIDENT && capture != '&' && capture != '='
-            && capture != ',') break;
       }
       if (j < expression->len && expression->str[j] == ']'
           && !saved_cpp_bracket_opens_designator(expression, j))
@@ -445,7 +445,8 @@ static Sym *lambda_capture_symbol(Sym *symbol)
   visible_type = capture->type;
   if (!capture->by_reference && !lambda_probe->mutable_call)
     visible_type.t |= VT_CONSTANT;
-  return sym_push(capture->name, &visible_type, VT_LOCAL | VT_LVAL, 0);
+  capture->probe_symbol = sym_push(capture->name, &visible_type, VT_LOCAL | VT_LVAL, 0);
+  return capture->probe_symbol;
 }
 
 static CType deduce_placeholder_return_pattern(CType *pattern, CType *actual)
@@ -580,19 +581,21 @@ static int lambda_lexical_owner(void)
   LambdaExpression *enclosing;
   const char *function_name = funcname ? funcname : "";
   if (lambda_probe)
-    return lambda_probe->owner;
+    return local_type_function_owner(lambda_probe->owner);
   /* A lambda body is probed in its enclosing function, then emitted as the
      closure's call operator. Nested expressions retain their lexical owner
      across both parses, including separate function-template instances. */
   for (enclosing = lambda_expressions; enclosing; enclosing = enclosing->next)
   {
     if (enclosing->class_tok == active_member_class_tok)
-      return enclosing->owner;
+      return enclosing->generic
+        ? local_type_function_owner(tok_alloc_const(function_name)) : enclosing->owner;
     const char *class_name = get_tok_str(enclosing->class_tok, NULL);
     size_t length = strlen(class_name);
     if (!strncmp(function_name, class_name, length)
         && function_name[length] == '_')
-      return enclosing->owner;
+      return enclosing->generic
+        ? local_type_function_owner(tok_alloc_const(function_name)) : enclosing->owner;
   }
   return tok_alloc_const(function_name);
 }
@@ -607,6 +610,8 @@ static void append_captureless_lambda_conversion(TokenString *declaration,
   int index, pointer_tok, invoke_tok = tok_alloc_const("__cpc_lambda_invoke");
   int object_tok = tok_alloc_const("__cpc_lambda_object");
   if (function.ref->f.func_type == FUNC_ELLIPSIS) return;
+  function.ref->f.func_noexcept_specified = lambda->noexcept_call;
+  function.ref->f.func_noexcept = lambda->noexcept_call;
   mk_pointer(&pointer);
   pointer_tok = template_exact_ctype_typedef_tok(&pointer);
   tok_str_add(declaration, TOK_STATIC);
@@ -622,6 +627,8 @@ static void append_captureless_lambda_conversion(TokenString *declaration,
     add_ctype_declarator_tokens(declaration, &parameter->type, tok_alloc_const(name));
   }
   tok_str_add(declaration, ')');
+  if (lambda->noexcept_call)
+    tok_str_add(declaration, tok_alloc_const("noexcept"));
   tok_str_add(declaration, '{');
   tok_str_add(declaration, lambda->class_tok);
   tok_str_add(declaration, object_tok);
@@ -657,6 +664,7 @@ static void append_captureless_lambda_conversion(TokenString *declaration,
   tok_str_add(declaration, '(');
   tok_str_add(declaration, ')');
   tok_str_add(declaration, TOK_CONST1);
+  tok_str_add(declaration, tok_alloc_const("noexcept"));
   tok_str_add(declaration, '{');
   tok_str_add(declaration, TOK_RETURN);
   tok_str_add(declaration, '&');
@@ -666,6 +674,32 @@ static void append_captureless_lambda_conversion(TokenString *declaration,
   tok_str_add(declaration, invoke_tok);
   tok_str_add(declaration, ';');
   tok_str_add(declaration, '}');
+}
+
+static void append_lambda_copy_capture(TokenString *tokens, CType *type,
+                                        TokenString *source)
+{
+  if ((type->t & VT_ARRAY) && type->ref) {
+    int i;
+    tok_str_add(tokens, '{');
+    for (i = 0; i < type->ref->c; ++i) {
+      TokenString *element = tok_str_alloc();
+      if (i) tok_str_add(tokens, ',');
+      tok_str_append_without_eof(element, source);
+      tok_str_add(element, '['); tok_str_add_cint(element, i); tok_str_add(element, ']');
+      append_lambda_copy_capture(tokens, pointed_type(type), element);
+      tok_str_free(element);
+    }
+    tok_str_add(tokens, '}');
+  } else {
+    if ((type->t & VT_BTYPE) == VT_STRUCT) {
+      /* Simple copy-captures use direct initialization, including explicit
+         copy constructors. The resulting prvalue initializes the field. */
+      tok_str_add(tokens, template_exact_ctype_typedef_tok(type)); tok_str_add(tokens, '(');
+    }
+    tok_str_append_without_eof(tokens, source);
+    if ((type->t & VT_BTYPE) == VT_STRUCT) tok_str_add(tokens, ')');
+  }
 }
 
 static void parse_cpp_lambda_expression(void)
@@ -679,7 +713,10 @@ static void parse_cpp_lambda_expression(void)
   CValue saved_tokc;
   LambdaExpression current, *lambda;
   TokenString *parameters = tok_str_alloc(), *body = NULL, *declaration, *value;
+  TokenString *exception_specification = NULL;
   TokenString *parent;
+  TokenString *capture_initializers[64] = {0};
+  int initializer_names[64], initializer_count = 0;
   const int *parent_ptr;
   memset(&current, 0, sizeof(current));
   current.marker = marker;
@@ -698,7 +735,10 @@ static void parse_cpp_lambda_expression(void)
     if (tok == ',' || tok == ']')
     {
       current.default_capture = mode;
-      if (tok == ',') next();
+      if (tok == ',') {
+        next();
+        if (tok == ']') cprime_error("lambda capture required after comma");
+      }
     }
     else
     {
@@ -709,28 +749,97 @@ static void parse_cpp_lambda_expression(void)
   }
   while (tok != ']')
   {
-    int by_reference = 0;
+    int by_reference = 0, star_this = 0;
     int name_tok;
     Sym *source;
     if (tok == '&') { by_reference = 1; next(); }
+    if (tok == '*') { star_this = 1; next(); }
     if (tok < TOK_UIDENT) cprime_error("lambda capture name expected");
     name_tok = tok;
+    if (current.outer_this && name_tok == (current.outer_this->v & ~SYM_FIELD))
+      name_tok = tok_alloc_const("this");
+    if (star_this && (by_reference || name_tok != tok_alloc_const("this")))
+      cprime_error("only this can be captured with *");
     next();
-    if (tok == '=')
+    if (!lambda)
+      for (i = 0; i < current.count; ++i)
+        if (current.captures[i].name == name_tok)
+          cprime_error("duplicate lambda capture '%s'", get_tok_str(name_tok, NULL));
+    if (tok == '=' || tok == '(' || tok == '{')
     {
-      TokenString *init_tokens = tok_str_alloc();
+      if (name_tok == tok_alloc_const("this")) cprime_error("this cannot be an init-capture name");
+      TokenString *init_tokens = NULL;
+      int initializer_kind = tok;
       next();
+      if (tok == ')' || tok == '}')
+        cprime_error("lambda init-capture requires an initializer");
       skip_or_save_block(&init_tokens);
-      /* Init captures are parsed for grammar; their initializer does not
-         introduce a closure field in this lowering. */
-      tok_str_free(init_tokens);
+      if (initializer_kind != '=') {
+        if (initializer_kind == '{' && tok == ',') next();
+        skip(initializer_kind == '(' ? ')' : '}');
+      }
+      if (initializer_count == 64) cprime_error("too many lambda init-captures");
+      initializer_names[initializer_count] = name_tok;
+      capture_initializers[initializer_count++] = init_tokens;
+      if (!lambda) {
+        CType type;
+        LambdaCapture *capture;
+        infer_saved_arg_type(init_tokens, &type);
+        if (type.t == VT_BRACED_LIST) {
+          if (initializer_kind != '=')
+            cprime_error("direct lambda init-capture requires a deducible expression");
+          TokenString **elements;
+          TemplateArgList arguments;
+          TemplateDef *definition;
+          Sym *instance;
+          int names[2], instance_tok;
+          CType element;
+          int count = split_saved_array_initializer(init_tokens, &elements);
+          int item;
+          if (by_reference) cprime_error("lambda reference init-capture cannot bind an initializer list temporary");
+          if (!count) cprime_error("cannot deduce lambda capture type from an empty initializer list");
+          for (item = 0; item < count; ++item) {
+            CType actual;
+            infer_saved_arg_type(elements[item], &actual);
+            if (actual.t == VT_BRACED_LIST)
+              cprime_error("cannot deduce lambda capture element from a nested initializer list");
+            if (is_reference_type(&actual)) actual = *pointed_type(&actual);
+            actual.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE | VT_ARRAY | VT_NULLPTR_TYPE);
+            if ((actual.t & VT_BTYPE) == VT_FUNC) mk_pointer(&actual);
+            if (!item) element = actual;
+            else if (!is_compatible_types(&element, &actual))
+              cprime_error("conflicting lambda initializer list element types");
+          }
+          free_saved_array_elements(elements, count);
+          names[0] = tok_alloc_const("std");
+          names[1] = tok_alloc_const("initializer_list");
+          definition = find_class_template_def(find_namespace_tok_from_parts(names, 2));
+          if (!definition) cprime_error("lambda list capture requires std::initializer_list");
+          template_arg_list_one(&arguments, template_exact_type_tok_from_ctype(&element));
+          instance_tok = instantiate_template_if_needed(definition, &arguments);
+          instance = struct_find(instance_tok);
+          if (!instance) cprime_error("initializer_list specialization has no class type");
+          type.t = VT_STRUCT;
+          type.ref = instance;
+        }
+        if (is_reference_type(&type)) type = *pointed_type(&type);
+        type.t &= ~(VT_STORAGE | VT_RVALUE_REFERENCE | VT_NULLPTR_TYPE);
+        if (!by_reference) {
+          type.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_ARRAY);
+          if ((type.t & VT_BTYPE) == VT_FUNC) mk_pointer(&type);
+        }
+        source = sym_push2(&global_stack, name_tok, type.t, 0);
+        source->type = type;
+        source->sym_scope = local_scope;
+        capture = add_lambda_capture(&current, source, by_reference);
+        capture->init_capture = initializer_kind;
+      }
     }
     else if (!lambda)
     {
-      for (i = 0; i < current.count; ++i)
-        if (current.captures[i].name == name_tok)
-          cprime_error("duplicate lambda capture '%s'",
-                       get_tok_str(name_tok, NULL));
+      if ((current.default_capture == '&' && by_reference)
+          || (current.default_capture == '=' && !by_reference && !star_this))
+        cprime_error("simple lambda capture repeats the capture default");
       source = name_tok == tok_alloc_const("this")
                  ? current.outer_this : sym_find(name_tok);
       if (!source && name_tok != tok_alloc_const("this"))
@@ -757,10 +866,17 @@ static void parse_cpp_lambda_expression(void)
       if (!source || !source->sym_scope)
         cprime_error("lambda capture '%s' must name an automatic variable (function '%s', scope %d)",
                      get_tok_str(name_tok, NULL), funcname, local_scope);
-      add_lambda_capture(&current, source, by_reference);
+      {
+        LambdaCapture *capture = add_lambda_capture(&current, source, by_reference);
+        if (star_this) {
+          capture->star_this = 1;
+          capture->type = *pointed_type(&source->type);
+        }
+      }
     }
     if (tok == ']') break;
     skip(',');
+    if (tok == ']') cprime_error("lambda capture required after comma");
   }
   next();
   if (tok == '(')
@@ -789,7 +905,29 @@ static void parse_cpp_lambda_expression(void)
   tok_str_add(parameters, TOK_EOF);
   if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "mutable"))
   { current.mutable_call = 1; next(); }
-  if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "noexcept")) next();
+  if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "noexcept"))
+  {
+    current.noexcept_call = 1;
+    if (current.generic) {
+      exception_specification = tok_str_alloc();
+      tok_str_add_tok(exception_specification);
+    }
+    next();
+    if (tok == '(') {
+      if (current.generic) {
+        skip_or_save_balanced_tokens(exception_specification);
+      } else {
+        Sym *saved_parameters;
+        int saved_parameter_scope;
+        push_saved_param_scope(parameters, &saved_parameters, &saved_parameter_scope);
+        next();
+        current.noexcept_call = expr_const() != 0;
+        skip(')');
+        pop_saved_param_scope(saved_parameters, saved_parameter_scope);
+      }
+    }
+    if (exception_specification) tok_str_add(exception_specification, TOK_EOF);
+  }
   if (tok == TOK_ARROW)
   {
     AttributeDef attr;
@@ -836,36 +974,6 @@ static void parse_cpp_lambda_expression(void)
         cprime_error("unsupported lambda capture type");
       tok_str_add(declaration, ';');
     }
-    tok_str_add(declaration, lambda->class_tok);
-    tok_str_add(declaration, '(');
-    for (i = 0; i < lambda->count; ++i)
-    {
-      CType param_type = lambda->captures[i].type;
-      int arg = make_joined_name_tok(tok_alloc_const("__cpc_capture_arg"),
-                                     lambda->captures[i].name, "_", "");
-      if (i) tok_str_add(declaration, ',');
-      if (!lambda->captures[i].by_reference)
-      {
-        param_type.t |= VT_CONSTANT;
-        mk_pointer(&param_type);
-        param_type.t |= VT_REFERENCE;
-      }
-      if (!add_ctype_declarator_tokens(declaration, &param_type, arg))
-        cprime_error("unsupported lambda capture parameter type");
-    }
-    tok_str_add(declaration, ')');
-    for (i = 0; i < lambda->count; ++i)
-    {
-      int arg = make_joined_name_tok(tok_alloc_const("__cpc_capture_arg"),
-                                     lambda->captures[i].name, "_", "");
-      tok_str_add(declaration, i ? ',' : ':');
-      tok_str_add(declaration, lambda_capture_field_tok(lambda, i));
-      tok_str_add(declaration, '(');
-      tok_str_add(declaration, arg);
-      tok_str_add(declaration, ')');
-    }
-    tok_str_add(declaration, '{');
-    tok_str_add(declaration, '}');
     if (lambda->generic)
     {
       tok_str_add(declaration, tok_alloc_const("template"));
@@ -898,6 +1006,10 @@ static void parse_cpp_lambda_expression(void)
     tok_str_append_without_eof(declaration, parameters);
     tok_str_add(declaration, ')');
     if (!lambda->mutable_call) tok_str_add(declaration, TOK_CONST1);
+    if (exception_specification)
+      tok_str_append_without_eof(declaration, exception_specification);
+    else if (lambda->noexcept_call)
+      tok_str_add(declaration, tok_alloc_const("noexcept"));
     for (i = 0; i < lambda->count; ++i)
       if (lambda->captures[i].source == lambda->outer_this) break;
     if (i < lambda->count)
@@ -906,13 +1018,24 @@ static void parse_cpp_lambda_expression(void)
       int first = tok_str_next_non_linenum_index(body->str, body->len, 0);
       if (body->str[first] != '{') cprime_error("lambda compound body expected");
       tok_str_add(declaration, '{');
-      if (!lambda->generic)
       {
-        if (!add_ctype_declarator_tokens(declaration, &lambda->outer_this->type,
-                                         tok_alloc_const("__cpc_lambda_this")))
+        CType this_type = lambda->outer_this->type;
+        if (lambda->captures[i].star_this) {
+          this_type = lambda->captures[i].type;
+          if (!lambda->mutable_call) this_type.t |= VT_CONSTANT;
+          mk_pointer(&this_type);
+        }
+        if (!add_ctype_declarator_tokens(declaration, &this_type,
+                                         tok_alloc_const("__cpc_lambda_this_source")))
           cprime_error("unsupported enclosing object type in lambda");
         tok_str_add(declaration, '=');
+        if (lambda->captures[i].star_this) tok_str_add(declaration, '&');
         tok_str_add(declaration, lambda_capture_field_tok(lambda, i));
+        tok_str_add(declaration, ';');
+        add_ctype_declarator_tokens(declaration, &this_type,
+                                   tok_alloc_const("__cpc_lambda_this"));
+        tok_str_add(declaration, '=');
+        tok_str_add(declaration, tok_alloc_const("__cpc_lambda_this_source"));
         tok_str_add(declaration, ';');
       }
       remainder.str += first + 1;
@@ -923,6 +1046,8 @@ static void parse_cpp_lambda_expression(void)
           int body_tok = remainder.str[body_i];
           if (TOK_HAS_VALUE(body_tok))
             tok_str_add_record(declaration, remainder.str, remainder.len, &body_i);
+          else if (append_nested_lambda_tokens(declaration, &remainder, &body_i))
+            ;
           else if (body_tok == '{')
           {
             tok_str_add(declaration, body_tok);
@@ -935,9 +1060,9 @@ static void parse_cpp_lambda_expression(void)
           }
           else if (body_tok == tok_alloc_const("this")
                    || body_tok == (lambda->outer_this->v & ~SYM_FIELD))
-            tok_str_add(declaration,
-                lambda->generic ? lambda_capture_field_tok(lambda, i)
-                                : tok_alloc_const("__cpc_lambda_this"));
+          {
+            tok_str_add(declaration, tok_alloc_const("__cpc_lambda_this"));
+          }
           else if (lambda->generic && body_tok >= TOK_UIDENT)
           {
             int prev = tok_str_prev_token_index(remainder.str, remainder.len,
@@ -959,7 +1084,7 @@ static void parse_cpp_lambda_expression(void)
                                                      sym_find(body_tok))
                 && lambda_is_enclosing_member(enclosing_class, body_tok))
             {
-              tok_str_add(declaration, lambda_capture_field_tok(lambda, i));
+              tok_str_add(declaration, tok_alloc_const("__cpc_lambda_this"));
               tok_str_add(declaration, TOK_ARROW);
             }
             tok_str_add(declaration, body_tok);
@@ -977,6 +1102,10 @@ static void parse_cpp_lambda_expression(void)
     tok_str_add(declaration, TOK_EOF);
     publish_template_member_proto(declaration, -1);
     lambda->class_tok = find_current_namespace_tok(lambda->class_tok);
+    if (!struct_find(lambda->class_tok) && enclosing_class) {
+      int nested = make_static_member_tok(enclosing_class, lambda->class_tok);
+      if (struct_find(nested)) lambda->class_tok = nested;
+    }
     {
       CppRecordDeclInfo *record =
         (CppRecordDeclInfo *)lookup_cpp_record_decl(lambda->class_tok);
@@ -991,17 +1120,46 @@ static void parse_cpp_lambda_expression(void)
       lambda_note_static(lambda, source);
   }
   tok_str_free(parameters);
+  if (exception_specification) tok_str_free(exception_specification);
   tok_str_free(body);
   value = tok_str_alloc();
-  tok_str_add(value, '(');
+  tok_str_add(value, '{');
   for (i = 0; i < lambda->count; ++i)
   {
     if (i) tok_str_add(value, ',');
+    if (lambda->captures[i].init_capture) {
+      int initializer;
+      for (initializer = 0; initializer < initializer_count; ++initializer)
+        if (initializer_names[initializer] == lambda->captures[i].name) break;
+      if (initializer == initializer_count) cprime_error("missing lambda init-capture initializer");
+      if (lambda->captures[i].init_capture != '='
+          && !lambda->captures[i].by_reference
+          && (lambda->captures[i].type.t & VT_BTYPE) == VT_STRUCT) {
+        int opening = lambda->captures[i].init_capture;
+        tok_str_add(value, template_exact_ctype_typedef_tok(&lambda->captures[i].type));
+        tok_str_add(value, opening);
+        tok_str_append_without_eof(value, capture_initializers[initializer]);
+        tok_str_add(value, opening == '(' ? ')' : '}');
+        continue;
+      }
+      tok_str_append_without_eof(value, capture_initializers[initializer]);
+      continue;
+    }
+    if (!lambda->captures[i].by_reference) {
+      TokenString *source = tok_str_alloc();
+      if (lambda->captures[i].star_this) tok_str_add(source, '*');
+      tok_str_add(source, lambda->captures[i].source == lambda->outer_this
+          && current.outer_this ? current.outer_this->v & ~SYM_FIELD : lambda->captures[i].name);
+      append_lambda_copy_capture(value, &lambda->captures[i].type, source);
+      tok_str_free(source);
+      continue;
+    }
     tok_str_add(value, lambda->captures[i].source == lambda->outer_this
         && current.outer_this ? current.outer_this->v & ~SYM_FIELD
                               : lambda->captures[i].name);
   }
-  tok_str_add(value, ')');
+  tok_str_add(value, '}');
+  for (i = 0; i < initializer_count; ++i) tok_str_free(capture_initializers[i]);
   tok_str_add(value, TOK_EOF);
   parent = macro_stack;
   parent_ptr = macro_ptr;

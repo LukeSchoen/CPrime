@@ -1,4 +1,5 @@
 static void call_lifecycle_constructor_members(CType *type, int r, int addr);
+static void cpp_noexcept_note_constructor(CType *type, Sym *constructor);
 static void tok_str_append(TokenString *dst, TokenString *src);
 static void call_lifecycle_constructor_members_base_ptr(CType *type,
                                                         SValue *base_ptr,
@@ -239,6 +240,50 @@ static Sym *resolve_autoctor_func(CType *type)
   return s;
 }
 
+static void cpp_noexcept_note_constructor(CType *type, Sym *constructor)
+{
+  Sym *field;
+  if (!cpp_noexcept_query_depth
+      || cpp_noexcept_query_depth != cpp_unevaluated_expression_depth
+      || !constructor) return;
+  if (constructor->type.ref->f.func_noexcept_specified
+      || !lifecycle_has_only_this_param(constructor)
+      || !is_defaulted_lifecycle_constructor(type, constructor)) {
+    cpp_noexcept_note_call(&constructor->type);
+    return;
+  }
+  /* An implicit/defaulted default constructor calls the selected subobject
+     constructors and evaluates default member initializers. Its generated
+     declaration alone does not determine the exception specification. */
+  for (field = type->ref->next; field; field = field->next) {
+    CType *element = &field->type;
+    if (element->t & (VT_STATIC | VT_TYPEDEF)
+        || (element->t & VT_BTYPE) == VT_FUNC) continue;
+    if (field->default_arg) {
+      TokenString *parameters = tok_str_alloc();
+      CType receiver = *type;
+      Sym *saved_locals;
+      int saved_scope, saved_member_class = active_member_class_tok;
+      mk_pointer(&receiver);
+      add_ctype_declarator_tokens(parameters, &receiver, CPP_TOK_THIS);
+      tok_str_add(parameters, TOK_EOF);
+      push_saved_param_scope(parameters, &saved_locals, &saved_scope);
+      active_member_class_tok = get_struct_type_name_tok(type);
+      emit_saved_arg_for_param(field->default_arg, field);
+      gen_assign_cast(&field->type);
+      vpop();
+      active_member_class_tok = saved_member_class;
+      pop_saved_param_scope(saved_locals, saved_scope);
+      tok_str_free(parameters);
+      continue;
+    }
+    while ((element->t & VT_ARRAY) && element->ref)
+      element = pointed_type(element);
+    if ((element->t & VT_BTYPE) == VT_STRUCT)
+      cpp_noexcept_note_constructor(element, resolve_autoctor_func(element));
+  }
+}
+
 static int class_has_virtual_destructor(CType *type)
 {
   ClassBaseInfo *base;
@@ -455,6 +500,7 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
   }
   next();
   vcheck_cmp();
+  cpp_noexcept_note_constructor(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 }
@@ -499,6 +545,7 @@ static void call_lifecycle_constructor_noargs(CType *type, int r, int addr, Sym 
   tok = saved_tok;
   tokc = saved_tokc;
 
+  cpp_noexcept_note_constructor(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 }
@@ -642,6 +689,7 @@ static void call_lifecycle_constructor_noargs_expr(CType *type, Sym *ctor_func)
   }
   tok = saved_tok;
   tokc = saved_tokc;
+  cpp_noexcept_note_constructor(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 }
@@ -982,9 +1030,10 @@ static int struct_needs_memberwise_copy(CType *type)
   return 0;
 }
 
-static void copy_construct_one_lvalue_pair(CType *type, SValue *dst_ptr,
+static void copy_construct_one_lvalue_pair_ex(CType *type, SValue *dst_ptr,
                                            SValue *src_ptr, int offset,
-                                           int move_source)
+                                           int move_source, Sym *selected_constructor,
+                                           CType *actual_source_type)
 {
   SValue *saved_vtop = vtop;
   Sym *ctor_func, *ctor_type, *sa;
@@ -1008,10 +1057,12 @@ static void copy_construct_one_lvalue_pair(CType *type, SValue *dst_ptr,
     return;
   }
 
+  if (actual_source_type) source_type = *actual_source_type;
   if (move_source == 1)
     source_type.t |= VT_RVALUE_REFERENCE;
   if (move_source == 2) source_type.t |= VT_CONSTANT;
-  ctor_func = resolve_copy_constructor_func(type, &source_type);
+  ctor_func = selected_constructor ? selected_constructor
+    : resolve_copy_constructor_func(type, &source_type);
   if (!ctor_func)
   {
     CType initialization_type = *type;
@@ -1050,9 +1101,17 @@ static void copy_construct_one_lvalue_pair(CType *type, SValue *dst_ptr,
       sa = sa->next;
     }
     vcheck_cmp();
+    cpp_noexcept_note_constructor(type, ctor_func);
     gfunc_call(argument_count);
   }
   vtop = saved_vtop;
+}
+
+static void copy_construct_one_lvalue_pair(CType *type, SValue *dst_ptr,
+                                           SValue *src_ptr, int offset,
+                                           int move_source)
+{
+  copy_construct_one_lvalue_pair_ex(type, dst_ptr, src_ptr, offset, move_source, NULL, NULL);
 }
 
 static void copy_construct_struct_memberwise_from_base_ptr(CType *type,
@@ -1264,6 +1323,7 @@ static void emit_lifecycle_constructor_selected(CType *type, int r, int addr,
     unget_tok(saved_delim);
   }
   vcheck_cmp();
+  cpp_noexcept_note_constructor(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 }
@@ -1296,6 +1356,16 @@ static void call_lifecycle_constructor_saved_args_ex(CType *type, int r, int add
   }
   saved_delim = tok;
   infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
+  if (call_arg_count == 1 && !saved_arg_is_braced(call_args[0])) {
+    CType source;
+    int prvalue;
+    infer_saved_arg_type_and_category(call_args[0], &source, &prvalue);
+    if (prvalue && is_compatible_unqualified_types(type, &source)) {
+      initialize_lifecycle_copy(type, r, addr, call_args[0]);
+      if (tok == TOK_EOF) { next(); unget_tok(saved_delim); }
+      return;
+    }
+  }
   if (tok == TOK_EOF)
   {
     next();
@@ -1403,9 +1473,16 @@ typedef struct CppConstructionDestination {
   CType type;
   int address, storage, available;
   int conditional_marker;
+  int extend_backing_array_lifetime;
 } CppConstructionDestination;
 
 static CppConstructionDestination *cpp_construction_destination;
+
+static int cpp_construction_backing_array_lifetime(void)
+{
+  return cpp_construction_destination
+    ? cpp_construction_destination->extend_backing_array_lifetime : 0;
+}
 
 static int take_cpp_construction_destination(CType *type, int *address,
                                               int *storage)
@@ -1509,6 +1586,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
       forwarded.storage = storage;
       forwarded.available = 1;
       forwarded.conditional_marker = 0;
+      forwarded.extend_backing_array_lifetime = cpp_construction_backing_array_lifetime();
       cpp_construction_destination = &forwarded;
     }
     materialize_braced_temporary(&type);
@@ -1525,6 +1603,24 @@ static int try_parse_cpp_functional_constructor(int type_tok)
   if (call_arg_count == 1)
   {
     CType source_type = call_arg_types[0];
+    int source_prvalue = 0;
+    CType inferred_source;
+    infer_saved_arg_type_and_category(call_args[0], &inferred_source, &source_prvalue);
+    if (source_prvalue && is_compatible_unqualified_types(&type, &inferred_source)) {
+      /* T(a T prvalue) initializes the result object directly in C++17.
+         Do not select a copy or move constructor for this initialization. */
+      size = type_size(&type, &align);
+      if (direct_destination) { addr = direct_address; r2 = VT_CONST; }
+      else addr = get_temp_local_var(size, align, &r2);
+      vset(&type, storage, addr);
+      vtop->r2 = r2;
+      initialize_lifecycle_copy(&type, storage, addr, call_args[0]);
+      tok_str_free(call_args[0]);
+      if (tok == TOK_EOF) next();
+      else skip(')');
+      if (!direct_destination) cpp_register_class_temporary(vtop);
+      return 1;
+    }
     if (is_reference_type(&source_type))
       source_type = *pointed_type(&source_type);
     source_type.t &= ~VT_RVALUE_REFERENCE;
@@ -1570,7 +1666,8 @@ static int try_parse_cpp_functional_constructor(int type_tok)
     ctor_func = resolve_member_func_by_arg_count(&type, TOK_CONSTRUCTOR1,
                                                  call_arg_count);
   if (!ctor_func)
-    ctor_func = resolve_lifecycle_func(&type, TOK_CONSTRUCTOR1);
+    ctor_func = call_arg_count == 0 ? resolve_autoctor_func(&type)
+                                    : resolve_lifecycle_func(&type, TOK_CONSTRUCTOR1);
   if (!ctor_func)
   {
     if (call_arg_count != 0)
@@ -1819,6 +1916,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
     destination.storage = VT_LLOCAL | VT_LVAL;
     destination.available = 1;
     destination.conditional_marker = cpp_prepare_conditional_destination(call_args[0]);
+    destination.extend_backing_array_lifetime = 0;
     previous = cpp_construction_destination;
     cpp_construction_destination = &destination;
     replay_saved_placement_expr(call_args[0]);
@@ -2039,6 +2137,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   }
 
   vcheck_cmp();
+  cpp_noexcept_note_constructor(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
   if ((vtop->type.t & VT_BTYPE) == VT_VOID)
@@ -3159,6 +3258,7 @@ static int try_materialize_constructor_conversion_into(CType *type, int allow_ex
   }
 
   vcheck_cmp();
+  cpp_noexcept_note_constructor(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 
@@ -6125,9 +6225,37 @@ static int is_cpp_operator_spelling_tok(int t)
       && !isid((unsigned char)name[8]) && !isnum((unsigned char)name[8]);
 }
 
+static unsigned char *pending_member_local_names(TokenString *body, int *limit)
+{
+  int at, previous = -1, in_body = 0, parens = 0;
+  unsigned char *names;
+  *limit = tok_ident;
+  names = cprime_mallocz(tok_ident - TOK_IDENT);
+  for (at = 0; at < body->len; ++at) {
+    int token = body->str[at];
+    if (TOK_HAS_VALUE(token)) {
+      at += tok_str_value_extra_words(body->str, body->len, at);
+      continue;
+    }
+    if (!in_body) {
+      if (token == '(') ++parens;
+      else if (token == ')') --parens;
+      else if (token == '{' && !parens) in_body = 1;
+    } else if (token >= TOK_IDENT && token < *limit) {
+      int next = tok_str_next_non_linenum_index(body->str, body->len, at + 1);
+      if (body_identifier_is_decl_target(body, at, previous, next))
+        names[token - TOK_IDENT] = 1;
+    }
+    previous = at;
+  }
+  return names;
+}
+
 static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
 {
   int i, in_body = 0, this_tok;
+  int local_name_limit;
+  unsigned char *local_names;
   int nested_type_depth = 0, pending_type_definition = 0;
   Sym *class_sym;
   CType class_type;
@@ -6164,6 +6292,7 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
   prepare_saved_cpp_lambdas(pm->str);
   index_pending_member_tokens(pm);
   pm->token_filter_valid = 0;
+  local_names = pending_member_local_names(pm->str, &local_name_limit);
   dst = tok_str_alloc();
   for (i = 0; i < pm->str->len && pm->str->str[i] != TOK_EOF; ++i)
   {
@@ -6315,13 +6444,18 @@ static void rewrite_pending_member_field_access(PendingMemberFunc *pm)
       Sym *member = find_field_try(&class_type, t, &dummy_ofs);
       if (member && (member->type.t & VT_BTYPE) != VT_FUNC)
       {
-        tok_str_add(dst, this_tok);
-        tok_str_add(dst, TOK_ARROW);
+        /* A local declaration may shadow this member for only part of the
+           body. Preserve the name for the parser's scoped lookup. */
+        if (t >= local_name_limit || !local_names[t - TOK_IDENT]) {
+          tok_str_add(dst, this_tok);
+          tok_str_add(dst, TOK_ARROW);
+        }
       }
     }
     tok_str_add(dst, t);
   }
   tok_str_add(dst, TOK_EOF);
+  cprime_free(local_names);
   tok_str_free(pm->str);
   pm->str = dst;
   index_pending_member_tokens(pm);

@@ -568,9 +568,14 @@ static void probe_lambda_body(LambdaExpression *lambda, TokenString *parameters,
   for (i = 0; i < lambda->count; ++i)
   {
     CType visible = lambda->captures[i].type;
+    if (lambda->captures[i].star_this) {
+      if (!lambda->mutable_call) visible.t |= VT_CONSTANT;
+      mk_pointer(&visible);
+    }
     if (!lambda->captures[i].by_reference && !lambda->mutable_call)
       visible.t |= VT_CONSTANT;
-    sym_push(lambda->captures[i].name, &visible, VT_LOCAL | VT_LVAL, 0);
+    lambda->captures[i].probe_symbol =
+      sym_push(lambda->captures[i].name, &visible, VT_LOCAL | VT_LVAL, 0);
   }
   if (lambda->generic)
   {

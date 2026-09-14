@@ -526,6 +526,9 @@ static void cpp_emit_conditional_arm(TokenString *arm, CType *type,
   macro = construction ? *construction : *arm;
   destination.type = *type; destination.storage = storage;
   destination.address = address; destination.available = 1;
+  destination.extend_backing_array_lifetime = saved
+      && saved->address == address && saved->storage == storage
+      ? saved->extend_backing_array_lifetime : 0;
   /* A converted glvalue arm is re-emitted as a construction of its value, so a
      rewritten marker would not appear in that stream. */
   destination.conditional_marker = kind == 3 ? 0
@@ -646,6 +649,7 @@ static int cpp_try_conditional_prvalue(void)
   type.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE);
   if (nocode_wanted) {
     vpop();
+    type.t |= result_qualifiers;
     vset(&type, VT_CONST | VT_CXX_PRVALUE, 0);
     tok_str_free(yes); tok_str_free(no);
     return 1;

@@ -665,6 +665,14 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       vpop();
       return;
     }
+    if (nocode_wanted && (dtype.t & VT_BTYPE) == VT_STRUCT
+        && (vtop->r & VT_CXX_PRVALUE)
+        && is_compatible_unqualified_types(&dtype, &vtop->type)) {
+      /* Mandatory same-type prvalue initialization has no copy constructor
+         to check, including while probing an aggregate field initializer. */
+      vpop();
+      return;
+    }
     if (!p->indirect_base && (dtype.t & VT_BTYPE) == VT_STRUCT
         && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == (VT_LOCAL | VT_LVAL)
         && (int)vtop->c.i == (int)c
@@ -697,7 +705,14 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
         && struct_needs_memberwise_copy(&dtype))
     {
       SValue dst_ptr, src_ptr, source;
+      Sym *constructor;
       source = *vtop;
+      constructor = resolve_copy_constructor_func(&dtype, &source.type);
+      if (constructor && constructor->type.ref && constructor->type.ref->f.func_cpp_explicit) {
+        constructor = resolve_implicit_constructor_func(&dtype, &source.type, 1);
+        if (!constructor)
+          cprime_error("explicit copy constructor is not eligible for copy-initialization");
+      }
       vtop--;
       init_push_lvalue(p, &dtype, c);
       mk_pointer(&vtop->type);
@@ -709,9 +724,9 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       gaddrof();
       src_ptr = *vtop;
       vtop--;
-      if (resolve_copy_constructor_func(&dtype, &source.type))
-        copy_construct_one_lvalue_pair(&dtype, &dst_ptr, &src_ptr, 0,
-          (source.type.t & VT_RVALUE_REFERENCE) != 0);
+      if (constructor)
+        copy_construct_one_lvalue_pair_ex(&dtype, &dst_ptr, &src_ptr, 0,
+          (source.type.t & VT_RVALUE_REFERENCE) != 0, constructor, &source.type);
       else
         copy_construct_struct_memberwise_from_base_ptr(&dtype, &dst_ptr,
                                                        &src_ptr, 0,
@@ -867,13 +882,18 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
     return 0;
   if (is_cpp_lambda_marker(expression->str[first]))
   {
-    int i;
+    int i, capture_depth = 1;
     for (i = first + 1; i <= end; ++i)
     {
       int token = expression->str[i];
       if (TOK_HAS_VALUE(token))
       {
         i += tok_str_value_extra_words(expression->str, expression->len, i);
+        continue;
+      }
+      if (capture_depth) {
+        if (token == '[' || is_cpp_lambda_marker(token)) ++capture_depth;
+        else if (token == ']') --capture_depth;
         continue;
       }
       if (token == '{')
@@ -966,15 +986,15 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
         index += tok_str_value_extra_words(expression->str, expression->len, index);
         continue;
       }
-      if (!angles && (token == '(' || token == '['))
+      if (!angles && (token == '(' || token == '[' || token == '{'))
       {
         int close, next;
         close = saved_initializer_close(expression, index, token,
-                                        token == '(' ? ')' : ']');
+                                        token == '(' ? ')' : token == '[' ? ']' : '}');
         if (close < 0) return 0;
         if (close == end)
         {
-          if (token != '(') return 0;   /* a subscript is not a call */
+          if (token == '[') return 0;   /* a subscript is not a prvalue construction */
           call = index;
           break;
         }
@@ -997,7 +1017,8 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
       else if (!angles && token < TOK_UIDENT && token != ':'
                && token != '.' && token != TOK_ARROW) return 0;
     }
-    if (call < 0 || saved_initializer_close(expression, call, '(', ')') != end)
+    if (call < 0 || saved_initializer_close(expression, call,
+          expression->str[call], expression->str[call] == '{' ? '}' : ')') != end)
       return 0;
     infer_saved_arg_type_and_category(expression, &result, &is_class_prvalue);
     if (!is_class_prvalue || is_reference_type(&result)) return 0;
@@ -1006,10 +1027,10 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
   }
 }
 
-static int emit_class_initializer_expression_at(TokenString *expression,
+static int emit_class_initializer_expression_at_ex(TokenString *expression,
                                                  CType *type,
                                                  unsigned long address,
-                                                 int storage)
+                                                 int storage, int extend_backing)
 {
   TokenString macro, *parent;
   const int *parent_ptr;
@@ -1028,6 +1049,7 @@ static int emit_class_initializer_expression_at(TokenString *expression,
   destination.available = saved_initializer_is_direct_constructor(expression, type);
   forwarding = destination.available;
   destination.conditional_marker = cpp_prepare_expression_destination(expression);
+  destination.extend_backing_array_lifetime = extend_backing;
   cpp_construction_destination = &destination;
   macro = *expression;
   begin_macro(&macro, 0);
@@ -1045,12 +1067,19 @@ static int emit_class_initializer_expression_at(TokenString *expression,
       && cpp_value_is_construction_destination(vtop, &destination);
 }
 
+static int emit_class_initializer_expression_at(TokenString *expression,
+                                                 CType *type, unsigned long address,
+                                                 int storage)
+{
+  return emit_class_initializer_expression_at_ex(expression, type, address, storage, 0);
+}
+
 static void emit_class_initializer_expression(TokenString *expression,
                                                CType *type,
                                                unsigned long address)
 {
-  emit_class_initializer_expression_at(expression, type, address,
-                                        VT_LOCAL | VT_LVAL);
+  emit_class_initializer_expression_at_ex(expression, type, address,
+                                        VT_LOCAL | VT_LVAL, 1);
 }
 
 static void initialize_lifecycle_copy(CType *type, int r, int addr,
@@ -1087,11 +1116,12 @@ static int parse_direct_class_initializer(init_params *p, CType *type,
     slot = loc;
     vset(&char_pointer_type, VT_LOCAL | VT_LVAL, slot);
     vswap(); vstore(); vpop();
-    p->elided_value = emit_class_initializer_expression_at(expression, type,
-                         slot, VT_LLOCAL | VT_LVAL);
+    p->elided_value = emit_class_initializer_expression_at_ex(expression, type,
+                         slot, VT_LLOCAL | VT_LVAL, p->extend_backing_array_lifetime);
   }
   else
-    emit_class_initializer_expression(expression, type, address);
+    p->elided_value = emit_class_initializer_expression_at_ex(expression, type, address,
+                         VT_LOCAL | VT_LVAL, p->extend_backing_array_lifetime);
   tok_str_free(expression);
   return 1;
 }
@@ -1172,6 +1202,7 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
   Sym *constructor = NULL;
   int count, i, best_rank = 0x7fffffff, ambiguous = 0;
   int class_tok = get_struct_type_name_tok(type), is_list = 0, implicit_copy = 0;
+  int elided_prvalue = 0;
   if (tok != '{' || p->sec || (flags & DIF_SIZE_ONLY)
       || !is_cpp_translation_unit() || !type->ref
       || !type->ref->a.cpp_user_provided_constructor
@@ -1198,7 +1229,10 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
       if (is_reference_type(&source)) source = *pointed_type(&source);
       source.t &= ~VT_RVALUE_REFERENCE;
       if (is_compatible_unqualified_types(&target, &source)) {
-        constructor = resolve_copy_constructor_func(&target, &actual[0]);
+        CType inferred;
+        infer_saved_arg_type_and_category(arguments[0], &inferred, &elided_prvalue);
+        if (!elided_prvalue)
+          constructor = resolve_copy_constructor_func(&target, &actual[0]);
         implicit_copy = !constructor;
       }
     }
@@ -1254,7 +1288,8 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
     int saved_tok = tok;
     CValue saved_tokc = tokc;
     begin_macro(&replay, 0); next();
-    parse_init_elem(EXPR_ANY);
+    if (!elided_prvalue || !parse_direct_class_initializer(p, &target, address))
+      parse_init_elem(EXPR_ANY);
     init_putv(p, &target, address);
     while (macro_stack && macro_stack != parent) end_macro();
     macro_ptr = parent_ptr; tok = saved_tok; tokc = saved_tokc;

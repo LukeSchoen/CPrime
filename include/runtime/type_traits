@@ -32,7 +32,10 @@ namespace std
   template<class T> struct is_integral<volatile T> : is_integral<T> {};
   template<class T> struct is_integral<const volatile T> : is_integral<T> {};
 
-  template<class T> struct is_enum { static const bool value = false; };
+  template<class T> struct is_enum : bool_constant<__is_enum(T)> {};
+  template<class T> struct is_class : bool_constant<__is_class(T)> {};
+  template<class T> struct is_union : bool_constant<__is_union(T)> {};
+  template<class T> struct is_trivially_copyable : bool_constant<__is_trivially_copyable(T)> {};
   template<class T, class U> struct is_same { static const bool value = false; };
   template<class T> struct is_same<T, T> { static const bool value = true; };
 
@@ -44,33 +47,17 @@ namespace std
   template<class T> struct is_floating_point<volatile T> : is_floating_point<T> {};
   template<class T> struct is_floating_point<const volatile T> : is_floating_point<T> {};
 
-  template<class T> struct is_signed { static const bool value = false; };
-  typedef signed char __cpc_signed_char;
-  typedef long long __cpc_signed_long_long;
-  typedef long double __cpc_long_double;
-  template<> struct is_signed<__cpc_signed_char> { static const bool value = true; };
-  template<> struct is_signed<char> { static const bool value = char(-1) < char(0); };
-  template<> struct is_signed<short> { static const bool value = true; };
-  template<> struct is_signed<int> { static const bool value = true; };
-  template<> struct is_signed<long> { static const bool value = true; };
-  template<> struct is_signed<__cpc_signed_long_long> { static const bool value = true; };
-  template<> struct is_signed<float> { static const bool value = true; };
-  template<> struct is_signed<double> { static const bool value = true; };
-  template<> struct is_signed<__cpc_long_double> { static const bool value = true; };
-  template<class T> struct is_signed<const T> : is_signed<T> {};
-  template<class T> struct is_signed<volatile T> : is_signed<T> {};
-  template<class T> struct is_signed<const volatile T> : is_signed<T> {};
-  typedef unsigned char __cpc_unsigned_char;
-  typedef unsigned short __cpc_unsigned_short;
-  typedef unsigned int __cpc_unsigned_int;
-  typedef unsigned long __cpc_unsigned_long;
-  typedef unsigned long long __cpc_unsigned_long_long;
-  template<class T> struct is_unsigned { static const bool value = false; };
-  template<> struct is_unsigned<__cpc_unsigned_char> { static const bool value = true; };
-  template<> struct is_unsigned<__cpc_unsigned_short> { static const bool value = true; };
-  template<> struct is_unsigned<__cpc_unsigned_int> { static const bool value = true; };
-  template<> struct is_unsigned<__cpc_unsigned_long> { static const bool value = true; };
-  template<> struct is_unsigned<__cpc_unsigned_long_long> { static const bool value = true; };
+  template<class T, bool = is_integral<T>::value || is_floating_point<T>::value>
+  struct __signed_arithmetic : false_type {};
+  template<class T> struct __signed_arithmetic<T, true>
+      : bool_constant<(T(-1) < T(0))> {};
+  template<class T> struct is_signed : __signed_arithmetic<T> {};
+
+  template<class T, bool = is_integral<T>::value || is_floating_point<T>::value>
+  struct __unsigned_arithmetic : false_type {};
+  template<class T> struct __unsigned_arithmetic<T, true>
+      : bool_constant<(T(0) < T(-1))> {};
+  template<class T> struct is_unsigned : __unsigned_arithmetic<T> {};
 
   template<bool B, class T, class F> struct conditional { typedef F type; };
   template<class T, class F> struct conditional<true, T, F> { typedef T type; };
@@ -83,14 +70,18 @@ namespace std
   template<class T> struct remove_reference { typedef T type; };
   template<class T> struct remove_reference<T&> { typedef T type; };
   template<class T> struct remove_reference<T&&> { typedef T type; };
+  template<class T> using remove_reference_t = typename remove_reference<T>::type;
 
   template<class T> struct is_lvalue_reference : false_type {};
   template<class T> struct is_lvalue_reference<T&> : true_type {};
 
   template<class T> struct remove_const { typedef T type; };
   template<class T> struct remove_const<const T> { typedef T type; };
+  template<class T> using remove_const_t = typename remove_const<T>::type;
 
-  template<class T> struct underlying_type { typedef int type; };
+  template<class T, bool = is_enum<T>::value> struct __underlying_type_if_enum {};
+  template<class T> struct __underlying_type_if_enum<T, true> { typedef __underlying_type(T) type; };
+  template<class T> struct underlying_type : __underlying_type_if_enum<T> {};
   template<class T> using underlying_type_t = typename underlying_type<T>::type;
 
   template<class T> struct remove_volatile { typedef T type; };

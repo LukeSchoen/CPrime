@@ -6,12 +6,6 @@
 namespace std
 {
   template<class T>
-  struct is_trivially_copyable
-  {
-    static const bool value = false;
-  };
-
-  template<class T>
   T&& declval();
 
   template<class T>

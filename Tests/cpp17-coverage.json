@@ -1,10 +1,25 @@
-﻿{
+{
     "schema":  1,
-    "repairCheckpoint": {
-        "compilerSHA256": "02536B5F825EB14302F8D15570191BB74F7642C91697D37AC99B5012F40219AD",
-        "evidence": "build/cpp17-repaired-verification.json",
-        "scope": "All 15 original reproducers passed individually; regression passed; fast gate found two additional constructor failures. Broader coverage remains incomplete."
-    },
+    "traitRepairCheckpoint":  {
+                                  "compilerSHA256":  "8EB45E715FD061EA870B81676EC1F8D94A7DF67A15497362DAFCEB997C79C748",
+                                  "evidence":  "build/cpp17-traits-repaired-verification.json",
+                                  "scope":  "165 fast and 1717 pedantic tests passed after removing name-based semantic shortcuts and fixing exposed defects. Further C++17 language and library work remains; this is not a conformance claim."
+                              },
+    "bindingProtocolCheckpoint":  {
+                                      "compilerSHA256":  "807F7881738DC651C487BDB30E85CBC88FCDC964C58BE62E0DE1163DD56B5D4A",
+                                      "evidence":  "build/cpp17-bindings-verification.json",
+                                      "scope":  "692 Templates and 71 Declarations tests passed with an unchanged compiler hash; complete conformance is not established."
+                                  },
+    "coverageCheckpoint":  {
+                               "compilerSHA256":  "B3EAF15101773114B505561E7DB502CF90054762DB4168D3D9B78CF518FB5C77",
+                               "evidence":  "Tests/cpp17-verification.json: coverageCheckpoint and stateResetCheckpoint",
+                               "scope":  "Original failures repaired; existing fast and pedantic inventory passed at the recorded prior compiler hash. New aggregate binding and variable-template tests pass. Complete C++17 conformance remains unverified and known library gaps remain."
+                           },
+    "repairCheckpoint":  {
+                             "compilerSHA256":  "02536B5F825EB14302F8D15570191BB74F7642C91697D37AC99B5012F40219AD",
+                             "evidence":  "build/cpp17-repaired-verification.json",
+                             "scope":  "All 15 original reproducers passed individually; regression passed; fast gate found two additional constructor failures. Broader coverage remains incomplete."
+                         },
     "date":  "2026-09-14",
     "complete":  false,
     "policy":  "One repository suite, independent minimal reductions, duplicate behaviors map to existing cases, CPC only and serial. Failed valid cases stay in pass/, never relabeled expected failures.",
@@ -200,5 +215,135 @@
                       "Audit fold operand grammar, nested folds, constexpr, multiple/non-type packs and feature macro before claiming complete support.",
                       "Audit if constexpr, constexpr lambdas, CTAD, inline variables across translation units, noexcept function type, over-aligned allocation, sequencing, attributes, and C++17 library facilities.",
                       "Add unique cases from inspected but unmapped upstream inputs. No claim of exhaustive upstream execution."
-                  ]
+                  ],
+    "lambdaCaptureCheckpoint":  {
+                                    "compilerSHA256":  "9509DC3B42705F4AE4B9BDC0C77A3783DA3333368699289BC1920329F358240E",
+                                    "complete":  false,
+                                    "gates":  {
+                                                  "fast":  {
+                                                               "log":  "build/cpp17-capture-fast.log",
+                                                               "failed":  0,
+                                                               "passed":  176
+                                                           },
+                                                  "pedantic":  {
+                                                                   "log":  "build/cpp17-capture-pedantic.log",
+                                                                   "failed":  0,
+                                                                   "passed":  1717
+                                                               }
+                                              },
+                                    "regression":  "45 passed; build/cpp17-capture-grammar-build.log",
+                                    "expressions":  "146 passed; build/cpp17-capture-expressions.log",
+                                    "templates":  "693 passed before final capture grammar checks; build/cpp17-lambda-templates.log",
+                                    "scope":  "Lambda = init-capture evaluation, ownership, nested scope, direct copy capture versus copy initialization, constructor-template candidate eligibility, array copy captures and capture-list rejection rules.",
+                                    "remaining":  "Parenthesized/braced init-captures, *this, constexpr/noexcept, closure special-member rules and broader C++17 language/library gaps remain."
+                                },
+    "directCaptureCheckpoint":  {
+                                    "compilerSHA256":  "B797AA827191924883F60CF3E9FA57B0BA5730CB581DE1F3DAC78C689BD8A132",
+                                    "complete":  false,
+                                    "fastPassed":  181,
+                                    "fastLog":  "build/cpp17-direct-capture-fast.log",
+                                    "regression":  "45 passed; build/cpp17-direct-capture-build.log",
+                                    "expressions":  "150 passed; build/cpp17-direct-capture-expressions.log",
+                                    "constructors":  "183 passed; build/cpp17-direct-capture-constructors.log",
+                                    "templates":  "693 passed; build/cpp17-direct-capture-templates.log",
+                                    "scope":  "Parenthesized and single-element direct-list init-captures; exact copy/move/destruction checks; mandatory same-type prvalue elision in functional, direct and aggregate initialization; lambda capture brackets excluded from body detection.",
+                                    "remaining":  "Copy-list capture deduction, *this capture, constexpr/noexcept, closure special members and additional C++17 language/library gaps. The preceding full pedantic checkpoint applies to its recorded earlier compiler, not this executable."
+                                },
+    "listCaptureCheckpoint":  {
+                                  "compilerSHA256":  "7164AA6420024490078E7A6D3E17D07A59CA7BF65E0252D98AAFCC2D7A2DF180",
+                                  "complete":  false,
+                                  "broadCompilerSHA256":  "8718B6C2041C3D7A7517FDE2D1593E436BE420CB22876DCC9D708BAC4C3A407D",
+                                  "gates":  {
+                                                "fast":  {
+                                                             "log":  "build/cpp17-list-capture-fast.log",
+                                                             "failed":  0,
+                                                             "passed":  187
+                                                         },
+                                                "final-fast":  {
+                                                                   "log":  "build/cpp17-list-capture-final-fast.log",
+                                                                   "failed":  0,
+                                                                   "passed":  189
+                                                               },
+                                                "pedantic":  {
+                                                                 "log":  "build/cpp17-list-capture-pedantic.log",
+                                                                 "failed":  0,
+                                                                 "passed":  1717
+                                                             }
+                                            },
+                                  "finalRegression":  "45 passed; build/cpp17-list-capture-final-build.log",
+                                  "finalExpressions":  "157 passed; build/cpp17-list-capture-final-expressions.log",
+                                  "finalDifference":  "Final compiler adds an explicit deduction rejection for non-copy-list nested braced init-captures. Broad fast/pedantic logs use broadCompilerSHA256; final-fast and finalExpressions use compilerSHA256.",
+                                  "scope":  "Copy-list lambda capture deduction and local/temporary backing-array lifetime; decltype capture and member declared types; implemented advertised __is_same and __is_same_as, including noexcept function identity and bool results.",
+                                  "remaining":  "*this capture, constexpr/noexcept lambdas, closure special members, other builtin advertisements, and remaining C++17 language/library coverage in task.md."
+                              },
+    "starThisCheckpoint":  {
+                               "compilerSHA256":  "8A2FD7C38939761E73F6BF61B0F668609FD0DCB3EAB8ECF3D21D3D5478BFC23A",
+                               "complete":  false,
+                               "gates":  {
+                                             "fast":  {
+                                                          "log":  "build/cpp17-star-this-fast.log",
+                                                          "failed":  0,
+                                                          "passed":  196
+                                                      },
+                                             "pedantic":  {
+                                                              "log":  "build/cpp17-star-this-pedantic.log",
+                                                              "failed":  0,
+                                                              "passed":  1717
+                                                          }
+                                         },
+                               "regression":  "45 passed; build/cpp17-star-this-build.log",
+                               "scope":  "C++17 *this object copy captures, mutable/const and nested/generic cases; stable nested closure identity across generic specializations; reject increment of const objects; distinguish member function templates from elaborated class types inside their bodies.",
+                               "regressionRepair":  "The full Templates run exposed an enclosing enum lookup regression in a publication-context experiment. That experiment was reverted; focused reproducer and fresh fast/pedantic gates passed on this compiler.",
+                               "remaining":  "constexpr/noexcept lambdas, capture/parameter conflicts, closure special members, further cv/access/lifetime tests and remaining C++17 language/library gaps in task.md."
+                           },
+    "captureScopeCheckpoint":  {
+                                   "compilerSHA256":  "7F9841C9F1C919B33D027553019CA691CF10970573B001A1DC1C125237E7C034",
+                                   "complete":  false,
+                                   "fastPassed":  199,
+                                   "fastLog":  "build/cpp17-capture-scope-fast.log",
+                                   "expressions":  "166 passed; build/cpp17-capture-scope-expressions.log",
+                                   "regression":  "45 passed; build/cpp17-capture-scope-build.log",
+                                   "relatedEarlierRuns":  "Before the final reference-declarator adjustment: 183 Constructors, 59 MemberFunctions and 694 Templates tests passed. These runs are additional repair evidence, not final-compiler certification.",
+                                   "scope":  "Retained rejection tests for simple/init-capture parameter conflicts. Repaired valid inner-block shadowing: built-in and reference declaration recognition, one-pass declaration-name bitmap, scoped expression lookup for shadowed members. Tests check uses before, inside, after and in sibling scopes.",
+                                   "failedExperiment":  "Removing data-member rewriting entirely failed publication regression. Restored it and applied the narrower declaration/scoping repair; root was preserved by the failed publication.",
+                                   "remaining":  "Further lambda scope/cv/access, constexpr/noexcept, closure special members and broader C++17 language/library requirements remain in task.md."
+                               },
+    "noexceptInvestigation":  {
+                                  "complete":  false,
+                                  "compilerSHA256":  "7F9841C9F1C919B33D027553019CA691CF10970573B001A1DC1C125237E7C034",
+                                  "test":  "Tests/features/Expressions/pass/test_lambda_noexcept_call_and_conversion.cpp",
+                                  "status":  "Confirmed valid positive failure; unchanged expectations",
+                                  "diagnosis":  "noexcept(expression) parsed as undeclared function; lambda noexcept discarded, conditional specification unsupported",
+                                  "log":  "build/cpp17-noexcept-confirmed-failure.log",
+                                  "experiment":  "Bare lambda noexcept propagation alone did not repair regression; reverted and republished through build gate",
+                                  "regression":  "45 passed; build/cpp17-noexcept-investigation-restore.log",
+                                  "remaining":  "Implement semantic potentially-throwing analysis for unevaluated expressions, lambda call specifications and conversion function types"
+                              },
+    "noexceptCheckpoint":  {
+                               "compilerSHA256":  "A6E8CF035203F3E8445A900C2488C96C469F5A192A38260AAE8A6D933B56FE53",
+                               "complete":  false,
+                               "fastPassed":  203,
+                               "pedanticPassed":  1717,
+                               "regressionPassed":  45,
+                               "expressionsPassed":  170,
+                               "templatesPassed":  694,
+                               "exceptionsPassed":  58,
+                               "logs":  [
+                                            "build/cpp17-noexcept-query-build.log",
+                                            "build/cpp17-noexcept-query-fast.log",
+                                            "build/cpp17-noexcept-query-pedantic.log",
+                                            "build/cpp17-noexcept-query-expressions.log",
+                                            "build/cpp17-noexcept-query-templates.log",
+                                            "build/cpp17-noexcept-query-exceptions.log"
+                                        ],
+                               "tests":  [
+                                             "test_lambda_noexcept_call_and_conversion.cpp",
+                                             "test_noexcept_unevaluated_operations.cpp",
+                                             "test_noexcept_allocation_and_rtti.cpp",
+                                             "test_lambda_conditional_noexcept.cpp"
+                                         ],
+                               "implementation":  "Semantic noexcept query tracks selected calls at the operand evaluation depth, excludes nested unevaluated operands and inference probes, handles throw, temporary cleanup, deletion, array allocation and RTTI checks. Lambda exception specifications preserved including conditional generic replay, concrete parameter scope and captureless function-pointer conversion types. Member-template exception-specification replay receives parameter scope.",
+                               "remaining":  "Complete C++17 conformance remains unproven. Further noexcept auditing includes implicit/defaulted special members, operator/conversion routes, substitution recovery, generic lambda conversions and allocation variants. Other language and library gaps remain in task.md.",
+                               "standardReference":  "https://timsong-cpp.github.io/cppwp/n4659/expr.unary.noexcept"
+                           }
 }

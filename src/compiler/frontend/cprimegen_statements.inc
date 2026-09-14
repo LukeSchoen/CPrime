@@ -1063,6 +1063,7 @@ if_chain:
         construction.available = cpp_current_return_regs(&func_vt,
                                   &register_type, &align, &regsize) == 0;
         construction.conditional_marker = 0;
+        construction.extend_backing_array_lifetime = 0;
         cpp_construction_destination = &construction;
         materialize_braced_temporary(&func_vt);
         cpp_construction_destination = saved_destination;
@@ -1667,6 +1668,7 @@ static void skip_or_save_block_mode(TokenString **str, int allow_eof, int logica
         && (angle > 0
             || (prev_sig >= TOK_UIDENT
                 && (find_template_def(prev_sig)
+                    || find_template_variable(prev_sig)
                     /* A qualified member template id (`Impl::member<...>`)
                        opens an argument list in ordinary call arguments too;
                        the `::` before the name makes the '<' unambiguous. */

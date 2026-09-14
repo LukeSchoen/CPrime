@@ -1,0 +1,33 @@
+#include <type_traits>
+enum class Code : unsigned char { value = 7 };
+union Union { int value; };
+struct Incomplete;
+struct Plain { int value; };
+struct Constructed { int value; Constructed(int n) : value(n) {} };
+struct Copy { Copy(const Copy &) {} };
+struct Destroy { ~Destroy() {} };
+struct Derived : Plain { int extra; };
+struct Reference { int &value; };
+struct Defaulted { Defaulted(const Defaulted &) = default; ~Defaulted() = default; };
+struct Assignment { Assignment &operator=(const Assignment &) { return *this; } };
+struct Virtual { virtual void function() {} };
+static_assert(std::is_enum<const Code>::value);
+static_assert(!std::is_enum<Code &>::value);
+static_assert(std::is_class<Incomplete>::value);
+static_assert(std::is_union<Union>::value);
+static_assert(!std::is_class<Union>::value);
+static_assert(std::is_same<std::underlying_type_t<Code>, unsigned char>::value);
+static_assert(std::is_trivially_copyable<int>::value);
+static_assert(std::is_trivially_copyable<Plain[2]>::value);
+static_assert(std::is_trivially_copyable<Constructed>::value);
+static_assert(std::is_trivially_copyable<Derived>::value);
+static_assert(std::is_trivially_copyable<Reference>::value);
+static_assert(std::is_trivially_copyable<Defaulted>::value);
+static_assert(!std::is_trivially_copyable<Assignment>::value);
+static_assert(!std::is_trivially_copyable<Virtual>::value);
+static_assert(!std::is_trivially_copyable<void()>::value);
+static_assert(!std::is_trivially_copyable<int &>::value);
+static_assert(!std::is_trivially_copyable<void>::value);
+static_assert(!std::is_trivially_copyable<Copy>::value);
+static_assert(!std::is_trivially_copyable<Destroy>::value);
+int main() {}
