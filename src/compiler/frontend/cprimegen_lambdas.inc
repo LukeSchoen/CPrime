@@ -906,6 +906,11 @@ static void parse_cpp_lambda_expression(void)
   tok_str_add(parameters, TOK_EOF);
   if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "mutable"))
   { current.mutable_call = 1; next(); }
+  /* `constexpr` is a lambda declarator specifier.  The synthesized call
+     operator already gets its constexpr semantics from its parsed body, so
+     accepting and consuming the spelling is sufficient here. */
+  if (tok == tok_constexpr)
+    next();
   if (tok >= TOK_UIDENT && !strcmp(get_tok_str(tok, NULL), "noexcept"))
   {
     current.noexcept_call = 1;

@@ -5217,7 +5217,7 @@ static void cprime_predefs(CPRIMEState *s1, CString *cs, int is_asm)
     if (cprimepp_is_cpp_filename(file->filename))
     {
       cstr_cat(cs, "#define __CPRIME_CPP__ 1\n", -1);
-      cstr_cat(cs, "#define __cplusplus 201402L\n", -1);
+      cstr_cat(cs, "#define __cplusplus 201703L\n", -1);
       cstr_cat(cs, "#define __GXX_RTTI 1\n", -1);
       cstr_cat(cs, "#define __GXX_EXPERIMENTAL_CXX0X__ 1\n", -1);
       cstr_cat(cs, "#define __STDC_LIMIT_MACROS 1\n", -1);

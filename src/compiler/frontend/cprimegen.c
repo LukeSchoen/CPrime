@@ -689,6 +689,10 @@ typedef struct TemplateDef
   struct TemplateDef *lookup_bucket_next;
 } TemplateDef;
 
+/* A class template name without an argument list is a provisional type
+   specifier until its declarator exposes the braced CTAD initializer. */
+static TemplateDef *pending_braced_ctad_template;
+
 /* A full specialization can target a non-template nested class of a class
    template (`template<> struct Outer<int>::Member { ... };`).  It does not
    specialize the enclosing class: its primary definition still supplies the
@@ -16518,6 +16522,20 @@ storage:
           next();
           if (tok != TOK_LT && tok != '<')
           {
+            /* C++17 aggregate CTAD is resolved after type_decl() has read
+               the declarator name and left its braced initializer in TOK.
+               Keep this as a provisional class type rather than treating
+               the template spelling as an old-style untyped declarator. */
+            if (is_cpp_translation_unit())
+            {
+              pending_braced_ctad_template = td;
+              t &= ~(VT_BTYPE | VT_LONG);
+              type->t = t | VT_STRUCT;
+              type->ref = NULL;
+              typespec_found = 1;
+              st = bt = -2;
+              break;
+            }
             unget_tok(template_tok);
             goto the_end;
           }
@@ -29327,6 +29345,56 @@ static int decl_context(int l, int condition)
                             : TYPE_DIRECT | ((l == VT_LOCAL || l == VT_JMP
                                 || (l == VT_CONST && is_cpp_translation_unit()))
                                              ? TYPE_LOCAL_CTOR_INIT : 0));
+      if (pending_braced_ctad_template)
+      {
+        TemplateDef *ctad = pending_braced_ctad_template;
+        TemplateArgList arguments;
+        TokenString *initializer;
+        TokenString **elements;
+        CType actual;
+        Sym *instance;
+        int count, i, instance_tok;
+
+        pending_braced_ctad_template = NULL;
+        if (tok != '{')
+          cprime_error("class template argument deduction requires a braced initializer");
+        /* Save and replay the ordinary initializer.  Type deduction must not
+           consume it: aggregate initialization below still owns validation,
+           conversions, and member-wise lowering. */
+        skip_or_save_block(&initializer);
+        count = split_saved_array_initializer(initializer, &elements);
+        if (count < ctad->nb_required_type_params)
+          cprime_error("not enough initializer expressions for class template argument deduction");
+        if (ctad->value_param_mask)
+          cprime_error("class template argument deduction for value parameters is not implemented");
+        if (count > CPC_MAX_TEMPLATE_ARGUMENTS)
+          cprime_error("too many initializer expressions for class template argument deduction");
+        memset(&arguments, 0, sizeof(arguments));
+        arguments.nb = count;
+        for (i = 0; i < count; ++i)
+        {
+          infer_saved_arg_type(elements[i], &actual);
+          if (actual.t == VT_BRACED_LIST)
+            cprime_error("cannot deduce class template argument from nested braced initializer");
+          if (is_reference_type(&actual)) actual = *pointed_type(&actual);
+          actual.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE
+                        | VT_RVALUE_REFERENCE | VT_ARRAY | VT_NULLPTR_TYPE);
+          if ((actual.t & VT_BTYPE) == VT_FUNC) mk_pointer(&actual);
+          arguments.toks[i] = template_exact_type_tok_from_ctype(&actual);
+        }
+        free_saved_array_elements(elements, count);
+        instance_tok = instantiate_template_declaration_type(ctad, &arguments, 0);
+        compile_pending_template_specs_without_member_flush();
+        instance = struct_find(instance_tok);
+        if (!instance)
+          cprime_error("class template argument deduction did not produce a specialization");
+        type.t = instance->type.t;
+        type.ref = instance;
+        /* Restore the initializer and its following delimiter as one parser
+           stream, as deferred class-lifecycle initializers do. */
+        --initializer->len;
+        restore_cpp_lifecycle_probe(initializer);
+      }
       if (ad.is_constexpr && (type.t & VT_BTYPE) != VT_FUNC)
         type.t |= VT_CONSTANT;
       if (friend_declaration && ad.is_global_declarator
