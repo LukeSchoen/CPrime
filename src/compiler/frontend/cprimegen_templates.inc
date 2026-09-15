@@ -11981,11 +11981,18 @@ static int template_inst_arg_for_name(TemplateDef *td, int inst_tok,
   TemplateInstOwner *owner;
   const CppRecordDeclInfo *record = lookup_cpp_record_decl(inst_tok);
 
-  if (!td || param_index < 0 || param_index >= td->nb_type_params)
+  if (!td || param_index < 0)
+    return 0;
+  /* A variadic template's specialization keeps every deduced argument, so a
+     parameter position beyond the written list still has a value. The
+     per-instance stride below only describes the written parameters. */
+  if (param_index >= td->nb_type_params && td->variadic_param_index < 0)
     return 0;
   if (record && record->template_definition == td
       && param_index < record->template_arguments.nb)
     return record->template_arguments.toks[param_index];
+  if (param_index >= td->nb_type_params)
+    return 0;
   owner = find_template_inst_owner_entry(inst_tok);
   if (owner && owner->owner == td)
     return td->inst_type_toks[owner->inst_index * td->nb_type_params + param_index];
@@ -13073,6 +13080,39 @@ static int finish_substituted_template_type_argument(int type_tok,
   return finish_template_type_argument(type_tok, 0);
 }
 
+/* `Pack...` inside a template-id argument list expands to every argument the
+   enclosing template deduced for the pack. The spelling is consumed here, so
+   the surrounding argument loop continues at the separator or the closing
+   '>'. An empty pack appends nothing, which also covers a class spelled
+   through an exhausted pack. */
+static int append_template_pack_substitutions(TemplateArgList *out,
+                                              TemplateDef *ctx_td,
+                                              TemplateArgList *ctx_args)
+{
+  const int *peek;
+  CValue peek_value;
+  int next_token, pack;
+  if (!ctx_td || !ctx_args || ctx_td->variadic_param_index < 0 || !macro_ptr)
+    return 0;
+  pack = ctx_td->variadic_param_index;
+  if (tok != ctx_td->type_param_toks[pack])
+    return 0;
+  peek = macro_ptr;
+  TOK_GET(&next_token, &peek, &peek_value);
+  while (next_token == TOK_LINENUM) TOK_GET(&next_token, &peek, &peek_value);
+  if (next_token != TOK_DOTS)
+    return 0;
+  next();
+  next();
+  while (pack < ctx_args->nb)
+  {
+    if (out->nb >= (int)(sizeof(out->toks) / sizeof(out->toks[0])))
+      cprime_error("too many template type arguments");
+    out->toks[out->nb++] = ctx_args->toks[pack++];
+  }
+  return 1;
+}
+
 static int parse_one_template_type_arg_subst_with_alias(
     TemplateDef *ctx_td, TemplateArgList *ctx_args,
     int *alias_from, int *alias_to, int nb_aliases)
@@ -13279,9 +13319,10 @@ static int parse_one_template_type_arg_subst_with_alias(
         {
           if (nested_args.nb >= (int)(sizeof(nested_args.toks) / sizeof(nested_args.toks[0])))
             cprime_error("too many template type arguments");
-          nested_args.toks[nested_args.nb++] =
-            parse_one_template_type_arg_subst_with_alias(
-                ctx_td, ctx_args, alias_from, alias_to, nb_aliases);
+          if (!append_template_pack_substitutions(&nested_args, ctx_td, ctx_args))
+            nested_args.toks[nested_args.nb++] =
+              parse_one_template_type_arg_subst_with_alias(
+                  ctx_td, ctx_args, alias_from, alias_to, nb_aliases);
           if (tok == TOK_SAR)
           {
           tok = TOK_GT;
@@ -13350,9 +13391,10 @@ static void parse_template_type_args_subst_with_alias(
   {
     if (out_args->nb >= (int)(sizeof(out_args->toks) / sizeof(out_args->toks[0])))
       cprime_error("too many template type arguments");
-    out_args->toks[out_args->nb++] =
-      parse_one_template_type_arg_subst_with_alias(
-          ctx_td, ctx_args, alias_from, alias_to, nb_aliases);
+    if (!append_template_pack_substitutions(out_args, ctx_td, ctx_args))
+      out_args->toks[out_args->nb++] =
+        parse_one_template_type_arg_subst_with_alias(
+            ctx_td, ctx_args, alias_from, alias_to, nb_aliases);
     if (tok == TOK_SAR)
     {
       tok = TOK_GT;
@@ -14065,7 +14107,22 @@ static int deduce_nested_class_pattern(TemplateDef *candidate,
   next(); skip(TOK_LT);
   while (tok != TOK_GT && tok != TOK_SAR && tok != TOK_EOF) {
     int parameter = template_param_index(candidate, tok);
-    int actual_argument = index < actual_arguments.nb
+    int actual_argument;
+    /* A pack written last absorbs every remaining actual argument, including
+       none at all. It is tested before the argument-position lookup so an
+       empty pack never demands a defaulted argument from the actual class. */
+    if (parameter >= 0 && parameter == candidate->variadic_param_index) {
+      next();
+      if (tok != TOK_DOTS) return 0;
+      next();
+      bindings->nb = parameter;
+      while (index < actual_arguments.nb) {
+        if (bindings->nb >= CPC_MAX_TEMPLATE_ARGUMENTS) return 0;
+        bindings->toks[bindings->nb++] = actual_arguments.toks[index++];
+      }
+      break;
+    }
+    actual_argument = index < actual_arguments.nb
                             ? actual_arguments.toks[index] : 0;
     /* A written template-id may omit trailing default arguments.  The
        instantiated class token still carries their substituted values, so

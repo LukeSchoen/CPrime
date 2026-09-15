@@ -379,8 +379,16 @@ static int class_partial_order_pattern(TemplateDef *definition,
         pattern->starts[pattern->parameters] = pattern->count;
         continue;
       }
-      if (pattern->count >= 510 || token == TOK_EOF || token == TOK_DOTS)
+      if (pattern->count >= 510 || token == TOK_EOF)
         return 0;
+      /* A pack written in the pattern keeps its parameter as an ordinary
+         ordering variable. Ordering only needs the structural position, so
+         the ellipsis itself carries no information here. Refusing the whole
+         pattern would leave two matching specializations unordered and make
+         a concrete pattern such as `X<0, box<T...>>` ambiguous against the
+         recursive `X<N, box<T...>>` form. */
+      if (token == TOK_DOTS)
+        continue;
       if (token == TOK_CONST2 || token == TOK_CONST3) token = TOK_CONST1;
       if (token == TOK_VOLATILE2 || token == TOK_VOLATILE3) token = TOK_VOLATILE1;
       variable = member_order_variable(pattern, token);

@@ -3,6 +3,7 @@
 
 #include <cprime_thread.h>
 #include <new>
+#include <tuple>
 
 namespace std
 {
@@ -50,15 +51,130 @@ namespace std
     T &m_mutex;
   };
 
+  struct defer_lock_t { explicit defer_lock_t() {} };
+  struct try_to_lock_t { explicit try_to_lock_t() {} };
+  struct adopt_lock_t { explicit adopt_lock_t() {} };
+
+  const defer_lock_t defer_lock;
+  const try_to_lock_t try_to_lock;
+  const adopt_lock_t adopt_lock;
+
+  namespace __cpc_scoped_lock_detail
+  {
+    struct locker
+    {
+      template<class... Mutexes>
+      void operator()(Mutexes *...mutexes) const
+      {
+        int sequence[] = { (mutexes->lock(), 0)... };
+        (void)sequence;
+      }
+    };
+
+    struct unlocker
+    {
+      template<class... Mutexes>
+      void operator()(Mutexes *...mutexes) const
+      {
+        int sequence[] = { (mutexes->unlock(), 0)... };
+        (void)sequence;
+      }
+    };
+  }
+
+  /* A plain class rather than a class template: the standard spelling
+     `std::scoped_lock lock(m);` has no template argument list, and this
+     compiler deduces class arguments only from braced initializers. The
+     variadic constructor records type-erased lock/unlock thunks, so one
+     definition covers every mutex type and any number of them. The standard
+     locks the whole set without deadlock; this minimal form takes them in
+     the order written, which is what a caller passing distinct, consistently
+     ordered mutexes relies on. */
   class scoped_lock
   {
   public:
-    explicit scoped_lock(mutex &value) : m_mutex(&value) { m_mutex->lock(); }
-    ~scoped_lock() { m_mutex->unlock(); }
+    enum { max_mutexes = 8 };
+
+    template<class... Mutexes>
+    explicit scoped_lock(Mutexes &...mutexes) : m_count(0), m_owns(false)
+    {
+      int sequence[] = { (record(&mutexes), 0)... };
+      (void)sequence;
+      lock();
+    }
+
+    ~scoped_lock()
+    {
+      if (m_owns) unlock();
+    }
+
     scoped_lock(const scoped_lock &) = delete;
     scoped_lock &operator=(const scoped_lock &) = delete;
+
+    scoped_lock(scoped_lock &&other) : m_count(other.m_count), m_owns(other.m_owns)
+    {
+      copy_entries(other);
+      other.m_owns = 0;
+      other.m_count = 0;
+    }
+
+    scoped_lock &operator=(scoped_lock &&other)
+    {
+      if (this != &other)
+      {
+        if (m_owns) unlock();
+        m_count = other.m_count;
+        copy_entries(other);
+        m_owns = other.m_owns;
+        other.m_owns = 0;
+        other.m_count = 0;
+      }
+      return *this;
+    }
+
+    void lock()
+    {
+      for (int i = 0; i < m_count; ++i) m_lock[i](m_mutexes[i]);
+      m_owns = 1;
+    }
+
+    void unlock()
+    {
+      for (int i = m_count - 1; i >= 0; --i) m_unlock[i](m_mutexes[i]);
+      m_owns = 0;
+    }
+
   private:
-    mutex *m_mutex;
+    template<class Mutex>
+    static void lock_thunk(void *mutex) { static_cast<Mutex *>(mutex)->lock(); }
+    template<class Mutex>
+    static void unlock_thunk(void *mutex) { static_cast<Mutex *>(mutex)->unlock(); }
+
+    template<class Mutex>
+    void record(Mutex *mutex)
+    {
+      if (m_count == max_mutexes) return;
+      m_mutexes[m_count] = mutex;
+      m_lock[m_count] = &lock_thunk<Mutex>;
+      m_unlock[m_count] = &unlock_thunk<Mutex>;
+      ++m_count;
+    }
+
+    void copy_entries(const scoped_lock &other)
+    {
+      for (int i = 0; i < m_count; ++i)
+      {
+        m_mutexes[i] = other.m_mutexes[i];
+        m_lock[i] = other.m_lock[i];
+        m_unlock[i] = other.m_unlock[i];
+      }
+    }
+
+    void *m_mutexes[max_mutexes];
+    void (*m_lock[max_mutexes])(void *);
+    void (*m_unlock[max_mutexes])(void *);
+    int m_count;
+    int m_owns;
   };
 
   template<class T>

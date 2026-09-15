@@ -20,8 +20,7 @@ static const ToolSpec tools[] = {
     {"scripts\\maintenance.c", "scripts\\maintenance.exe", NULL},
     {"scripts\\build-clang.c", "scripts\\build-clang.exe", NULL},
     {"scripts\\seed-tcc.c", "scripts\\seed-tcc.exe", NULL},
-    {"Tests\\tools\\test_runner.c", "Tests\\test.exe", NULL},
-    {"Tests\\tools\\test_msvc.c", "Tests\\test-msvc.exe", NULL}
+    {"Tests\\tools\\test_runner.c", "Tests\\test.exe", NULL}
 };
 
 static void replace_file(const char *from, const char *to) {

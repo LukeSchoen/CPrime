@@ -1,87 +1,79 @@
-# C++17 language-support work
+# C++17 language support: remaining work
 
-The root `cpc.exe` is the only compiler used for this work. Keep one compiler
-process active at a time. A valid test stays valid: repair the shared compiler
-or runtime behavior and retain a minimal deterministic regression in `Tests/`.
+The root `cpc.exe` is the only compiler used for this work, one process at a
+time. Tests live in `Tests/`; generated evidence lives in `build/`.
 
-## Current checkpoint
+## Test loop
 
-- Root `cpc.exe` (SHA256 `6AE287BF0A7F621D742707CE15A4EB7D295E70BCB069D1146DDCC5E08DC0691F`)
-  is published from this source state and passes the publication regression
-  gate, the process path helper, and the full fast and pedantic inventories:
-  311 fast cases across 27 suites and 1,717 pedantic cases across 27 suites.
-  The CL gap suite's 45 cases now all pass and are part of the fast partition.
-- Member-pointer constexpr evaluation now covers calls, assignments, equality,
-  null conversion, receiver adjustment, access checks, and C-style conversion
-  controls.
-- `Tests/features/Cpp17Gaps` now holds 45 passing reproducers ported from the CL
-  repository's C++17 gap probe. The wave repaired C++17 mode reporting and
-  alternative operator spellings, class-head `alignas`, structured-binding
-  range-for, the listed missing headers and members, tuple construction and
-  `apply`, and vector initializer-list construction. No gap case remains in the
-  pedantic work list.
-- The member-pointer ambiguity check is repaired and published.
-  `class_has_unique_base` now counts base subobjects, so virtual inheritance
-  paths no longer escape the `.*`/`->*` declaring-base check, and identity is no
-  longer reported as a base. That identity case also made
-  `class_value_is_derived_from(T, T)` true, which silently removed the C++17
-  prvalue return slot and forced a move construction from `return T(...)`
-  (including the packaged `<future>`). Retained as
-  `features/Constructors/pass/test_prvalue_return_elision_with_deleted_copy.cpp`.
-- A struct, union, or enum tag is no longer an ordinary type name in C: after
-  `struct T;` the spelling `T *p;` is rejected while `struct T *p;` and explicit
-  typedefs still work, and C++ keeps the C++-style tag spelling. Retained as
-  `c_compat/fail/test_undeclared_struct_tag_typedef_name.c`; a broad C header
-  smoke test (`windows.h`, `shellapi.h`, `objbase.h`, libc) still compiles.
-- `get_temp_local_var` callers all pass an `int` slot; the constexpr temporary
-  allocator fills an `int` local and narrows into `SValue::r2` instead of writing
-  four bytes through the two-byte field.
-- This is a progress checkpoint, not a C++17 conformance claim. Historical raw
-  logs are disposable; `Tests/cpp17-coverage.json` records the durable scope.
+```
+Tests\test.exe -All -Tier fast        the loop: 25 representative cases, ~1s
+Tests\test.exe -Suite features/X      one suite, every retained case
+Tests\test.exe -All -Tier pedantic    the full internal inventory, ~20s
+Tests\test.exe -Regression            publication gate (~58 cases)
+scripts\build.exe                     self-host, validate, publish cpc.exe
+```
 
-## Next wave
+`Tests/tiers.json` lists the `fast` subset. Every other retained internal case
+runs in the pedantic tier, so a case leaves the loop by not being listed.
+Short self-contained pass cases compile and run in combined units at suite
+scale; a combined unit that fails is recompiled and rerun case by case, and
+`-GroupSize 1` disables combining.
 
-1. The `Tests/features/Cpp17Gaps` work item is complete; continue with the
-   remaining core-language, constexpr, and library scope below.
-2. Complete constexpr object evaluation: aggregate returns and copies, indirect
-   calls, nontrivial construction, union/bit-field/reference fields, ownership,
-   provenance, temporary cleanup, and lifetime escape rejection.
-3. Complete constexpr statements and local state: class ranges/sentinels,
-   selection and loop scopes, mutation through subobjects, initialization order,
-   references, pointer bounds, and discarded runtime calls.
-4. Finish the lexer and literal path: user-defined literals, separators, raw and
-   encoded strings, concatenation, Unicode escape diagnostics, and static-assert
-   source locations.
-5. Extend the remaining C++17 core features: structured bindings, variable
-   templates, folds, `if constexpr`, lambdas, CTAD, inline variables, noexcept
-   function types, allocation, sequencing, and attributes.
-6. Finish deleted-function and constructibility semantics, then add focused
-   coverage for missing library facilities, including `any` and `variant`.
+## Remaining work
 
-Start each item with one standalone reproducer. Add only independent cases;
-reuse an existing regression when it already proves the same behavior. Preserve
-batch-state recovery after a rejected translation unit.
+### 1. constexpr object evaluation
 
-## Test cadence
+- A user-provided `constexpr` constructor is never constant-evaluated:
+  `static_assert(S(1).a == 1)` and `constexpr S g(1);` with
+  `constexpr S(int) : a(v) {}` are rejected with "constant expression
+  expected". Member-function calls on the same object work.
+- A union or bit-field member of a constexpr object cannot be read; writes to a
+  local constexpr object are accepted but never recorded.
+- A reference member cannot be initialized in a constexpr aggregate
+  ("lvalue expected").
+- Returning the address of a function-local object, or of a temporary, from a
+  `constexpr` function is accepted instead of rejected.
+- Reading a member that declaration order has not yet initialized is accepted.
 
-- During a repair, run the exact selected tests and the smallest related suite.
-- After a coherent repair, run `Tests/test.exe -Regression`, then the affected
-  fast suite. Run `Tests/test.exe -All -Tier fast` only when a change crosses
-  suite boundaries or before publication.
-- Put broad, duplicate, costly, stress, or cross-feature coverage in
-  `Tests/tiers.json`'s pedantic partition. Keep fast tests short, representative,
-  and individually diagnosable.
-- Publish with `scripts/build.exe` only after focused checks pass. For a large
-  wave, run the relevant pedantic suites once on the published root compiler.
+### 2. constexpr statements and local state
 
-Generated executables, objects, logs, and temporary runner directories belong
-under `build/` and are not project history. Keep only current evidence needed
-to diagnose an active failure; remove it after recording the durable result in
-tests or coverage metadata.
+Selection and loop scopes, mutation through subobjects, initialization order,
+references, pointer bounds, and discarded runtime calls.
 
-## Exit condition
+### 3. Literals and diagnostics
 
-Do not claim C++17 support is locked until the listed feature areas have focused
-coverage, the fast gate and relevant pedantic gate pass on a freshly published
-root compiler, and outstanding negative tests are checked for the intended
-diagnostic rather than mere rejection.
+- User-defined literals parse but are not constant-evaluated
+  (`2.5_km == 2500.0L` fails a `static_assert`).
+- `sizeof(u"ab")` does not match the encoded-literal element type.
+- Concatenating a wide and a narrow literal (`L"a" "b"`) is accepted.
+- Digit separators, raw strings, Unicode escapes, and the Unicode-escape
+  diagnostics already pass.
+
+### 4. Core C++17 semantics
+
+- A pack expansion nested in a function parameter type
+  (`void f(box<Ts...>)`) is rejected, which is why `std::get`/`std::apply`
+  deduce the whole tuple type instead.
+- Class template argument deduction works only from braced initializers.
+- A trailing return type whose `decltype` names a dependent call does not
+  participate in deduction.
+- `std::is_copy_assignable` is missing.
+
+### 5. Libraries
+
+- `std::variant` holds four alternatives with no copy constructor or copy
+  assignment.
+- `std::tuple` is variadic but `make_tuple`/`tie` spell their parameter lists
+  up to six, because a pack expansion inside a function's template-id is not
+  substituted.
+
+## Rules
+
+- Reproduce first, then repair the shared mechanism, then retain one case. A
+  failed case stays in `pass/`, never relabelled as an expected failure.
+- Keep tests minimal, deterministic, and fast; reuse an existing case when it
+  already proves the behavior.
+- Put one-off reproducers in `build/` and delete them once the durable case
+  exists.
+- Run the exact selected case, then the affected suite, then the fast tier at
+  a boundary, and the pedantic tier before publication.

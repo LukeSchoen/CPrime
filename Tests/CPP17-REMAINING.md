@@ -1,59 +1,64 @@
 # C++17 remaining scope
 
-`cpp17-coverage.json` is the durable feature map. This page is the working
-queue, not a history of individual experiments or raw test output.
+Working queue only. `cpp17-coverage.json` maps upstream cases to local tests;
+this page lists what still has to be built.
 
-## CL gap suite
+## constexpr object model
 
-`Tests/features/Cpp17Gaps` holds the minimal reproducers ported from the CL
-repository's C++17 gap probe (`C:\Luke\Src\CL\CpcRegressions.txt` and
-`tmp_cpc_gaps/results.csv`). The probe was a 139-case single-feature sweep; the
-suite keeps one file per distinct surviving defect, drops cases that the current
-root `cpc.exe` already passes, and drops duplicate or transitive-include-only
-cases.
+| Gap | Reproducer shape |
+| --- | --- |
+| user-provided constructor is not constant-evaluated | `static_assert(S(1).a == 1)` with `constexpr S(int) : a(v) {}` |
+| union member read | `union U{int i;}; constexpr int f(){U u{5}; return u.i;}` |
+| bit-field read | `struct B{unsigned a:3;}; constexpr int f(){B b{5}; return (int)b.a;}` |
+| reference member | `struct R{int &r;}; constexpr int f(){int x=3; R v{x}; return v.r;}` |
+| lifetime escape accepted | `constexpr const int *f(){int x=1; return &x;}` |
+| uninitialized member read accepted | `constexpr Bad() : b(2), a(b+1) {}` |
 
-Run it with `Tests\test.exe -Suite features/Cpp17Gaps`. The former work list is
-now empty: every gap case passes on the published root compiler and belongs to
-the fast partition.
+Already passing and retained: aggregate returns and copies, indirect calls,
+member allocation and provenance, subobject mutation, class ranges and
+sentinels, selection and loop scopes, discarded runtime calls, and the
+member-pointer forms.
 
-Status: no case remains in the pedantic work list. All 45 gap cases pass on
-root `cpc.exe` SHA256
-`6AE287BF0A7F621D742707CE15A4EB7D295E70BCB069D1146DDCC5E08DC0691F`.
-The repaired areas are the C++17 `__cplusplus` value and alternative operator
-spellings, class-head `alignas`, structured bindings in range-for, the runtime
-headers and definitions listed by the gap probe, tuple construction and
-`apply`, vector initializer-list construction, and the missing members in
-`bitset`, `optional`, `memory`, `mutex`, `atomic`, `iterator`, `utility`,
-`algorithm`, `regex`, and `new`.
+## Statements and local state
 
-## First priority: constexpr object model
+Selection and loop scopes, initialization order across local declarations,
+reference binding, pointer bounds, and discarded runtime calls.
 
-- Aggregate returns and copies through indirect/member calls, nontrivial
-  construction, union, bit-field, and reference-member forms.
-- Evaluation-owned storage: pointer provenance, subobjects, array bounds,
-  temporary destruction, reference binding, and escape rejection.
-- Local mutation and initialization: subobjects, constructors, declaration
-  scope, lifetime, discarded runtime calls, and failure recovery.
-- Statement evaluation: class range/sentinel lookup, selection and loop
-  conditions, control flow, and iterator lifetime.
+## Lexing and literals
 
-Retain the member-pointer, aggregate-return, range, temporary, and batch-reset
-regressions already in the feature suites. Add a test only when it proves a
-distinct semantic rule.
+- user-defined literals are parsed but not constant-evaluated
+- `sizeof(u"ab")` disagrees with the encoded-literal element type
+- wide and narrow literals concatenate instead of being rejected
 
-## Second priority: parsing and core C++17
+Digit separators, raw strings, Unicode escapes, and the escape diagnostics
+already pass.
 
-- User-defined literals, digit separators, raw/encoded literals, Unicode
-  escapes, concatenation, and static-assert locations.
-- Structured bindings, variable templates, fold expressions, `if constexpr`,
-  lambdas, CTAD, inline variables, noexcept types, allocation, sequencing, and
-  attributes.
-- Deleted functions, special-member availability, constructibility traits, and
-  minimal `any`/`variant` behavior.
+## Core C++17
 
-## Execution
+- pack expansion nested in a function parameter type (`void f(box<Ts...>)`)
+- class template argument deduction from parentheses
+- trailing return types whose `decltype` names a dependent call
+- `std::is_copy_assignable`
 
-Use `Tests/test.exe` with the smallest applicable `-Suite` and `-Select` list
-while developing. Run regression plus the affected fast suite after each repair.
-Use `-All -Tier fast` at a boundary, and reserve pedantic for broad, expensive,
-or cross-feature coverage. Use CPC only and one compiler process at a time.
+Deleted functions, special-member availability, `is_constructible`,
+`is_copy_constructible`, fold expressions, `if constexpr`, lambdas, inline
+variables, noexcept function types, and attributes already pass.
+
+## Libraries
+
+- `std::variant`: four alternatives, no copy constructor or copy assignment
+- `std::tuple`: variadic, but `make_tuple`/`tie` spell parameter lists to six
+  and `get`/`apply` deduce the whole tuple because parameter-position packs are
+  unsupported
+
+`std::any` (dynamic type, cast rejection, `emplace`, `swap`, `make_any`),
+`std::scoped_lock` (any number of mutexes), `std::shared_mutex` (reader-writer),
+and the tuple arity work are covered by retained cases.
+
+## Where the cases live
+
+- `features/Abi/pass` — Microsoft x64 layout, nullptr and record-return facts
+  that used to need a second compiler
+- `features/Templates/pass` — variadic class, pack and constexpr semantics
+- `features/Includes/pass` — runtime header and container behavior
+- `features/StdConcurrency/pass` — mutex, lock and thread behavior

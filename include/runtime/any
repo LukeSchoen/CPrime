@@ -2,6 +2,8 @@
 #define _CPC_ANY
 
 #include <exception>
+#include <typeinfo>
+#include <type_traits>
 #include <utility>
 
 namespace std
@@ -18,6 +20,7 @@ namespace std
     {
       virtual ~holder_base() {}
       virtual holder_base *clone() const = 0;
+      virtual const type_info &type() const = 0;
     };
 
     template<class T>
@@ -26,11 +29,15 @@ namespace std
       T value;
       explicit holder(const T &object) : value(object) {}
       holder_base *clone() const override { return new holder(value); }
+      const type_info &type() const override { return typeid(T); }
     };
 
   public:
+    typedef void value_type;
+
     template<class U> friend U any_cast(const any &);
     template<class U> friend U *any_cast(any *);
+    template<class U> friend const U *any_cast(const any *);
 
     any() noexcept : m_holder(0) {}
     any(const any &other) : m_holder(other.m_holder ? other.m_holder->clone() : 0) {}
@@ -71,6 +78,22 @@ namespace std
       return *this;
     }
 
+    template<class T>
+    T &emplace(const T &value)
+    {
+      holder<T> *created = new holder<T>(value);
+      reset();
+      m_holder = created;
+      return created->value;
+    }
+
+    void swap(any &other) noexcept
+    {
+      holder_base *temporary = m_holder;
+      m_holder = other.m_holder;
+      other.m_holder = temporary;
+    }
+
     void reset() noexcept
     {
       delete m_holder;
@@ -79,30 +102,82 @@ namespace std
     bool has_value() const noexcept { return m_holder != 0; }
     explicit operator bool() const noexcept { return has_value(); }
 
+    /* The dynamic type of the contained object, or typeid(void) when empty.
+       The standard spelling is a register-free function call; the comparison
+       below is what callers actually use. */
+    const type_info &type() const noexcept
+    {
+      return m_holder ? m_holder->type() : typeid(void);
+    }
+
     template<class T>
     const holder<T> *__cast() const
     {
+      /* Every holder has the same layout, so a static downcast alone would
+         accept a request for a different stored type. Compare the dynamic
+         type first, which is also what makes the pointer form return null
+         for a mismatch. */
+      if (!m_holder || m_holder->type() != typeid(T)) return 0;
       return static_cast<const holder<T> *>(m_holder);
+    }
+
+    template<class T>
+    holder<T> *__cast_mutable()
+    {
+      if (!m_holder || m_holder->type() != typeid(T)) return 0;
+      return static_cast<holder<T> *>(m_holder);
     }
 
   private:
     holder_base *m_holder;
   };
 
-  template<class T>
-  T any_cast(const any &value)
+  inline void swap(any &left, any &right) noexcept { left.swap(right); }
+
+  namespace __cpc_any_detail
   {
-    const any::holder<T> *result = value.__cast<T>();
-    if (!result) throw bad_any_cast();
-    return result->value;
+    /* any_cast names the contained type, not the reference spelling the
+       caller asked for: `any_cast<T&>` must find the holder for T. */
+    template<class T> struct bare { typedef T type; };
+    template<class T> struct bare<T &> { typedef typename bare<T>::type type; };
+    template<class T> struct bare<const T> { typedef typename bare<T>::type type; };
+    template<class T> struct bare<volatile T> { typedef typename bare<T>::type type; };
   }
 
   template<class T>
   T *any_cast(any *value)
   {
+    typedef typename __cpc_any_detail::bare<T>::type bare_type;
     if (!value) return 0;
-    const any::holder<T> *result = value->__cast<T>();
+    any::holder<bare_type> *result = value->__cast_mutable<bare_type>();
     return const_cast<T *>(result ? &result->value : 0);
+  }
+
+  template<class T>
+  const T *any_cast(const any *value)
+  {
+    typedef typename __cpc_any_detail::bare<T>::type bare_type;
+    if (!value) return 0;
+    const any::holder<bare_type> *result = value->__cast<bare_type>();
+    return result ? &result->value : 0;
+  }
+
+  template<class T>
+  T any_cast(const any &value)
+  {
+    typedef typename __cpc_any_detail::bare<T>::type bare_type;
+    const bare_type *result = any_cast<bare_type>(
+        static_cast<const any *>(&value));
+    if (!result) throw bad_any_cast();
+    return static_cast<T>(*result);
+  }
+
+  template<class T, class... Args>
+  any make_any(Args &&...args)
+  {
+    any result;
+    result.emplace<T>(T(std::forward<Args>(args)...));
+    return result;
   }
 }
 

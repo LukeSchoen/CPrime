@@ -25,6 +25,18 @@ typedef struct TestList {
 } TestList;
 
 static char root[NT_PATH], tests_root[NT_PATH];
+#define CPC_MAX_GROUP_CASES 32
+/* The routine loop prints failures and a summary; PASS lines are noise unless
+   a caller asks for them. Compiled programs run in parallel because the suite
+   compile phase is already one serial compiler process. */
+static int verbose_cases;
+static int run_jobs = 4;
+/* Short pass cases combine into unity translation units when a suite has at
+   least a handful of them; 1 disables combining. */
+static int group_size = 6;
+/* Failing suites keep their work directory for diagnosis; the self-check
+   fixtures deliberately fail, so they ask for a clean run. */
+static int keep_evidence = 1;
 
 static int compare_tests(const void *left, const void *right) {
     const TestCase *a = left, *b = right;
@@ -170,20 +182,48 @@ static int selected(const char *name, char **selection, int count) {
     return 0;
 }
 
-static int tier_contains(const char *relative) {
-    char path[NT_PATH], needle[NT_PATH + 8];
+/* tiers.json holds named lists. `fast` is the routine development loop: a
+   short, representative set. Everything else is pedantic, so a case leaves
+   the loop by simply not being listed here. `excluded` names cases that no
+   tier runs. */
+static unsigned char *tier_data(void) {
+    char path[NT_PATH];
     size_t size;
     static unsigned char *data;
     if (!data) {
         nt_join(path, sizeof path, tests_root, "tiers.json");
         data = nt_read_file(path, &size);
+        if (!data) nt_die("cannot read tier lists", path);
     }
-    if (!data) return 0;
+    return data;
+}
+
+static const char *tier_list_range(const char *list, const char **end) {
+    const char *data = (const char *)tier_data();
+    char needle[64];
+    const char *at, *close;
+    snprintf(needle, sizeof needle, "\"%s\"", list);
+    at = strstr(data, needle);
+    if (!at) return NULL;
+    at = strchr(at + strlen(needle), '[');
+    if (!at) return NULL;
+    close = strchr(at, ']');
+    if (!close) return NULL;
+    *end = close;
+    return at;
+}
+
+static int tier_list_member(const char *list, const char *relative) {
+    const char *begin, *end, *at;
+    char needle[NT_PATH + 8];
+    int length;
+    begin = tier_list_range(list, &end);
+    if (!begin) return 0;
     snprintf(needle, sizeof needle, "\"%s\"", relative);
-    {
-        int found = strstr((char *)data, needle) != NULL;
-        return found;
-    }
+    length = (int)strlen(needle);
+    for (at = begin; at + length <= end; ++at)
+        if (!strncmp(at, needle, length)) return 1;
+    return 0;
 }
 
 typedef struct RegressionCase {
@@ -192,6 +232,92 @@ typedef struct RegressionCase {
     char output[NT_PATH];
     TestMeta meta;
 } RegressionCase;
+
+typedef struct RunJob {
+    int index;
+    const char *output;
+    int expected_exit;
+    const char *expected_stdout;
+    int ok;
+    double seconds;
+    char message[1024];
+} RunJob;
+
+typedef struct RunPool {
+    CRITICAL_SECTION lock;
+    RunJob *jobs;
+    int count, next;
+    unsigned timeout_ms;
+} RunPool;
+
+static DWORD WINAPI run_pool_worker(void *argument) {
+    RunPool *pool = argument;
+    for (;;) {
+        const char *run_command[2];
+        RunJob *job;
+        NtProcessResult run;
+        int index;
+        EnterCriticalSection(&pool->lock);
+        index = pool->next < pool->count ? pool->next++ : -1;
+        LeaveCriticalSection(&pool->lock);
+        if (index < 0) return 0;
+        job = &pool->jobs[index];
+        run_command[0] = job->output;
+        run_command[1] = NULL;
+        run = nt_run(run_command, root, pool->timeout_ms, 0);
+        job->seconds = run.wall_seconds;
+        normalize_output(run.output);
+        if (!run.started)
+            snprintf(job->message, sizeof job->message, "could not start");
+        else if (run.timed_out)
+            snprintf(job->message, sizeof job->message,
+                     "exceeded %.3f second budget", pool->timeout_ms / 1000.0);
+        else if ((int)run.exit_code != job->expected_exit)
+            snprintf(job->message, sizeof job->message,
+                     "runtime mismatch (exit %lu): %s",
+                     (unsigned long)run.exit_code, run.output);
+        else if (job->expected_stdout && *job->expected_stdout
+                 && strcmp(run.output, job->expected_stdout))
+            snprintf(job->message, sizeof job->message,
+                     "stdout mismatch; expected '%s', got '%s'",
+                     job->expected_stdout, run.output);
+        else
+            job->ok = 1;
+        nt_process_free(&run);
+    }
+}
+
+/* Run every job `run_jobs` at a time. Returns the wall time of the run phase. */
+static double run_jobs_parallel(RunJob *jobs, int count, unsigned timeout_ms) {
+    RunPool pool;
+    HANDLE threads[32];
+    int created = 0, workers, i;
+    double seconds = 0, begin;
+    if (!count) return 0;
+    memset(&pool, 0, sizeof pool);
+    InitializeCriticalSection(&pool.lock);
+    pool.jobs = jobs;
+    pool.count = count;
+    pool.timeout_ms = timeout_ms;
+    workers = run_jobs;
+    if (workers < 1) workers = 1;
+    if (workers > (int)(sizeof threads / sizeof threads[0]))
+        workers = (int)(sizeof threads / sizeof threads[0]);
+    if (workers > count) workers = count;
+    begin = nt_seconds();
+    for (i = 0; i < workers; ++i) {
+        HANDLE handle = CreateThread(NULL, 0, run_pool_worker, &pool, 0, NULL);
+        if (handle) threads[created++] = handle;
+    }
+    if (!created) run_pool_worker(&pool);
+    for (i = 0; i < created; ++i) {
+        WaitForSingleObject(threads[i], INFINITE);
+        CloseHandle(threads[i]);
+    }
+    seconds = nt_seconds() - begin;
+    DeleteCriticalSection(&pool.lock);
+    return seconds;
+}
 
 static void job_argument(NtBuffer *batch, const char *argument);
 static int append_additional_job_sources(NtBuffer *batch, const char *test_path,
@@ -362,16 +488,238 @@ static int run_one(const TestCase *test, const char *compiler, const char *runti
     return ok;
 }
 
+/* ---------------------------------------------------------------------------
+   Combined execution of short pass cases.
+
+   A short, self-contained pass case can share a unity translation unit with
+   other short cases: includes are hoisted and deduplicated, each body is
+   wrapped in its own namespace, and the driver returns the first failing
+   member's status. The case files stay exactly as they are - a group is only
+   an execution unit - and a group that fails to compile or run is retried one
+   case at a time, so every failure is still reported per case. */
+
+typedef struct TestUnit {
+    int first_case;
+    int members;
+    int grouped;
+    char source[NT_PATH];
+    char output[NT_PATH];
+    TestMeta meta;
+    int compile_bad;
+    int run_bad;
+    char message[512];
+} TestUnit;
+
+static int group_candidate(const char *text) {
+    static const char *blocked[] = {
+        "#define", "#undef", "#pragma", "#if", "#else", "#elif", "#endif",
+        "#include \"", "extern \"C\"", "__FILE__", "__LINE__", "thread_local",
+        "__asm", "asm(", "main(int", "main (int", "argc", "argv"
+    };
+    const char *p;
+    int i, lines = 0;
+    if (!strstr(text, "int main")) return 0;
+    for (i = 0; i < (int)(sizeof blocked / sizeof blocked[0]); ++i)
+        if (strstr(text, blocked[i])) return 0;
+    for (p = text; *p; ++p)
+        if (*p == '\n' && ++lines > 200) return 0;
+    return 1;
+}
+
+/* Only a case whose observable behavior is "runs and exits 0" can share a
+   driver with other cases. Everything else keeps its own translation unit. */
+static int group_case_ok(RegressionCase *item) {
+    TestMeta *meta = &item->meta;
+    return !meta->compile_fail && !meta->compile_only && !meta->link_fail
+        && !*meta->sources && !*meta->expected_stdout
+        && !*meta->manifest_source && meta->expected_exit == 0;
+}
+
+static void group_trim_line(char *line) {
+    char *end;
+    size_t length = strlen(line);
+    if (length && line[length - 1] == '\n') line[--length] = 0;
+    if (length && line[length - 1] == '\r') line[--length] = 0;
+    while (*line == ' ' || *line == '\t') memmove(line, line + 1, strlen(line));
+    end = line + strlen(line);
+    while (end > line && (end[-1] == ' ' || end[-1] == '\t')) *--end = 0;
+}
+
+static int group_line_is_include(char *line) {
+    group_trim_line(line);
+    return !strncmp(line, "#include", 8);
+}
+
+static void write_group_source(const char *path, char **texts,
+                               RegressionCase *members, int count) {
+    NtBuffer includes = {0}, out = {0};
+    char number[16];
+    int i;
+    nt_buffer_text(&out, "/* Combined short pass cases:");
+    for (i = 0; i < count; ++i) {
+        nt_buffer_text(&out, " ");
+        nt_buffer_text(&out, members[i].name);
+    }
+    nt_buffer_text(&out, " */\n");
+    for (i = 0; i < count; ++i) {
+        const char *p = texts[i];
+        while (*p) {
+            const char *end = strchr(p, '\n');
+            size_t length = end ? (size_t)(end - p + 1) : strlen(p);
+            char line[512];
+            size_t n = length < sizeof line ? length : sizeof line - 1;
+            memcpy(line, p, n);
+            line[n] = 0;
+            if (group_line_is_include(line)
+                && !strstr(includes.data ? includes.data : "", line)) {
+                nt_buffer_text(&includes, line);
+                nt_buffer_text(&includes, "\n");
+            }
+            if (!end) break;
+            p = end + 1;
+        }
+    }
+    nt_buffer_append(&out, includes.data ? includes.data : "", includes.size);
+    for (i = 0; i < count; ++i) {
+        const char *p = texts[i];
+        snprintf(number, sizeof number, "%d", i);
+        nt_buffer_text(&out, "namespace cpc_group_");
+        nt_buffer_text(&out, number);
+        nt_buffer_text(&out, " {\n");
+        while (*p) {
+            const char *end = strchr(p, '\n');
+            size_t length = end ? (size_t)(end - p + 1) : strlen(p);
+            char line[512];
+            size_t n = length < sizeof line ? length : sizeof line - 1;
+            memcpy(line, p, n);
+            line[n] = 0;
+            if (!group_line_is_include(line))
+                nt_buffer_append(&out, p, length);
+            if (!end) break;
+            p = end + 1;
+        }
+        nt_buffer_text(&out, "\n}\n");
+    }
+    nt_buffer_text(&out, "int main() {\n    int cpc_group_result;\n");
+    for (i = 0; i < count; ++i) {
+        snprintf(number, sizeof number, "%d", i);
+        nt_buffer_text(&out, "    cpc_group_result = cpc_group_");
+        nt_buffer_text(&out, number);
+        nt_buffer_text(&out, "::main();\n");
+        nt_buffer_text(&out, "    if (cpc_group_result) return cpc_group_result;\n");
+    }
+    nt_buffer_text(&out, "    return 0;\n}\n");
+    nt_write_file(path, out.data ? out.data : "", out.size);
+    nt_buffer_free(&includes);
+    nt_buffer_free(&out);
+}
+
+/* Compile every unit in one serial batch, then run the units that produce a
+   program `run_jobs` at a time. Results land in the units themselves. */
+static void execute_units(TestUnit *units, int count, const char *compiler,
+                          const char *runtime, const char *work,
+                          unsigned timeout_ms, double *compile_seconds,
+                          double *run_seconds) {
+    NtBuffer batch = {0};
+    NtProcessResult compile;
+    char batch_path[NT_PATH];
+    const char *command[4];
+    RunJob *jobs = nt_alloc(count * sizeof *jobs);
+    int i, job_count = 0;
+    memset(jobs, 0, count * sizeof *jobs);
+    for (i = 0; i < count; ++i) {
+        TestUnit *unit = &units[i];
+        unit->compile_bad = 0;
+        unit->run_bad = 0;
+        unit->message[0] = 0;
+        if (runtime && *runtime) {
+            char flag[NT_PATH + 2];
+            snprintf(flag, sizeof flag, "-B%s", runtime);
+            job_argument(&batch, flag);
+        }
+        if (unit->grouped) {
+            char args_copy[4096], *extra[128];
+            int k, extra_count;
+            strcpy(args_copy, unit->meta.compile_args);
+            extra_count = split_arguments(args_copy, extra, 128);
+            for (k = 0; k < extra_count; ++k) job_argument(&batch, extra[k]);
+            job_argument(&batch, unit->source);
+        } else {
+            char args_copy[4096], *extra[128];
+            int k, extra_count, source_count = 1;
+            strcpy(args_copy, unit->meta.compile_args);
+            extra_count = split_arguments(args_copy, extra, 128);
+            for (k = 0; k < extra_count; ++k) job_argument(&batch, extra[k]);
+            job_argument(&batch, unit->source);
+            source_count += append_additional_job_sources(&batch, unit->source,
+                                                          unit->meta.sources);
+            if (unit->meta.compile_only || unit->meta.compile_fail) {
+                if (source_count != 1)
+                    nt_die("compile-only test has multiple sources", unit->source);
+                job_argument(&batch, "-c");
+            }
+        }
+        job_argument(&batch, "-o");
+        job_argument(&batch, unit->output);
+        nt_buffer_text(&batch, "\n");
+    }
+    nt_join(batch_path, sizeof batch_path, work, "jobs.txt");
+    nt_write_file(batch_path, batch.data, batch.size);
+    command[0] = compiler; command[1] = "--batch-continue";
+    command[2] = batch_path; command[3] = NULL;
+    compile = nt_run(command, root, timeout_ms * count, 0);
+    *compile_seconds += compile.wall_seconds;
+    for (i = 0; i < count; ++i) {
+        TestUnit *unit = &units[i];
+        DWORD code = 0;
+        int expect_fail = unit->grouped ? 0 : unit->meta.compile_fail;
+        char marker[80];
+        const char *timing;
+        unsigned elapsed;
+        unsigned long job_code;
+        snprintf(marker, sizeof marker, "# cprime batch end %d ", i + 1);
+        timing = strstr(compile.output, marker);
+        if (timing && sscanf(timing + strlen(marker), "%lu %u", &job_code, &elapsed) == 2
+            && elapsed >= 250)
+            printf("SLOW compile %s: %.3fs\n", unit->grouped ? "combined group" : units[i].source,
+                   elapsed / 1000.0);
+        if (!find_batch_exit(compile.output, i + 1, &code)
+            || (expect_fail ? code != 1 : code != 0)
+            || (!expect_fail && !nt_exists(unit->output))) {
+            unit->compile_bad = 1;
+            snprintf(unit->message, sizeof unit->message,
+                     "compile failed (exit %lu)", (unsigned long)code);
+            continue;
+        }
+        if (!expect_fail && !(unit->grouped ? 0 : unit->meta.compile_only)) {
+            jobs[job_count].index = i;
+            jobs[job_count].output = unit->output;
+            jobs[job_count].expected_exit = unit->grouped ? 0 : unit->meta.expected_exit;
+            jobs[job_count].expected_stdout = unit->grouped ? "" : unit->meta.expected_stdout;
+            job_count++;
+        }
+    }
+    if (job_count) {
+        *run_seconds += run_jobs_parallel(jobs, job_count, timeout_ms);
+        for (i = 0; i < job_count; ++i) {
+            TestUnit *unit;
+            if (jobs[i].ok) continue;
+            unit = &units[jobs[i].index];
+            unit->run_bad = 1;
+            snprintf(unit->message, sizeof unit->message, "%s", jobs[i].message);
+        }
+    }
+    nt_process_free(&compile);
+    nt_buffer_free(&batch);
+    free(jobs);
+}
+
 static int run_suite(const char *suite, const char *compiler, const char *runtime,
                      char **selection, int selection_count, const char *tier,
                      int tier_explicit, unsigned timeout_ms) {
     char suite_path[NT_PATH], pass_path[NT_PATH], fail_path[NT_PATH], work[NT_PATH];
     TestList list = {0};
     RegressionCase *cases;
-    NtBuffer batch = {0};
-    NtProcessResult compile;
-    char batch_path[NT_PATH];
-    const char *command[4];
     DWORD pid = GetCurrentProcessId();
     unsigned tick = GetTickCount();
     int i, count = 0, passed = 0, failed = 0;
@@ -389,18 +737,19 @@ static int run_suite(const char *suite, const char *compiler, const char *runtim
     nt_mkdirs(work);
     for (i = 0; i < list.count; ++i) {
         char relative[NT_PATH];
-        int pedantic;
+        int fast_case;
         if (!selected(list.items[i].name, selection, selection_count)) continue;
         snprintf(relative, sizeof relative, "%s/%s/%s", suite,
                  list.items[i].fail_directory ? "fail" : "pass", list.items[i].name);
         for (char *p = relative; *p; ++p) if (*p == '\\') *p = '/';
-        pedantic = tier_contains(relative);
-        if ((!selection_count || tier_explicit) && _stricmp(tier, "all") &&
-            (pedantic != !_stricmp(tier, "pedantic"))) continue;
+        if (tier_list_member("excluded", relative)) continue;
+        fast_case = tier_list_member("fast", relative);
+        /* `fast` is the listed subset; `pedantic` and `all` run every retained
+           case that is not excluded. */
+        if ((!selection_count || tier_explicit) && _stricmp(tier, "all")
+            && !_stricmp(tier, "fast") && !fast_case) continue;
         {
             RegressionCase *item = &cases[count];
-            char args_copy[4096], *extra[128];
-            int k, extra_count, source_count = 1;
             strcpy(item->path, list.items[i].path); strcpy(item->name, list.items[i].name);
             parse_meta(item->path, &item->meta);
             if (item->meta.link_fail) {
@@ -409,80 +758,145 @@ static int run_suite(const char *suite, const char *compiler, const char *runtim
                 continue;
             }
             if (*item->meta.manifest_source) nt_die("native manifest test context is not implemented", item->path);
-            snprintf(item->output, sizeof item->output, "%s\\test-%d.%s", work, count,
-                     (item->meta.compile_only || item->meta.compile_fail) ? "obj" : "exe");
-            if (runtime && *runtime) {
-                char flag[NT_PATH + 2]; snprintf(flag, sizeof flag, "-B%s", runtime); job_argument(&batch, flag);
-            }
-            strcpy(args_copy, item->meta.compile_args);
-            extra_count = split_arguments(args_copy, extra, 128);
-            for (k = 0; k < extra_count; ++k) job_argument(&batch, extra[k]);
-            job_argument(&batch, item->path);
-            source_count += append_additional_job_sources(&batch, item->path, item->meta.sources);
-            if (item->meta.compile_only || item->meta.compile_fail) {
-                if (source_count != 1) nt_die("compile-only test has multiple sources", item->path);
-                job_argument(&batch, "-c");
-            }
-            job_argument(&batch, "-o"); job_argument(&batch, item->output);
-            nt_buffer_text(&batch, "\n"); count++;
+            count++;
         }
     }
     if (!count) {
         if (passed || failed) {
             printf("\nSummary: %d passed, %d failed\n", passed, failed);
-            if (!failed) nt_remove_tree(work);
+            if (!failed || !keep_evidence) nt_remove_tree(work);
             else printf("Compiler evidence: %s\n", work);
-            free(cases); free(list.items); nt_buffer_free(&batch);
+            free(cases); free(list.items);
             return failed ? 1 : 0;
         }
         printf("No %s tests under %s\n", tier, suite);
         nt_remove_tree(work); free(cases); free(list.items); return selection_count ? 1 : 0;
     }
-    nt_join(batch_path, sizeof batch_path, work, "jobs.txt"); nt_write_file(batch_path, batch.data, batch.size);
-    command[0] = compiler; command[1] = "--batch-continue"; command[2] = batch_path; command[3] = NULL;
-    compile = nt_run(command, root, timeout_ms * count, 0);
-    compile_seconds = compile.wall_seconds;
     printf("Using compiler: %s\nRunning suite: %s\n\n", compiler, suite);
-    for (i = 0; i < count; ++i) {
-        DWORD code;
-        char marker[80];
-        const char *timing;
-        unsigned elapsed;
-        unsigned long job_code;
-        snprintf(marker, sizeof marker, "# cprime batch end %d ", i + 1);
-        timing = strstr(compile.output, marker);
-        if (timing && sscanf(timing + strlen(marker), "%lu %u", &job_code, &elapsed) == 2
-            && elapsed >= 100)
-            printf("SLOW %s: compile %.3fs\n", cases[i].name, elapsed / 1000.0);
-        int ok = find_batch_exit(compile.output, i + 1, &code);
-        if (!ok || (cases[i].meta.compile_fail ? code != 1 : code != 0) ||
-            (!cases[i].meta.compile_fail && !nt_exists(cases[i].output))) {
-            printf("FAIL %s: compiler batch result %s\n", cases[i].name, ok ? "mismatched" : "missing");
-            failed++; continue;
-        }
-        if (!cases[i].meta.compile_fail && !cases[i].meta.compile_only) {
-            const char *run_command[2] = {cases[i].output, NULL};
-            NtProcessResult run = nt_run(run_command, root, timeout_ms, 0);
-            run_seconds += run.wall_seconds;
-            normalize_output(run.output);
-            if (!run.started || run.timed_out || (int)run.exit_code != cases[i].meta.expected_exit ||
-                (*cases[i].meta.expected_stdout && strcmp(run.output, cases[i].meta.expected_stdout))) {
-                printf("FAIL %s: runtime mismatch (exit %lu): %s\n", cases[i].name,
-                       (unsigned long)run.exit_code, run.output); failed++;
-                nt_process_free(&run); continue;
+    {
+        TestUnit *units = nt_alloc((count + 1) * sizeof *units);
+        int *case_failed = nt_alloc(count * sizeof *case_failed);
+        int *retry = nt_alloc(count * sizeof *retry);
+        int unit_count = 0, suite_group = count >= 16 ? group_size : 1;
+        int retry_count = 0, u;
+        memset(units, 0, (count + 1) * sizeof *units);
+        memset(case_failed, 0, count * sizeof *case_failed);
+        memset(retry, 0, count * sizeof *retry);
+        i = 0;
+        while (i < count) {
+            int grouped = 0;
+            if (suite_group > 1) {
+                char *texts[CPC_MAX_GROUP_CASES];
+                int members = 0, j = i;
+                while (j < count && members < suite_group) {
+                    size_t size = 0;
+                    unsigned char *text = nt_read_file(cases[j].path, &size);
+                    if (!text) break;
+                    if (!group_case_ok(&cases[j])) { free(text); break; }
+                    if (members && strcmp(cases[j].meta.compile_args,
+                                          cases[i].meta.compile_args)) {
+                        free(text);
+                        break;
+                    }
+                    if (!group_candidate((const char *)text)) { free(text); break; }
+                    texts[members++] = (char *)text;
+                    j++;
+                }
+                if (members >= 2) {
+                    TestUnit *unit = &units[unit_count];
+                    int k;
+                    unit->first_case = i;
+                    unit->members = members;
+                    unit->grouped = 1;
+                    unit->meta = cases[i].meta;
+                    snprintf(unit->source, sizeof unit->source, "%s\\group-%d.cpp",
+                             work, unit_count);
+                    snprintf(unit->output, sizeof unit->output, "%s\\group-%d.exe",
+                             work, unit_count);
+                    write_group_source(unit->source, texts, &cases[i], members);
+                    for (k = 0; k < members; ++k) free(texts[k]);
+                    unit_count++;
+                    i += members;
+                    grouped = 1;
+                } else {
+                    int k;
+                    for (k = 0; k < members; ++k) free(texts[k]);
+                }
             }
-            nt_process_free(&run);
+            if (!grouped) {
+                TestUnit *unit = &units[unit_count++];
+                unit->first_case = i;
+                unit->members = 1;
+                strcpy(unit->source, cases[i].path);
+                snprintf(unit->output, sizeof unit->output, "%s\\test-%d.%s", work, i,
+                         (cases[i].meta.compile_only || cases[i].meta.compile_fail)
+                             ? "obj" : "exe");
+                unit->meta = cases[i].meta;
+                i++;
+            }
         }
-        printf("PASS %s\n", cases[i].name); passed++;
+        execute_units(units, unit_count, compiler, runtime, work, timeout_ms,
+                      &compile_seconds, &run_seconds);
+        {
+            int combined = 0, groups = 0;
+            for (u = 0; u < unit_count; ++u)
+                if (units[u].grouped) {
+                    combined += units[u].members;
+                    groups++;
+                }
+            if (groups)
+                printf("Combined %d short cases into %d units\n", combined, groups);
+        }
+        for (u = 0; u < unit_count; ++u) {
+            TestUnit *unit = &units[u];
+            int k;
+            if (!unit->compile_bad && !unit->run_bad) continue;
+            if (!unit->grouped) {
+                printf("FAIL %s: %s\n", cases[unit->first_case].name, unit->message);
+                case_failed[unit->first_case] = 1;
+                continue;
+            }
+            for (k = 0; k < unit->members; ++k) retry[unit->first_case + k] = 1;
+            retry_count += unit->members;
+        }
+        /* A combined unit that failed is recompiled and rerun case by case so
+           the failing case keeps its own diagnostic. */
+        if (retry_count) {
+            TestUnit *retry_units = nt_alloc(retry_count * sizeof *retry_units);
+            int n = 0;
+            memset(retry_units, 0, retry_count * sizeof *retry_units);
+            for (i = 0; i < count; ++i)
+                if (retry[i]) {
+                    TestUnit *unit = &retry_units[n++];
+                    unit->first_case = i;
+                    unit->members = 1;
+                    strcpy(unit->source, cases[i].path);
+                    snprintf(unit->output, sizeof unit->output, "%s\\test-%d.exe",
+                             work, i);
+                    unit->meta = cases[i].meta;
+                }
+            execute_units(retry_units, n, compiler, runtime, work, timeout_ms,
+                          &compile_seconds, &run_seconds);
+            for (i = 0; i < n; ++i)
+                if (retry_units[i].compile_bad || retry_units[i].run_bad) {
+                    printf("FAIL %s: %s\n", cases[retry_units[i].first_case].name,
+                           retry_units[i].message);
+                    case_failed[retry_units[i].first_case] = 1;
+                }
+            free(retry_units);
+        }
+        for (i = 0; i < count; ++i) {
+            if (case_failed[i]) { failed++; continue; }
+            if (verbose_cases) printf("PASS %s\n", cases[i].name);
+            passed++;
+        }
+        free(units);
+        free(case_failed);
+        free(retry);
     }
-    if (failed) {
-        char log[NT_PATH];
-        nt_join(log, sizeof log, work, "compiler.log");
-        nt_write_file(log, compile.output, strlen(compile.output));
-        printf("Failure evidence: %s (compiler exit %lu)\n", work,
-               (unsigned long)compile.exit_code);
-    } else nt_remove_tree(work);
-    nt_process_free(&compile); nt_buffer_free(&batch); free(cases); free(list.items);
+    if (failed && keep_evidence) printf("Evidence: %s\n", work);
+    else nt_remove_tree(work);
+    free(cases); free(list.items);
     printf("\nSummary: %d passed, %d failed\n", passed, failed);
     printf("Time: compile %.3fs, run %.3fs\n", compile_seconds, run_seconds);
     if (selection_count && passed + failed != selection_count)
@@ -689,6 +1103,7 @@ static int run_runner_checks(const char *compiler, const char *runtime, unsigned
         if (runtime && *runtime) {
             command[n++] = "-RuntimeRoot"; command[n++] = runtime;
         }
+        command[n++] = "-NoEvidence";
         command[n++] = "-Suite"; command[n++] = "tools/fixtures/negative_runner";
         command[n++] = "-Select"; command[n++] = checks[i].name; command[n] = NULL;
         NtProcessResult result = nt_run(command, root, timeout_ms * 4, 0);
@@ -703,12 +1118,13 @@ static int run_runner_checks(const char *compiler, const char *runtime, unsigned
 }
 
 static void usage(void) {
-    puts("test.exe -Suite NAME [-Select TEST ...] [-CompilerPath PATH] [-RuntimeRoot PATH] [-Tier fast|pedantic|all] [-Timeout SECONDS]\n"
-         "test.exe -All [-CompilerPath PATH] [-RuntimeRoot PATH] [-Tier fast|pedantic|all]\n"
+    puts("test.exe -Suite NAME [-Select TEST ...] [-CompilerPath PATH] [-RuntimeRoot PATH] [-Tier fast|pedantic|all] [-Timeout SECONDS] [-Jobs N] [-GroupSize N] [-Verbose]\n"
+         "test.exe -All [-CompilerPath PATH] [-RuntimeRoot PATH] [-Tier fast|pedantic|all] [-Jobs N] [-GroupSize N] [-Verbose]\n"
          "test.exe -Regression [-CompilerPath PATH] [-RuntimeRoot PATH]\n"
          "test.exe -Checks [-CompilerPath PATH] [-RuntimeRoot PATH]\n"
          "test.exe -RunnerChecks [-CompilerPath PATH] [-RuntimeRoot PATH]\n"
-         "-Checks is the fast CPC-only publication/development gate; external ABI checks live in test-msvc.exe.");
+         "Default tier is the short `fast` list in tiers.json; `pedantic` runs every retained internal case.\n"
+         "-Checks is the CPC-only publication/development gate.");
 }
 
 static int run_checks(const char *compiler, const char *runtime, unsigned timeout_ms) {
@@ -827,6 +1243,17 @@ int main(int argc, char **argv) {
         } else if (!_stricmp(argv[i], "-RuntimeRoot") && i + 1 < argc) {
             if (!GetFullPathNameA(argv[++i], sizeof runtime, runtime, NULL)) nt_die("invalid runtime path", argv[i]);
         } else if (!_stricmp(argv[i], "-Tier") && i + 1 < argc) { tier = argv[++i]; tier_explicit = 1; }
+        else if (!_stricmp(argv[i], "-Jobs") && i + 1 < argc) {
+            run_jobs = atoi(argv[++i]);
+            if (run_jobs < 1) run_jobs = 1;
+        }
+        else if (!_stricmp(argv[i], "-Verbose")) verbose_cases = 1;
+        else if (!_stricmp(argv[i], "-NoEvidence")) keep_evidence = 0;
+        else if (!_stricmp(argv[i], "-GroupSize") && i + 1 < argc) {
+            group_size = atoi(argv[++i]);
+            if (group_size < 1) group_size = 1;
+            if (group_size > CPC_MAX_GROUP_CASES) group_size = CPC_MAX_GROUP_CASES;
+        }
         else if (!_stricmp(argv[i], "-Timeout") && i + 1 < argc) timeout_ms = (unsigned)(atof(argv[++i]) * 1000.0);
         else if (!_stricmp(argv[i], "-Regression")) regression = 1;
         else if (!_stricmp(argv[i], "-Checks")) checks = 1;
@@ -843,5 +1270,8 @@ int main(int argc, char **argv) {
     if (checks) return run_checks(compiler, runtime, timeout_ms);
     if (regression) return run_regressions(compiler, runtime, timeout_ms);
     if (all) return run_all_suites(compiler, runtime, tier, timeout_ms, list_only);
+    /* Naming a suite means the whole suite; the tier filter applies only when
+       a tier was asked for or a whole tier is being run. */
+    if (!tier_explicit) tier = "all";
     return run_suite(suite, compiler, runtime, selection, selection_count, tier, tier_explicit, timeout_ms);
 }

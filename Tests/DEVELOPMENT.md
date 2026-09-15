@@ -1,25 +1,28 @@
 # Development loop
 
-Use root `cpc.exe` and one compiler process at a time. Reproduce a defect with a
-minimal source under the matching suite, repair the shared mechanism, run the
-selected native test, then run the publication regression set. Use
-`scripts/build.exe` only when compiler changes are ready for a validated
-self-host publication.
+Use root `cpc.exe`, one compiler process at a time.
 
 ```
-Tests\test.exe -Suite features/Templates -Select test_name.cpp
-Tests\test.exe -Regression
-scripts\build.exe
+Tests\test.exe -Suite features/Templates -Select test_x.cpp   reproduce
+Tests\test.exe -Suite features/Templates                      the suite
+Tests\test.exe -All -Tier fast                                the loop
+Tests\test.exe -Regression                                    publication gate
+scripts\build.exe                                             publish
 ```
 
-The fast partition is the routine package gate; keep it short and focused. Move
-large matrices, stress cases, duplicate cases, and costly cross-feature checks
-to the pedantic partition in `tiers.json`. Run selected reproducers while
-developing, the affected fast suite after a repair, and the complete fast gate
-only at a suite boundary or before publication. The pedantic partition is for
-large changes and release validation. Cross-compiler work remains isolated in
-explicitly named native executables and requires separate authorization.
+Reproduce with a minimal source in the matching suite, repair the shared
+mechanism, then keep the case. Do not relabel a failing case as expected.
 
-Keep raw diagnostics, response files, identities, and timing samples in
-`build/` only while they are useful. Remove stale generated output. Keep
-remaining-work Markdown current, but put completed behavior in code and tests.
+Run the pedantic tier when a change crosses suites or before publication:
+
+```
+Tests\test.exe -All -Tier pedantic
+```
+
+It runs every retained internal case, including the fast subset, and is fast
+enough to use at every boundary: short pass cases are combined into unity
+units and test programs run `-Jobs` at a time, while compilation stays one
+serial batch per suite.
+
+Keep reproducers and logs in `build/` and delete them once the durable case
+exists. `Tests/CPP17-REMAINING.md` and `task.md` list open work only.

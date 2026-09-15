@@ -5,39 +5,130 @@
 
 namespace std
 {
+  /* A reader-writer lock. Readers that arrive while no writer holds or waits
+     for the lock share it; a writer excludes every other holder. Blocking is
+     done on the state mutex and its condition variables, so no holder waits
+     on a lock it already owns. */
   class shared_mutex
   {
   public:
-    shared_mutex() {}
+    shared_mutex() : m_readers(0), m_writer(0), m_waiting_writers(0) {}
     shared_mutex(const shared_mutex &) = delete;
     shared_mutex &operator=(const shared_mutex &) = delete;
 
-    void lock() { m_mutex.lock(); }
-    bool try_lock() { return m_mutex.try_lock(); }
-    void unlock() { m_mutex.unlock(); }
-    void lock_shared() { m_mutex.lock(); }
-    bool try_lock_shared() { return m_mutex.try_lock(); }
-    void unlock_shared() { m_mutex.unlock(); }
+    void lock()
+    {
+      unique_lock<mutex> guard(m_state);
+      ++m_waiting_writers;
+      while (m_writer || m_readers)
+        m_writers_ready.wait(guard);
+      --m_waiting_writers;
+      m_writer = 1;
+    }
+
+    bool try_lock()
+    {
+      unique_lock<mutex> guard(m_state);
+      if (m_writer || m_readers) return false;
+      m_writer = 1;
+      return true;
+    }
+
+    void unlock()
+    {
+      unique_lock<mutex> guard(m_state);
+      m_writer = 0;
+      if (m_waiting_writers) m_writers_ready.notify_one();
+      else m_readers_ready.notify_all();
+    }
+
+    void lock_shared()
+    {
+      unique_lock<mutex> guard(m_state);
+      while (m_writer || m_waiting_writers)
+        m_readers_ready.wait(guard);
+      ++m_readers;
+    }
+
+    bool try_lock_shared()
+    {
+      unique_lock<mutex> guard(m_state);
+      if (m_writer || m_waiting_writers) return false;
+      ++m_readers;
+      return true;
+    }
+
+    void unlock_shared()
+    {
+      unique_lock<mutex> guard(m_state);
+      if (--m_readers == 0 && m_waiting_writers)
+        m_writers_ready.notify_one();
+    }
 
   private:
-    mutex m_mutex;
+    mutex m_state;
+    condition_variable m_readers_ready;
+    condition_variable m_writers_ready;
+    unsigned m_readers;
+    unsigned m_writer;
+    unsigned m_waiting_writers;
   };
 
   template<class Mutex>
   class shared_lock
   {
   public:
+    typedef Mutex mutex_type;
+
+    shared_lock() : m_mutex(0), m_owns(false) {}
     explicit shared_lock(Mutex &mutex) : m_mutex(&mutex), m_owns(true)
     {
       m_mutex->lock_shared();
     }
+    shared_lock(Mutex &mutex, defer_lock_t) : m_mutex(&mutex), m_owns(false) {}
+    shared_lock(Mutex &mutex, try_to_lock_t) : m_mutex(&mutex), m_owns(false)
+    {
+      m_owns = m_mutex->try_lock_shared();
+    }
+    shared_lock(Mutex &mutex, adopt_lock_t) : m_mutex(&mutex), m_owns(true) {}
+
     ~shared_lock()
     {
       if (m_owns) m_mutex->unlock_shared();
     }
+
     shared_lock(const shared_lock &) = delete;
     shared_lock &operator=(const shared_lock &) = delete;
 
+    shared_lock(shared_lock &&other) : m_mutex(other.m_mutex), m_owns(other.m_owns)
+    {
+      other.m_mutex = 0;
+      other.m_owns = false;
+    }
+
+    shared_lock &operator=(shared_lock &&other)
+    {
+      if (this != &other)
+      {
+        if (m_owns) m_mutex->unlock_shared();
+        m_mutex = other.m_mutex;
+        m_owns = other.m_owns;
+        other.m_mutex = 0;
+        other.m_owns = false;
+      }
+      return *this;
+    }
+
+    void lock()
+    {
+      m_mutex->lock_shared();
+      m_owns = true;
+    }
+    bool try_lock()
+    {
+      m_owns = m_mutex->try_lock_shared();
+      return m_owns;
+    }
     void unlock()
     {
       if (m_owns)
@@ -48,11 +139,21 @@ namespace std
     }
     bool owns_lock() const { return m_owns; }
     explicit operator bool() const { return m_owns; }
+    Mutex *mutex() const { return m_mutex; }
+    Mutex *release()
+    {
+      Mutex *result = m_mutex;
+      m_mutex = 0;
+      m_owns = false;
+      return result;
+    }
 
   private:
     Mutex *m_mutex;
     bool m_owns;
   };
+
+  using shared_timed_mutex = shared_mutex;
 }
 
 #endif

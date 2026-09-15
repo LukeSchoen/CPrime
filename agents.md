@@ -9,10 +9,9 @@
   or alternate working compiler copies. Staging belongs inside the build only;
   a failed build preserves root `cpc.exe` and stops without changing hosts.
   Clang builds must have Clang explicitly in their entry-point name and still
-  require authorization. for external projects Verify they use fresh validated CPC.
-  This also applies to test workflows: `Tests/test-msvc.exe` requires
-  `-RunExternal`. Use `Tests/test.exe` for CPC-only work unless those external
-  compiler invocations are explicitly authorized.
+  require authorization. For external projects verify they use fresh validated CPC.
+  The test workflow is CPC-only: `Tests/test.exe` runs every internal case,
+  including the Microsoft x64 ABI facts in `Tests/features/Abi`.
 - Run Cprime compilation and project builds serially: one thread and one compiler
   process at a time. Improve algorithms and data handling, not concurrency.
   Compiled programs may still use threads. MSVC benchmarks may run in parallel.
@@ -34,13 +33,12 @@
   and transient output in `build/`.
 - Avoid pedantic sweeps except at the end of very large changes that warrant deep
   testing. Exact retained reproducers and focused runner unit tests are allowed
-  during repairs. Keep fast standalone gates under a few seconds; move genuinely
-  heavier workloads to the explicit pedantic tier.
-- Keep Markdown limited to remaining work, decisions and completed-work ARE code.
-
-reference tests, or benchmarks without explicit user authorization.
-Clang builds are available only through explicitly Clang-named entry points.
-Investigate CPC failures using CPC; do not change the default host.
+  during repairs. Keep the fast gate near a second and the pedantic gate within
+  a few tens of seconds.
+- Keep Markdown limited to remaining work and decisions; completed work is code.
+  Do not add reference tests or benchmarks without explicit user authorization.
+  Clang builds are available only through explicitly Clang-named entry points.
+  Investigate CPC failures using CPC; do not change the default host.
 
 Builds create the compiler from the C/assembly bootstrap runtime first. The
 candidate compiler builds the packaged C++ runtime only when runtime, SDK, or
@@ -68,15 +66,22 @@ Metrics include elapsed and CPU seconds for each tool process.
 ```
 Tests/test.exe -All -Tier fast
 Tests/test.exe -Suite features/Templates
+Tests/test.exe -All -Tier pedantic
 ```
+
+`tiers.json` lists the small `fast` subset; the pedantic tier runs every
+retained internal case, combining short pass cases into unity units and
+running test programs `-Jobs` at a time while compilation stays one serial
+batch per suite.
 
 See [test commands and layout](Tests/README.md) and the
 [development loop](Tests/DEVELOPMENT.md). Bug reports should include a standalone
 reproducer, the command, and expected versus actual behavior.
 
-`Tests/test-msvc.exe -RunExternal` includes cross-compiler ABI gates and requires
-explicit authorization. Use `Tests/test.exe -All -Tier pedantic` only after a
-large change that warrants deeper language, packaging, or self-host testing.
+`Tests/test.exe -All -Tier fast` is the routine loop; `-Tier pedantic` runs
+every retained internal case and is the gate before publication. Tests are
+CPC-only; a change that would need a second compiler belongs in an
+explicitly named tool and needs separate authorization.
 
 Implementation lives in `src/`, headers in `include/`, test and benchmark inputs
 in `Tests/`, and native workflow sources and executables in `scripts/`.

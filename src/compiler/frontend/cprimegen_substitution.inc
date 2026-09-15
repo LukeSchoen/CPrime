@@ -526,10 +526,40 @@ static int template_return_substitution_matches_bound(TemplateDef *definition,
       continue;
     if (TOK_HAS_VALUE(token))
       tok_str_add_record(tokens, definition->def_str->str, definition->def_str->len, &i);
-    else tok_str_add(tokens, template_subst_token(definition, bindings, 0,
-                                                   NULL, NULL, 0, token));
+    else tok_str_add(tokens, token);
   }
   tok_str_add(tokens, TOK_EOF);
+  /* A return type that names the pack (`tuple<decay<Ts>::type...>`) must be
+     expanded while the pack spelling is still present. Substituting first
+     would replace the pack with its first argument and leave the ellipsis
+     behind, which then fails to parse as a type. */
+  if (definition->variadic_param_index >= 0)
+  {
+    int pack = definition->variadic_param_index;
+    TokenString *expanded = expand_template_expression_packs(tokens,
+        definition->type_param_toks[pack], 0, 0,
+        bindings->toks + pack, bindings->nb - pack);
+    tok_str_free(tokens);
+    tokens = expanded;
+  }
+  {
+    TokenString *substituted = tok_str_alloc();
+    for (i = 0; i < tokens->len; ++i)
+    {
+      int token = tokens->str[i];
+      if (token == TOK_EOF) break;
+      if (TOK_HAS_VALUE(token))
+      {
+        tok_str_add_record(substituted, tokens->str, tokens->len, &i);
+        continue;
+      }
+      tok_str_add(substituted, template_subst_token(definition, bindings, 0,
+                                                    NULL, NULL, 0, token));
+    }
+    tok_str_add(substituted, TOK_EOF);
+    tok_str_free(tokens);
+    tokens = substituted;
+  }
   valid = template_probe_type(tokens, 0, definition->namespace_tok, &result);
   tok_str_free(tokens);
   return valid;
