@@ -9,6 +9,14 @@ or runtime behavior and retain a minimal deterministic regression in `Tests/`.
 - Member-pointer constexpr evaluation now covers calls, assignments, equality,
   null conversion, receiver adjustment, access checks, and C-style conversion
   controls.
+- `Tests/features/Cpp17Gaps` now holds the minimal reproducers ported from the CL
+  repository's C++17 gap probe: 44 distinct surviving defects, three of them
+  silent runtime miscompiles. They are listed in the pedantic partition so the
+  fast gate stays usable while the list is worked down.
+- The fast gate is red on two stale member-pointer negative tests
+  (`features/Templates/fail/test_member_pointer_distinct_virtual_containers.cpp`
+  and `..._mixed_virtual_receiver.cpp`): root `cpc.exe` accepts translation units
+  it must reject. Publication is blocked until that regression is repaired.
 - The last published compiler passed 58 regression cases, 308 fast cases across
   26 suites, 935 template cases, and 113 operator cases.
 - This is a progress checkpoint, not a C++17 conformance claim. Historical raw
@@ -16,19 +24,23 @@ or runtime behavior and retain a minimal deterministic regression in `Tests/`.
 
 ## Next wave
 
-1. Complete constexpr object evaluation: aggregate returns and copies, indirect
+1. Work down `Tests/features/Cpp17Gaps` from the runtime miscompiles outward:
+   inline variable initialization, deque `front()`/`back()` returned directly,
+   `stringstream` extraction, then the missing core-language and library
+   facilities. Each case is a standalone `-Select` reproducer.
+2. Complete constexpr object evaluation: aggregate returns and copies, indirect
    calls, nontrivial construction, union/bit-field/reference fields, ownership,
    provenance, temporary cleanup, and lifetime escape rejection.
-2. Complete constexpr statements and local state: class ranges/sentinels,
+3. Complete constexpr statements and local state: class ranges/sentinels,
    selection and loop scopes, mutation through subobjects, initialization order,
    references, pointer bounds, and discarded runtime calls.
-3. Finish the lexer and literal path: user-defined literals, separators, raw and
+4. Finish the lexer and literal path: user-defined literals, separators, raw and
    encoded strings, concatenation, Unicode escape diagnostics, and static-assert
    source locations.
-4. Extend the remaining C++17 core features: structured bindings, variable
+5. Extend the remaining C++17 core features: structured bindings, variable
    templates, folds, `if constexpr`, lambdas, CTAD, inline variables, noexcept
    function types, allocation, sequencing, and attributes.
-5. Finish deleted-function and constructibility semantics, then add focused
+6. Finish deleted-function and constructibility semantics, then add focused
    coverage for missing library facilities, including `any` and `variant`.
 
 Start each item with one standalone reproducer. Add only independent cases;
