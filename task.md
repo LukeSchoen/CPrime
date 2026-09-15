@@ -1,5 +1,23 @@
 # C++17 language-support work
 
+## Immediate compiler correctness / Clang-compatibility defects
+
+1. **C parser accepts a typedef name before its declaration.**
+   `include/cprime/cprime.h:366` declares
+   `Sym *bound_member_receiver_object;` in `SValue`, but the defining
+   `typedef struct Sym { ... } Sym;` does not appear until line 452. In C,
+   `Sym` is not a type name at line 366; only `struct Sym *` is valid. CPC
+   currently accepts this invalid C input while Clang correctly rejects it.
+   Repair the declaration ordering or use `struct Sym *`, then add a minimal
+   C negative regression proving an undeclared typedef name is rejected.
+2. **Constexpr temporary allocator writes an `int` through a 16-bit field.**
+   `src/compiler/frontend/cprimegen_constexpr.inc:905` passes
+   `&result->r2` (`unsigned short *`) to `get_temp_local_var`, whose declared
+   parameter is `int *` (`cprimegen.c:4597`). This is an incompatible pointer
+   conversion and can write four bytes into the two-byte `SValue::r2` field.
+   Make the slot type and allocator interface agree, audit every caller, and
+   add a focused constexpr temporary-object regression.
+
 The root `cpc.exe` is the only compiler used for this work. Keep one compiler
 process active at a time. A valid test stays valid: repair the shared compiler
 or runtime behavior and retain a minimal deterministic regression in `Tests/`.
@@ -13,10 +31,16 @@ or runtime behavior and retain a minimal deterministic regression in `Tests/`.
   repository's C++17 gap probe: 44 distinct surviving defects, three of them
   silent runtime miscompiles. They are listed in the pedantic partition so the
   fast gate stays usable while the list is worked down.
-- The fast gate is red on two stale member-pointer negative tests
-  (`features/Templates/fail/test_member_pointer_distinct_virtual_containers.cpp`
-  and `..._mixed_virtual_receiver.cpp`): root `cpc.exe` accepts translation units
-  it must reject. Publication is blocked until that regression is repaired.
+- The member-pointer ambiguity check is repaired in source.
+  `class_has_unique_base` now counts base subobjects, so virtual inheritance
+  paths no longer escape the `.*`/`->*` declaring-base check, and identity is no
+  longer reported as a base. That identity case also made
+  `class_value_is_derived_from(T, T)` true, which silently removed the C++17
+  prvalue return slot and forced a move construction from `return T(...)`
+  (including the packaged `<future>`). Retained as
+  `features/Constructors/pass/test_prvalue_return_elision_with_deleted_copy.cpp`.
+  A candidate compiler passes the publication regression set (58/58) and every
+  fast suite; root `cpc.exe` predates the repair, so publishing is the last step.
 - The last published compiler passed 58 regression cases, 308 fast cases across
   26 suites, 935 template cases, and 113 operator cases.
 - This is a progress checkpoint, not a C++17 conformance claim. Historical raw

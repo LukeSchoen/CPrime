@@ -12595,7 +12595,13 @@ static int class_base_accessible(int class_tok, int base_tok, int context, int d
 static int class_has_unique_base(int class_tok, int base_tok)
 {
   CppVisitedVirtualBase *visited = NULL, *entry;
-  int count = class_base_subobject_count(class_tok, base_tok, &visited);
+  int count;
+  /* The query asks whether class_tok reaches base_tok through exactly one
+     base subobject.  A class is not a base subobject of itself, so identity is
+     not a derivation; callers that accept the same class check it first. */
+  if (!class_tok || !base_tok || class_tok == base_tok)
+    return 0;
+  count = class_base_subobject_count(class_tok, base_tok, &visited);
   while ((entry = visited) != NULL) {
     visited = entry->next;
     cprime_free(entry);

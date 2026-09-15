@@ -902,7 +902,9 @@ static int evaluate_constexpr_function(Sym *function, SValue *arguments, int cou
     constexpr_pending_result_objects = returned_object->pending_result_next;
     if (valid) {
       int align, size = type_size(&returned_object->object.type, &align);
-      returned_object->object.c = get_temp_local_var(size, align, &result->r2);
+      int temporary_slot;
+      returned_object->object.c = get_temp_local_var(size, align, &temporary_slot);
+      result->r2 = (unsigned short)temporary_slot;
       result->c.i = returned_object->object.c;
       returned_object->next = constexpr_temporary_objects;
       constexpr_temporary_objects = returned_object;

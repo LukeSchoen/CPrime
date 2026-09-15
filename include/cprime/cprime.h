@@ -363,7 +363,7 @@ typedef struct SValue {
     unsigned char complex_constant;
     CValue complex_imaginary;
     int bound_member_receiver;
-    Sym *bound_member_receiver_object;
+    struct Sym *bound_member_receiver_object;
     int bound_member_name;
     int bound_member_qualified;
     unsigned short r;
