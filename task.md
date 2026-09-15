@@ -6,7 +6,8 @@ or runtime behavior and retain a minimal deterministic regression in `Tests/`.
 
 ## Current checkpoint
 
-- Root `cpc.exe` (SHA256 `BF3A6117...`) is published from this source state and
+- Root `cpc.exe` (SHA256 `18B7E339BBC998AB1A5E2BF561F41ADA88D083C8C5E722EFD8C3976BC47401D0`)
+  is published from this source state and
   passes the publication gate: source policy, 58 regression cases, the process
   path helper, and 311 fast cases across 27 suites. The pedantic partition passes
   everywhere except the CL gap work list below.
@@ -14,9 +15,14 @@ or runtime behavior and retain a minimal deterministic regression in `Tests/`.
   null conversion, receiver adjustment, access checks, and C-style conversion
   controls.
 - `Tests/features/Cpp17Gaps` holds the minimal reproducers ported from the CL
-  repository's C++17 gap probe: 45 distinct surviving defects, three of them
-  silent runtime miscompiles. They are listed in the pedantic partition so the
-  fast gate stays usable while the list is worked down.
+  repository's C++17 gap probe: 42 distinct surviving defects. They are listed
+  in the pedantic partition so the fast gate stays usable while the list is
+  worked down. Scalar return lowering now materializes a local deque
+  `front()`/`back()` value before local cleanup, and member-operator lowering
+  preserves scalar reference destinations for `basic_istream::operator>>`.
+  Both reproducers are promoted to the fast tier. Inline static data members
+  now define and initialize addressable storage in their class body;
+  `test_inline_variable_static_member.cpp` is also promoted.
 - The member-pointer ambiguity check is repaired and published.
   `class_has_unique_base` now counts base subobjects, so virtual inheritance
   paths no longer escape the `.*`/`->*` declaring-base check, and identity is no
@@ -39,8 +45,8 @@ or runtime behavior and retain a minimal deterministic regression in `Tests/`.
 ## Next wave
 
 1. Work down `Tests/features/Cpp17Gaps` from the runtime miscompiles outward:
-   inline variable initialization, deque `front()`/`back()` returned directly,
-   `stringstream` extraction, then the missing core-language and library
+   deque `front()`/`back()` returned directly, `stringstream` extraction, then
+   the missing core-language and library
    facilities. Each case is a standalone `-Select` reproducer.
 2. Complete constexpr object evaluation: aggregate returns and copies, indirect
    calls, nontrivial construction, union/bit-field/reference fields, ownership,

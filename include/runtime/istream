@@ -22,6 +22,22 @@ public:
     }
     return *this;
   }
+  basic_istream& operator>>(int& value) {
+    int_type character;
+    do {
+      character=read_character();
+      if(Traits::eq_int_type(character,Traits::eof())) { this->setstate(ios_base::eofbit|ios_base::failbit); return *this; }
+    } while(Traits::to_char_type(character)==(C)' ' || Traits::to_char_type(character)==(C)'\t' || Traits::to_char_type(character)==(C)'\n');
+    if(Traits::to_char_type(character)<(C)'0' || Traits::to_char_type(character)>(C)'9') { this->setstate(ios_base::failbit); return *this; }
+    value=0;
+    while(Traits::to_char_type(character)>=(C)'0' && Traits::to_char_type(character)<=(C)'9') {
+      value*=10;
+      value+=(int)(Traits::to_char_type(character)-(C)'0');
+      character=read_character();
+      if(Traits::eq_int_type(character,Traits::eof()))break;
+    }
+    return *this;
+  }
   streamsize gcount() const { return m_count; }
   int_type get(){m_count=0;if(this->fail()){this->setstate(ios_base::failbit);return Traits::eof();}int_type c=read_character();if(Traits::eq_int_type(c,Traits::eof()))this->setstate(ios_base::eofbit|ios_base::failbit);else m_count=1;return c;}
   basic_istream& get(C& c){int_type value=get();if(!Traits::eq_int_type(value,Traits::eof()))c=Traits::to_char_type(value);return *this;}

@@ -1373,6 +1373,13 @@ if_chain:
       cprime_warning("'return' with no value");
       b = 0;
     }
+    /* A scalar return expression can still be an lvalue into a local object
+       (for example, `return values.front()`).  Materialize it before ending
+       the scope: local destructors below are allowed to release that storage,
+       and ordinary call spilling keeps the staged value alive until
+       gfunc_return assigns the ABI result register. */
+    if (b && (func_vt.t & VT_BTYPE) != VT_STRUCT)
+      gv(RC_TYPE(func_vt.t));
     if (b && (func_vt.t & VT_BTYPE) == VT_STRUCT)
     {
       if (cpp_elide_named_local_return(&func_vt))

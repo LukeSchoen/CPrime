@@ -12,17 +12,19 @@ suite keeps one file per distinct surviving defect, drops cases that the current
 root `cpc.exe` already passes, and drops duplicate or transitive-include-only
 cases.
 
-Run it with `Tests\test.exe -Suite features/Cpp17Gaps`. Every case is listed in
-`tiers.json` under `pedantic`, so the fast partition and the publication
-`-Checks` gate are unaffected while the list is outstanding; the pedantic
-partition reports them as failures until they are repaired. Remove a case from
-that list when it passes on a published root compiler.
+Run it with `Tests\test.exe -Suite features/Cpp17Gaps`. Unrepaired cases are
+listed in `tiers.json` under `pedantic`, so the fast partition and the
+publication `-Checks` gate are unaffected while the list is outstanding; the
+pedantic partition reports them as failures until they are repaired. Remove a
+case from that list when it passes on a published root compiler.
 
 Outstanding groups:
 
-- Runtime miscompiles: `static inline` data member reads fault, a local deque's
-  `front()`/`back()` returned directly reads freed storage, and `stringstream`
-  extraction never assigns.
+- Runtime miscompiles: none retained. Scalar return lowering materializes a
+  local deque's `front()`/`back()` result before local destruction, and
+  `basic_istream::operator>>` preserves its scalar reference destination while
+  parsing decimal input. Inline static data-member definitions now allocate and
+  initialize their storage.
 - Core language: CTAD, explicit `constexpr` lambdas, class-specifier `alignas`,
   structured bindings in range-for, native alternative operator tokens, and the
   `__cplusplus` language-mode value.

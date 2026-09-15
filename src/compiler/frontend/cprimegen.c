@@ -15184,6 +15184,8 @@ cpp_conversion_operator:
               CType static_type = type1;
               int class_tok = get_struct_type_name_tok(type);
               int static_tok;
+              int inline_definition = is_cpp_translation_unit()
+                                      && (type1.t & VT_INLINE);
               int r = 0;
               int has_const_init = 0;
               int64_t const_init = 0;
@@ -15192,6 +15194,26 @@ cpp_conversion_operator:
                 cprime_error("static data members require a named class");
               if (tok == '=')
               {
+                if (inline_definition)
+                {
+                  /* An inline static data member is a definition in the
+                     class body.  Unlike an ordinary static declaration, its
+                     initializer must allocate the object now. */
+                  static_tok = make_static_member_tok(class_tok, v);
+                  static_type.t = (static_type.t & ~VT_STATIC) | VT_EXTERN;
+                  if (symbol_has_internal_namespace_linkage(static_tok))
+                    static_type.t |= VT_STATIC;
+                  if (!(static_type.t & VT_ARRAY))
+                    r |= VT_LVAL;
+                  external_sym(static_tok, &static_type, r, &ad1);
+                  next();
+                  decl_initializer_alloc(&static_type, &ad1, r, 1, 0,
+                                         NULL, static_tok, VT_CONST, 0, -1);
+                  if (tok == ';' || tok == TOK_EOF)
+                    break;
+                  skip(',');
+                  continue;
+                }
                 int saved_initializer_owner = cpp_static_member_initializer_owner;
                 cpp_static_member_initializer_owner = class_tok;
                 next();
@@ -15209,6 +15231,18 @@ cpp_conversion_operator:
               static_type.t = (static_type.t & ~VT_STATIC) | VT_EXTERN;
               if (symbol_has_internal_namespace_linkage(static_tok))
                 static_type.t |= VT_STATIC;
+              if (inline_definition)
+              {
+                /* `static inline T member;` is also a definition, with the
+                   usual zero initialization when no explicit initializer is
+                   present. */
+                if (!(static_type.t & VT_ARRAY))
+                  r |= VT_LVAL;
+                external_sym(static_tok, &static_type, r, &ad1);
+                decl_initializer_alloc(&static_type, &ad1, r, 0, 0,
+                                       NULL, static_tok, VT_CONST, 0, -1);
+              }
+              else
               if (has_const_init)
               {
                 Sym *static_sym = external_sym(static_tok, &static_type,

@@ -4316,7 +4316,12 @@ static int try_call_cpp_binary_operator_method(int method_tok)
   gaddrof();
   gv(RC_INT);
   vswap();
-  save_lvalues();
+  /* A reference parameter observes the operand's identity.  Spilling the
+     right-hand lvalue here would bind it to a compiler temporary instead of
+     the caller object (`stream >> value`), so only preserve ordinary
+     by-value operands across receiver lowering. */
+  if (!is_reference_type(&sa->next->type))
+    save_lvalues();
   gfunc_param_typed(func_type, sa->next);
   vswap();
   gfunc_param_typed(func_type, sa);
