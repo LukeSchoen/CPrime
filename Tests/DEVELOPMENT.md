@@ -12,10 +12,14 @@ Tests\test.exe -Regression
 scripts\build.exe
 ```
 
-The fast partition is the routine package gate; the pedantic partition is for
+The fast partition is the routine package gate; keep it short and focused. Move
+large matrices, stress cases, duplicate cases, and costly cross-feature checks
+to the pedantic partition in `tiers.json`. Run selected reproducers while
+developing, the affected fast suite after a repair, and the complete fast gate
+only at a suite boundary or before publication. The pedantic partition is for
 large changes and release validation. Cross-compiler work remains isolated in
 explicitly named native executables and requires separate authorization.
 
 Keep raw diagnostics, response files, identities, and timing samples in
-`build/`. Keep remaining-work Markdown current, but put completed behavior in
-code and tests.
+`build/` only while they are useful. Remove stale generated output. Keep
+remaining-work Markdown current, but put completed behavior in code and tests.

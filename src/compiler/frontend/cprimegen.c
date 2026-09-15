@@ -6452,15 +6452,20 @@ redo:
     CType right = *pointed_type(&vtop->type);
     int left_derived = class_value_is_derived_from(&left, &right);
     int right_derived = class_value_is_derived_from(&right, &left);
-    if (left_derived || right_derived)
+    /* Both directions hold for one class compared with itself: there is no
+       base subobject to reach, so an adjustment would leave the operands
+       unchanged and re-enter this test. */
+    if (left_derived != right_derived)
     {
       CType target = left_derived ? right : left;
+      int adjusted;
       target.t |= (left.t | right.t) & (VT_CONSTANT | VT_VOLATILE);
       mk_pointer(&target);
       if (left_derived) vswap();
-      try_adjust_derived_pointer_to_base(&target);
+      adjusted = try_adjust_derived_pointer_to_base(&target);
       if (left_derived) vswap();
-      goto redo;
+      if (adjusted)
+        goto redo;
     }
   }
 

@@ -18,9 +18,17 @@ set, and the fast language partition. The publication build invokes
 `-Regression` against its staged packaged compiler before replacing root
 `cpc.exe`.
 
+Keep the fast tier short: each case should cover one representative behavior
+and finish quickly. Put broad matrices, stress cases, duplicate coverage, and
+cross-feature cases in `tiers.json`'s pedantic list. While repairing a defect,
+run an exact `-Select` set first; run the full fast tier only when the change
+crosses suites or is ready for publication.
+
 Test metadata uses leading source comments: `EXPECT_EXIT`, `EXPECT_STDOUT`,
 `EXPECT_COMPILE_FAIL`, `EXPECT_COMPILE_ONLY`, `EXPECT_COMPILE_ARGS`, and
-`EXPECT_SOURCES`. Generated files and timing evidence belong in `build/`.
+`EXPECT_SOURCES`. Generated files and timing evidence belong in `build/`. They
+are disposable: retain only evidence for an active investigation, then remove
+old logs and runner directories.
 
 Cross-compiler ABI checks are separate and never run implicitly:
 
