@@ -1,0 +1,84 @@
+#ifndef _CPC_CHARCONV
+#define _CPC_CHARCONV
+
+#include <system_error>
+
+namespace std
+{
+  struct from_chars_result
+  {
+    const char *ptr;
+    errc ec;
+  };
+
+  struct to_chars_result
+  {
+    char *ptr;
+    errc ec;
+  };
+
+  template<class T>
+  from_chars_result from_chars(const char *first, const char *last,
+                               T &value, int base = 10)
+  {
+    from_chars_result result;
+    result.ptr = first;
+    result.ec = errc::invalid_argument;
+    if (base != 10 || first == last)
+      return result;
+
+    bool negative = false;
+    const char *at = first;
+    if (*at == '-' || *at == '+')
+    {
+      negative = *at == '-';
+      ++at;
+    }
+    if (at == last || *at < '0' || *at > '9')
+      return result;
+
+    T parsed = T();
+    for (; at != last && *at >= '0' && *at <= '9'; ++at)
+      parsed = parsed * 10 + static_cast<T>(*at - '0');
+    value = negative ? -parsed : parsed;
+    result.ptr = at;
+    result.ec = errc::success;
+    return result;
+  }
+
+  template<class T>
+  to_chars_result to_chars(char *first, char *last, T value, int base = 10)
+  {
+    to_chars_result result;
+    result.ptr = first;
+    result.ec = errc::invalid_argument;
+    if (base != 10 || first == last)
+      return result;
+
+    char digits[64];
+    int count = 0;
+    bool negative = value < T();
+    unsigned long long magnitude = negative
+      ? (unsigned long long)(-(value + 1)) + 1ull
+      : (unsigned long long)value;
+    do
+    {
+      digits[count++] = static_cast<char>('0' + (magnitude % 10));
+      magnitude /= 10;
+    } while (magnitude);
+    if (negative)
+      digits[count++] = '-';
+    if (first + count > last)
+    {
+      result.ec = errc::result_out_of_range;
+      return result;
+    }
+    for (int i = 0; i < count; ++i)
+      first[i] = digits[count - 1 - i];
+    result.ptr = first + count;
+    result.ec = errc::success;
+    return result;
+  }
+}
+
+#endif

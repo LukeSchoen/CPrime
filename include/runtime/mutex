@@ -50,6 +50,17 @@ namespace std
     T &m_mutex;
   };
 
+  class scoped_lock
+  {
+  public:
+    explicit scoped_lock(mutex &value) : m_mutex(&value) { m_mutex->lock(); }
+    ~scoped_lock() { m_mutex->unlock(); }
+    scoped_lock(const scoped_lock &) = delete;
+    scoped_lock &operator=(const scoped_lock &) = delete;
+  private:
+    mutex *m_mutex;
+  };
+
   template<class T>
   class unique_lock
   {

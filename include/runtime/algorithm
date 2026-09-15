@@ -73,6 +73,19 @@ namespace std
   }
 
   template<class T>
+  constexpr const T &clamp(const T &value, const T &low, const T &high)
+  {
+    return value < low ? low : high < value ? high : value;
+  }
+
+  template<class T, class Compare>
+  constexpr const T &clamp(const T &value, const T &low, const T &high,
+                           Compare compare)
+  {
+    return compare(value, low) ? low : compare(high, value) ? high : value;
+  }
+
+  template<class T>
   void iter_swap(T *left, T *right)
   {
     T value = *left;

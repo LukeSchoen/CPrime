@@ -429,13 +429,34 @@ static TokenString *lower_range_for(void)
       while (tok == TOK_LINENUM)
         next();
     }
-    if (tok < TOK_UIDENT)
-      cprime_error("range-for variable");
-    var_tok = tok;
-    tok_str_add(var_decl, tok);
-    next();
-    while (tok == TOK_LINENUM)
+    if (tok == '[')
+    {
+      int depth = 0;
+      do
+      {
+        tok_str_add(var_decl, tok);
+        if (tok == '[')
+          ++depth;
+        else if (tok == ']')
+          --depth;
+        next();
+        while (tok == TOK_LINENUM)
+          next();
+      } while (depth > 0 && tok != TOK_EOF);
+      if (depth != 0 || tok == TOK_EOF)
+        cprime_error("range-for structured binding");
+      var_tok = 0;
+    }
+    else
+    {
+      if (tok < TOK_UIDENT)
+        cprime_error("range-for variable");
+      var_tok = tok;
+      tok_str_add(var_decl, tok);
       next();
+      while (tok == TOK_LINENUM)
+        next();
+    }
   }
   else
   {

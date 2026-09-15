@@ -1,8 +1,34 @@
 #ifndef _CPC_QUEUE
 #define _CPC_QUEUE
 
+#include <deque>
+
 namespace std
 {
+  template<class T, class Container = deque<T> >
+  class queue
+  {
+  public:
+    typedef T value_type;
+    typedef Container container_type;
+    typedef size_t size_type;
+
+    queue() : m_container() {}
+    explicit queue(const Container &container) : m_container(container) {}
+
+    bool empty() const { return m_container.empty(); }
+    size_type size() const { return m_container.size(); }
+    T &front() { return m_container.front(); }
+    const T &front() const { return m_container.front(); }
+    T &back() { return m_container.back(); }
+    const T &back() const { return m_container.back(); }
+    void push(const T &value) { m_container.push_back(value); }
+    void push(T &&value) { m_container.push_back(static_cast<T &&>(value)); }
+    void pop() { m_container.pop_front(); }
+
+  protected:
+    Container m_container;
+  };
 }
 
 #endif

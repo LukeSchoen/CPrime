@@ -1,0 +1,60 @@
+#ifndef _CPC_RANDOM
+#define _CPC_RANDOM
+
+namespace std
+{
+  class mt19937
+  {
+  public:
+    typedef unsigned long result_type;
+
+    static const result_type default_seed = 5489u;
+
+    explicit mt19937(result_type value = default_seed) { seed(value); }
+
+    void seed(result_type value)
+    {
+      m_state[0] = value;
+      for (result_type i = 1; i < state_size; ++i)
+        m_state[i] = 1812433253UL
+          * (m_state[i - 1] ^ (m_state[i - 1] >> 30)) + i;
+      m_index = state_size;
+    }
+
+    result_type operator()()
+    {
+      if (m_index >= state_size)
+        generate();
+      result_type value = m_state[m_index++];
+      value ^= value >> 11;
+      value ^= (value << 7) & 0x9d2c5680UL;
+      value ^= (value << 15) & 0xefc60000UL;
+      value ^= value >> 18;
+      return value;
+    }
+
+    static constexpr result_type min() { return 0; }
+    static constexpr result_type max() { return 0xffffffffUL; }
+
+  private:
+    enum { state_size = 624, middle_word = 397 };
+
+    void generate()
+    {
+      for (result_type i = 0; i < state_size; ++i)
+      {
+        result_type value = (m_state[i] & 0x80000000UL)
+          | (m_state[(i + 1) % state_size] & 0x7fffffffUL);
+        m_state[i] = m_state[(i + middle_word) % state_size]
+          ^ (value >> 1)
+          ^ ((value & 1) ? 0x9908b0dfUL : 0);
+      }
+      m_index = 0;
+    }
+
+    result_type m_state[state_size];
+    result_type m_index;
+  };
+}
+
+#endif

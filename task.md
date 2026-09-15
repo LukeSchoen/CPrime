@@ -6,23 +6,20 @@ or runtime behavior and retain a minimal deterministic regression in `Tests/`.
 
 ## Current checkpoint
 
-- Root `cpc.exe` (SHA256 `18B7E339BBC998AB1A5E2BF561F41ADA88D083C8C5E722EFD8C3976BC47401D0`)
-  is published from this source state and
-  passes the publication gate: source policy, 58 regression cases, the process
-  path helper, and 311 fast cases across 27 suites. The pedantic partition passes
-  everywhere except the CL gap work list below.
+- Root `cpc.exe` (SHA256 `6AE287BF0A7F621D742707CE15A4EB7D295E70BCB069D1146DDCC5E08DC0691F`)
+  is published from this source state and passes the publication regression
+  gate, the process path helper, and the full fast and pedantic inventories:
+  311 fast cases across 27 suites and 1,717 pedantic cases across 27 suites.
+  The CL gap suite's 45 cases now all pass and are part of the fast partition.
 - Member-pointer constexpr evaluation now covers calls, assignments, equality,
   null conversion, receiver adjustment, access checks, and C-style conversion
   controls.
-- `Tests/features/Cpp17Gaps` holds the minimal reproducers ported from the CL
-  repository's C++17 gap probe: 42 distinct surviving defects. They are listed
-  in the pedantic partition so the fast gate stays usable while the list is
-  worked down. Scalar return lowering now materializes a local deque
-  `front()`/`back()` value before local cleanup, and member-operator lowering
-  preserves scalar reference destinations for `basic_istream::operator>>`.
-  Both reproducers are promoted to the fast tier. Inline static data members
-  now define and initialize addressable storage in their class body;
-  `test_inline_variable_static_member.cpp` is also promoted.
+- `Tests/features/Cpp17Gaps` now holds 45 passing reproducers ported from the CL
+  repository's C++17 gap probe. The wave repaired C++17 mode reporting and
+  alternative operator spellings, class-head `alignas`, structured-binding
+  range-for, the listed missing headers and members, tuple construction and
+  `apply`, and vector initializer-list construction. No gap case remains in the
+  pedantic work list.
 - The member-pointer ambiguity check is repaired and published.
   `class_has_unique_base` now counts base subobjects, so virtual inheritance
   paths no longer escape the `.*`/`->*` declaring-base check, and identity is no
@@ -44,10 +41,8 @@ or runtime behavior and retain a minimal deterministic regression in `Tests/`.
 
 ## Next wave
 
-1. Work down `Tests/features/Cpp17Gaps` from the runtime miscompiles outward:
-   deque `front()`/`back()` returned directly, `stringstream` extraction, then
-   the missing core-language and library
-   facilities. Each case is a standalone `-Select` reproducer.
+1. The `Tests/features/Cpp17Gaps` work item is complete; continue with the
+   remaining core-language, constexpr, and library scope below.
 2. Complete constexpr object evaluation: aggregate returns and copies, indirect
    calls, nontrivial construction, union/bit-field/reference fields, ownership,
    provenance, temporary cleanup, and lifetime escape rejection.

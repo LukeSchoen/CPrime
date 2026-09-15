@@ -1,0 +1,98 @@
+#ifndef _CPC_STRING_VIEW
+#define _CPC_STRING_VIEW
+
+#include <stddef.h>
+
+namespace std
+{
+  template<class C>
+  class basic_string_view
+  {
+  public:
+    typedef C value_type;
+    typedef size_t size_type;
+    typedef const C *const_iterator;
+    typedef const_iterator iterator;
+
+    constexpr basic_string_view() noexcept : m_data(0), m_size(0) {}
+    constexpr basic_string_view(const C *text, size_type count)
+      : m_data(text), m_size(count) {}
+    basic_string_view(const C *text) : m_data(text), m_size(0)
+    {
+      if (text)
+        m_size = length(text);
+    }
+
+    constexpr const_iterator begin() const noexcept { return m_data; }
+    constexpr const_iterator end() const noexcept { return m_data + m_size; }
+    constexpr const_iterator cbegin() const noexcept { return begin(); }
+    constexpr const_iterator cend() const noexcept { return end(); }
+    constexpr const C *data() const noexcept { return m_data; }
+    constexpr size_type size() const noexcept { return m_size; }
+    constexpr size_type length() const noexcept { return m_size; }
+    constexpr bool empty() const noexcept { return m_size == 0; }
+    constexpr const C &operator[](size_type index) const { return m_data[index]; }
+    constexpr const C &front() const { return m_data[0]; }
+    constexpr const C &back() const { return m_data[m_size - 1]; }
+
+    constexpr basic_string_view substr(size_type position = 0,
+                                       size_type count = (size_type)-1) const
+    {
+      return position > m_size ? basic_string_view()
+        : basic_string_view(m_data + position,
+                            count > m_size - position ? m_size - position
+                                                      : count);
+    }
+
+    void remove_prefix(size_type count)
+    {
+      if (count > m_size) count = m_size;
+      m_data += count;
+      m_size -= count;
+    }
+    void remove_suffix(size_type count)
+    {
+      if (count > m_size) count = m_size;
+      m_size -= count;
+    }
+
+  private:
+    static size_type length(const C *text)
+    {
+      size_type result = 0;
+      while (text[result]) ++result;
+      return result;
+    }
+
+    const C *m_data;
+    size_type m_size;
+  };
+
+  typedef basic_string_view<char> string_view;
+  typedef basic_string_view<wchar_t> wstring_view;
+
+  template<class C>
+  bool operator==(basic_string_view<C> left, basic_string_view<C> right)
+  {
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); ++i)
+      if (left[i] != right[i]) return false;
+    return true;
+  }
+  template<class C>
+  bool operator!=(basic_string_view<C> left, basic_string_view<C> right)
+  {
+    return !(left == right);
+  }
+  template<class C>
+  bool operator<(basic_string_view<C> left, basic_string_view<C> right)
+  {
+    size_t count = left.size() < right.size() ? left.size() : right.size();
+    for (size_t i = 0; i < count; ++i)
+      if (left[i] < right[i]) return true;
+      else if (right[i] < left[i]) return false;
+    return left.size() < right.size();
+  }
+}
+
+#endif

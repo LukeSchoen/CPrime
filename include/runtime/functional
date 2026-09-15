@@ -3,6 +3,7 @@
 
 #include <type_traits>
 #include <utility>
+#include <tuple>
 #include <exception>
 
 namespace std
@@ -108,6 +109,104 @@ namespace std
   reference_wrapper<const T> cref(const T &value)
   {
     return reference_wrapper<const T>(value);
+  }
+
+  template<class Function>
+  class __not_fn_result
+  {
+  public:
+    explicit __not_fn_result(Function &&function)
+      : m_function(std::forward<Function>(function)) {}
+
+    template<class... Args>
+    auto operator()(Args &&...args)
+      -> decltype(!std::invoke(m_function, std::forward<Args>(args)...))
+    {
+      return !std::invoke(m_function, std::forward<Args>(args)...);
+    }
+
+  private:
+    Function m_function;
+  };
+
+  template<class Function>
+  __not_fn_result<typename decay<Function>::type>
+  not_fn(Function &&function)
+  {
+    typedef typename decay<Function>::type stored_type;
+    return __not_fn_result<stored_type>(std::forward<Function>(function));
+  }
+
+  template<class Function, class Bound>
+  class __bind_result1
+  {
+  public:
+    template<class Callable, class Argument>
+    __bind_result1(Callable &&callable, Argument &&argument)
+      : m_function(std::forward<Callable>(callable)),
+        m_bound(std::forward<Argument>(argument)) {}
+
+    template<class... Args>
+    auto operator()(Args &&...args)
+      -> decltype(std::invoke(m_function, m_bound,
+                              std::forward<Args>(args)...))
+    {
+      return std::invoke(m_function, m_bound, std::forward<Args>(args)...);
+    }
+
+  private:
+    Function m_function;
+    Bound m_bound;
+  };
+
+  template<class Function, class Bound1, class Bound2>
+  class __bind_result2
+  {
+  public:
+    template<class Callable, class Argument1, class Argument2>
+    __bind_result2(Callable &&callable, Argument1 &&argument1,
+                   Argument2 &&argument2)
+      : m_function(std::forward<Callable>(callable)),
+        m_first(std::forward<Argument1>(argument1)),
+        m_second(std::forward<Argument2>(argument2)) {}
+
+    template<class... Args>
+    auto operator()(Args &&...args)
+      -> decltype(std::invoke(m_function, m_first, m_second,
+                              std::forward<Args>(args)...))
+    {
+      return std::invoke(m_function, m_first, m_second,
+                         std::forward<Args>(args)...);
+    }
+
+  private:
+    Function m_function;
+    Bound1 m_first;
+    Bound2 m_second;
+  };
+
+  template<class Function, class Bound>
+  __bind_result1<typename decay<Function>::type, typename decay<Bound>::type>
+  bind(Function &&function, Bound &&bound)
+  {
+    typedef __bind_result1<typename decay<Function>::type,
+                           typename decay<Bound>::type> result_type;
+    return result_type(std::forward<Function>(function),
+                       std::forward<Bound>(bound));
+  }
+
+  template<class Function, class Bound1, class Bound2>
+  __bind_result2<typename decay<Function>::type,
+                 typename decay<Bound1>::type,
+                 typename decay<Bound2>::type>
+  bind(Function &&function, Bound1 &&bound1, Bound2 &&bound2)
+  {
+    typedef __bind_result2<typename decay<Function>::type,
+                           typename decay<Bound1>::type,
+                           typename decay<Bound2>::type> result_type;
+    return result_type(std::forward<Function>(function),
+                       std::forward<Bound1>(bound1),
+                       std::forward<Bound2>(bound2));
   }
 }
 

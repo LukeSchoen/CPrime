@@ -2,6 +2,7 @@
 #define _UTILITY
 
 #include <type_traits>
+#include <stddef.h>
 
 namespace std
 {
@@ -26,6 +27,37 @@ namespace std
   {
     return static_cast<typename remove_reference<T>::type&&>(value);
   }
+
+  template<class T>
+  constexpr const T &as_const(T &value) noexcept
+  {
+    return value;
+  }
+  template<class T>
+  void as_const(const T &&) = delete;
+
+  template<class T, T... Values>
+  struct integer_sequence
+  {
+    typedef T value_type;
+    static constexpr size_t size() noexcept { return sizeof...(Values); }
+  };
+
+  template<size_t... Values>
+  using index_sequence = integer_sequence<size_t, Values...>;
+
+  template<class T, T Size, T... Values>
+  struct __make_integer_sequence
+      : __make_integer_sequence<T, Size - 1, Size - 1, Values...> {};
+  template<class T, T... Values>
+  struct __make_integer_sequence<T, 0, Values...>
+  {
+    typedef integer_sequence<T, Values...> type;
+  };
+  template<class T, T Size>
+  using make_integer_sequence = typename __make_integer_sequence<T, Size>::type;
+  template<size_t Size>
+  using make_index_sequence = make_integer_sequence<size_t, Size>;
 
   template<class T, class U>
   constexpr T exchange(T &object, U &&replacement)

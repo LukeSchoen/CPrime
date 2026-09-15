@@ -1,0 +1,20 @@
+#ifndef _CPC_EXECUTION
+#define _CPC_EXECUTION
+
+namespace std
+{
+  namespace execution
+  {
+    struct sequenced_policy {};
+    struct parallel_policy {};
+    struct parallel_unsequenced_policy {};
+    struct unsequenced_policy {};
+
+    inline constexpr sequenced_policy seq{};
+    inline constexpr parallel_policy par{};
+    inline constexpr parallel_unsequenced_policy par_unseq{};
+    inline constexpr unsequenced_policy unseq{};
+  }
+}
+
+#endif

@@ -1,0 +1,41 @@
+#ifndef _CPC_FORWARD_LIST
+#define _CPC_FORWARD_LIST
+
+#include <list>
+#include <initializer_list>
+
+namespace std
+{
+  template<class T, class Allocator = allocator<T> >
+  class forward_list
+  {
+  public:
+    typedef T value_type;
+    typedef Allocator allocator_type;
+    typedef size_t size_type;
+    typedef typename list<T, Allocator>::iterator iterator;
+    typedef typename list<T, Allocator>::const_iterator const_iterator;
+
+    forward_list() : m_values() {}
+    explicit forward_list(size_type count) : m_values(count) {}
+    forward_list(size_type count, const T &value) : m_values(count, value) {}
+    forward_list(initializer_list<T> values) : m_values(values) {}
+
+    iterator begin() { return m_values.begin(); }
+    iterator end() { return m_values.end(); }
+    const_iterator begin() const { return m_values.begin(); }
+    const_iterator end() const { return m_values.end(); }
+    bool empty() const { return m_values.empty(); }
+    T &front() { return m_values.front(); }
+    const T &front() const { return m_values.front(); }
+    void push_front(const T &value) { m_values.push_front(value); }
+    void push_front(T &&value) { m_values.push_front(static_cast<T &&>(value)); }
+    void pop_front() { m_values.pop_front(); }
+    void clear() { m_values.clear(); }
+
+  private:
+    list<T, Allocator> m_values;
+  };
+}
+
+#endif

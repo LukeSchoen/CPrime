@@ -1,0 +1,52 @@
+#ifndef _CPC_NUMERIC
+#define _CPC_NUMERIC
+
+namespace std
+{
+  template<class InputIterator, class T>
+  T accumulate(InputIterator first, InputIterator last, T initial)
+  {
+    for (; first != last; ++first)
+      initial = initial + *first;
+    return initial;
+  }
+
+  template<class InputIterator, class T, class BinaryOperation>
+  T accumulate(InputIterator first, InputIterator last, T initial,
+               BinaryOperation operation)
+  {
+    for (; first != last; ++first)
+      initial = operation(initial, *first);
+    return initial;
+  }
+
+  template<class ForwardIterator, class T>
+  void iota(ForwardIterator first, ForwardIterator last, T value)
+  {
+    for (; first != last; ++first, ++value)
+      *first = value;
+  }
+
+  template<class T>
+  T gcd(T left, T right)
+  {
+    if (left < T()) left = -left;
+    if (right < T()) right = -right;
+    while (right != T())
+    {
+      T remainder = left % right;
+      left = right;
+      right = remainder;
+    }
+    return left;
+  }
+
+  template<class T>
+  T lcm(T left, T right)
+  {
+    T divisor = gcd(left, right);
+    return divisor ? (left / divisor) * right : T();
+  }
+}
+
+#endif

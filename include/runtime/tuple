@@ -2,74 +2,258 @@
 #define _CPC_TUPLE
 
 #include <stddef.h>
+#include <type_traits>
 #include <utility>
 
 namespace std
 {
-  template<class... Types>
-  class tuple;
-
+  struct __tuple_empty {};
   template<class T>
-  class tuple<T>
+  struct __tuple_present
   {
-  public:
-    T value;
-
-    tuple() : value() {}
-    tuple(const T &other) : value(other) {}
-    tuple(T &&other) : value(static_cast<T &&>(other)) {}
+    static const bool value = true;
+  };
+  template<>
+  struct __tuple_present<__tuple_empty>
+  {
+    static const bool value = false;
   };
 
-  template<class T>
-  class tuple<T &>
+  template<class T1 = __tuple_empty, class T2 = __tuple_empty,
+           class T3 = __tuple_empty, class T4 = __tuple_empty>
+  class tuple
   {
   public:
-    T &value;
+    enum
+    {
+      __arity = __tuple_present<T2>::value
+        ? (__tuple_present<T3>::value ? (__tuple_present<T4>::value ? 4 : 3) : 2)
+        : 1
+    };
+    typedef typename conditional<!__tuple_present<T2>::value,
+                                 __tuple_empty, T2>::type second_type;
+    typedef typename conditional<!__tuple_present<T3>::value,
+                                 __tuple_empty, T3>::type third_type;
+    typedef typename conditional<!__tuple_present<T4>::value,
+                                 __tuple_empty, T4>::type fourth_type;
 
-    tuple(T &other) : value(other) {}
+    T1 first;
+    second_type second;
+    third_type third;
+    fourth_type fourth;
+
+    tuple() : first(), second(), third(), fourth() {}
+    tuple(const tuple &) = default;
+    tuple(tuple &&) = default;
+
+    template<class U1>
+    explicit tuple(U1 &&a)
+      : first(std::forward<U1>(a)), second(), third(), fourth() {}
+
+    template<class U1, class U2>
+    tuple(U1 &&a, U2 &&b)
+      : first(std::forward<U1>(a)), second(std::forward<U2>(b)),
+        third(), fourth() {}
+
+    template<class U1, class U2, class U3>
+    tuple(U1 &&a, U2 &&b, U3 &&c)
+      : first(std::forward<U1>(a)), second(std::forward<U2>(b)),
+        third(std::forward<U3>(c)), fourth() {}
+
+    template<class U1, class U2, class U3, class U4>
+    tuple(U1 &&a, U2 &&b, U3 &&c, U4 &&d)
+      : first(std::forward<U1>(a)), second(std::forward<U2>(b)),
+        third(std::forward<U3>(c)), fourth(std::forward<U4>(d)) {}
   };
 
-  template<size_t Index, class T>
-  auto get(tuple<T> &value) -> decltype((value.value))
-  {
-    return value.value;
-  }
+  template<size_t Index, class Tuple>
+  struct tuple_access;
 
-  template<size_t Index, class T>
-  auto get(const tuple<T> &value) -> decltype((value.value))
+  template<class T1, class T2, class T3, class T4>
+  struct tuple_access<0, tuple<T1, T2, T3, T4> >
   {
-    return value.value;
-  }
+    typedef T1 type;
+    static type &get(tuple<T1, T2, T3, T4> &value) { return value.first; }
+    static const type &get(const tuple<T1, T2, T3, T4> &value)
+    {
+      return value.first;
+    }
+    static type &&get(tuple<T1, T2, T3, T4> &&value)
+    {
+      return static_cast<type &&>(value.first);
+    }
+  };
 
-  template<size_t Index, class T>
-  auto get(tuple<T> &&value) -> decltype(static_cast<T &&>(value.value))
+  template<class T1, class T2, class T3, class T4>
+  struct tuple_access<1, tuple<T1, T2, T3, T4> >
   {
-    return static_cast<T &&>(value.value);
+    typedef T2 type;
+    static type &get(tuple<T1, T2, T3, T4> &value) { return value.second; }
+    static const type &get(const tuple<T1, T2, T3, T4> &value)
+    {
+      return value.second;
+    }
+    static type &&get(tuple<T1, T2, T3, T4> &&value)
+    {
+      return static_cast<type &&>(value.second);
+    }
+  };
+
+  template<class T1, class T2, class T3, class T4>
+  struct tuple_access<2, tuple<T1, T2, T3, T4> >
+  {
+    typedef T3 type;
+    static type &get(tuple<T1, T2, T3, T4> &value) { return value.third; }
+    static const type &get(const tuple<T1, T2, T3, T4> &value)
+    {
+      return value.third;
+    }
+    static type &&get(tuple<T1, T2, T3, T4> &&value)
+    {
+      return static_cast<type &&>(value.third);
+    }
+  };
+
+  template<class T1, class T2, class T3, class T4>
+  struct tuple_access<3, tuple<T1, T2, T3, T4> >
+  {
+    typedef T4 type;
+    static type &get(tuple<T1, T2, T3, T4> &value) { return value.fourth; }
+    static const type &get(const tuple<T1, T2, T3, T4> &value)
+    {
+      return value.fourth;
+    }
+    static type &&get(tuple<T1, T2, T3, T4> &&value)
+    {
+      return static_cast<type &&>(value.fourth);
+    }
+  };
+
+  template<size_t Index, class T1, class T2, class T3, class T4>
+  typename tuple_access<Index, tuple<T1, T2, T3, T4> >::type &
+  get(tuple<T1, T2, T3, T4> &value)
+  {
+    return tuple_access<Index, tuple<T1, T2, T3, T4> >::get(value);
+  }
+  template<size_t Index, class T1, class T2, class T3, class T4>
+  const typename tuple_access<Index, tuple<T1, T2, T3, T4> >::type &
+  get(const tuple<T1, T2, T3, T4> &value)
+  {
+    return tuple_access<Index, tuple<T1, T2, T3, T4> >::get(value);
+  }
+  template<size_t Index, class T1, class T2, class T3, class T4>
+  typename tuple_access<Index, tuple<T1, T2, T3, T4> >::type &&
+  get(tuple<T1, T2, T3, T4> &&value)
+  {
+    return tuple_access<Index, tuple<T1, T2, T3, T4> >::get(
+             static_cast<tuple<T1, T2, T3, T4> &&>(value));
   }
 
   template<class T>
   struct tuple_size;
-
-  template<class T>
-  struct tuple_size<tuple<T> >
-  {
-    static const size_t value = 1;
-  };
+  template<class T1, class T2, class T3, class T4>
+  struct tuple_size<tuple<T1, T2, T3, T4> >
+      : integral_constant<size_t, tuple<T1, T2, T3, T4>::__arity> {};
 
   template<size_t Index, class T>
   struct tuple_element;
+  template<class T1, class T2, class T3, class T4>
+  struct tuple_element<0, tuple<T1, T2, T3, T4> > { typedef T1 type; };
+  template<class T1, class T2, class T3, class T4>
+  struct tuple_element<1, tuple<T1, T2, T3, T4> > { typedef T2 type; };
+  template<class T1, class T2, class T3, class T4>
+  struct tuple_element<2, tuple<T1, T2, T3, T4> > { typedef T3 type; };
+  template<class T1, class T2, class T3, class T4>
+  struct tuple_element<3, tuple<T1, T2, T3, T4> > { typedef T4 type; };
 
-  template<class T>
-  struct tuple_element<0, tuple<T> >
+  template<class T1>
+  tuple<typename decay<T1>::type> make_tuple(T1 &&a)
   {
-    typedef T type;
-  };
+    typedef tuple<typename decay<T1>::type> result_type;
+    return result_type(std::forward<T1>(a));
+  }
+  template<class T1, class T2>
+  tuple<typename decay<T1>::type, typename decay<T2>::type>
+  make_tuple(T1 &&a, T2 &&b)
+  {
+    typedef tuple<typename decay<T1>::type, typename decay<T2>::type> result_type;
+    return result_type(std::forward<T1>(a), std::forward<T2>(b));
+  }
+  template<class T1, class T2, class T3>
+  tuple<typename decay<T1>::type, typename decay<T2>::type,
+        typename decay<T3>::type>
+  make_tuple(T1 &&a, T2 &&b, T3 &&c)
+  {
+    typedef tuple<typename decay<T1>::type, typename decay<T2>::type,
+                  typename decay<T3>::type> result_type;
+    return result_type(std::forward<T1>(a), std::forward<T2>(b),
+                       std::forward<T3>(c));
+  }
+  template<class T1, class T2, class T3, class T4>
+  tuple<typename decay<T1>::type, typename decay<T2>::type,
+        typename decay<T3>::type, typename decay<T4>::type>
+  make_tuple(T1 &&a, T2 &&b, T3 &&c, T4 &&d)
+  {
+    typedef tuple<typename decay<T1>::type, typename decay<T2>::type,
+                  typename decay<T3>::type, typename decay<T4>::type> result_type;
+    return result_type(std::forward<T1>(a), std::forward<T2>(b),
+                       std::forward<T3>(c), std::forward<T4>(d));
+  }
 
-  template<class T>
-  struct tuple_element<0, tuple<T &> >
+  namespace __cpc_apply_detail
   {
-    typedef T &type;
-  };
+    template<class Function, class Tuple, size_t... Indices>
+    auto apply_tuple(Function &&function, Tuple &&arguments,
+                     index_sequence<Indices...>)
+      -> decltype(std::forward<Function>(function)(
+                    std::get<Indices>(std::forward<Tuple>(arguments))...))
+    {
+      return std::forward<Function>(function)(
+               std::get<Indices>(std::forward<Tuple>(arguments))...);
+    }
+  }
+
+  template<class Function, class T1, class T2, class T3, class T4>
+  auto apply(Function &&function, tuple<T1, T2, T3, T4> &arguments)
+    -> decltype(__cpc_apply_detail::apply_tuple(
+                  std::forward<Function>(function), arguments,
+                  make_index_sequence<
+                    tuple_size<tuple<T1, T2, T3, T4> >::value>()))
+  {
+    return __cpc_apply_detail::apply_tuple(
+             std::forward<Function>(function), arguments,
+             make_index_sequence<
+               tuple_size<tuple<T1, T2, T3, T4> >::value>());
+  }
+
+  template<class Function, class T1, class T2, class T3, class T4>
+  auto apply(Function &&function, const tuple<T1, T2, T3, T4> &arguments)
+    -> decltype(__cpc_apply_detail::apply_tuple(
+                  std::forward<Function>(function), arguments,
+                  make_index_sequence<
+                    tuple_size<tuple<T1, T2, T3, T4> >::value>()))
+  {
+    return __cpc_apply_detail::apply_tuple(
+             std::forward<Function>(function), arguments,
+             make_index_sequence<
+               tuple_size<tuple<T1, T2, T3, T4> >::value>());
+  }
+
+  template<class Function, class T1, class T2>
+  auto apply(Function &&function, pair<T1, T2> &arguments)
+    -> decltype(std::forward<Function>(function)(arguments.first,
+                                                 arguments.second))
+  {
+    return std::forward<Function>(function)(arguments.first, arguments.second);
+  }
+
+  template<class Function, class T1, class T2>
+  auto apply(Function &&function, const pair<T1, T2> &arguments)
+    -> decltype(std::forward<Function>(function)(arguments.first,
+                                                 arguments.second))
+  {
+    return std::forward<Function>(function)(arguments.first, arguments.second);
+  }
 }
 
 #endif

@@ -7,6 +7,49 @@ namespace std {
   typedef ::size_t size_t;
   typedef ::ptrdiff_t ptrdiff_t;
   typedef decltype(nullptr) nullptr_t;
+
+  enum class byte : unsigned char {};
+
+  template<class IntegerType>
+  constexpr IntegerType to_integer(byte value) noexcept
+  {
+    return static_cast<IntegerType>(value);
+  }
+
+  constexpr byte operator|(byte left, byte right) noexcept
+  {
+    return static_cast<byte>(to_integer<unsigned char>(left)
+                             | to_integer<unsigned char>(right));
+  }
+  constexpr byte operator&(byte left, byte right) noexcept
+  {
+    return static_cast<byte>(to_integer<unsigned char>(left)
+                             & to_integer<unsigned char>(right));
+  }
+  constexpr byte operator^(byte left, byte right) noexcept
+  {
+    return static_cast<byte>(to_integer<unsigned char>(left)
+                             ^ to_integer<unsigned char>(right));
+  }
+  constexpr byte operator~(byte value) noexcept
+  {
+    return static_cast<byte>(~to_integer<unsigned char>(value));
+  }
+  inline byte &operator|=(byte &left, byte right) noexcept
+  {
+    left = left | right;
+    return left;
+  }
+  inline byte &operator&=(byte &left, byte right) noexcept
+  {
+    left = left & right;
+    return left;
+  }
+  inline byte &operator^=(byte &left, byte right) noexcept
+  {
+    left = left ^ right;
+    return left;
+  }
 }
 
 #endif

@@ -1,0 +1,32 @@
+#ifndef _CPC_STACK
+#define _CPC_STACK
+
+#include <vector>
+
+namespace std
+{
+  template<class T, class Container = vector<T> >
+  class stack
+  {
+  public:
+    typedef T value_type;
+    typedef Container container_type;
+    typedef size_t size_type;
+
+    stack() : m_container() {}
+    explicit stack(const Container &container) : m_container(container) {}
+
+    bool empty() const { return m_container.empty(); }
+    size_type size() const { return m_container.size(); }
+    T &top() { return m_container.back(); }
+    const T &top() const { return m_container.back(); }
+    void push(const T &value) { m_container.push_back(value); }
+    void push(T &&value) { m_container.push_back(static_cast<T &&>(value)); }
+    void pop() { m_container.pop_back(); }
+
+  protected:
+    Container m_container;
+  };
+}
+
+#endif

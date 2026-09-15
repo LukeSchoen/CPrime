@@ -1,0 +1,118 @@
+#ifndef _CPC_VARIANT
+#define _CPC_VARIANT
+
+#include <stddef.h>
+#include <new>
+#include <type_traits>
+#include <utility>
+
+namespace std
+{
+  struct __variant_empty
+  {
+    __variant_empty() {}
+    template<class T> __variant_empty(const T &) {}
+  };
+
+  namespace __cpc_variant_detail
+  {
+    template<class T, class... Types>
+    struct index_of;
+    template<class T, class First, class... Rest>
+    struct index_of<T, First, Rest...>
+    {
+      enum { next = index_of<T, Rest...>::value };
+      enum { value = is_same<T, First>::value ? 0
+        : next == -1 ? -1 : next + 1 };
+    };
+    template<class T>
+    struct index_of<T>
+    {
+      enum { value = -1 };
+    };
+  }
+
+  template<class A, class B = __variant_empty, class C = __variant_empty,
+           class D = __variant_empty>
+  class variant
+  {
+  public:
+    variant() : m_index(0)
+    {
+      new (static_cast<void *>(&m_storage)) A();
+    }
+
+    ~variant()
+    {
+      destroy();
+    }
+
+    template<class T>
+    variant &operator=(const T &value)
+    {
+      int index = __cpc_variant_detail::index_of<T, A, B, C, D>::value;
+      if (index < 0)
+        return *this;
+      destroy();
+      if (index == 0)
+        new (static_cast<void *>(&m_storage)) A(value);
+      else if (index == 1)
+        new (static_cast<void *>(&m_storage)) B(value);
+      else if (index == 2)
+        new (static_cast<void *>(&m_storage)) C(value);
+      else
+        new (static_cast<void *>(&m_storage)) D(value);
+      m_index = static_cast<size_t>(index);
+      return *this;
+    }
+
+    size_t index() const noexcept { return m_index; }
+
+    template<class T>
+    T &get()
+    {
+      return *static_cast<T *>(static_cast<void *>(&m_storage));
+    }
+    template<class T>
+    const T &get() const
+    {
+      return *static_cast<const T *>(static_cast<const void *>(&m_storage));
+    }
+
+  private:
+    void destroy()
+    {
+      if (m_index == 0)
+        static_cast<A *>(static_cast<void *>(&m_storage))->~A();
+      else if (m_index == 1 && !is_same<B, __variant_empty>::value)
+        static_cast<B *>(static_cast<void *>(&m_storage))->~B();
+      else if (m_index == 2 && !is_same<C, __variant_empty>::value)
+        static_cast<C *>(static_cast<void *>(&m_storage))->~C();
+      else if (m_index == 3 && !is_same<D, __variant_empty>::value)
+        static_cast<D *>(static_cast<void *>(&m_storage))->~D();
+    }
+
+    typename aligned_storage<64, 16>::type m_storage;
+    size_t m_index;
+  };
+
+  template<class T, class A, class B, class C, class D>
+  bool holds_alternative(const variant<A, B, C, D> &value)
+  {
+    return value.index() == (size_t)__cpc_variant_detail::index_of<
+      T, A, B, C, D>::value;
+  }
+
+  template<class T, class A, class B, class C, class D>
+  T &get(variant<A, B, C, D> &value)
+  {
+    return value.template get<T>();
+  }
+  template<class T, class A, class B, class C, class D>
+  const T &get(const variant<A, B, C, D> &value)
+  {
+    return value.template get<T>();
+  }
+}
+
+#endif

@@ -3,10 +3,10 @@
 #include <bitset>
 
 int main() {
-  std::bitset<8> bits(0xB3);
-  if (bits.count() != 5) return 1;
+  std::bitset<8> bits(0xB2);
+  if (bits.count() != 4) return 1;
   bits.set(0);
-  if (bits.count() != 6) return 2;
+  if (bits.count() != 5) return 2;
   bits.reset(0);
-  return bits.count() == 5 ? 0 : 3;
+  return bits.count() == 4 ? 0 : 3;
 }

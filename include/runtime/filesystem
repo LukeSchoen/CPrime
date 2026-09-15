@@ -1,0 +1,36 @@
+#ifndef _CPC_FILESYSTEM
+#define _CPC_FILESYSTEM
+
+#include <string>
+
+extern "C" __declspec(dllimport) unsigned long __stdcall
+GetFileAttributesA(const char *path);
+
+namespace std
+{
+  namespace filesystem
+  {
+    class path
+    {
+    public:
+      path() {}
+      path(const char *text) : m_text(text) {}
+      path(const string &text) : m_text(text) {}
+
+      bool empty() const { return m_text.empty(); }
+      const char *c_str() const { return m_text.c_str(); }
+      const string &string_value() const { return m_text; }
+      string &string_value() { return m_text; }
+
+    private:
+      string m_text;
+    };
+
+    inline bool exists(const path &value)
+    {
+      return GetFileAttributesA(value.c_str()) != 0xFFFFFFFFu;
+    }
+  }
+}
+
+#endif

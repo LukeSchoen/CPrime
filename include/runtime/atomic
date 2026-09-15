@@ -20,6 +20,33 @@ namespace std
     memory_order_seq_cst = __CPC_ATOMIC_SEQ_CST
   };
 
+#define ATOMIC_FLAG_INIT {}
+
+  class atomic_flag
+  {
+  public:
+    constexpr atomic_flag() noexcept : m_value(0) {}
+    atomic_flag(const atomic_flag &) = delete;
+    atomic_flag &operator=(const atomic_flag &) = delete;
+
+    bool test_and_set(memory_order order = memory_order_seq_cst) noexcept
+    {
+      unsigned char expected = 0;
+      unsigned char desired = 1;
+      return !__atomic_compare_exchange(&m_value, &expected, &desired, 0,
+                                        (int)order, (int)order);
+    }
+
+    void clear(memory_order order = memory_order_seq_cst) noexcept
+    {
+      unsigned char value = 0;
+      __atomic_store(&m_value, &value, (int)order);
+    }
+
+  private:
+    unsigned char m_value;
+  };
+
   template<class T>
   class atomic
   {

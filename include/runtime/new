@@ -15,6 +15,12 @@ namespace std {
     bad_alloc() noexcept {}
     const char *what() const noexcept override { return "std::bad_alloc"; }
   };
+
+  template<class T>
+  constexpr T *launder(T *pointer) noexcept
+  {
+    return __builtin_launder(pointer);
+  }
 }
 
 void* operator new(std::size_t);

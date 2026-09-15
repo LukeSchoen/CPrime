@@ -247,6 +247,7 @@ static void complex_part_operand(int imag);
 static void push_complex_imaginary_constant(CType *elem, CValue *value);
 static int is_compatible_types(CType *type1, CType *type2);
 static int parse_btype(CType *type, AttributeDef *ad, int ignore_label);
+static void parse_cpp_alignas(AttributeDef *ad);
 static CType *type_decl(CType *type, AttributeDef *ad, int *v, int td);
 static void parse_btype_qualify(CType *type, int qualifiers);
 typedef struct CppMemberPointerType {
@@ -13960,6 +13961,8 @@ static void struct_decl(CType *type, int u, int is_class_tag)
 
   memset(&ad, 0, sizeof ad);
   next();
+  while (tok == TOK_ALIGNAS || tok == TOK_ALIGNAS2)
+    parse_cpp_alignas(&ad);
   parse_attribute(&ad);
 
   if (u == VT_ENUM && (tok == TOK_CLASS || tok == TOK_STRUCT))
@@ -15888,6 +15891,36 @@ static void parse_underlying_type(CType *type)
   type->ref = NULL;
 }
 
+/* Receive a C++ alignas-specifier.  The operand is either a type-id, whose
+   alignment is the requested value, or a constant integral expression. */
+static void parse_cpp_alignas(AttributeDef *ad)
+{
+  int n;
+  CType type;
+  AttributeDef operand_attributes;
+
+  next();
+  skip('(');
+  memset(&operand_attributes, 0, sizeof operand_attributes);
+  if (parse_btype(&type, &operand_attributes, 0))
+  {
+    int name;
+    type_decl(&type, &operand_attributes, &name, TYPE_ABSTRACT);
+    if (operand_attributes.a.aligned)
+      n = 1 << (operand_attributes.a.aligned - 1);
+    else
+      type_size(&type, &n);
+  }
+  else
+  {
+    n = expr_const();
+    if (n < 0 || (n & (n - 1)) != 0)
+      cprime_error("alignment must be a positive power of two");
+  }
+  skip(')');
+  ad->a.aligned = exact_log2p1(n);
+}
+
 static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
 {
   int t, u, bt, st, type_found, typespec_found, g, n;
@@ -16002,30 +16035,8 @@ tmbt: cprime_error("too many basic types");
       goto basic_type;
     case TOK_ALIGNAS:
     case TOK_ALIGNAS2:
-    {
-      int n;
-      AttributeDef ad1;
-      next();
-      skip('(');
-      memset(&ad1, 0, sizeof(AttributeDef));
-      if (parse_btype(&type1, &ad1, 0))
-      {
-        type_decl(&type1, &ad1, &n, TYPE_ABSTRACT);
-        if (ad1.a.aligned)
-          n = 1 << (ad1.a.aligned - 1);
-        else
-          type_size(&type1, &n);
-      }
-      else
-      {
-        n = expr_const();
-        if (n < 0 || (n & (n - 1)) != 0)
-          cprime_error("alignment must be a positive power of two");
-      }
-      skip(')');
-      ad->a.aligned = exact_log2p1(n);
-    }
-    continue;
+      parse_cpp_alignas(ad);
+      continue;
     case TOK_LONG:
       if ((t & VT_BTYPE) == VT_DOUBLE)
         t = (t & ~(VT_BTYPE | VT_LONG)) | VT_LDOUBLE;

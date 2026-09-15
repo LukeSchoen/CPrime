@@ -1,5 +1,11 @@
 {
     "schema":  1,
+    "cpp17GapSuiteCheckpoint":  {
+                                    "compilerSHA256":  "6AE287BF0A7F621D742707CE15A4EB7D295E70BCB069D1146DDCC5E08DC0691F",
+                                    "evidence":  "Tests/features/Cpp17Gaps; Tests/tiers.json; 45 selected gap cases, 58 regressions, 311 fast and 1717 pedantic cases",
+                                    "scope":  "Closed the retained CL C++17 gap suite. Repaired __cplusplus mode reporting, alternative operators, class-head alignas, structured-binding range-for, the listed missing standard headers and members, tuple construction/apply, and vector initializer-list construction. All gap cases are promoted to the fast partition. This is not a complete C++17 conformance claim.",
+                                    "complete":  false
+                                },
     "traitRepairCheckpoint":  {
                                   "compilerSHA256":  "8EB45E715FD061EA870B81676EC1F8D94A7DF67A15497362DAFCEB997C79C748",
                                   "evidence":  "build/cpp17-traits-repaired-verification.json",
@@ -20,10 +26,10 @@
                              "evidence":  "build/cpp17-repaired-verification.json",
                              "scope":  "All 15 original reproducers passed individually; regression passed; fast gate found two additional constructor failures. Broader coverage remains incomplete."
                          },
-    "date":  "2026-09-14",
+    "date":  "2026-09-15",
     "complete":  false,
     "policy":  "One repository suite, independent minimal reductions, duplicate behaviors map to existing cases, CPC only and serial. Failed valid cases stay in pass/, never relabeled expected failures.",
-    "verificationLimits":  "Another session modified sources, committed changes and replaced root cpc.exe during this run. Earlier results are historical observations, not certification of the current executable. Compiler hashes were not captured for earlier runs; final stable-build verification is pending.",
+    "verificationLimits":  "Historical checkpoints remain observations for their recorded compiler states. The 2026-09-15 gap-suite checkpoint records the current root cpc.exe hash and its full gate results; complete C++17 conformance is not established.",
     "sources":  [
                     {
                         "set":  "LLVM/Clang 18.1.8",

@@ -1,0 +1,62 @@
+#ifndef _CPC_MEMORY_RESOURCE
+#define _CPC_MEMORY_RESOURCE
+
+#include <stddef.h>
+#include <stdlib.h>
+#include <new>
+
+namespace std
+{
+  class memory_resource
+  {
+  public:
+    virtual ~memory_resource() {}
+    void *allocate(size_t bytes,
+                   size_t alignment = alignof(unsigned long long))
+    {
+      return do_allocate(bytes, alignment);
+    }
+    void deallocate(void *pointer, size_t bytes,
+                    size_t alignment = alignof(unsigned long long))
+    {
+      do_deallocate(pointer, bytes, alignment);
+    }
+    bool is_equal(const memory_resource &other) const noexcept
+    {
+      return do_is_equal(other);
+    }
+
+  protected:
+    virtual void *do_allocate(size_t bytes, size_t) = 0;
+    virtual void do_deallocate(void *pointer, size_t, size_t) = 0;
+    virtual bool do_is_equal(const memory_resource &other) const noexcept = 0;
+  };
+
+  namespace pmr
+  {
+    class monotonic_buffer_resource : public std::memory_resource
+    {
+    public:
+      monotonic_buffer_resource() {}
+      explicit monotonic_buffer_resource(size_t) {}
+
+    protected:
+      void *do_allocate(size_t bytes, size_t) override
+      {
+        void *result = malloc(bytes ? bytes : 1);
+        if (!result) throw std::bad_alloc();
+        return result;
+      }
+      void do_deallocate(void *pointer, size_t, size_t) override
+      {
+        free(pointer);
+      }
+      bool do_is_equal(const std::memory_resource &other) const noexcept override
+      {
+        return this == &other;
+      }
+    };
+  }
+}
+
+#endif

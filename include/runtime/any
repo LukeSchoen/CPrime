@@ -1,0 +1,109 @@
+#ifndef _CPC_ANY
+#define _CPC_ANY
+
+#include <exception>
+#include <utility>
+
+namespace std
+{
+  class bad_any_cast : public exception
+  {
+  public:
+    const char *what() const noexcept override { return "bad any cast"; }
+  };
+
+  class any
+  {
+    struct holder_base
+    {
+      virtual ~holder_base() {}
+      virtual holder_base *clone() const = 0;
+    };
+
+    template<class T>
+    struct holder : holder_base
+    {
+      T value;
+      explicit holder(const T &object) : value(object) {}
+      holder_base *clone() const override { return new holder(value); }
+    };
+
+  public:
+    template<class U> friend U any_cast(const any &);
+    template<class U> friend U *any_cast(any *);
+
+    any() noexcept : m_holder(0) {}
+    any(const any &other) : m_holder(other.m_holder ? other.m_holder->clone() : 0) {}
+    any(any &&other) noexcept : m_holder(other.m_holder) { other.m_holder = 0; }
+
+    template<class T>
+    any(const T &value) : m_holder(new holder<T>(value)) {}
+
+    ~any() { reset(); }
+
+    any &operator=(const any &other)
+    {
+      if (this != &other)
+      {
+        holder_base *replacement = other.m_holder ? other.m_holder->clone() : 0;
+        reset();
+        m_holder = replacement;
+      }
+      return *this;
+    }
+
+    any &operator=(any &&other) noexcept
+    {
+      if (this != &other)
+      {
+        reset();
+        m_holder = other.m_holder;
+        other.m_holder = 0;
+      }
+      return *this;
+    }
+
+    template<class T>
+    any &operator=(const T &value)
+    {
+      reset();
+      m_holder = new holder<T>(value);
+      return *this;
+    }
+
+    void reset() noexcept
+    {
+      delete m_holder;
+      m_holder = 0;
+    }
+    bool has_value() const noexcept { return m_holder != 0; }
+    explicit operator bool() const noexcept { return has_value(); }
+
+    template<class T>
+    const holder<T> *__cast() const
+    {
+      return static_cast<const holder<T> *>(m_holder);
+    }
+
+  private:
+    holder_base *m_holder;
+  };
+
+  template<class T>
+  T any_cast(const any &value)
+  {
+    const any::holder<T> *result = value.__cast<T>();
+    if (!result) throw bad_any_cast();
+    return result->value;
+  }
+
+  template<class T>
+  T *any_cast(any *value)
+  {
+    if (!value) return 0;
+    const any::holder<T> *result = value->__cast<T>();
+    return const_cast<T *>(result ? &result->value : 0);
+  }
+}
+
+#endif

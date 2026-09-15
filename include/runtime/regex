@@ -149,6 +149,13 @@ bool regex_search(Iterator first,Iterator last,const basic_regex<C,Traits>& expr
                   regex_constants::match_flag_type flags=regex_constants::match_default){
   match_results<Iterator> result;return regex_search(first,last,result,expression,flags);
 }
+template<class Allocator,class RegexTraits>
+bool regex_search(const string& text,
+                  match_results<const char*,Allocator>& result,
+                  const basic_regex<char,RegexTraits>& expression,
+                  regex_constants::match_flag_type flags=regex_constants::match_default){
+  return regex_search(text.begin(),text.end(),result,expression,flags);
+}
 template<class C,class Allocator,class Traits>
 bool regex_search(const C* text,match_results<const C*,Allocator>& result,const basic_regex<C,Traits>& expression,
                   regex_constants::match_flag_type flags=regex_constants::match_default){
@@ -158,6 +165,10 @@ template<class C,class Traits>
 bool regex_search(const C* text,const basic_regex<C,Traits>& expression,
                   regex_constants::match_flag_type flags=regex_constants::match_default){
   return regex_search(text,text+char_traits<C>::length(text),expression,flags);
+}
+inline bool regex_search(const string& text,smatch& result,const regex& expression,
+                         regex_constants::match_flag_type flags=regex_constants::match_default){
+  return regex_search(text.begin(),text.end(),result,expression,flags);
 }
 template<class Iterator,class Allocator,class C,class Traits>
 bool regex_match(Iterator first,Iterator last,match_results<Iterator,Allocator>& result,

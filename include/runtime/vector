@@ -7,6 +7,7 @@
 #include <type_traits>
 #include <utility>
 #include <stdexcept>
+#include <initializer_list>
 
 namespace std
 {
@@ -23,6 +24,12 @@ namespace std
 
     explicit vector(size_t count) : vector() { resize(count); }
     vector(size_t count, const T &value) : vector() { resize(count, value); }
+    vector(initializer_list<T> values) : vector()
+    {
+      reserve(values.size());
+      for (const T *value = values.begin(); value != values.end(); ++value)
+        push_back(*value);
+    }
 
     template<class InputIterator,
       class = typename enable_if<!is_integral<InputIterator>::value>::type>

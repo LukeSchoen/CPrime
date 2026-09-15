@@ -1,0 +1,41 @@
+#ifndef _CPC_SYSTEM_ERROR
+#define _CPC_SYSTEM_ERROR
+
+namespace std
+{
+  enum class errc
+  {
+    success = 0,
+    invalid_argument = 22,
+    result_out_of_range = 34
+  };
+
+  class error_code
+  {
+  public:
+    error_code() noexcept : m_value(0) {}
+    error_code(errc value) noexcept : m_value(static_cast<int>(value)) {}
+    error_code(int value) noexcept : m_value(value) {}
+
+    int value() const noexcept { return m_value; }
+    explicit operator bool() const noexcept { return m_value != 0; }
+
+  private:
+    int m_value;
+  };
+
+  inline bool operator==(const error_code &left, const error_code &right) noexcept
+  {
+    return left.value() == right.value();
+  }
+  inline bool operator!=(const error_code &left, const error_code &right) noexcept
+  {
+    return !(left == right);
+  }
+  inline error_code make_error_code(errc value) noexcept
+  {
+    return error_code(value);
+  }
+}
+
+#endif

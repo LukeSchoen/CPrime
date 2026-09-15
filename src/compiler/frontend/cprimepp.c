@@ -5218,6 +5218,20 @@ static void cprime_predefs(CPRIMEState *s1, CString *cs, int is_asm)
     {
       cstr_cat(cs, "#define __CPRIME_CPP__ 1\n", -1);
       cstr_cat(cs, "#define __cplusplus 201703L\n", -1);
+      /* The alternative operator spellings are keywords in C++.  Expanding
+         them here leaves the parser's ordinary punctuator path unchanged. */
+      cstr_cat(cs,
+        "#define and &&\n"
+        "#define and_eq &=\n"
+        "#define bitand &\n"
+        "#define bitor |\n"
+        "#define compl ~\n"
+        "#define not !\n"
+        "#define not_eq !=\n"
+        "#define or ||\n"
+        "#define or_eq |=\n"
+        "#define xor ^\n"
+        "#define xor_eq ^=\n", -1);
       cstr_cat(cs, "#define __GXX_RTTI 1\n", -1);
       cstr_cat(cs, "#define __GXX_EXPERIMENTAL_CXX0X__ 1\n", -1);
       cstr_cat(cs, "#define __STDC_LIMIT_MACROS 1\n", -1);

@@ -47,5 +47,40 @@ template<class I, class D> void advance(I& it, D n) {
 }
 template<class I> I next(I it, typename iterator_traits<I>::difference_type n = 1) { advance(it, n); return it; }
 template<class I> I prev(I it, typename iterator_traits<I>::difference_type n = 1) { advance(it, -n); return it; }
+template<class Container>
+auto size(const Container &container) -> decltype(container.size())
+{
+  return container.size();
+}
+template<class T, size_t N>
+constexpr size_t size(const T (&)[N]) noexcept
+{
+  return N;
+}
+template<class Container>
+auto empty(const Container &container) -> decltype(container.empty())
+{
+  return container.empty();
+}
+template<class T, size_t N>
+constexpr bool empty(const T (&)[N]) noexcept
+{
+  return false;
+}
+template<class Container>
+auto data(Container &container) -> decltype(container.data())
+{
+  return container.data();
+}
+template<class Container>
+auto data(const Container &container) -> decltype(container.data())
+{
+  return container.data();
+}
+template<class T, size_t N>
+constexpr T *data(T (&array)[N]) noexcept
+{
+  return array;
+}
 }
 #endif

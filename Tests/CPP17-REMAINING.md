@@ -12,32 +12,19 @@ suite keeps one file per distinct surviving defect, drops cases that the current
 root `cpc.exe` already passes, and drops duplicate or transitive-include-only
 cases.
 
-Run it with `Tests\test.exe -Suite features/Cpp17Gaps`. Unrepaired cases are
-listed in `tiers.json` under `pedantic`, so the fast partition and the
-publication `-Checks` gate are unaffected while the list is outstanding; the
-pedantic partition reports them as failures until they are repaired. Remove a
-case from that list when it passes on a published root compiler.
+Run it with `Tests\test.exe -Suite features/Cpp17Gaps`. The former work list is
+now empty: every gap case passes on the published root compiler and belongs to
+the fast partition.
 
-Outstanding groups:
-
-- Runtime miscompiles: none retained. Scalar return lowering materializes a
-  local deque's `front()`/`back()` result before local destruction, and
-  `basic_istream::operator>>` preserves its scalar reference destination while
-  parsing decimal input. Inline static data-member definitions now allocate and
-  initialize their storage.
-- Core language: CTAD, explicit `constexpr` lambdas, class-specifier `alignas`,
-  structured bindings in range-for, native alternative operator tokens, and the
-  `__cplusplus` language-mode value.
-- Missing headers: `string_view`, `variant`, `any`, `filesystem`, `shared_mutex`,
-  `list`, `forward_list`, `stack`, `set`, `random`, `complex`, `numeric`,
-  `charconv`, `system_error`, `typeindex`, `memory_resource`, and `execution`.
-- Missing contents in present headers: `std::queue` is undeclared; `std::byte`,
-  `std::scoped_lock`, `std::make_unique`, `std::not_fn`, `std::bind` results,
-  `std::smatch` overloads, `std::aligned_storage`, and `std::atomic_flag` are
-  absent; `std::clamp`, `std::as_const`, `std::size`, `std::make_tuple` are
-  declared without definitions; `std::launder`, `std::tuple` construction,
-  `std::vector`'s initializer_list constructor, `std::bitset::count`, and
-  `std::optional::value_or` do not resolve.
+Status: no case remains in the pedantic work list. All 45 gap cases pass on
+root `cpc.exe` SHA256
+`6AE287BF0A7F621D742707CE15A4EB7D295E70BCB069D1146DDCC5E08DC0691F`.
+The repaired areas are the C++17 `__cplusplus` value and alternative operator
+spellings, class-head `alignas`, structured bindings in range-for, the runtime
+headers and definitions listed by the gap probe, tuple construction and
+`apply`, vector initializer-list construction, and the missing members in
+`bitset`, `optional`, `memory`, `mutex`, `atomic`, `iterator`, `utility`,
+`algorithm`, `regex`, and `new`.
 
 ## First priority: constexpr object model
 

@@ -1,0 +1,51 @@
+#ifndef _CPC_LIST
+#define _CPC_LIST
+
+#include <deque>
+#include <initializer_list>
+
+namespace std
+{
+  template<class T, class Allocator = allocator<T> >
+  class list
+  {
+  public:
+    typedef T value_type;
+    typedef Allocator allocator_type;
+    typedef size_t size_type;
+    typedef typename deque<T, Allocator>::iterator iterator;
+    typedef typename deque<T, Allocator>::const_iterator const_iterator;
+
+    list() : m_values() {}
+    explicit list(size_type count) : m_values(count) {}
+    list(size_type count, const T &value) : m_values(count, value) {}
+    list(initializer_list<T> values) : m_values()
+    {
+      for (const T *value = values.begin(); value != values.end(); ++value)
+        push_back(*value);
+    }
+
+    iterator begin() { return m_values.begin(); }
+    iterator end() { return m_values.end(); }
+    const_iterator begin() const { return m_values.begin(); }
+    const_iterator end() const { return m_values.end(); }
+    bool empty() const { return m_values.empty(); }
+    size_type size() const { return m_values.size(); }
+    T &front() { return m_values.front(); }
+    const T &front() const { return m_values.front(); }
+    T &back() { return m_values.back(); }
+    const T &back() const { return m_values.back(); }
+    void push_front(const T &value) { m_values.push_front(value); }
+    void push_front(T &&value) { m_values.push_front(static_cast<T &&>(value)); }
+    void push_back(const T &value) { m_values.push_back(value); }
+    void push_back(T &&value) { m_values.push_back(static_cast<T &&>(value)); }
+    void pop_front() { m_values.pop_front(); }
+    void pop_back() { m_values.pop_back(); }
+    void clear() { m_values.clear(); }
+
+  private:
+    deque<T, Allocator> m_values;
+  };
+}
+
+#endif
