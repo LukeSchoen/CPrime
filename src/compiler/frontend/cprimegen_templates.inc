@@ -1061,12 +1061,34 @@ static unsigned template_function_merge_signature_hash(TokenString *str,
   return hash;
 }
 
-static int find_template_name_in_str(TokenString *str)
+static int find_template_name_in_str(TokenString *str, int *literal_operator)
 {
   int i, n = str->len;
   for (i = 0; i + 1 < n; ++i)
   {
     int t = str->str[i];
+    if (t == TOK_OPERATOR && i + 1 < n && (TOK_IS_STRING(str->str[i + 1]) || str->str[i + 1] == TOK_PPSTR)) {
+      int *cursor = str->str + i + 1, string_tok, literal_name, following;
+      CValue literal;
+      CString name;
+      tok_get(&string_tok, &cursor, &literal);
+      if (!((string_tok == TOK_STR && literal.str.size == 1)
+            || (string_tok == TOK_PPSTR && !strcmp(literal.str.data, "\"\""))))
+        cprime_error("literal operator requires an empty ordinary string");
+      if (cursor >= str->str + n || *cursor < TOK_UIDENT)
+        cprime_error("literal operator requires an identifier suffix");
+      cstr_new(&name);
+      cstr_cat(&name, "operator \"\" ", 12);
+      cstr_cat(&name, get_tok_str(*cursor++, NULL), 0);
+      literal_name = tok_alloc(name.data, name.size - 1)->tok;
+      cstr_free(&name);
+      following = cursor - str->str;
+      str->str[i] = literal_name;
+      memmove(str->str + i + 1, cursor, (n - following) * sizeof(int));
+      str->len -= following - i - 1;
+      if (literal_operator) *literal_operator = 1;
+      return literal_name;
+    }
     if (t == TOK_OPERATOR && i + 2 < n
         && str->str[i + 2] == '(')
       return get_cpp_binary_operator_method_tok(str->str[i + 1]);
@@ -4463,6 +4485,32 @@ static int class_has_static_member_template_name(int class_tok, int member_tok)
   return 0;
 }
 
+static int find_static_member_template_owner(int class_tok, int member_tok)
+{
+  ClassBaseInfo *base;
+  MemberFuncOverload *method;
+  Sym *owner = struct_find(class_tok), *field;
+  int found = 0;
+  if (!class_tok) return 0;
+  if (class_has_static_member_template_name(class_tok, member_tok)) return class_tok;
+  /* A declaration in this class hides the base classes' declaration set. */
+  if (class_has_static_member_func(class_tok, member_tok)
+      || class_has_concrete_member_template_declaration(class_tok, member_tok)) return 0;
+  for (method = member_func_candidates(class_tok, member_tok); method; method = method->bucket_next)
+    if (method->struct_tok == class_tok && method->method_tok == member_tok) return 0;
+  for (field = owner ? owner->next : NULL; field; field = field->next)
+    if ((field->v & ~SYM_FIELD) == member_tok) return 0;
+  for (base = class_base_candidates(class_tok); base; base = base->bucket_next) {
+    int candidate;
+    if (base->class_tok != class_tok) continue;
+    candidate = find_static_member_template_owner(base->base_tok, member_tok);
+    if (candidate && found && candidate != found)
+      cprime_error("ambiguous inherited member template '%s'", get_tok_str(member_tok, NULL));
+    if (candidate) found = candidate;
+  }
+  return found;
+}
+
 /* An out-of-class definition omits the static specifier. Recover it from
    the declaration with the same parameter signature, not merely its name:
    a class may overload static and non-static functions. */
@@ -5198,6 +5246,7 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
                                                   int member_type_arg_tok)
 {
   int saved_tok, method_tok, member_func_tok, paren, i, cv_qualifiers, noexcept_spec;
+  int deleted_definition = 0;
   int member_decl_exists = 0;
   int substitution_failed = 0;
   int qualifier_already_parsed = 0;
@@ -6211,6 +6260,7 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
     } else cv_qualifiers = skip_member_func_cv_qualifiers();
   }
   noexcept_spec = last_member_noexcept_spec;
+  if (tok == '=') deleted_definition = skip_defaulted_or_deleted_member_suffix() == 2;
   is_member_template_replay = template_member_is_call_specialized(md);
   if (is_member_template_replay) {
     int parameter_count = explicit_param_names[0] ? explicit_param_index + 1
@@ -6449,6 +6499,7 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
     replay_func_type = make_member_func_type_from_saved_params(&replay_ret_type,
                                                         typed_params, class_mangled_tok);
     replay_func_type.ref->f.func_cpp_explicit = is_explicit_constructor;
+    replay_func_type.ref->f.func_cpp_deleted = deleted_definition;
     class_sym = struct_find(class_mangled_tok);
     if (!class_sym)
       cprime_error("template member replay requires instantiated class '%s'",
@@ -6557,6 +6608,7 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
       replay_func_type.ref->f.func_cpp_explicit = is_explicit_constructor;
     }
     replay_func_type.t |= cv_qualifiers;
+    replay_func_type.ref->f.func_cpp_deleted = deleted_definition;
     apply_function_noexcept(&replay_func_type, noexcept_spec);
     class_sym = struct_find(class_mangled_tok);
     if (!class_sym)
@@ -6659,8 +6711,10 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
       Sym *interface_sym = sym_find(member_func_tok);
       if (!interface_sym)
         interface_sym = global_symbol_find(member_func_tok);
-      if (interface_sym && interface_sym->type.ref)
+      if (interface_sym && interface_sym->type.ref) {
         interface_sym->type.ref->type = replay_ret_type;
+        interface_sym->type.ref->f.func_cpp_deleted |= deleted_definition;
+      }
       for (o = member_func_candidates(class_mangled_tok, method_tok);
            o; o = o->bucket_next)
         if (o->mangled_tok == member_func_tok && o->func_type.ref)
@@ -7967,6 +8021,7 @@ static int resolve_qualified_static_template_call(int class_tok, int method_tok)
   for (i = 0; i < argument_count; ++i) tok_str_free(saved_arguments[i]);
   if (!selected) cprime_error("no matching static member-template call '%s'",
                               get_tok_str(base_tok, NULL));
+  check_cpp_function_access(selected);
   for (i = 0; i < candidate_count; ++i)
     if (candidates[i] == selected->v && candidate_defs[i]
         && template_member_has_body(candidate_defs[i]))
@@ -9527,8 +9582,19 @@ static int instantiate_template_variable(TemplateVariableDef *definition,
     }
     if (token == definition->name_tok) token = instance_tok;
     else for (j = 0; j < definition->parameter_count; ++j)
-      if (token == definition->parameters[j]) { token = arguments->toks[j]; break; }
+      if (token == definition->parameters[j]) {
+        if (j != definition->pattern.variadic_param_index) token = arguments->toks[j];
+        break;
+      }
     tok_str_add(replay, token);
+  }
+  if (definition->pattern.variadic_param_index >= 0) {
+    int pack = definition->pattern.variadic_param_index;
+    TokenString *expanded = expand_template_expression_packs(replay,
+        definition->parameters[pack], 0, 0, arguments->toks + pack,
+        arguments->nb - pack);
+    tok_str_free(replay);
+    replay = expanded;
   }
   saved_macro_stack = macro_stack;
   saved_macro_ptr = macro_ptr;
@@ -10440,8 +10506,12 @@ static void parse_template_decl(void)
     return;
   }
 
-  if (!is_class && !is_alias)
+  if (!is_class && !is_alias) {
+    int literal_operator = 0;
+    int parsed_name = find_template_name_in_str(str, &literal_operator);
+    if (literal_operator) name_tok = parsed_name;
     is_guide = template_declaration_is_deduction_guide(str, name_tok);
+  }
 
   /* An out-of-class nested class template names its class with a qualified
      id (`struct A::B { ... }` or `struct N::B { ... }`).  The scan above
@@ -10460,14 +10530,20 @@ static void parse_template_decl(void)
       if (str->str[i] == name_tok
           && (str->str[i - 1] == TOK_CLASS || str->str[i - 1] == TOK_STRUCT
               || str->str[i - 1] == TOK_UNION)
-          && !is_namespace_tok(name_tok)
           && str->str[i + 1] == ':' && str->str[i + 2] == ':'
           && str->str[i + 3] >= TOK_UIDENT)
       {
         int j = i + 3, qualified;
+        int namespace_parts[16], namespace_count = 0;
+        if (is_namespace_tok(name_tok)) namespace_parts[namespace_count++] = name_tok;
         qualified = name_tok;
         do {
-          qualified = make_static_member_tok(qualified, str->str[j]);
+          if (namespace_count) {
+            if (namespace_count == 16) cprime_error("qualified template name too deep");
+            namespace_parts[namespace_count++] = str->str[j];
+            qualified = find_namespace_tok_from_parts(namespace_parts, namespace_count);
+          } else
+            qualified = make_static_member_tok(qualified, str->str[j]);
           if (!(j + 3 < str->len && str->str[j + 1] == ':'
                 && str->str[j + 2] == ':' && str->str[j + 3] >= TOK_UIDENT))
             break;
@@ -10508,7 +10584,7 @@ static void parse_template_decl(void)
                                     variadic_param_index, default_arg_strs, value_type_strs))
     return;
   if (!name_tok)
-    name_tok = find_template_name_in_str(str);
+    name_tok = find_template_name_in_str(str, NULL);
 
   member_class_tok = is_alias || is_guide ? 0
     : find_template_member_class_in_str(str, type_param_toks[0]);
@@ -12475,6 +12551,9 @@ static int infer_template_type_tok_from_first_arg(void)
 
   switch (tok)
   {
+  case TOK_U8CHAR: return TOK_CHAR;
+  case TOK_U16CHAR: return tok_alloc_const("char16_t");
+  case TOK_U32CHAR: return tok_alloc_const("char32_t");
   case TOK_CINT:
   case TOK_CCHAR:
   case TOK_CUINT:
@@ -12638,7 +12717,9 @@ static int parse_one_template_type_arg(void)
   /* Numeric literals are non-type template arguments.  Check them before
      the builtin-type parser, which otherwise normalizes their token kind to
      `int` and loses the constant payload. */
-  if (tok == TOK_CINT || tok == TOK_CUINT || tok == TOK_CCHAR
+  if (tok == TOK_CCHAR || tok == TOK_U8CHAR || tok == TOK_U16CHAR || tok == TOK_U32CHAR)
+    return parse_template_constant_expression_arg();
+  if (tok == TOK_CINT || tok == TOK_CUINT
       || tok == TOK_CLONG || tok == TOK_CULONG
       || tok == TOK_CLLONG || tok == TOK_CULLONG)
   {
@@ -13036,7 +13117,9 @@ static int parse_one_template_type_arg_subst_with_alias(
     next();
     return type_tok;
   }
-  if (tok == TOK_CINT || tok == TOK_CUINT || tok == TOK_CCHAR
+  if (tok == TOK_CCHAR || tok == TOK_U8CHAR || tok == TOK_U16CHAR || tok == TOK_U32CHAR)
+    return parse_template_constant_expression_arg_subst(ctx_td, ctx_args, alias_from, alias_to, nb_aliases);
+  if (tok == TOK_CINT || tok == TOK_CUINT
       || tok == TOK_CLONG || tok == TOK_CULONG
       || tok == TOK_CLLONG || tok == TOK_CULLONG)
   {
@@ -13045,6 +13128,10 @@ static int parse_one_template_type_arg_subst_with_alias(
     return template_integer_constant_arg_tok();
   }
   if (tok == '+' || tok == '-' || tok == '!' || tok == '~')
+    return parse_template_constant_expression_arg_subst(
+      ctx_td, ctx_args, alias_from, alias_to, nb_aliases);
+  if (tok >= TOK_UIDENT && cpp_type_trait_name_tok(tok)
+      && template_next_token_is_paren())
     return parse_template_constant_expression_arg_subst(
       ctx_td, ctx_args, alias_from, alias_to, nb_aliases);
   if ((type_tok = parse_builtin_template_type_argument()) != 0)
@@ -14778,6 +14865,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
                                                  TemplateArgList *args,
                                                  int specialization_name_tok)
 {
+  jmp_buf *definition_substitution_jump = cpp_substitution_jump;
   int mangled_tok;
   TokenString *spec;
   int saved_tok;
@@ -15046,6 +15134,10 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
      CRTP shape (Base<Derived> while Derived is being defined).  Materialize
      the specialization now; ordinary field layout will still reject a truly
      invalid by-value use of the incomplete argument. */
+  /* Arguments have been selected. Instantiating a class definition is a
+     side effect of substitution, outside its immediate context. This also
+     covers eagerly parsed aliases before the generated class is queued. */
+  if (td->is_class) cpp_substitution_jump = NULL;
   spec = tok_str_alloc();
   if (td->friend_class_tok) tok_str_add(spec, tok_alloc_const("friend"));
   type_tok = args->toks[0];
@@ -16489,6 +16581,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
   if (expanded_class_definition) tok_str_free(expanded_class_definition);
   tok = saved_tok;
   tokc = saved_tokc;
+  cpp_substitution_jump = definition_substitution_jump;
   tok_str_add(spec, TOK_EOF);
 
 
@@ -16948,11 +17041,16 @@ static void queue_demanded_function_template_bodies(void)
           func_sym = sym_find(td->inst_name_toks[j]);
         /* Interface probing (notably decltype and overload ranking) can
            create many concrete prototypes that are never called.  Inline
-           symbol reachability is the demand signal: emit a body only after
-           code generation has referenced that specialization. */
-        if (!func_sym || !func_sym->c)
+           symbol reachability requests emission; semantic demand from an
+           unused body requests validation without emission. */
+        if (!func_sym || (!func_sym->c && !func_sym->cpp_semantic_demand))
           continue;
-        instantiate_template_if_needed(td, &args);
+        {
+          int saved_validation = cpp_unused_body_validation;
+          if (!func_sym->c) ++cpp_unused_body_validation;
+          instantiate_template_if_needed(td, &args);
+          cpp_unused_body_validation = saved_validation;
+        }
       }
   }
 }
@@ -17138,6 +17236,8 @@ static void compile_pending_template_specs(void)
       unsigned saved_spec_bound = cpp_template_replay_bound;
       int saved_spec_class = cpp_template_replay_class_tok;
       int saved_default_arg_owner = cpp_template_default_arg_owner_tok;
+      int saved_validation = cpp_unused_body_validation;
+      cpp_unused_body_validation = pending_template_spec_semantic_only[i];
       cpp_template_replay_bound = pending_template_spec_bounds
                                   ? pending_template_spec_bounds[i] : 0;
       cpp_template_replay_class_tok = pending_template_spec_class_toks
@@ -17198,6 +17298,7 @@ static void compile_pending_template_specs(void)
       cpp_template_replay_bound = saved_spec_bound;
       cpp_template_replay_class_tok = saved_spec_class;
       cpp_template_default_arg_owner_tok = saved_default_arg_owner;
+      cpp_unused_body_validation = saved_validation;
     }
     /* end_macro() owns the replay buffer and frees it.  Clear the slot so
        later scans of pending_template_specs cannot dereference the dangling
@@ -18586,8 +18687,10 @@ static Sym *resolve_function_address(CType *source, CType *target)
       instantiate_template_member_if_needed(member, 0, owner_tok, key);
       candidate = template_member_lookup_inst(member, 0, key, owner_tok);
       function = candidate > 1 ? global_symbol_find(candidate) : NULL;
-      if (function && is_compatible_types(&function->type, signature))
+      if (function && is_compatible_types(&function->type, signature)) {
+        check_cpp_function_access(function);
         return function;
+      }
     }
     return NULL;
   }

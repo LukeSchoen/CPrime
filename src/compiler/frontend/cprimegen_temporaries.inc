@@ -115,6 +115,11 @@ static void cpp_register_class_temporary(SValue *value)
       || !is_cpp_translation_unit()) return;
   value->r |= VT_CXX_PRVALUE;
   value->type.t |= VT_RVALUE_REFERENCE;
+  destructor = resolve_autodtor_func(&value->type);
+  if (destructor) cpp_check_deleted_function(&destructor->type);
+  if (destructor) {
+    check_cpp_function_access(destructor);
+  }
   if (cpp_noexcept_query_depth && !class_destructor_is_noexcept(&value->type))
     cpp_noexcept_note_throw();
   if (nocode_wanted || !cur_scope) return;

@@ -31,6 +31,7 @@ struct member_task
   struct promise_type
   {
     member_task get_return_object() { return {}; }
+    void return_void() noexcept {}
     std::suspend_never initial_suspend() { return {}; }
     std::suspend_never final_suspend() noexcept { return {}; }
     void unhandled_exception() {}

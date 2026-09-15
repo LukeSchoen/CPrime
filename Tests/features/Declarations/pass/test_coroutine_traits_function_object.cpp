@@ -28,3 +28,5 @@ struct functor
 {
   fake operator()(int) { co_return; }
 };
+
+fake invoke_functor() { return functor{}(1); }

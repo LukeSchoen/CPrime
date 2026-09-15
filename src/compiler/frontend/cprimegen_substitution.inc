@@ -15,6 +15,13 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     CppMemberDeclContext *member_declaration_context;
     LambdaExpression *lambda;
     CppConstructionDestination *construction;
+    ConstexprTemporaryObject *evaluation_temporaries;
+    Sym *initialization_object;
+    SValue initializer_receiver;
+    int initializer_receiver_offset;
+    int integral_fold_suppression;
+    long long initialization_frontier;
+    int temporary_expression_depth, initializer_probe_noeval;
     CType *member_address_target;
     jmp_buf *previous;
     int token, depth, nocode, local_offset, temporary_count, namespace_tok;
@@ -70,6 +77,14 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   saved->permit_deferred_bound = cpp_permit_deferred_array_bound;
   saved->lambda = lambda_probe;
   saved->construction = cpp_construction_destination;
+  saved->evaluation_temporaries = constexpr_temporary_objects;
+  saved->temporary_expression_depth = constexpr_temporary_expression_depth;
+  saved->initializer_probe_noeval = constexpr_initializer_probe_noeval;
+  saved->initialization_object = constant_initialization_object;
+  saved->initializer_receiver = cpp_default_initializer_receiver;
+  saved->initializer_receiver_offset = cpp_default_initializer_receiver_offset;
+  saved->integral_fold_suppression = suppress_integral_constexpr_fold;
+  saved->initialization_frontier = constant_initialization_frontier;
   saved->member_address_target = cpp_member_address_target;
   /* Modes 6/8 disambiguate expression type-ids and statement declarators in the current lexical
      context. Other probes use the template's declaration context. A caller's
@@ -139,7 +154,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     else if (argument == 7)
     {
       cpp_construction_destination = NULL;
-      materialize_braced_temporary_mode(result, 1);
+      materialize_braced_temporary_mode(result, 1, NULL);
       success = tok == TOK_EOF;
       vpop();
     }
@@ -295,6 +310,14 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   cpp_member_address_target = saved->member_address_target;
   global_expr = saved->global_expression;
   defer_pending_member_funcs = saved->deferred_members;
+  release_constexpr_temporary_objects(saved->evaluation_temporaries, 0);
+  constexpr_temporary_expression_depth = saved->temporary_expression_depth;
+  constexpr_initializer_probe_noeval = saved->initializer_probe_noeval;
+  constant_initialization_object = saved->initialization_object;
+  cpp_default_initializer_receiver = saved->initializer_receiver;
+  cpp_default_initializer_receiver_offset = saved->initializer_receiver_offset;
+  suppress_integral_constexpr_fold = saved->integral_fold_suppression;
+  constant_initialization_frontier = saved->initialization_frontier;
   memcpy(_vstack, saved->values, (saved->depth + 1) * sizeof(SValue));
   vtop = _vstack + saved->depth;
   memcpy(arr_temp_local_vars, saved->temporaries, sizeof(saved->temporaries));

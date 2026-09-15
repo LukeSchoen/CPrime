@@ -106,6 +106,11 @@ static void note_cpp_template_member_decl(TemplateMemberDef *definition,
 static void free_cpp_member_declarations(void)
 {
   int bucket;
+  while (cpp_class_friends) {
+    CppClassFriend *next = cpp_class_friends->next;
+    cprime_free(cpp_class_friends);
+    cpp_class_friends = next;
+  }
   for (bucket = 0; bucket < cpp_member_declaration_capacity; ++bucket)
     cprime_free(cpp_member_declarations[bucket]);
   cprime_free(cpp_member_declarations);
@@ -124,6 +129,40 @@ static void free_cpp_member_declarations(void)
     }
   }
   cpp_member_decl_context = NULL;
+}
+
+static int cpp_class_is_friend(int owner, int candidate)
+{
+  CppClassFriend *entry;
+  if (!owner || !candidate) return 0;
+  for (entry = cpp_class_friends; entry; entry = entry->next)
+    if (entry->owner == owner && entry->candidate == candidate) return 1;
+  return 0;
+}
+
+static void cpp_note_class_friend(int owner, int candidate)
+{
+  CppClassFriend *entry;
+  if (!owner || !candidate || cpp_class_is_friend(owner, candidate)) return;
+  entry = cprime_malloc(sizeof(*entry));
+  entry->owner = owner;
+  entry->candidate = candidate;
+  entry->next = cpp_class_friends;
+  cpp_class_friends = entry;
+}
+
+static void check_cpp_function_access(Sym *function)
+{
+  const CppMemberDeclInfo *member;
+  if (!function) return;
+  member = lookup_cpp_member_decl(function->v);
+  if (member && member->access_known && member->access
+      && active_member_class_tok != member->owner_tok
+      && !cpp_class_is_friend(member->owner_tok, active_member_class_tok)
+      && !(member->access == 1 && active_member_class_tok
+           && class_has_base(active_member_class_tok, member->owner_tok)))
+    cprime_error("member function '%s' is inaccessible",
+                 get_tok_str(member->source_name_tok, NULL));
 }
 
 static const CppRecordDeclInfo *lookup_cpp_record_decl(int type_tok)

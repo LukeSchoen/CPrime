@@ -1472,6 +1472,7 @@ static int cprime_add_binary(CPRIMEState *s1, int flags, const char *filename, i
   int obj_type;
   const char *saved_filename = s1->current_filename;
   int ret = 0;
+  int previous_errors = s1->nb_errors;
 
   s1->current_filename = filename;
   obj_type = cprime_object_type(fd, &ehdr);
@@ -1572,6 +1573,8 @@ case_dyn_or_tbd:
   s1->current_filename = saved_filename;
   if (ret == FILE_NOT_RECOGNIZED)
     return cprime_error_noabort("%s: unrecognized file type", filename);
+  if (s1->nb_errors != previous_errors)
+    return -1;
   return ret;
 }
 

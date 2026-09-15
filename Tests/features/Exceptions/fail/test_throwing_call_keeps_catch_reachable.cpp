@@ -1,5 +1,5 @@
-// EXPECT_COMPILE_FAIL: 1
-extern void may_throw();
+// EXPECT_LINK_FAIL: 1
+void may_throw() { throw 7; }
 extern void required_link_error();
 
 int main() {

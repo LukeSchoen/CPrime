@@ -348,8 +348,14 @@ typedef struct ObjectSizeInfo {
     unsigned char depth;
 } ObjectSizeInfo;
 
+typedef struct ConstexprPointerBounds {
+    struct Sym *object;
+    long long begin, end;
+} ConstexprPointerBounds;
+
 typedef struct SValue {
     CType type;
+    ConstexprPointerBounds constexpr_bounds;
     ObjectSizeInfo object_size;
     long long object_size_int_value;
     unsigned char object_size_int_valid;
@@ -357,6 +363,7 @@ typedef struct SValue {
     unsigned char complex_constant;
     CValue complex_imaginary;
     int bound_member_receiver;
+    Sym *bound_member_receiver_object;
     int bound_member_name;
     int bound_member_qualified;
     unsigned short r;
@@ -436,7 +443,10 @@ struct FuncAttr {
     func_cpp_member : 1,
     func_ref_qualifier : 2,
     func_unresolved_overload : 1,
-    func_cxx_destructor_function_try : 1;
+    func_cxx_destructor_function_try : 1,
+    func_cpp_deleted : 1,
+    func_cpp_deduced_return : 1,
+    func_cpp_defaulted_first_declaration : 1;
 };
 
 typedef struct Sym {
@@ -481,6 +491,10 @@ typedef struct Sym {
     };
     /* Symbolic constant substituted for an address template argument. */
     struct Sym *template_address_target;
+    /* Constant-evaluation parameter address; const_value holds its offset. */
+    struct Sym *constexpr_address_target;
+    int parameter_object_qualifiers;
+    ConstexprPointerBounds constexpr_bounds;
     /* Frame-independent referent recorded for an automatic reference, so a
        deferred local class member body can name it without the frame. */
     struct Sym *lexical_reference_target;
@@ -492,6 +506,8 @@ typedef struct Sym {
     int cpp_member_address_tok;
     int cpp_using_target;
     unsigned char cpp_hidden_friend;
+    unsigned char cpp_semantic_demand;
+    unsigned char cpp_constexpr_object;
     unsigned char string_literal;
     int cpp_friend_owner;
     /* Owned lookup index for the direct fields of a completed record. */
@@ -629,6 +645,8 @@ typedef struct InlineFunc {
     int preserve_type;
     int stable_heap;
     int expand_at_call;
+    int semantic_only;
+    int semantic_checked;
     /* Two-stage lookup boundary of the definition this body came from (see
        cpp_template_replay_bound) and its definition-time class. */
     unsigned replay_bound;
@@ -1134,9 +1152,17 @@ struct filespec {
 #define TOK_CIMAGF  0xd4
 #define TOK_CIMAGD  0xd5
 #define TOK_CIMAGL  0xd6
+#define TOK_U16CHAR 0xd7
+#define TOK_U32CHAR 0xd8
+#define TOK_U16STR  0xd9
+#define TOK_U32STR  0xda
+#define TOK_U8STR   0xdb
+#define TOK_U8CHAR  0xdc
+#define TOK_IS_STRING(t) ((t) == TOK_STR || (t) == TOK_LSTR || (t) == TOK_U16STR || (t) == TOK_U32STR || (t) == TOK_U8STR)
+#define TOK_STRING_UNIT_SIZE(t) (((t) == TOK_STR || (t) == TOK_U8STR) ? 1 : (t) == TOK_U16STR ? 2 : (t) == TOK_U32STR ? 4 : sizeof(nwchar_t))
 
 #define TOK_HAS_VALUE(t) ((t >= TOK_CCHAR && t <= TOK_LINENUM) \
-                          || (t >= TOK_CIMAGI && t <= TOK_CIMAGL))
+                          || (t >= TOK_CIMAGI && t <= TOK_U8CHAR))
 
 #define TOK_EOF       (-1)
 #define TOK_LINEFEED  10

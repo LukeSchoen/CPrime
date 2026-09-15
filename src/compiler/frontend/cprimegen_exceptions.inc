@@ -247,6 +247,36 @@ static void cpp_eh_register_subobject_cleanup(CType *type, Sym *this_symbol,
   cur_scope->cl.s = cleanup;
 }
 
+static void cpp_eh_register_copied_subobject(CType *type, SValue *destination,
+                                            int offset)
+{
+  Sym *pointer;
+  CType pointer_type = *type;
+  int slot;
+  if (nocode_wanted || !cur_scope || !cpp_eh_function.enabled) return;
+  if ((type->t & VT_ARRAY) && type->ref) {
+    CType *element = pointed_type(type);
+    int index, alignment, size = type_size(element, &alignment);
+    for (index = 0; index < type->ref->c; ++index)
+      cpp_eh_register_copied_subobject(element, destination, offset + index * size);
+    return;
+  }
+  if (!resolve_autodtor_func(type)) return;
+  mk_pointer(&pointer_type);
+  loc = (loc - PTR_SIZE) & -PTR_SIZE;
+  slot = loc;
+  vset(&pointer_type, VT_LOCAL | VT_LVAL, slot);
+  vpushv(destination);
+  vtop->type = char_pointer_type;
+  if (offset) { vpushi(offset); gen_op('+'); }
+  vtop->type = pointer_type;
+  vstore(); vpop();
+  pointer = sym_push2(&local_stack, SYM_FIELD, 0, slot);
+  pointer->type = pointer_type;
+  pointer->r = VT_LOCAL | VT_LVAL;
+  cpp_eh_register_subobject_cleanup(type, pointer, 0, 0);
+}
+
 static void cpp_eh_enter_function_body(void)
 {
   Sym *function = cpp_eh_function.function;
@@ -917,6 +947,11 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment,
   int cookie = cpp_array_cookie_size(type, destructor), context = 0;
   int index_slot, loop, done, value_initialize = 0, null_allocation_jump = 0;
   (void)alignment;
+  cpp_check_abstract_object(type);
+  if (destructor) {
+    cpp_check_deleted_function(&destructor->type);
+    check_cpp_function_access(destructor);
+  }
   next(); expr_eq(); skip(']');
   if ((vtop->type.t & VT_BTYPE) == VT_STRUCT)
     try_call_cpp_conversion_operator(&count_type, 0);

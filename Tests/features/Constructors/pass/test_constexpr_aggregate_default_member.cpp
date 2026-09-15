@@ -7,6 +7,13 @@ struct aggregate {
 
 aggregate runtime = {1, "asdf"};
 constexpr aggregate constant = {1, "asdf"};
+struct ordered {
+  int zero;
+  int initialized = 9;
+  int result = zero + initialized;
+};
+constexpr ordered values{};
+static_assert(values.result == 9, "earlier implicit and explicit initialization");
 
 static_assert(constant.index == 1, "explicit member");
 static_assert(constant.text[0] == 'a' && constant.text[3] == 'f', "string member");

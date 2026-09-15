@@ -3778,7 +3778,8 @@ done:
 
 LIBCPRIMEAPI int cprime_output_file(CPRIMEState *s, const char *filename)
 {
-  s->nb_errors = 0;
+  if (s->nb_errors)
+    return -1;
   if (s->test_coverage)
     cprime_tcov_add_file(s, filename);
 #ifdef CPRIME_TARGET_PE

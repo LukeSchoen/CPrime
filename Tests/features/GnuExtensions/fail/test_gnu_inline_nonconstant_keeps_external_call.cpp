@@ -1,4 +1,4 @@
-// EXPECT_COMPILE_FAIL: 1
+// EXPECT_LINK_FAIL: 1
 
 extern int unavailable(int);
 

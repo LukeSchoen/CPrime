@@ -15,6 +15,7 @@
  DEF(TOK_THROW, "throw")
  DEF(TOK_CXX_EH_CONSTRUCTED, "__builtin_cpc_eh_constructed")
  DEF(TOK_CXX_CTOR_BODY, "__builtin_cpc_constructor_body")
+ DEF(TOK_CXX_INITIALIZER_OBJECT, "__builtin_cpc_initializer_object")
  DEF(TOK_CXX_BASE_SUBOBJECT, "__builtin_cpc_base_subobject")
  DEF(TOK_CXX_BASE_CTOR_SPLIT, "__builtin_cpc_base_ctor_split")
      DEF(TOK_GOTO, "goto")

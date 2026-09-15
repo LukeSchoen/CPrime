@@ -238,7 +238,12 @@ no_designator:
     flags &= ~DIF_CLEAR; // Mark Stack Dirty Too
   }
 
-  decl_initializer(p, type, c, flags & ~DIF_FIRST);
+  {
+    int saved_list = p->list_initialization;
+    p->list_initialization = 1;
+    decl_initializer(p, type, c, flags & ~DIF_FIRST);
+    p->list_initialization = saved_list;
+  }
 
   if (!(flags & DIF_SIZE_ONLY) && nb_elems > 1)
   {
@@ -287,11 +292,53 @@ static void init_push_lvalue(init_params *p, CType *type, unsigned long offset)
 }
 
 // Store A Value Or An Expression Directly In Global Data Or In Local Array
-static void check_integer_list_initialization(CType *target, SValue *value)
+static void check_scalar_list_initialization(CType *target, SValue *value)
 {
   int source_kind = value->type.t & VT_BTYPE, target_kind = target->t & VT_BTYPE;
   int align, source_bits, target_bits, source_unsigned, target_unsigned;
   uint64_t number, maximum;
+  if (is_float(target_kind) && is_float(source_kind)
+      && ((source_kind == VT_LDOUBLE && target_kind != VT_LDOUBLE)
+          || (source_kind == VT_DOUBLE && target_kind == VT_FLOAT))) {
+    long double source, converted;
+    if ((value->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) != VT_CONST)
+      cprime_error("narrowing floating-point list initialization");
+    source = source_kind == VT_DOUBLE ? value->c.d : value->c.ld;
+    if (target_kind == VT_FLOAT) {
+      float rounded = (float)source;
+      converted = rounded;
+    } else {
+      double rounded = (double)source;
+      converted = rounded;
+    }
+    if (source - source == 0 && converted - converted != 0)
+      cprime_error("out-of-range floating-point list initialization");
+    return;
+  }
+  if (is_float(target_kind) && is_integer_btype(source_kind)) {
+    int precision = target_kind == VT_FLOAT ? 24 : 53;
+    if ((value->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) != VT_CONST)
+      cprime_error("narrowing integer-to-floating list initialization");
+#if !defined(CPRIME_USING_DOUBLE_FOR_LDOUBLE)
+    if (target_kind == VT_LDOUBLE && LDOUBLE_SIZE > 8) precision = 64;
+#endif
+    source_bits = source_kind == VT_BOOL ? 1 : type_size(&value->type, &align) * 8;
+    number = value->c.i;
+    if (source_bits < 64) {
+      uint64_t mask = (UINT64_C(1) << source_bits) - 1;
+      number &= mask;
+      if (!(value->type.t & VT_UNSIGNED) && source_kind != VT_BOOL
+          && (number & (UINT64_C(1) << (source_bits - 1)))) number |= ~mask;
+    }
+    if (!(value->type.t & VT_UNSIGNED) && source_kind != VT_BOOL
+        && (int64_t)number < 0) number = UINT64_C(0) - number;
+    /* Binary floating values represent an integer exactly when its
+       significant bits fit after removing trailing powers of two. */
+    if (number) while (!(number & 1)) number >>= 1;
+    if (precision < 64 && (number >> precision))
+      cprime_error("narrowing integer-to-floating list initialization");
+    return;
+  }
   if (!is_integer_btype(target_kind)) return;
   if (is_float(source_kind)) cprime_error("narrowing floating-to-integer list initialization");
   if (!is_integer_btype(source_kind)) return;
@@ -325,6 +372,81 @@ static void check_integer_list_initialization(CType *target, SValue *value)
   if (number > maximum) cprime_error("narrowing integer list initialization");
 }
 
+static ConstexprLocalField **capture_static_constant_members(
+    SValue *source, Sym *destination, int offset, ConstexprLocalField **tail)
+{
+  Sym *field;
+  if ((source->type.t & VT_ARRAY) && !(source->type.t & VT_VLA)
+      && source->type.ref) {
+    int align, index, size = type_size(&source->type.ref->type, &align);
+    if (size <= 0 || source->type.ref->c < 0
+        || source->type.ref->c > INT_MAX / size) return tail;
+    for (index = 0; index < source->type.ref->c; ++index) {
+      SValue child = *source;
+      child.type = source->type.ref->type;
+      child.type.t |= VT_CONSTANT;
+      child.c.i += index * size;
+      tail = capture_static_constant_members(&child, destination,
+                                             offset + index * size, tail);
+    }
+    return tail;
+  }
+  if ((source->type.t & VT_BTYPE) != VT_STRUCT) {
+    Sym scalar;
+    CValue value;
+    Sym *relocation;
+    ConstexprPointerBounds pointer_bounds;
+    memset(&scalar, 0, sizeof(scalar));
+    scalar.type = source->type;
+    if (!(scalar.type.t & VT_VOLATILE)
+        && constexpr_aggregate_field_value(source, &scalar, 0, &value, &relocation, &pointer_bounds)) {
+      ConstexprLocalField *entry = cprime_mallocz(sizeof(*entry));
+      entry->object = destination;
+      entry->offset = offset;
+      entry->type = scalar.type;
+      entry->value = value;
+      entry->relocation = relocation;
+      entry->pointer_bounds = pointer_bounds;
+      *tail = entry;
+      tail = &entry->next;
+    }
+    return tail;
+  }
+  if (!source->type.ref || IS_UNION(source->type.t)) return tail;
+  for (field = source->type.ref->next; field; field = field->next) {
+    SValue child;
+    if (!(field->v & SYM_FIELD) || (field->type.t & (VT_STATIC | VT_VOLATILE))
+        || field->a.cpp_mutable_field) continue;
+    child = *source;
+    child.type = field->type;
+    child.type.t |= VT_CONSTANT;
+    child.c.i += field->c;
+    tail = capture_static_constant_members(&child, destination,
+                                           offset + field->c, tail);
+  }
+  return tail;
+}
+
+/* Trivial copies read scalar subobjects. An enclosing mutable or volatile
+   subobject cannot supply those reads from an object predating evaluation.
+   Union reads additionally need active-member information. */
+static int constexpr_copy_has_forbidden_read(CType *type, int forbidden, int allow_mutable)
+{
+  Sym *field;
+  forbidden |= !!(type->t & VT_VOLATILE);
+  if (type->t & VT_ARRAY)
+    return type->ref && type->ref->c > 0
+        && constexpr_copy_has_forbidden_read(&type->ref->type, forbidden, allow_mutable);
+  if ((type->t & VT_BTYPE) != VT_STRUCT)
+    return forbidden && !is_reference_type(type);
+  if (!type->ref || IS_UNION(type->t)) return 0;
+  for (field = type->ref->next; field; field = field->next)
+    if ((field->v & SYM_FIELD) && !(field->type.t & VT_STATIC)
+        && constexpr_copy_has_forbidden_read(&field->type,
+             forbidden || (field->a.cpp_mutable_field && !allow_mutable), allow_mutable)) return 1;
+  return 0;
+}
+
 static void init_putv(init_params *p, CType *type, unsigned long c)
 {
   int bt;
@@ -341,7 +463,7 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
     cpp_range_note_initializer(p->range_alias_target, vtop);
   p->range_alias_target = NULL;
   if (is_cpp_translation_unit() && (p->copy_list_initialization || p->list_initialization))
-    check_integer_list_initialization(&dtype, vtop);
+    check_scalar_list_initialization(&dtype, vtop);
   if (!is_reference_type(&dtype) && is_reference_type(&vtop->type))
   {
     int category = vtop->type.t & VT_RVALUE_REFERENCE;
@@ -438,6 +560,85 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
     size = (BIT_POS(type->t) + BIT_SIZE(type->t) + 7) / 8;
   init_assert(p, c + size);
 
+  if (p->constexpr_initializer && (dtype.t & VT_BTYPE) == VT_STRUCT
+      && vtop->sym && (constexpr_local_object_view(vtop) || (vtop->r & VT_SYM))
+      && cpp_type_trivially_copyable(&dtype)
+      && is_compatible_unqualified_types(&dtype, &vtop->type)) {
+    int active_temporary = is_active_constexpr_temporary(vtop->sym);
+    if (constexpr_copy_has_forbidden_read(&vtop->type, 0, active_temporary))
+      cprime_error("constexpr copy reads a mutable or volatile subobject");
+    if (!vtop->sym->cpp_constexpr_object && !active_temporary
+        && constexpr_copy_has_forbidden_read(&vtop->type, 1, 0))
+      cprime_error("constexpr copy reads an object not declared constexpr");
+  }
+  if (p->constant_object_target && (dtype.t & VT_BTYPE) == VT_STRUCT) {
+    unsigned bucket = constexpr_local_bucket(p->constant_object_target);
+    ConstexprLocalField *copies = NULL, **tail = &copies, *entry;
+    int destination = (int)c - p->constant_object_offset;
+    if (constexpr_local_object_view(vtop) && cpp_type_trivially_copyable(&dtype)
+        && is_compatible_unqualified_types(&dtype, &vtop->type)) {
+      int source = (int)vtop->c.i - (int)vtop->sym->c;
+      if (vtop->sym == p->constant_object_target && source == destination
+          && constexpr_copy_has_forbidden_read(&dtype, 1, 0))
+        cprime_error("constexpr initialization copies its own uninitialized storage");
+      for (entry = constexpr_local_fields[constexpr_local_bucket(vtop->sym)];
+           entry; entry = entry->next) {
+        int extent, alignment;
+        if (entry->object != vtop->sym) continue;
+        extent = entry->zero_size ? (entry->zero_size < 0 ? -entry->zero_size : entry->zero_size)
+                                 : type_size(&entry->type, &alignment);
+        if (extent <= 0 || entry->offset >= source + size || entry->offset + extent <= source) continue;
+        if (!entry->zero_size && (entry->offset < source || entry->offset + extent > source + size)) continue;
+        *tail = cprime_malloc(sizeof(**tail));
+        **tail = *entry;
+        (*tail)->object = p->constant_object_target;
+        if (entry->zero_size) {
+          int start = entry->offset < source ? source : entry->offset;
+          int end = entry->offset + extent > source + size ? source + size : entry->offset + extent;
+          (*tail)->offset = destination + start - source;
+          (*tail)->zero_size = entry->zero_size < 0 ? start - end : end - start;
+        } else (*tail)->offset += destination - source;
+        tail = &(*tail)->next;
+      }
+    }
+    if (vtop->sym && (vtop->r & VT_SYM) && (vtop->sym->type.t & VT_CONSTANT)
+        && !(vtop->sym->type.t & VT_VOLATILE)
+        && cpp_type_trivially_copyable(&dtype)
+        && is_compatible_unqualified_types(&dtype, &vtop->type))
+      tail = capture_static_constant_members(vtop, p->constant_object_target, destination, tail);
+    /* A copy overwrites prior destination initialization even when its
+       values cannot yet be evaluated. Do not reuse older zero-fill data. */
+    entry = cprime_mallocz(sizeof(*entry));
+    entry->object = p->constant_object_target;
+    entry->offset = destination;
+    entry->zero_size = -size;
+    entry->next = constexpr_local_fields[bucket];
+    *tail = entry;
+    constexpr_local_fields[bucket] = copies;
+  }
+
+  if (p->require_constant_values && (dtype.t & VT_BTYPE) != VT_STRUCT) {
+    gen_assign_cast(&dtype);
+    if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_NONCONST)) != VT_CONST
+        && !((dtype.t & VT_BTYPE) == VT_PTR
+             && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_LOCAL
+             && is_active_constexpr_temporary(vtop->sym)))
+      cprime_error("constexpr variable initializer is not a constant expression");
+    if (p->constant_object_target && !(type->t & VT_BITFIELD)) {
+      unsigned bucket = constexpr_local_bucket(p->constant_object_target);
+      ConstexprLocalField *entry = cprime_malloc(sizeof(*entry));
+      entry->object = p->constant_object_target;
+      entry->zero_size = 0;
+      entry->offset = (int)c - p->constant_object_offset;
+      entry->type = dtype;
+      entry->value = vtop->c;
+      entry->relocation = ((vtop->r & VT_SYM) || is_active_constexpr_temporary(vtop->sym)) ? vtop->sym : NULL;
+      entry->pointer_bounds = vtop->constexpr_bounds;
+      entry->next = constexpr_local_fields[bucket];
+      constexpr_local_fields[bucket] = entry;
+    }
+  }
+
   if (sec)
   {
     // XXX: not portable
@@ -446,6 +647,10 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
     ++static_initializer_conversion_wanted;
     gen_assign_cast(&dtype);
     static_initializer_conversion_wanted = static_conversion_prev;
+    if (p->pointer_bounds_capture_sym) {
+      p->pointer_bounds_capture_sym->constexpr_bounds = vtop->constexpr_bounds;
+      p->pointer_bounds_capture_sym = NULL;
+    }
     bt = dtype.t &VT_BTYPE;
     if (is_reference_type(type)
         && (vtop->r & (VT_VALMASK | VT_LVAL | VT_NONCONST)) != VT_CONST)
@@ -877,7 +1082,8 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
             && expression->str[leading_next] != TOK_ARROW))
       return 0;
   }
-  else if ((expression->str[first] < TOK_UIDENT && expression->str[first] != ':')
+  else if ((expression->str[first] < TOK_UIDENT && expression->str[first] != ':'
+            && expression->str[first] != TOK_CO_AWAIT)
       || TOK_HAS_VALUE(expression->str[first]))
     return 0;
   if (is_cpp_lambda_marker(expression->str[first]))
@@ -981,6 +1187,7 @@ static int saved_initializer_is_direct_constructor(TokenString *expression,
        Operators still reject the claim conservatively. */
     for (index = first; index <= end; ++index) {
       int token = expression->str[index];
+      if (index == first && token == TOK_CO_AWAIT) continue;
       if (TOK_HAS_VALUE(token)) {
         if (!angles && token != TOK_LINENUM) return 0;
         index += tok_str_value_extra_words(expression->str, expression->len, index);
@@ -1101,7 +1308,7 @@ static int parse_direct_class_initializer(init_params *p, CType *type,
                                            unsigned long address)
 {
   TokenString *expression;
-  if (tok != '(' && tok != '[' && tok < TOK_UIDENT)
+  if (tok != '(' && tok != '[' && tok != TOK_CO_AWAIT && tok < TOK_UIDENT)
     return 0;
   /* Inspect the complete expression before forwarding storage. For example,
      in T value = T(1) + T(2), neither operand is value's result object. */
@@ -1343,8 +1550,7 @@ static int initializer_integral_constant_value(SValue *value, int64_t *result)
    This preserves ordinary lookup for names that are not fields (types,
    functions, namespace constants, and qualified members). */
 static TokenString *bind_aggregate_default_initializer(TokenString *source,
-                                                        CType *aggregate,
-                                                        Sym *target)
+                                                        CType *aggregate)
 {
   TokenString *bound = tok_str_alloc();
   int i, previous = 0;
@@ -1360,7 +1566,7 @@ static TokenString *bind_aggregate_default_initializer(TokenString *source,
       if (field && !(field->type.t & (VT_TYPEDEF | VT_STATIC))
           && (field->type.t & VT_BTYPE) != VT_FUNC)
       {
-        tok_str_add(bound, target->v);
+        tok_str_add(bound, TOK_CXX_INITIALIZER_OBJECT);
         tok_str_add(bound, '.');
       }
     }
@@ -1384,8 +1590,22 @@ static TokenString *bind_aggregate_default_initializer(TokenString *source,
    allocation. 'flags & DIF_FIRST' is true if array '{' must be read (multi
    dimension implicit array init handling). 'flags & DIF_SIZE_ONLY' is true if
    size only evaluation is wanted (only for arrays). */
+static void decl_initializer_impl(init_params *p, CType *type, unsigned long c, int flags);
+
 static void decl_initializer(init_params *p, CType *type, unsigned long c, int flags)
 {
+  long long saved_frontier = constant_initialization_frontier;
+  /* C++ aggregate subobjects are initialized in declaration/index order.
+     Pre-cleared output bytes beyond this subobject are not initialized values. */
+  if ((p->sec || p->constant_object_target) && constant_initialization_object)
+    constant_initialization_frontier = p->sec ? (long long)c : (int)c;
+  decl_initializer_impl(p, type, c, flags);
+  constant_initialization_frontier = saved_frontier;
+}
+
+static void decl_initializer_impl(init_params *p, CType *type, unsigned long c, int flags)
+{
+  int single_expression_list = 0;
   int len, n, no_oblock, i;
   int size1, align1;
   Sym *s, *f;
@@ -1398,11 +1618,32 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
   if (debug_modes && !(flags & DIF_SIZE_ONLY) && !p->sec)
     cprime_debug_line(cprime_state), cprime_tcov_check_line (cprime_state, 1);
 
+  if (tok == '{' && !(flags & DIF_HAVE_ELEM) && is_cpp_translation_unit()
+      && (type->t & VT_BTYPE) == VT_STRUCT && !(type->t & VT_ARRAY)
+      && constexpr_aggregate_temporary_type(type) && cpp_type_trivially_copyable(type)) {
+    TokenString *initializer, **elements = NULL;
+    int count;
+    skip_or_save_block(&initializer);
+    count = split_saved_array_initializer(initializer, &elements);
+    if (count == 1) {
+      int first = tok_str_next_non_linenum_index(elements[0]->str, elements[0]->len, 0);
+      int second = tok_str_next_non_linenum_index(elements[0]->str, elements[0]->len, first + 1);
+      single_expression_list = elements[0]->str[first] != '.' && elements[0]->str[first] != '{'
+          && !(second < elements[0]->len && elements[0]->str[second] == ':');
+    }
+    free_saved_array_elements(elements, count);
+    {
+      TokenString *replay = tok_str_alloc();
+      tok_str_append_without_eof(replay, initializer);
+      tok_str_free(initializer);
+      restore_cpp_lifecycle_probe(replay);
+    }
+  }
   if (!(flags & DIF_HAVE_ELEM) && tok != '{' &&
       /* In case of strings we have special handling for arrays, so
          don't consume them as initializer value (which would commit them
          to some anonymous symbol).  */
-      ((tok != TOK_LSTR && tok != TOK_STR) || !(type->t & VT_ARRAY)) &&
+      ((!TOK_IS_STRING(tok)) || !(type->t & VT_ARRAY)) &&
       (!(flags & DIF_SIZE_ONLY)
        /* a struct may be initialized from a struct of same type, as in
                struct {int x,y;} a = {1,2}, b = {3,4}, c[] = {a,b};
@@ -1450,7 +1691,7 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
   if (type->t & VT_ARRAY)
   {
     no_oblock = 1;
-    if (((flags & DIF_FIRST) && tok != TOK_LSTR && tok != TOK_STR) ||
+    if (((flags & DIF_FIRST) && !TOK_IS_STRING(tok)) ||
         tok == '{')
     {
       skip('{');
@@ -1464,26 +1705,30 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
 
     /* only parse strings here if correct type (otherwise: handle
        them as ((w)char *) expressions */
-    if ((tok == TOK_LSTR &&
+    if ((tok == TOK_U16STR && (t1->t & ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE)) == VT_CHAR16_T)
+        || (tok == TOK_U32STR && (t1->t & ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE)) == VT_CHAR32_T)
+        || (tok == TOK_LSTR &&
 #ifdef CPRIME_TARGET_PE
          (t1->t & VT_BTYPE) == VT_SHORT && (t1->t & VT_UNSIGNED)
 #else
          (t1->t & VT_BTYPE) == VT_INT
 #endif
-        ) || (tok == TOK_STR && (t1->t & VT_BTYPE) == VT_BYTE))
+        ) || ((tok == TOK_STR || tok == TOK_U8STR) && (t1->t & VT_BTYPE) == VT_BYTE))
     {
       len = 0;
       cstr_reset(&initstr);
-      if (size1 != (tok == TOK_STR ? 1 : sizeof(nwchar_t)))
+      int string_token = tok;
+      if (size1 != TOK_STRING_UNIT_SIZE(tok))
         cprime_error("unhandled string literal merging");
-      while (tok == TOK_STR || tok == TOK_LSTR)
+      while (TOK_IS_STRING(tok))
       {
+        if (tok != string_token) cprime_error("incompatible string literal encodings");
         if (initstr.size)
           initstr.size -= size1;
-        if (tok == TOK_STR)
+        if (tok == TOK_STR || tok == TOK_U8STR)
           len += tokc.str.size;
         else
-          len += tokc.str.size / sizeof(nwchar_t);
+          len += tokc.str.size / TOK_STRING_UNIT_SIZE(tok);
         len--;
         cstr_cat(&initstr, tokc.str.data, tokc.str.size);
         next();
@@ -1492,7 +1737,7 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
           && tok != TOK_EOF)
       {
         // Not a lone literal but part of a bigger expression.
-        unget_tok(size1 == 1 ? TOK_STR : TOK_LSTR);
+        unget_tok(string_token);
         tokc.str.size = initstr.size;
         tokc.str.data = initstr.data;
         goto do_init_array;
@@ -1538,7 +1783,7 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
             else if (size1 == 1)
               ch = ((unsigned char *)initstr.data)[i];
             else
-              ch = ((nwchar_t *)initstr.data)[i];
+              ch = size1 == 2 ? ((uint16_t *)initstr.data)[i] : ((uint32_t *)initstr.data)[i];
             vpushi(ch);
             init_putv(p, t1, c + i *size1);
           }
@@ -1560,6 +1805,20 @@ do_init_list:
         flags |= DIF_CLEAR;
       }
 
+      /* Evaluate at the normal element position, after destination setup.
+         The lexical scan above neither evaluates nor declares anything. */
+      if (single_expression_list) {
+        single_expression_list = 0;
+        parse_init_elem(!p->sec || static_initializer_constant_fold ? EXPR_ANY : EXPR_CONST);
+        if (is_compatible_unqualified_types(type, &vtop->type)) {
+          if (flags & DIF_SIZE_ONLY) vpop();
+          else init_putv(p, type, c);
+          if (tok == ',') next();
+          skip('}');
+          return;
+        }
+        flags |= DIF_HAVE_ELEM;
+      }
       len = 0;
       /* language extension: if the initializer is empty for a flex array,
          it's size is zero.  We won't enter the loop, so set the size
@@ -1603,21 +1862,41 @@ do_init_list:
         TokenString *parent;
         const int *parent_ptr;
         int saved_tok;
+        int saved_list = p->list_initialization;
+        int saved_copy_list = p->copy_list_initialization;
         CValue saved_tokc;
+        SValue saved_receiver = cpp_default_initializer_receiver;
+        int saved_receiver_offset = cpp_default_initializer_receiver_offset;
         if ((f->type.t & VT_BTYPE) != VT_STRUCT && !(f->type.t & VT_ARRAY)
             && !f->default_arg) continue;
         initializer = f->default_arg && p->aggregate_target_sym
-          ? bind_aggregate_default_initializer(f->default_arg, type,
-                                               p->aggregate_target_sym)
+          ? bind_aggregate_default_initializer(f->default_arg, type)
           : tok_str_alloc();
         if (f->default_arg && !p->aggregate_target_sym)
           tok_str_append_without_eof(initializer, f->default_arg);
-        else { tok_str_add(initializer, '{'); tok_str_add(initializer, '}'); }
+        else if (!f->default_arg) { tok_str_add(initializer, '{'); tok_str_add(initializer, '}'); }
         tok_str_add(initializer, tok); tok_str_add(initializer, 0);
         parent = macro_stack; parent_ptr = macro_ptr;
         saved_tok = tok; saved_tokc = tokc;
+        if (p->aggregate_target_sym) {
+          cpp_default_initializer_receiver.type = *type;
+          cpp_default_initializer_receiver.r = p->aggregate_target_sym->r;
+          cpp_default_initializer_receiver.sym = p->aggregate_target_sym;
+          cpp_default_initializer_receiver.c.i = p->sec
+              ? (long long)(c - elfsym(p->aggregate_target_sym)->st_value) : (int)c;
+          cpp_default_initializer_receiver_offset = 0;
+          if (p->indirect_base) {
+            cpp_default_initializer_receiver.c.i = p->indirect_base;
+            cpp_default_initializer_receiver_offset = (int)c;
+          }
+        }
         begin_macro(initializer, 1); next();
+        p->list_initialization = p->copy_list_initialization = 0;
         decl_initializer(p, &f->type, c + f->c, DIF_FIRST | DIF_CLEAR);
+        p->list_initialization = saved_list;
+        p->copy_list_initialization = saved_copy_list;
+        cpp_default_initializer_receiver = saved_receiver;
+        cpp_default_initializer_receiver_offset = saved_receiver_offset;
         while (macro_stack && macro_stack != parent) end_macro();
         macro_ptr = parent_ptr; tok = saved_tok; tokc = saved_tokc;
       }
@@ -1673,7 +1952,7 @@ do_init_list:
         /* This should happen only when we haven't parsed
            the init element above for fear of committing a
            string constant to memory too early.  */
-        if (tok != TOK_STR && tok != TOK_LSTR)
+        if (!TOK_IS_STRING(tok))
           expect("string constant");
         parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
       }
@@ -1891,6 +2170,8 @@ do_init_list:
   }
   else if (tok == '{')
   {
+    int saved_list_initialization = p->list_initialization;
+    p->list_initialization = 1;
     if (flags & DIF_HAVE_ELEM)
       skip(';');
     next();
@@ -1906,7 +2187,9 @@ do_init_list:
     }
     else
       decl_initializer(p, type, c, flags & ~DIF_HAVE_ELEM);
+    if (tok == ',') next();
     skip('}');
+    p->list_initialization = saved_list_initialization;
 
   }
   else
@@ -1932,7 +2215,7 @@ do_init_list:
         /* This should happen only when we haven't parsed
            the init element above for fear of committing a
            string constant to memory too early.  */
-        if (tok != TOK_STR && tok != TOK_LSTR)
+        if (!TOK_IS_STRING(tok))
           expect("string constant");
         parse_init_elem(!p->sec ? EXPR_ANY : EXPR_CONST);
       }
@@ -2199,6 +2482,13 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
     nocode_wanted |= DATA_ONLY_WANTED;
 
   flexible_array = NULL;
+  if (type->t & VT_ARRAY) {
+    CType *element = &type->ref->type;
+    int element_align;
+    materialize_incomplete_template_type(element);
+    if (type_size(element, &element_align) < 0)
+      cprime_error("definition of an array of incomplete type elements");
+  }
   size = type_size(type, &align);
   if (size < 0 && (type->t & VT_BTYPE) == VT_STRUCT
       && materialize_incomplete_template_type(type))
@@ -2207,6 +2497,17 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
   /* One flexible array can be initialized: the top-level array, the last
      struct member, or the selected member of a top-level union. */
 
+  if (is_cpp_translation_unit()) {
+    CType *element = type;
+    Sym *destructor;
+    cpp_check_abstract_object(type);
+    while ((element->t & VT_ARRAY) && element->ref) element = &element->ref->type;
+    destructor = resolve_autodtor_func(element);
+    if (destructor) {
+      cpp_check_deleted_function(&destructor->type);
+      check_cpp_function_access(destructor);
+    }
+  }
   if (size < 0)
   {
     // Error Out Except For Top-Level Incomplete Arrays
@@ -2265,7 +2566,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
     {
       // Only Get Strings
       init_str = tok_str_alloc();
-      while (tok == TOK_STR || tok == TOK_LSTR)
+      while (TOK_IS_STRING(tok))
       {
         tok_str_add_tok(init_str);
         next();
@@ -2373,7 +2674,17 @@ err_size:
       if (!NODATA_WANTED)
         cpp_eh_mark_local_initializing(sym);
       {
-        Sym *destructor = resolve_autodtor_func(type);
+        CType *destruction_type = type;
+        Sym *destructor;
+        while ((destruction_type->t & VT_ARRAY) && destruction_type->ref)
+          destruction_type = &destruction_type->ref->type;
+        destructor = resolve_autodtor_func(destruction_type);
+        if (destructor) {
+          cpp_check_deleted_function(&destructor->type);
+          check_cpp_function_access(destructor);
+        }
+        /* Array cleanup is emitted by the counted array-initialization path. */
+        if (type->t & VT_ARRAY) destructor = NULL;
         if (destructor) {
           Sym *cls = sym_push2(&all_cleanups,
                                SYM_FIELD | ++cur_scope->cl.n, 0, 0);
@@ -2476,6 +2787,8 @@ err_size:
 #endif
   }
 
+  if (sym && ad->is_constexpr) sym->cpp_constexpr_object = 1;
+
   if (type->t & VT_VLA)
   {
     int a;
@@ -2558,11 +2871,19 @@ err_size:
   }
   else if (has_init)
   {
+    Sym *saved_initialization_object = constant_initialization_object;
+    ConstexprTemporaryObject *evaluation_mark = constexpr_temporary_objects;
+    int evaluate_temporaries = ad->is_constexpr || (sec && !is_reference_type(type));
     Sym *initial_cleanup = cur_scope ? cur_scope->cl.s : NULL;
     int initial_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
     p.sec = sec;
-    p.aggregate_target_sym = sym && (r & VT_VALMASK) == VT_CONST
-                             && (type->t & VT_BTYPE) == VT_STRUCT
+    p.constexpr_initializer = ad->is_constexpr;
+    if (ad->is_constexpr && !sec && sym
+        && ((type->t & VT_BTYPE) == VT_STRUCT || (type->t & VT_ARRAY))) {
+      p.constant_object_target = sym;
+      p.constant_object_offset = addr;
+    }
+    p.aggregate_target_sym = sym && (type->t & VT_BTYPE) == VT_STRUCT
                              ? sym : NULL;
     p.track_partial_cleanups = cur_scope && is_cpp_translation_unit() && !sec
                                && (r & VT_VALMASK) == VT_LOCAL
@@ -2580,12 +2901,25 @@ err_size:
     p.reference_capture_sym = sym && is_reference_type(type)
                               && (r & VT_VALMASK) == VT_LOCAL
                               && !(type->t & VT_STATIC) ? sym : NULL;
+    p.pointer_bounds_capture_sym = sec && sym && ad->is_constexpr
+        && (type->t & VT_BTYPE) == VT_PTR
+        && !(type->t & (VT_ARRAY | VT_VLA)) && !is_reference_type(type) ? sym : NULL;
     p.range_alias_target = sym && (r & VT_VALMASK) == VT_LOCAL
                            && is_integer_btype(type->t & VT_BTYPE)
                            && !(type->t & (VT_ARRAY | VT_VLA | VT_VOLATILE))
                            ? sym : NULL;
     if (sec && !is_reference_type(type)) ++static_initializer_constant_fold;
+    p.require_constant_values = ad->is_constexpr && !sec;
+    if (p.require_constant_values) ++integral_constant_expression_wanted;
+    if (sec || p.constant_object_target) constant_initialization_object = sym;
+    if (evaluate_temporaries) ++constexpr_temporary_expression_depth;
     decl_initializer(&p, type, addr, DIF_FIRST);
+    if (evaluate_temporaries) {
+      --constexpr_temporary_expression_depth;
+      release_constexpr_temporary_objects(evaluation_mark, 1);
+    }
+    constant_initialization_object = saved_initialization_object;
+    if (p.require_constant_values) --integral_constant_expression_wanted;
     if (sec && !is_reference_type(type)) --static_initializer_constant_fold;
     if (is_cpp_translation_unit() && sym && sec && sec->data
         && (type->t & VT_CONSTANT) && !(type->t & (VT_ARRAY | VT_VLA | VT_VOLATILE))

@@ -1,4 +1,4 @@
-// EXPECT_COMPILE_FAIL: 1
+// EXPECT_LINK_FAIL: 1
 // EXPECT_SOURCES: ["strong_definition_other.cpp"]
 // Matching code bytes do not permit two non-inline external definitions.
 int repeated() { return 7; }

@@ -901,7 +901,7 @@ static void parse_explicit_specialization_body(int instantiation)
   saved_tok = tok; saved_tokc = tokc;
   enter_namespace_scope(owner ? symbol_namespace_scope_tok(owner) : selected_free->namespace_tok);
   begin_macro(definition, 1); next();
-  if (owner) parse_cpp_scoped_member_def_body(&result, owner, function_tok, 0);
+  if (owner) parse_cpp_scoped_member_def_body(&result, owner, function_tok, 0, attributes.is_constexpr);
   else decl(VT_CONST);
   end_macro(); tok = saved_tok; tokc = saved_tokc;
   enter_namespace_scope(saved_namespace);

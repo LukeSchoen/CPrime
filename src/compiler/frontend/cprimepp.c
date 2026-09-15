@@ -565,6 +565,12 @@ ST_FUNC int cstr_printf(CString *cstr, const char *fmt, ...)
 // XXX: unicode ?
 static void add_char(CString *cstr, int c)
 {
+  if ((unsigned)c > 255) {
+    char escaped[16];
+    snprintf(escaped, sizeof(escaped), "\\x%X", (unsigned)c);
+    cstr_cat(cstr, escaped, strlen(escaped));
+    return;
+  }
   if (c == '\'' || c == '\"' || c == '\\')
   {
     // XXX: could be more precise if char or string
@@ -699,9 +705,13 @@ ST_FUNC const char *get_tok_str(int v, CValue *cv)
     // XXX: not quite exact, but only useful for testing
     sprintf(p, "%llu", (unsigned long long)cv->i);
     break;
+  case TOK_U16CHAR:
+  case TOK_U32CHAR:
   case TOK_LCHAR:
-    cstr_ccat(&cstr_buf, 'L');
+    cstr_ccat(&cstr_buf, (v == TOK_U16STR || v == TOK_U16CHAR) ? 'u' : (v == TOK_U32STR || v == TOK_U32CHAR) ? 'U' : 'L');
+  case TOK_U8CHAR:
   case TOK_CCHAR:
+    if (v == TOK_U8CHAR) cstr_cat(&cstr_buf, "u8", 2);
     cstr_ccat(&cstr_buf, '\'');
     add_char(&cstr_buf, cv->i);
     cstr_ccat(&cstr_buf, '\'');
@@ -710,11 +720,15 @@ ST_FUNC const char *get_tok_str(int v, CValue *cv)
   case TOK_PPNUM:
   case TOK_PPSTR:
     return (char *)cv->str.data;
+  case TOK_U16STR:
+  case TOK_U32STR:
   case TOK_LSTR:
-    cstr_ccat(&cstr_buf, 'L');
+    cstr_ccat(&cstr_buf, (v == TOK_U16STR || v == TOK_U16CHAR) ? 'u' : (v == TOK_U32STR || v == TOK_U32CHAR) ? 'U' : 'L');
+  case TOK_U8STR:
   case TOK_STR:
+    if (v == TOK_U8STR) cstr_cat(&cstr_buf, "u8", 2);
     cstr_ccat(&cstr_buf, '\"');
-    if (v == TOK_STR)
+    if (v == TOK_STR || v == TOK_U8STR)
     {
       len = cv->str.size - 1;
       for (i = 0; i < len; i++)
@@ -722,9 +736,9 @@ ST_FUNC const char *get_tok_str(int v, CValue *cv)
     }
     else
     {
-      len = (cv->str.size / sizeof(nwchar_t)) - 1;
+      len = (cv->str.size / TOK_STRING_UNIT_SIZE(v)) - 1;
       for (i = 0; i < len; i++)
-        add_char(&cstr_buf, ((nwchar_t *)cv->str.data)[i]);
+        add_char(&cstr_buf, TOK_STRING_UNIT_SIZE(v) == 2 ? ((uint16_t *)cv->str.data)[i] : ((uint32_t *)cv->str.data)[i]);
     }
     cstr_ccat(&cstr_buf, '\"');
     cstr_ccat(&cstr_buf, '\0');
@@ -1019,6 +1033,37 @@ check_eof:
   return p + 1;
 }
 
+static uint8_t *parse_pp_raw_string(uint8_t *p, CString *str)
+{
+  char delimiter[17];
+  int length = 0, c, matched = 0;
+  file->buf_ptr = p;
+  while ((c = next_c()) != '(') {
+    if (c == CH_EOF) cprime_error("unterminated raw string delimiter");
+    if (length == 16 || c <= 32 || c == ')' || c == '\\' || c > 126)
+      cprime_error("invalid raw string delimiter");
+    delimiter[length++] = c;
+    if (str) cstr_ccat(str, c);
+  }
+  if (str) cstr_ccat(str, '(');
+  for (;;) {
+    c = next_c();
+    if (c == CH_EOF) cprime_error("unterminated raw string literal");
+    if (c == '\r') {
+      int following = next_c();
+      if (following != '\n') *--file->buf_ptr = following;
+      c = '\n';
+    }
+    if (c == '\n') ++file->line_num;
+    if (str) cstr_ccat(str, c);
+    if (matched && c == (matched <= length ? delimiter[matched - 1] : '"'))
+      ++matched;
+    else
+      matched = c == ')';
+    if (matched == length + 2) return file->buf_ptr + 1;
+  }
+}
+
 // Parse A String Without Interpreting Escapes
 static uint8_t *parse_pp_string(uint8_t *p, int sep, CString *str)
 {
@@ -1096,16 +1141,58 @@ add_char:
   return p;
 }
 
+/* Consume a preprocessing number without interpreting its value. In inactive
+   source its identifier-like suffix must not become a literal prefix. */
+static uint8_t *skip_pp_number(uint8_t *p)
+{
+  int previous = *p, c;
+  for (;;) {
+    PEEKC(c, p);
+    if (c == '\'') {
+      PEEKC(c, p);
+      if (!(isidnum_table[c - CH_EOF] & (IS_ID | IS_NUM))
+          && !(c == '\\' && ucn_identifier_prefix(&p))) {
+        /* PEEKC may have refilled the buffer; use its reserved unget space. */
+        *--p = '\'';
+        return p;
+      }
+    } else if (!(isidnum_table[c - CH_EOF] & (IS_ID | IS_NUM))
+               && !(c == '\\' && ucn_identifier_prefix(&p))
+               && c != '.'
+               && !((c == '+' || c == '-')
+                    && (previous == 'e' || previous == 'E'
+                        || previous == 'p' || previous == 'P'))) {
+      return p;
+    }
+    if (c == '\\') {
+      int digits;
+      PEEKC(c, p);
+      digits = c == 'u' ? 4 : 8;
+      while (digits--) {
+        PEEKC(c, p);
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+              || (c >= 'A' && c <= 'F')))
+          expect("more hex digits in universal-character-name");
+      }
+      /* The last spelling digit is not an exponent marker. */
+      c = 0;
+    }
+    previous = c;
+  }
+}
 /* skip block of text until #else, #elif or #endif. skip also pairs of
    #if/#endif */
 static void preprocess_skip(void)
 {
   int a, start_of_line, c, in_warn_or_error;
   uint8_t *p;
+  char prefix[3];
+  int prefix_len = 0;
 
   p = file->buf_ptr;
   a = 0;
 redo_start:
+  prefix_len = 0;
   start_of_line = 1;
   in_warn_or_error = 0;
   for (;;)
@@ -1118,6 +1205,7 @@ redo_start:
     case '\f':
     case '\v':
     case '\r':
+      prefix_len = 0;
       p++;
       continue;
     case '\n':
@@ -1128,8 +1216,10 @@ redo_start:
       c = handle_bs(&p);
       if (c == CH_EOF)
         expect("#endif");
-      if (c == '\\')
+      if (c == '\\') {
+        prefix_len = 0;
         ++p;
+      }
       continue;
     // Skip Strings
     case '\"':
@@ -1137,10 +1227,19 @@ redo_start:
       if (in_warn_or_error)
         goto _default;
       tok_flags &= ~TOK_FLAG_BOL;
-      p = parse_pp_string(p, c, NULL);
+      if (c == '"' &&
+          ((prefix_len == 1 && prefix[0] == 'R') ||
+           (prefix_len == 2 && prefix[1] == 'R' &&
+            (prefix[0] == 'u' || prefix[0] == 'U' || prefix[0] == 'L')) ||
+           (prefix_len == 3 && prefix[0] == 'u' && prefix[1] == '8' && prefix[2] == 'R')))
+        p = parse_pp_raw_string(p, NULL);
+      else
+        p = parse_pp_string(p, c, NULL);
+      prefix_len = 0;
       break;
     // Skip Comments
     case '/':
+      prefix_len = 0;
       if (in_warn_or_error)
         goto _default;
       ++p;
@@ -1151,6 +1250,7 @@ redo_start:
         p = parse_line_comment(p);
       continue;
     case '#':
+      prefix_len = 0;
       p++;
       if (start_of_line)
       {
@@ -1187,8 +1287,21 @@ _default:
         while (!pp_skip_stop_msg[*p])
           ++p;
       else
-        while (!pp_skip_stop[*p])
+        while (!pp_skip_stop[*p]) {
+          if (!prefix_len && isnum(*p)) {
+            p = skip_pp_number(p);
+            continue;
+          }
+          /* Keep the candidate prefix across refills and line splices.
+             Saturation excludes longer identifiers without allocating. */
+          if (isidnum_table[*p - CH_EOF] & (IS_ID | IS_NUM)) {
+            if (prefix_len < 3) prefix[prefix_len] = *p;
+            if (prefix_len < 4) ++prefix_len;
+          } else {
+            prefix_len = 0;
+          }
           ++p;
+        }
       break;
     }
     start_of_line = 0;
@@ -1207,12 +1320,18 @@ static inline int tok_size(const int *p)
   // 4 Bytes
   case TOK_CINT:
   case TOK_CUINT:
+  case TOK_U8CHAR:
   case TOK_CCHAR:
+  case TOK_U16CHAR:
+  case TOK_U32CHAR:
   case TOK_LCHAR:
   case TOK_CFLOAT:
   case TOK_LINENUM:
     return 1 + 1;
+  case TOK_U8STR:
   case TOK_STR:
+  case TOK_U16STR:
+  case TOK_U32STR:
   case TOK_LSTR:
   case TOK_PPNUM:
   case TOK_PPSTR:
@@ -1341,7 +1460,10 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
   {
   case TOK_CINT:
   case TOK_CUINT:
+  case TOK_U8CHAR:
   case TOK_CCHAR:
+  case TOK_U16CHAR:
+  case TOK_U32CHAR:
   case TOK_LCHAR:
   case TOK_CFLOAT:
   case TOK_LINENUM:
@@ -1354,7 +1476,10 @@ static void tok_str_add2(TokenString *s, int t, CValue *cv)
     break;
   case TOK_PPNUM:
   case TOK_PPSTR:
+  case TOK_U8STR:
   case TOK_STR:
+  case TOK_U16STR:
+  case TOK_U32STR:
   case TOK_LSTR:
   {
     // Insert the string into the int array.
@@ -1443,7 +1568,10 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
   case TOK_CLONG:
 #endif
   case TOK_CINT:
+  case TOK_U8CHAR:
   case TOK_CCHAR:
+  case TOK_U16CHAR:
+  case TOK_U32CHAR:
   case TOK_LCHAR:
   case TOK_LINENUM:
   case TOK_CIMAGI:
@@ -1459,7 +1587,10 @@ static inline void tok_get(int *t, const int **pp, CValue *cv)
   case TOK_CIMAGF:
     tab[0] = *p++;
     break;
+  case TOK_U8STR:
   case TOK_STR:
+  case TOK_U16STR:
+  case TOK_U32STR:
   case TOK_LSTR:
   case TOK_PPNUM:
   case TOK_PPSTR:
@@ -2902,7 +3033,7 @@ the_end:
 // Evaluate Escape Codes In A String.
 static void parse_escape_string(CString *outstr, const uint8_t *buf, int is_long)
 {
-  int c, n, i;
+  int c, n, i, unicode_escape;
   const uint8_t *p;
 
   p = buf;
@@ -2916,6 +3047,7 @@ static void parse_escape_string(CString *outstr, const uint8_t *buf, int is_long
       p++;
       // Escape
       c = *p;
+      unicode_escape = c == 'u' || c == 'U';
       switch (c)
       {
       case '0': case '1': case '2': case '3':
@@ -2956,10 +3088,18 @@ parse_hex_or_ucn:
             expect("more hex digits in universal-character-name");
           else
             goto add_hex_or_ucn;
+          if (!unicode_escape && (is_long == 'u' || is_long == 'U')) {
+            unsigned limit = is_long == 'u' ? 0xFFFFu : UINT32_MAX;
+            if ((unsigned)n > (limit - (unsigned)c) / 16)
+              cprime_error("numeric escape exceeds encoded code-unit range");
+          }
           n = (unsigned) n * 16 + c;
           p++;
         }
         while (--i);
+        if (unicode_escape && ((unsigned)n > 0x10FFFF
+            || (n >= 0xD800 && n <= 0xDFFF)))
+          cprime_error("invalid universal character name");
         if (is_long)
         {
 add_hex_or_ucn:
@@ -3083,44 +3223,78 @@ add_char_nonext:
       cstr_ccat(outstr, c);
     else
     {
-#ifdef CPRIME_TARGET_PE
-      // store as UTF-16
-      if (c < 0x10000)
-        cstr_wccat(outstr, c);
-      else
-      {
-        c -= 0x10000;
-        cstr_wccat(outstr, (c >> 10) + 0xD800);
-        cstr_wccat(outstr, (c & 0x3FF) + 0xDC00);
+      int width = is_long == 'u' ? 2 : is_long == 'U' ? 4 : sizeof(nwchar_t);
+      if (width == 2) {
+        uint16_t unit;
+        if (c < 0x10000) {
+          unit = c;
+          cstr_cat(outstr, (char *)&unit, 2);
+        } else {
+          c -= 0x10000;
+          unit = (c >> 10) + 0xD800;
+          cstr_cat(outstr, (char *)&unit, 2);
+          unit = (c & 0x3FF) + 0xDC00;
+          cstr_cat(outstr, (char *)&unit, 2);
+        }
+      } else {
+        uint32_t unit = c;
+        cstr_cat(outstr, (char *)&unit, 4);
       }
-#else
-      cstr_wccat(outstr, c);
-#endif
     }
   }
   // Add A Trailing '\0'
   if (!is_long)
     cstr_ccat(outstr, '\0');
   else
-    cstr_wccat(outstr, '\0');
+  {
+    uint32_t zero = 0;
+    cstr_cat(outstr, (char *)&zero, is_long == 'u' ? 2 : is_long == 'U' ? 4 : sizeof(nwchar_t));
+  }
 }
 
 static void parse_string(const char *s, int len)
 {
   uint8_t buf[1000], *p = buf;
-  int is_long, sep;
+  int is_long, sep, raw = 0;
 
-  if ((is_long = *s == 'L'))
+  is_long = (*s == 'L' || *s == 'u' || *s == 'U') ? *s : 0;
+  if (is_long == 'u' && s[1] == '8') {
+    is_long = '8';
+    ++s; --len;
+  }
+  if (is_long)
     ++s, --len;
+  if (*s == 'R') { raw = 1; ++s; --len; }
   sep = *s++;
   len -= 2;
+  if (raw) {
+    const char *opening = strchr(s, '(');
+    int delimiter_length;
+    if (!opening) cprime_error("invalid raw string literal");
+    delimiter_length = opening - s;
+    len -= 2 * delimiter_length + 2;
+    if (len < 0) cprime_error("invalid raw string literal");
+    s = opening + 1;
+  }
   if (len >= sizeof buf)
     p = cprime_malloc(len + 1);
   memcpy(p, s, len);
   p[len] = 0;
 
   cstr_reset(&tokcstr);
-  parse_escape_string(&tokcstr, p, is_long);
+  if (raw) {
+    CString escaped;
+    int i;
+    cstr_new(&escaped);
+    for (i = 0; i < len; ++i) {
+      if (p[i] == '\\') cstr_ccat(&escaped, '\\');
+      cstr_ccat(&escaped, p[i]);
+    }
+    cstr_ccat(&escaped, 0);
+    parse_escape_string(&tokcstr, escaped.data, is_long == '8' ? 0 : is_long);
+    cstr_free(&escaped);
+  } else
+    parse_escape_string(&tokcstr, p, is_long == '8' ? 0 : is_long);
   if (p != buf)
     cprime_free(p);
 
@@ -3130,6 +3304,12 @@ static void parse_string(const char *s, int len)
     // XXX: make it portable
     if (!is_long)
       tok = TOK_CCHAR, char_size = 1;
+    else if (is_long == '8')
+      tok = TOK_U8CHAR, char_size = 1;
+    else if (is_long == 'u')
+      tok = TOK_U16CHAR, char_size = 2;
+    else if (is_long == 'U')
+      tok = TOK_U32CHAR, char_size = 4;
     else
       tok = TOK_LCHAR, char_size = sizeof(nwchar_t);
     n = tokcstr.size / char_size - 1;
@@ -3137,14 +3317,16 @@ static void parse_string(const char *s, int len)
       cprime_error("empty character constant");
     if (n > 1)
     {
+      if (is_long == 'u' || is_long == 'U' || is_long == '8')
+        cprime_error("encoded character literal requires one code unit");
       cprime_warning_c(warn_all)("multi-character character constant");
       if (!is_long)
         tok = TOK_CINT;
     }
     for (c = i = 0; i < n; ++i)
     {
-      if (is_long)
-        c = ((nwchar_t *)tokcstr.data)[i];
+      if (is_long && is_long != '8')
+        c = char_size == 2 ? ((uint16_t *)tokcstr.data)[i] : ((uint32_t *)tokcstr.data)[i];
       else
         c = (c << 8) | ((char *)tokcstr.data)[i];
     }
@@ -3156,6 +3338,9 @@ static void parse_string(const char *s, int len)
     tokc.str.data = tokcstr.data;
     if (!is_long)
       tok = TOK_STR;
+    else if (is_long == '8') tok = TOK_U8STR;
+    else if (is_long == 'u') tok = TOK_U16STR;
+    else if (is_long == 'U') tok = TOK_U32STR;
     else
       tok = TOK_LSTR;
   }
@@ -3230,6 +3415,39 @@ static void parse_number(const char *p)
   long double d;
 #endif
 
+  if (strchr(p, '\'')) {
+    char cleaned[STRING_MAX_SIZE + 1];
+    int count = 0, base = 10, previous = -1;
+    const char *source = p;
+    if (p[0] == '0' && (p[1] == 'x' || p[1] == 'X')) base = 16;
+    else if (p[0] == '0' && (p[1] == 'b' || p[1] == 'B')) base = 2;
+    while (*source) {
+      int current = *source++;
+      int digit = current >= '0' && current <= '9' ? current - '0'
+                : current >= 'a' && current <= 'f' ? current - 'a' + 10
+                : current >= 'A' && current <= 'F' ? current - 'A' + 10 : -1;
+      if (current == '\'') {
+        int following = *source;
+        int next_digit = following >= '0' && following <= '9' ? following - '0'
+                       : following >= 'a' && following <= 'f' ? following - 'a' + 10
+                       : following >= 'A' && following <= 'F' ? following - 'A' + 10 : -1;
+        if (previous < 0 || previous >= base || next_digit < 0 || next_digit >= base)
+          cprime_error("digit separator must occur between digits");
+        continue;
+      }
+      if ((base == 10 && (current == 'e' || current == 'E'))
+          || (base != 10 && (current == 'p' || current == 'P'))) {
+        base = 10;
+        digit = -1;
+      }
+      previous = digit;
+      if (count == STRING_MAX_SIZE) cprime_error("number too long");
+      cleaned[count++] = current;
+    }
+    cleaned[count] = 0;
+    parse_number(cleaned);
+    return;
+  }
   // Number
   q = token_buf;
   ch = *p++;
@@ -3757,14 +3975,14 @@ maybe_newline:
   case 'i': case 'j': case 'k': case 'l':
   case 'm': case 'n': case 'o': case 'p':
   case 'q': case 'r': case 's': case 't':
-  case 'u': case 'v': case 'w': case 'x':
+  case 'v': case 'w': case 'x':
   case 'y': case 'z':
   case 'A': case 'B': case 'C': case 'D':
   case 'E': case 'F': case 'G': case 'H':
   case 'I': case 'J': case 'K':
   case 'M': case 'N': case 'O': case 'P':
-  case 'Q': case 'R': case 'S': case 'T':
-  case 'U': case 'V': case 'W': case 'X':
+  case 'Q': case 'S': case 'T':
+  case 'V': case 'W': case 'X':
   case 'Y': case 'Z':
   case '_':
 parse_ident_fast:
@@ -3827,23 +4045,34 @@ parse_ident_slow:
       }
       ts = tok_alloc(tokcstr.data, tokcstr.size);
     }
+    /* Recognize prefixes after scanning the complete preprocessing identifier.
+       The scanner handles refills and line splices, including inside a prefix. */
+    if (c == '"' || c == '\'') {
+      const char *prefix = ts->str;
+      int prefix_len = ts->len;
+      int raw = prefix_len && prefix[prefix_len - 1] == 'R';
+      if (raw) --prefix_len;
+      is_long = -1;
+      if (!prefix_len && raw)
+        is_long = 0;
+      else if (prefix_len == 1
+               && (prefix[0] == 'u' || prefix[0] == 'U' || prefix[0] == 'L'))
+        is_long = prefix[0];
+      else if (prefix_len == 2 && prefix[0] == 'u' && prefix[1] == '8')
+        is_long = '8';
+      if (is_long >= 0) {
+        if (raw && c == '"') goto raw_str_const;
+        if (!raw) goto str_const;
+      }
+    }
     tok = ts->tok;
     last_ident_sym = ts;
     break;
+  case 'R':
+  case 'u':
+  case 'U':
   case 'L':
-    t = p[1];
-    if (t == '\'' || t == '\"' || t == '\\')
-    {
-      PEEKC(c, p);
-      if (c == '\'' || c == '\"')
-      {
-        is_long = 1;
-        goto str_const;
-      }
-      *--p = c = 'L';
-    }
     goto parse_ident_fast;
-
   case '0': case '1': case '2': case '3':
   case '4': case '5': case '6': case '7':
   case '8': case '9':
@@ -3856,6 +4085,34 @@ parse_num:
     for (;;)
     {
       cstr_ccat(&tokcstr, t);
+pp_number_continuation:
+      if (c == '\'') {
+        PEEKC(c, p);
+        if (!(isidnum_table[c - CH_EOF] & (IS_ID | IS_NUM))
+            && !(c == '\\' && ucn_identifier_prefix(&p))) {
+          *--p = '\'';
+          break;
+        }
+        cstr_ccat(&tokcstr, '\'');
+      }
+      if (c == '\\' && ucn_identifier_prefix(&p)) {
+        int digits;
+        cstr_ccat(&tokcstr, c);
+        PEEKC(c, p);
+        digits = c == 'u' ? 4 : 8;
+        cstr_ccat(&tokcstr, c);
+        while (digits--) {
+          PEEKC(c, p);
+          if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')
+                || (c >= 'A' && c <= 'F')))
+            expect("more hex digits in universal-character-name");
+          cstr_ccat(&tokcstr, c);
+        }
+        PEEKC(c, p);
+        /* A UCN's final spelling digit is not an exponent marker. */
+        t = 0;
+        goto pp_number_continuation;
+      }
       if (!((isidnum_table[c - CH_EOF] & (IS_ID | IS_NUM))
             || c == '.'
             || ((c == '+' || c == '-')
@@ -3910,13 +4167,23 @@ parse_num:
   case '\'':
   case '\"':
     is_long = 0;
+    goto str_const;
+raw_str_const:
+    cstr_reset(&tokcstr);
+    if (is_long == '8') cstr_cat(&tokcstr, "u8", 2);
+    else if (is_long) cstr_ccat(&tokcstr, is_long);
+    cstr_cat(&tokcstr, "R\"", 2);
+    p = parse_pp_raw_string(p, &tokcstr);
+    goto string_token_ready;
 str_const:
     cstr_reset(&tokcstr);
-    if (is_long)
-      cstr_ccat(&tokcstr, 'L');
+    if (is_long == '8') cstr_cat(&tokcstr, "u8", 2);
+    else if (is_long)
+      cstr_ccat(&tokcstr, is_long);
     cstr_ccat(&tokcstr, c);
     p = parse_pp_string(p, c, &tokcstr);
     cstr_ccat(&tokcstr, c);
+string_token_ready:
     cstr_ccat(&tokcstr, '\0');
     tokc.str.size = tokcstr.size;
     tokc.str.data = tokcstr.data;
@@ -4693,6 +4960,66 @@ no_subst:
   return nosubst;
 }
 
+/* Return the encoding of a preprocessing string, excluding character tokens. */
+static int pp_string_encoding(const char *s)
+{
+  int encoding = 0;
+  if (s[0] == 'u' && s[1] == '8') { encoding = '8'; s += 2; }
+  else if (*s == 'u' || *s == 'U' || *s == 'L') encoding = *s++;
+  if (*s == 'R') ++s;
+  return *s == '"' ? encoding : -1;
+}
+
+/* Select the encoding before the parser creates an array type. Decode each
+   component independently: a hex escape cannot consume the next literal. */
+static void parse_string_sequence(void)
+{
+  TokenString *pieces = tok_str_alloc();
+  CString combined, spelling;
+  int encoding = 0, saved_flags = parse_flags, *cursor, piece_tok;
+  CValue piece;
+  cstr_new(&combined);
+  cstr_new(&spelling);
+  parse_flags &= ~(PARSE_FLAG_TOK_STR | PARSE_FLAG_TOK_NUM);
+  do {
+    int current = pp_string_encoding(tokc.str.data);
+    if (current && encoding && current != encoding)
+      cprime_error("incompatible string literal encodings");
+    if (current) encoding = current;
+    tok_str_add2(pieces, tok, &tokc);
+    next();
+  } while (tok == TOK_PPSTR && pp_string_encoding(tokc.str.data) >= 0);
+  parse_flags = saved_flags;
+  tok_str_add(pieces, 0);
+  unget_tok(TOK_STR);
+  cursor = pieces->str;
+  while (*cursor) {
+    const char *source;
+    int length;
+    tok_get(&piece_tok, &cursor, &piece);
+    source = piece.str.data;
+    length = piece.str.size - 1;
+    if (!pp_string_encoding(source) && encoding) {
+      cstr_reset(&spelling);
+      if (encoding == '8') cstr_cat(&spelling, "u8", 2);
+      else cstr_ccat(&spelling, encoding);
+      cstr_cat(&spelling, source, length);
+      length = spelling.size;
+      cstr_ccat(&spelling, 0);
+      source = spelling.data;
+    }
+    parse_string(source, length);
+    if (combined.size) combined.size -= TOK_STRING_UNIT_SIZE(tok);
+    cstr_cat(&combined, tokc.str.data, tokc.str.size);
+  }
+  cstr_reset(&tokcstr);
+  cstr_cat(&tokcstr, combined.data, combined.size);
+  tokc.str.data = tokcstr.data;
+  tokc.str.size = tokcstr.size;
+  cstr_free(&spelling);
+  cstr_free(&combined);
+  tok_str_free(pieces);
+}
 // Return Next Token With Macro Substitution
 ST_FUNC void next(void)
 {
@@ -4759,13 +5086,16 @@ convert:
   // convert preprocessor tokens into C tokens
   if (t == TOK_PPNUM)
   {
-    if  (parse_flags & PARSE_FLAG_TOK_NUM)
+    if  ((parse_flags & PARSE_FLAG_TOK_NUM)
+         && !(cprime_cpp_mode && strchr(tokc.str.data, '_')))
       parse_number(tokc.str.data);
   }
   else if (t == TOK_PPSTR)
   {
-    if (parse_flags & PARSE_FLAG_TOK_STR)
-      parse_string(tokc.str.data, tokc.str.size - 1);
+    if (parse_flags & PARSE_FLAG_TOK_STR) {
+      if (pp_string_encoding(tokc.str.data) >= 0) parse_string_sequence();
+      else parse_string(tokc.str.data, tokc.str.size - 1);
+    }
   }
 }
 

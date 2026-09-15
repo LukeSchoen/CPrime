@@ -13,6 +13,7 @@ typedef struct LambdaBodyDeclaration {
 typedef struct LambdaExpression {
   int marker, owner, class_tok, body_owner_tok, count, default_capture, mutable_call;
   int return_seen, explicit_return, outer_scope, enclosing_class_tok;
+  int discarded_statement;
   int noexcept_call;
   int return_deduction_kind, generic, generic_param_count;
   int generic_param_toks[16], generic_param_is_pack[16];
@@ -565,7 +566,7 @@ static void lambda_note_return(void)
   else if (lambda_probe->return_deduction_kind == 1
            && (lambda_probe->return_pattern.t & VT_BTYPE) == VT_PTR)
     cprime_error("empty return does not match auto pointer or reference declarator");
-  if (!lambda_probe->explicit_return)
+  if (!lambda_probe->explicit_return && !lambda_probe->discarded_statement)
   {
     if (lambda_probe->return_seen
         && !is_compatible_types(&lambda_probe->return_type, &result))

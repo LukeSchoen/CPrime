@@ -71,7 +71,7 @@ static int cpp_ms_unqualified_tok(int name_tok, int namespace_tok)
 
 static void cpp_ms_template_name(CppMsMangleContext *ctx, int source_tok,
                                  TemplateArgList *args, unsigned value_mask,
-                                 int is_class)
+                                 int is_class, int trailing_value_pack)
 {
   CppMsMangleContext nested;
   CString name;
@@ -88,7 +88,8 @@ static void cpp_ms_template_name(CppMsMangleContext *ctx, int source_tok,
   for (i = 0; i < args->nb; ++i) {
     CType argument;
     int64_t value;
-    if (i < 32 && (value_mask & (1u << i))) {
+    int parameter_index = trailing_value_pack >= 0 && i >= trailing_value_pack ? trailing_value_pack : i;
+    if (parameter_index < 32 && (value_mask & (1u << parameter_index))) {
       Sym *address = global_symbol_find(args->toks[i]);
       if (address && address->cpp_member_address_tok) {
         CppMemberPointerType *member = find_cpp_member_pointer_type(&address->type);
@@ -169,7 +170,8 @@ static int cpp_ms_instantiation_name(CppMsMangleContext *ctx, int name_tok)
     cpp_ms_template_name(ctx,
         cpp_ms_unqualified_tok(record->source_name_tok, record->namespace_tok),
         (TemplateArgList *)&record->template_arguments,
-        definition->value_param_mask, 1);
+        definition->value_param_mask, 1,
+        definition->variadic_param_index == definition->nb_type_params - 1 ? definition->variadic_param_index : -1);
     return 1;
   }
   if (!entry) return 0;
@@ -179,7 +181,8 @@ static int cpp_ms_instantiation_name(CppMsMangleContext *ctx, int name_tok)
       cpp_ms_template_name(ctx,
           cpp_ms_unqualified_tok(definition->name_tok, definition->namespace_tok),
           &definition->inst_arg_lists[i], definition->value_param_mask,
-          definition->is_class);
+          definition->is_class,
+          definition->variadic_param_index == definition->nb_type_params - 1 ? definition->variadic_param_index : -1);
       return 1;
     }
   return 0;
@@ -412,7 +415,7 @@ static int cpp_ms_linkage_tok(int name_tok, CType *function_type)
     if (member->is_template) {
       int source = operator_code ? tok_alloc_const(operator_code) : member->source_name_tok;
       cpp_ms_template_name(&context, source,
-          (TemplateArgList *)&member->template_arguments, member->template_value_mask, 0);
+          (TemplateArgList *)&member->template_arguments, member->template_value_mask, 0, -1);
     } else if (operator_code) cstr_cat(&label, operator_code, -1);
     cpp_ms_mangle_qualified_name(&context,
         operator_code || member->is_template ? 0 : member->source_name_tok,

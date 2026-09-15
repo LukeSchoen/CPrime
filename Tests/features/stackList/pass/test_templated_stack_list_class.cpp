@@ -7,6 +7,7 @@ class List
   int count;
   int capacity;
 
+public:
   List()
   {
     this->count = 0;

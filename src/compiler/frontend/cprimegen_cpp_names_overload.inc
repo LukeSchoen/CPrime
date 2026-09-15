@@ -1707,6 +1707,8 @@ static void pop_default_arg_parameter_scope(Sym *saved_locals, int saved_scope)
   local_scope = saved_scope;
 }
 
+static void parse_typed_function_argument(Sym *param);
+
 static void emit_default_arg(Sym *func_type, Sym *arg)
 {
   int entry_tok = tok;
@@ -1782,7 +1784,7 @@ static void emit_default_arg(Sym *func_type, Sym *arg)
   saved_parameter_locals = push_default_arg_parameter_scope(func_type, arg,
                                                             &saved_parameter_scope);
   next();
-  expr_eq();
+  parse_typed_function_argument(arg);
   pop_default_arg_parameter_scope(saved_parameter_locals, saved_parameter_scope);
   while (macro_stack && macro_stack != saved_macro_stack)
     end_macro();
@@ -2099,6 +2101,8 @@ static void infer_saved_arg_types(TokenString **args, CType *types, int nb_args)
 static void parse_typed_function_argument(Sym *param)
 {
   CType type;
+  int reference_argument = param && is_reference_type(&param->type);
+  int saved_suppression = suppress_integral_constexpr_fold;
   if (tok == '{' && param && is_cpp_translation_unit())
   {
     type = param->type;
@@ -2109,7 +2113,9 @@ static void parse_typed_function_argument(Sym *param)
       return;
     }
   }
+  suppress_integral_constexpr_fold = reference_argument ? saved_suppression + 1 : 0;
   expr_eq();
+  suppress_integral_constexpr_fold = saved_suppression;
 }
 
 static TokenString *saved_list_direct_reference_argument(CType *parameter,
@@ -2160,7 +2166,7 @@ static int emit_saved_arg_for_param(TokenString *arg, Sym *param)
     if (direct)
       expr_eq();
     else
-      materialize_braced_temporary_mode(&temp_type, 1);
+      materialize_braced_temporary_mode(&temp_type, 1, NULL);
     while (macro_stack && macro_stack != saved_macro_stack)
       end_macro();
     macro_ptr = saved_macro_ptr;
@@ -2178,7 +2184,7 @@ static int emit_saved_arg_for_param(TokenString *arg, Sym *param)
   const int *saved_macro_ptr = macro_ptr;
   begin_macro(&macro, 0);
   next();
-  expr_eq();
+  parse_typed_function_argument(param);
   while (macro_stack && macro_stack != saved_macro_stack)
     end_macro();
   macro_ptr = saved_macro_ptr;
@@ -3948,6 +3954,22 @@ static int parse_cpp_operator_method_tok(void)
   if (tok != TOK_OPERATOR)
     cprime_error("operator");
   next();
+  if (TOK_IS_STRING(tok)) {
+    CString spelling;
+    int literal_tok;
+    if (tok != TOK_STR || tokc.str.size != 1)
+      cprime_error("literal operator requires an empty ordinary string");
+    next();
+    if (tok < TOK_UIDENT)
+      cprime_error("literal operator requires an identifier suffix");
+    cstr_new(&spelling);
+    cstr_cat(&spelling, "operator \"\" ", 12);
+    cstr_cat(&spelling, get_tok_str(tok, NULL), 0);
+    literal_tok = tok_alloc(spelling.data, spelling.size - 1)->tok;
+    cstr_free(&spelling);
+    next();
+    return literal_tok;
+  }
   if (tok >= TOK_UIDENT
       && (!strcmp(get_tok_str(tok, NULL), "new")
           || !strcmp(get_tok_str(tok, NULL), "delete"))) {
@@ -4091,16 +4113,19 @@ static void finish_cpp_member_func_call_to(Sym *func_type, int nb_args,
 
   vcheck_cmp();
   cpp_noexcept_note_call(&vtop[-nb_args].type);
-  if (nb_args && vtop[-nb_args].sym && static_initializer_constant_fold
-      && (func_type->type.t & VT_BTYPE) != VT_STRUCT) {
+  if (nb_args && vtop[-nb_args].sym
+      && (CONST_WANTED || integral_constant_expression_wanted || static_initializer_constant_fold)) {
     SValue constant;
-    if (evaluate_constexpr_function(vtop[-nb_args].sym, vtop + 1 - nb_args,
-                                    nb_args, &constant)) {
+    int result_argument = (func_type->type.t & VT_BTYPE) == VT_STRUCT && ret_nregs == 0;
+    if (evaluate_constexpr_function(vtop[-nb_args].sym, vtop + 1 - nb_args + result_argument,
+                                    nb_args - result_argument, &constant)) {
       vtop -= nb_args;
       *vtop = constant;
+      maybe_indir_call_result();
       return;
     }
   }
+  invalidate_constexpr_runtime_call();
   gfunc_call(nb_args);
 
   if (ret_nregs < 0)
@@ -4760,6 +4785,15 @@ static int try_call_cpp_unary_operator(int op)
     cprime_error("unary operator overload must have no explicit parameters");
   mk_pointer(&vtop->type);
   gaddrof();
+  if (CONST_WANTED || integral_constant_expression_wanted || static_initializer_constant_fold) {
+    SValue constant, argument = *vtop;
+    argument.type = sa->type;
+    if (evaluate_constexpr_function(func_sym, &argument, 1, &constant)) {
+      *vtop = constant;
+      maybe_indir_call_result();
+      return 1;
+    }
+  }
   gv(RC_INT);
   save_lvalues();
   vpushsym(&func_sym->type, func_sym);
@@ -4916,6 +4950,21 @@ static int try_call_cpp_bool_conversion_operator(void)
     cprime_error("conversion operator must have no explicit parameters");
   mk_pointer(&vtop->type);
   gaddrof();
+  if (CONST_WANTED || integral_constant_expression_wanted) {
+    SValue constant, argument = *vtop;
+    argument.type = sa->type;
+    if (evaluate_constexpr_function(func_sym, &argument, 1, &constant)) {
+      *vtop = constant;
+      return 1;
+    }
+    /* Ordinary inline folding cannot make an unevaluable call a core
+       constant expression. Keep the failed semantic evaluation visible. */
+    vtop->type = func_type->type;
+    vtop->r = VT_CONST | VT_NONCONST;
+    vtop->c.i = 0;
+    vtop->sym = NULL;
+    return 1;
+  }
   gv(RC_INT);
   save_lvalues();
   vpushsym(&func_sym->type, func_sym);

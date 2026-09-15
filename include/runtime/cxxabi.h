@@ -18,7 +18,7 @@ namespace __cxxabiv1
     virtual ~__shim_type_info ();
 
   protected:
-    __shim_type_info () {}
+    __shim_type_info ();
   };
 
   class __class_type_info : public __shim_type_info

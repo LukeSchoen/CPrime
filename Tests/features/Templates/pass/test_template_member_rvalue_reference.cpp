@@ -22,6 +22,6 @@ int main(void)
   Sink<int> sink;
   int value;
   value = 4;
-  sink.move_from(value);
+  sink.move_from(static_cast<int &&>(value));
   return sink.stored == 7 ? 0 : 1;
 }

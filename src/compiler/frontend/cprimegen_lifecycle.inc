@@ -1,5 +1,5 @@
 static void call_lifecycle_constructor_members(CType *type, int r, int addr);
-static void cpp_noexcept_note_constructor(CType *type, Sym *constructor);
+static void cpp_note_constructor_call(CType *type, Sym *constructor);
 static void tok_str_append(TokenString *dst, TokenString *src);
 static void call_lifecycle_constructor_members_base_ptr(CType *type,
                                                         SValue *base_ptr,
@@ -152,6 +152,33 @@ static int lifecycle_has_only_this_param(Sym *func_sym)
 
 static int is_currently_defining_class(int class_tok);
 
+static int cpp_destructor_is_deleted(CType *type)
+{
+  Sym *destructor, *field;
+  while ((type->t & VT_ARRAY) && type->ref) type = &type->ref->type;
+  if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref) return 0;
+  destructor = resolve_lifecycle_func(type, TOK_DESTRUCTOR1);
+  if (destructor && destructor->type.ref->f.func_cpp_deleted) return 1;
+  if (type->ref->a.cpp_user_destructor) return 0;
+  for (field = type->ref->next; field; field = field->next) {
+    CType *element = &field->type;
+    const CppMemberDeclInfo *member;
+    int owner = get_struct_type_name_tok(type);
+    if (!cpp_field_is_data_member(field)) continue;
+    if (cpp_destructor_is_deleted(element)) return 1;
+    while ((element->t & VT_ARRAY) && element->ref) element = &element->ref->type;
+    destructor = resolve_lifecycle_func(element, TOK_DESTRUCTOR1);
+    member = destructor ? lookup_cpp_member_decl(destructor->v) : NULL;
+    if (member && member->access_known && member->access
+        && member->owner_tok != owner
+        && !cpp_class_is_friend(member->owner_tok, owner)
+        && !(member->access == 1
+             && class_direct_base_for_field(owner, field, NULL)))
+      return 1;
+  }
+  return 0;
+}
+
 static Sym *resolve_autodtor_func(CType *type)
 {
   CType destroying_type = *type;
@@ -161,6 +188,8 @@ static Sym *resolve_autodtor_func(CType *type)
       && !type->ref->a.lifecycle_dtor && type->ref->a.cpp_trivial_destruction)
     return NULL;
   Sym *s = resolve_lifecycle_func(type, TOK_DESTRUCTOR1);
+  if (s && cpp_destructor_is_deleted(type))
+    s->type.ref->f.func_cpp_deleted = 1;
   if (!s && is_cpp_translation_unit()
       && (type->t & VT_BTYPE) == VT_STRUCT && type->ref
       && !type->ref->a.lifecycle_dtor && !IS_UNION(type->t)) {
@@ -172,6 +201,14 @@ static Sym *resolve_autodtor_func(CType *type)
       if (resolve_autodtor_func(element)) {
         TokenString *body = tok_str_alloc();
         s = declare_lifecycle_func(type, TOK_DESTRUCTOR1);
+        s->type.ref->f.func_cpp_deleted = cpp_destructor_is_deleted(type);
+        {
+          CppMemberDeclInfo *member = note_cpp_member_decl(
+            get_struct_type_name_tok(type), TOK_DESTRUCTOR1, s->v,
+            &s->type, 0, 1);
+          member->access = 0;
+          member->access_known = 1;
+        }
         tok_str_add(body, '{');
         tok_str_add(body, '}');
         tok_str_add(body, TOK_EOF);
@@ -240,9 +277,11 @@ static Sym *resolve_autoctor_func(CType *type)
   return s;
 }
 
-static void cpp_noexcept_note_constructor(CType *type, Sym *constructor)
+static void cpp_note_constructor_call(CType *type, Sym *constructor)
 {
   Sym *field;
+  if (constructor && constructor->type.ref && constructor->type.ref->f.func_cpp_deleted)
+    cprime_error("use of deleted constructor");
   if (!cpp_noexcept_query_depth
       || cpp_noexcept_query_depth != cpp_unevaluated_expression_depth
       || !constructor) return;
@@ -280,7 +319,7 @@ static void cpp_noexcept_note_constructor(CType *type, Sym *constructor)
     while ((element->t & VT_ARRAY) && element->ref)
       element = pointed_type(element);
     if ((element->t & VT_BTYPE) == VT_STRUCT)
-      cpp_noexcept_note_constructor(element, resolve_autoctor_func(element));
+      cpp_note_constructor_call(element, resolve_autoctor_func(element));
   }
 }
 
@@ -369,6 +408,8 @@ static void call_explicit_destructor(CType *type, int name_tok, int qualified)
   }
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)
     cprime_error("destructor target is not declared as function");
+  cpp_check_deleted_function(&func_sym->type);
+  check_cpp_function_access(func_sym);
   if (!lifecycle_has_only_this_param(func_sym))
     cprime_error("explicit destructor call requires destructor with no parameters");
 
@@ -500,7 +541,7 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
   }
   next();
   vcheck_cmp();
-  cpp_noexcept_note_constructor(type, ctor_func);
+  cpp_note_constructor_call(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 }
@@ -545,7 +586,7 @@ static void call_lifecycle_constructor_noargs(CType *type, int r, int addr, Sym 
   tok = saved_tok;
   tokc = saved_tokc;
 
-  cpp_noexcept_note_constructor(type, ctor_func);
+  cpp_note_constructor_call(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 }
@@ -689,7 +730,7 @@ static void call_lifecycle_constructor_noargs_expr(CType *type, Sym *ctor_func)
   }
   tok = saved_tok;
   tokc = saved_tokc;
-  cpp_noexcept_note_constructor(type, ctor_func);
+  cpp_note_constructor_call(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 }
@@ -1101,7 +1142,7 @@ static void copy_construct_one_lvalue_pair_ex(CType *type, SValue *dst_ptr,
       sa = sa->next;
     }
     vcheck_cmp();
-    cpp_noexcept_note_constructor(type, ctor_func);
+    cpp_note_constructor_call(type, ctor_func);
     gfunc_call(argument_count);
   }
   vtop = saved_vtop;
@@ -1114,7 +1155,155 @@ static void copy_construct_one_lvalue_pair(CType *type, SValue *dst_ptr,
   copy_construct_one_lvalue_pair_ex(type, dst_ptr, src_ptr, offset, move_source, NULL, NULL);
 }
 
+static void copy_construct_struct_memberwise_body(CType *type,
+                                                           SValue *dst_ptr,
+                                                           SValue *src_ptr,
+                                                           int base_offset,
+                                                           int move_source);
+
+static void copy_construct_struct_memberwise_from_base_ptr_impl(CType *type,
+                                                           SValue *dst_ptr,
+                                                           SValue *src_ptr,
+                                                           int base_offset,
+                                                           int move_source)
+{
+  Sym *saved_cleanup = cur_scope ? cur_scope->cl.s : NULL;
+  int saved_depth = cur_scope ? cur_scope->cl.n : 0;
+  copy_construct_struct_memberwise_body(type, dst_ptr, src_ptr, base_offset, move_source);
+  if (cur_scope) {
+    cur_scope->cl.s = saved_cleanup;
+    cur_scope->cl.n = saved_depth;
+  }
+}
+
+typedef struct CppDefaultedCopyBoundary {
+  Sym *function;
+  CType type;
+  int constructor, move_source, destination_name, source_name;
+  struct CppDefaultedCopyBoundary *next;
+} CppDefaultedCopyBoundary;
+static CppDefaultedCopyBoundary *cpp_defaulted_copy_boundaries;
+
+static void free_defaulted_copy_boundaries(void)
+{
+  while (cpp_defaulted_copy_boundaries) {
+    CppDefaultedCopyBoundary *entry = cpp_defaulted_copy_boundaries;
+    cpp_defaulted_copy_boundaries = entry->next;
+    cprime_free(entry);
+  }
+}
+
+static Sym *defaulted_copy_boundary(CType *type, Sym *constructor, int move_source)
+{
+  CppDefaultedCopyBoundary *entry;
+  TokenString *body, *parameters;
+  PendingMemberFunc *pending;
+  CType result = {VT_VOID, NULL}, destination = *type, source = *type, function;
+  AttributeDef attributes;
+  char name[64];
+  int helper;
+  for (entry = cpp_defaulted_copy_boundaries; entry; entry = entry->next)
+    if (entry->constructor == constructor->v && entry->move_source == move_source)
+      return entry->function;
+  entry = cprime_mallocz(sizeof(*entry));
+  entry->constructor = constructor->v;
+  entry->type = *type;
+  entry->move_source = move_source;
+  entry->destination_name = tok_alloc_const("__cpc_copy_destination");
+  entry->source_name = tok_alloc_const("__cpc_copy_source");
+  destination.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE);
+  source.t &= ~VT_RVALUE_REFERENCE;
+  if (move_source == 2 || (!move_source && class_copy_accepts_const(type, 0)))
+    source.t |= VT_CONSTANT;
+  mk_pointer(&destination); mk_pointer(&source);
+  parameters = tok_str_alloc();
+  add_ctype_declarator_tokens(parameters, &destination, entry->destination_name);
+  tok_str_add(parameters, ',');
+  add_ctype_declarator_tokens(parameters, &source, entry->source_name);
+  tok_str_add(parameters, TOK_EOF);
+  function = make_func_type_from_saved_params(&result, parameters);
+  function.t |= VT_STATIC;
+  function.ref->f.func_noexcept = function.ref->f.func_noexcept_specified = 1;
+  memset(&attributes, 0, sizeof attributes); attributes.f = function.ref->f;
+  snprintf(name, sizeof name, "__cpc_defaulted_copy_%u", anon_sym++);
+  helper = prepare_free_func_declarator(tok_alloc_const(name), &function, &attributes);
+  entry->function = external_global_sym(helper, &function);
+  entry->function->asm_label = attributes.asm_label;
+  entry->next = cpp_defaulted_copy_boundaries;
+  cpp_defaulted_copy_boundaries = entry;
+  body = tok_str_alloc();
+  tok_str_add(body, TOK_STATIC); tok_str_add(body, TOK_VOID); tok_str_add(body, helper);
+  tok_str_add(body, '('); tok_str_append_without_eof(body, parameters); tok_str_add(body, ')');
+  tok_str_add(body, tok_alloc_const("noexcept"));
+  tok_str_add(body, '{'); tok_str_add(body, '}'); tok_str_add(body, TOK_EOF);
+  pending = cprime_mallocz(sizeof(*pending));
+  pending->str = body; pending->func_tok = helper;
+  pending->is_local_class_member = local_scope != 0;
+  queue_pending_member(pending);
+  tok_str_free(parameters);
+  return entry->function;
+}
+
+static void emit_defaulted_copy_boundary_body(Sym *function)
+{
+  CppDefaultedCopyBoundary *entry;
+  for (entry = cpp_defaulted_copy_boundaries; entry; entry = entry->next)
+    if (entry->function->v == function->v) {
+      Sym *destination = sym_find(entry->destination_name);
+      Sym *source = sym_find(entry->source_name);
+      SValue destination_value, source_value;
+      if (!destination || !source) cprime_internal_error("defaulted copy boundary parameters missing");
+      vset(&destination->type, destination->r, destination->c);
+      destination_value = *vtop--;
+      vset(&source->type, source->r, source->c);
+      source_value = *vtop--;
+      copy_construct_struct_memberwise_from_base_ptr_impl(&entry->type,
+          &destination_value, &source_value, 0, entry->move_source);
+      return;
+    }
+}
+
 static void copy_construct_struct_memberwise_from_base_ptr(CType *type,
+                                                           SValue *dst_ptr,
+                                                           SValue *src_ptr,
+                                                           int base_offset,
+                                                           int move_source)
+{
+  int saved_query_depth = cpp_noexcept_query_depth;
+  if (!nocode_wanted || (saved_query_depth == cpp_unevaluated_expression_depth && saved_query_depth)) {
+    CType source = *type;
+    Sym *selected;
+    if (move_source == 1) source.t |= VT_RVALUE_REFERENCE;
+    else if (move_source == 2 || class_copy_accepts_const(type, 0))
+      source.t |= VT_CONSTANT;
+    selected = resolve_copy_constructor_func_ex(type, &source, 1);
+    if (!nocode_wanted && selected && selected->type.ref->f.func_noexcept
+        && is_defaulted_lifecycle_constructor(type, selected)) {
+      Sym *boundary = defaulted_copy_boundary(type, selected, move_source);
+      SValue *saved_top = vtop;
+      vpushsym(&boundary->type, boundary);
+      push_field_lvalue_from_base_ptr(dst_ptr, type, base_offset);
+      mk_pointer(&vtop->type); gaddrof();
+      push_field_lvalue_from_base_ptr(src_ptr, &source, base_offset);
+      mk_pointer(&vtop->type); gaddrof();
+      gfunc_call(2);
+      vtop = saved_top;
+      return;
+    }
+    if (selected && selected->type.ref->f.func_noexcept_specified
+        && is_defaulted_lifecycle_constructor(type, selected)) {
+      cpp_noexcept_note_call(&selected->type);
+      /* Subobject calls implement this constructor's body; the caller sees
+         the selected constructor's explicit exception specification. */
+      cpp_noexcept_query_depth = 0;
+    }
+  }
+  copy_construct_struct_memberwise_from_base_ptr_impl(type, dst_ptr, src_ptr,
+                                                      base_offset, move_source);
+  cpp_noexcept_query_depth = saved_query_depth;
+}
+
+static void copy_construct_struct_memberwise_body(CType *type,
                                                            SValue *dst_ptr,
                                                            SValue *src_ptr,
                                                            int base_offset,
@@ -1161,6 +1350,7 @@ static void copy_construct_struct_memberwise_from_base_ptr(CType *type,
       else
         copy_construct_one_lvalue_pair(elem_type, dst_ptr, src_ptr,
                                        elem_offset, move_source);
+      cpp_eh_register_copied_subobject(elem_type, dst_ptr, elem_offset);
     }
     return;
   }
@@ -1189,6 +1379,7 @@ static void copy_construct_struct_memberwise_from_base_ptr(CType *type,
     else
       copy_construct_one_lvalue_pair(&field->type, dst_ptr, src_ptr,
                                      field_offset, member_source);
+    cpp_eh_register_copied_subobject(&field->type, dst_ptr, field_offset);
   }
   /* Base copy constructors install their own dispatch tables. Complete this
      implicit constructor with the tables of the object being constructed,
@@ -1323,7 +1514,7 @@ static void emit_lifecycle_constructor_selected(CType *type, int r, int addr,
     unget_tok(saved_delim);
   }
   vcheck_cmp();
-  cpp_noexcept_note_constructor(type, ctor_func);
+  cpp_note_constructor_call(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 }
@@ -1883,6 +2074,8 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   int conversion_memberwise_copy = 0;
   CValue saved_tokc;
 
+  if (!base_subobject)
+    cpp_check_abstract_object(type);
   if (call_arg_count == 1 && saved_arg_is_braced(call_args[0])
       && type->ref && !type->ref->a.lifecycle_ctor)
   {
@@ -2137,7 +2330,7 @@ static void call_placement_constructor(CType *type, TokenString *placement,
   }
 
   vcheck_cmp();
-  cpp_noexcept_note_constructor(type, ctor_func);
+  cpp_note_constructor_call(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
   if ((vtop->type.t & VT_BTYPE) == VT_VOID)
@@ -3258,7 +3451,7 @@ static int try_materialize_constructor_conversion_into(CType *type, int allow_ex
   }
 
   vcheck_cmp();
-  cpp_noexcept_note_constructor(type, ctor_func);
+  cpp_note_constructor_call(type, ctor_func);
   gfunc_call(nb_args);
   drop_leaked_call_target(ctor_func);
 
@@ -4217,6 +4410,7 @@ static CType make_lowered_member_func_type(CType *struct_type, CType *func_type)
     arg_type = arg->type;
     param = sym_push(SYM_FIELD, &arg_type, arg->r, arg->c);
     param->v = arg->v;
+    param->parameter_object_qualifiers = arg->parameter_object_qualifiers;
     param->default_arg = arg->default_arg;
     param->default_arg_class = arg->default_arg_class;
     last->next = param;
@@ -5005,6 +5199,25 @@ static int type_requires_class_construction(CType *type)
   return 0;
 }
 
+/* Aggregate default member initializers are handled by decl_initializer;
+   only actual constructor/virtual machinery excludes value tracking here. */
+static int constexpr_aggregate_temporary_type(CType *type)
+{
+  Sym *field;
+  VirtualTableInfo *table;
+  if (type->t & VT_VOLATILE) return 0;
+  if ((type->t & VT_ARRAY) && type->ref)
+    return constexpr_aggregate_temporary_type(&type->ref->type);
+  if ((type->t & VT_BTYPE) != VT_STRUCT) return 1;
+  if (!type->ref || type->ref->a.lifecycle_ctor) return 0;
+  for (table = virtual_table_infos; table; table = table->next)
+    if (table->class_tok == get_struct_type_name_tok(type)) return 0;
+  for (field = type->ref->next; field; field = field->next)
+    if ((field->v & SYM_FIELD) && !(field->type.t & VT_STATIC)
+        && !constexpr_aggregate_temporary_type(&field->type)) return 0;
+  return 1;
+}
+
 static TemplateDef *find_template_def(int name_tok);
 
 static int split_saved_array_initializer(TokenString *initializer,
@@ -5325,7 +5538,15 @@ static int append_static_reference_initialization(TokenString *body, int var_tok
   tok_str_add(body, ';');
   tok_str_add(body, var_tok);
   tok_str_add(body, TOK_INIT_MEMBER);
+  if (type->t & VT_RVALUE_REFERENCE) {
+    tok_str_add(body, tok_alloc_const("static_cast"));
+    tok_str_add(body, TOK_LT);
+    add_ctype_tokens(body, type);
+    tok_str_add(body, TOK_GT);
+    tok_str_add(body, '(');
+  }
   tok_str_add(body, object_tok);
+  if (type->t & VT_RVALUE_REFERENCE) tok_str_add(body, ')');
   tok_str_add(body, ';');
   return 1;
 }
@@ -6538,10 +6759,13 @@ static void compile_pending_member_funcs(int start)
      drop entries the outer pass still owes (e.g. out-of-class template
      operator bodies).  The outer pass iterates with a live bound, so it picks
      up every entry appended during the pass; nested flushes must simply stay
-     out of the way. */
+     out of the way. Template replay can hide local bindings while the
+     enclosing function is still active; its name must also prevent emission
+     until the explicit end-of-function flush. */
   if (compiling_pending_member_funcs || cpp_template_probe_depth
       || start >= nb_pending_member_funcs
-      || ((local_stack || local_scope) && !compile_local_member_funcs_now))
+      || ((local_stack || local_scope || (funcname && *funcname))
+          && !compile_local_member_funcs_now))
     return;
   compiling_pending_member_funcs++;
 
@@ -6660,9 +6884,12 @@ static void compile_pending_member_funcs(int start)
         note_member_function_scope(pm->func_tok, pm->struct_tok);
       {
         int saved_base_variant = cpp_compiling_base_object_variant;
+        int saved_validation = cpp_unused_body_validation;
+        if (pm->semantic_only) ++cpp_unused_body_validation;
         cpp_compiling_base_object_variant = pm->is_base_object_variant;
         decl(VT_CONST);
         cpp_compiling_base_object_variant = saved_base_variant;
+        cpp_unused_body_validation = saved_validation;
       }
       enter_namespace_scope(saved_namespace_tok);
       defer_pending_member_funcs = saved_defer_pending_member_funcs;

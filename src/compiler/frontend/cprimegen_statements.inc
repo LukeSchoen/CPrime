@@ -257,6 +257,10 @@ statement_again:
   {
     tok_str_add_tok(dst);
     next();
+    if (is_cpp_translation_unit() && tok == tok_constexpr) {
+      tok_str_add_tok(dst);
+      next();
+    }
     while (tok == TOK_LINENUM)
     {
       tok_str_add_tok(dst);
@@ -372,7 +376,16 @@ static int for_header_starts_range_declaration(void)
   return is_range;
 }
 
-static int try_parse_range_for(void)
+static int range_has_member_name(CType *type, int name)
+{
+  int offset = 0;
+  return type_has_member_func_name(type, name)
+      || find_field_try(type, name, &offset)
+      || find_static_member_try(type, name, NULL)
+      || find_inherited_class_alias(get_struct_type_name_tok(type), name);
+}
+
+static TokenString *lower_range_for(void)
 {
   char tmp_name[64];
   int var_tok, range_tok, index_tok, iterator_tok, end_tok;
@@ -380,6 +393,7 @@ static int try_parse_range_for(void)
   int body_had_semicolon = 0;
   int is_array_range, array_count;
   int is_iterator_range = 0;
+  int adl_begin = 0, adl_end = 0;
   int has_range_type = 0;
   Sym *range_sym;
   CType range_type;
@@ -506,10 +520,27 @@ static int try_parse_range_for(void)
   if (!is_array_range && has_range_type
       && (range_type.t & VT_BTYPE) == VT_STRUCT)
   {
-    is_iterator_range = type_has_member_func_name(&range_type,
+    is_iterator_range = range_has_member_name(&range_type,
                                      tok_alloc_const("begin"))
-                        && type_has_member_func_name(&range_type,
+                        && range_has_member_name(&range_type,
                                      tok_alloc_const("end"));
+  }
+  if (!is_array_range && !is_iterator_range && has_range_type)
+  {
+    CType argument = range_type;
+    Sym *begin_function, *end_function;
+    /* The named forwarding-reference range is an lvalue. Range-for's free
+       functions are found only through associated types and namespaces. */
+    mk_reference(&argument);
+    begin_function = cpp_resolve_associated_function(tok_alloc_const("begin"),
+                        0, &argument, 1, NULL, 0);
+    end_function = cpp_resolve_associated_function(tok_alloc_const("end"),
+                        0, &argument, 1, NULL, 0);
+    if (begin_function && end_function) {
+      adl_begin = begin_function->v;
+      adl_end = end_function->v;
+      is_iterator_range = 1;
+    }
   }
   skip(')');
 
@@ -549,19 +580,27 @@ static int try_parse_range_for(void)
     tok_str_add(lowered, TOK_AUTO);
     tok_str_add(lowered, iterator_tok);
     tok_str_add(lowered, '=');
-    tok_str_add(lowered, range_tok);
-    tok_str_add(lowered, '.');
-    tok_str_add(lowered, tok_alloc_const("begin"));
+    if (adl_begin) tok_str_add(lowered, adl_begin);
+    else {
+      tok_str_add(lowered, range_tok);
+      tok_str_add(lowered, '.');
+      tok_str_add(lowered, tok_alloc_const("begin"));
+    }
     tok_str_add(lowered, '(');
+    if (adl_begin) tok_str_add(lowered, range_tok);
     tok_str_add(lowered, ')');
     tok_str_add(lowered, ';');
     tok_str_add(lowered, TOK_AUTO);
     tok_str_add(lowered, end_tok);
     tok_str_add(lowered, '=');
-    tok_str_add(lowered, range_tok);
-    tok_str_add(lowered, '.');
-    tok_str_add(lowered, tok_alloc_const("end"));
+    if (adl_end) tok_str_add(lowered, adl_end);
+    else {
+      tok_str_add(lowered, range_tok);
+      tok_str_add(lowered, '.');
+      tok_str_add(lowered, tok_alloc_const("end"));
+    }
     tok_str_add(lowered, '(');
+    if (adl_end) tok_str_add(lowered, range_tok);
     tok_str_add(lowered, ')');
     tok_str_add(lowered, ';');
   }
@@ -569,16 +608,12 @@ static int try_parse_range_for(void)
   {
     tok_str_add(lowered, TOK_INT);
     tok_str_add(lowered, index_tok);
+    tok_str_add(lowered, '=');
+    tok_str_add_cint(lowered, 0);
     tok_str_add(lowered, ';');
   }
   tok_str_add(lowered, TOK_FOR);
   tok_str_add(lowered, '(');
-  if (!is_iterator_range)
-  {
-    tok_str_add(lowered, index_tok);
-    tok_str_add(lowered, '=');
-    tok_str_add_cint(lowered, 0);
-  }
   tok_str_add(lowered, ';');
   if (is_iterator_range)
   {
@@ -642,6 +677,14 @@ static int try_parse_range_for(void)
   tok_str_add2(lowered, tok, &tokc);
   tok_str_add(lowered, 0);
 
+  return lowered;
+}
+
+static int try_parse_range_for(void)
+{
+  TokenString *lowered = lower_range_for();
+  if (!lowered) return 0;
+
   begin_macro(lowered, 1);
   next();
   block(STMT_COMPOUND);
@@ -702,11 +745,22 @@ static void gexpr_decl(int for_condition)
     vset(&s->type, s->r, (s->r &VT_SYM) ? 0 : s->c);
     vtop->sym = s;
     maybe_indir_reference();
+    if (integral_constant_expression_wanted && s->a.integral_constexpr
+        && (s->type.t & VT_CONSTANT)
+        && is_integer_btype(s->type.t & VT_BTYPE)) {
+      vtop->r = VT_CONST;
+      vtop->c.i = s->const_value;
+      vtop->sym = NULL;
+    }
   }
   else
   {
     if (v)
+    {
       skip(';');
+      gexpr_decl(1);
+      return;
+    }
     gexpr();
   }
 }
@@ -728,6 +782,25 @@ static void gexpr_selection(void)
     next();
   }
   gexpr_decl(1);
+}
+
+/* Inspect the complete header without evaluating an initializer as part of
+   the constant condition. Nested lambdas and braced expressions can contain
+   semicolons of their own. Replay preserves the original token values. */
+static int selection_has_initializer(void)
+{
+  TokenString *header = tok_str_alloc();
+  int depth = 0, found = 0;
+  while (tok != TOK_EOF && (depth || tok != ')')) {
+    if (!depth && tok == ';') found = 1;
+    if (tok == '(' || tok == '[' || tok == '{') ++depth;
+    else if (tok == ')' || tok == ']' || tok == '}') --depth;
+    tok_str_add_tok(header);
+    next();
+  }
+  if (tok == TOK_EOF) cprime_error("unterminated selection condition");
+  restore_cpp_lifecycle_probe(header);
+  return found;
 }
 
 static void block(int flags)
@@ -846,17 +919,54 @@ again:
     TokenString *operand = NULL;
     TokenString *replay = tok_str_alloc();
     int returns_value = tok != ';';
+    int move_operand = 0;
+    CType move_type;
 
-    (void)cpp_coroutine_promise_symbol();
+    Sym *promise = cpp_coroutine_promise_symbol();
     if (returns_value)
       skip_or_save_block(&operand);
+    if (operand) {
+      int first = 0, last = operand->len;
+      Sym *source;
+      while (last > first && (operand->str[last - 1] == TOK_EOF
+                              || operand->str[last - 1] == 0)) --last;
+      while (first + 1 < last && operand->str[first] == TOK_LINENUM) first += 2;
+      while (last - first >= 3 && operand->str[first] == '('
+             && operand->str[last - 1] == ')') { ++first; --last; }
+      source = last - first == 1 ? sym_find(operand->str[first]) : NULL;
+      if (source && !(source->type.t & (VT_STATIC | VT_EXTERN))
+          && ((source->r & VT_VALMASK) == VT_LOCAL
+              || (source->r & VT_VALMASK) == VT_LLOCAL)
+          && (!is_reference_type(&source->type)
+              || (source->type.t & VT_RVALUE_REFERENCE))) {
+        int method = tok_alloc_const("return_value");
+        move_type = source->type;
+        if (is_reference_type(&move_type)) move_type = *pointed_type(&move_type);
+        move_type.t |= VT_RVALUE_REFERENCE;
+        instantiate_template_member_for_call(&promise->type, method, &move_type, 1);
+        /* Implicit move first tries the rvalue overload set. If no candidate
+           is viable, retain the original lvalue expression for the retry. */
+        move_operand = resolve_member_func_by_arg_types(&promise->type, method,
+                                                         &move_type, 1) != NULL;
+      }
+    }
     tok_str_add(replay, TOK_CPC_COROUTINE_PROMISE);
     tok_str_add(replay, '.');
     tok_str_add(replay, tok_alloc_const(returns_value
                                           ? "return_value" : "return_void"));
     tok_str_add(replay, '(');
+    if (move_operand) {
+      move_type.t &= ~VT_RVALUE_REFERENCE;
+      tok_str_add(replay, tok_alloc_const("static_cast"));
+      tok_str_add(replay, TOK_LT);
+      add_ctype_tokens(replay, &move_type);
+      tok_str_add(replay, TOK_LAND);
+      tok_str_add(replay, TOK_GT);
+      tok_str_add(replay, '(');
+    }
     if (returns_value)
       tok_str_append_without_eof(replay, operand);
+    if (move_operand) tok_str_add(replay, ')');
     tok_str_add(replay, ')');
     tok_str_add_tok(replay);
     tok_str_add(replay, 0);
@@ -881,6 +991,66 @@ again:
     int end_chain = 0;
 if_chain:
     new_scope(&o);
+    if (is_cpp_translation_unit() && tok == tok_constexpr) {
+      int condition, discarded, arm;
+      ConstexprTemporaryObject *evaluation_mark;
+      CType boolean_type;
+      next();
+      skip('(');
+      if (selection_has_initializer()) {
+        int initializer_mark = cpp_temp_mark();
+        if (tok != ';' && !decl(VT_JMP)) {
+          gexpr();
+          vpop();
+        }
+        skip(';');
+        cpp_temp_end(initializer_mark);
+      }
+      ++integral_constant_expression_wanted;
+      evaluation_mark = constexpr_temporary_objects;
+      ++constexpr_temporary_expression_depth;
+      gexpr_decl(1);
+      try_call_cpp_bool_conversion_operator();
+      --integral_constant_expression_wanted;
+      boolean_type.t = VT_BOOL;
+      boolean_type.ref = NULL;
+      gen_cast(&boolean_type);
+      if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) != VT_CONST)
+        cprime_error("if constexpr condition is not a constant expression");
+      condition = vtop->c.i != 0;
+      vpop();
+      --constexpr_temporary_expression_depth;
+      release_constexpr_temporary_objects(evaluation_mark, 1);
+      skip(')');
+      for (arm = 0; arm < 2; ++arm) {
+        discarded = arm ? condition : !condition;
+        if (discarded && cpp_template_replay_bound) {
+          TokenString *unused = tok_str_alloc();
+          skip_or_save_statement_tokens(unused, 1);
+          tok_str_free(unused);
+        } else {
+          int saved_nocode = nocode_wanted;
+          int saved_discarded_owner = cpp_discarded_return_owner;
+          LambdaExpression *deduction = lambda_probe;
+          int saved_discarded = deduction ? deduction->discarded_statement : 0;
+          if (discarded) {
+            if (deduction) deduction->discarded_statement = 1;
+            else if (funcname && *funcname)
+              cpp_discarded_return_owner = tok_alloc_const(funcname);
+          }
+          if (discarded) ++nocode_wanted;
+          block(0);
+          cpp_discarded_return_owner = saved_discarded_owner;
+          if (deduction) deduction->discarded_statement = saved_discarded;
+          if (discarded) nocode_wanted = saved_nocode;
+        }
+        if (arm || tok != TOK_ELSE) break;
+        next();
+      }
+      prev_scope(&o, 0);
+      gsym(end_chain);
+      return;
+    }
     skip('(');
     cpp_range_condition_begin();
     gexpr_selection();
@@ -985,6 +1155,18 @@ if_chain:
       lambda_note_return();
       return;
     }
+    if (cpp_discarded_return_owner && funcname
+        && cpp_discarded_return_owner == tok_alloc_const(funcname)) {
+      Sym *function = global_symbol_find(cpp_discarded_return_owner);
+      if (!function) function = sym_find(cpp_discarded_return_owner);
+      if (function && function->type.ref
+          && function->type.ref->f.func_cpp_deduced_return) {
+        if (tok != ';') { gexpr(); vpop(); }
+        skip(';');
+        cpp_temp_end(temporary_mark);
+        return;
+      }
+    }
     b = (func_vt.t &VT_BTYPE) != VT_VOID;
     a = 0;
     e = 0;
@@ -1044,7 +1226,7 @@ if_chain:
         if (tok == '}') vset(&result, VT_CONST, 0);
         else {
           expr_eq();
-          check_integer_list_initialization(&result, vtop);
+          check_scalar_list_initialization(&result, vtop);
           gen_assign_cast(&result);
           if (tok == ',') next();
         }
@@ -1786,6 +1968,15 @@ static void init_assert(init_params *p, int offset)
 static void init_putz(init_params *p, unsigned long c, int size)
 {
   init_assert(p, c + size);
+  if (p->constant_object_target && size > 0) {
+    unsigned bucket = constexpr_local_bucket(p->constant_object_target);
+    ConstexprLocalField *entry = cprime_mallocz(sizeof(*entry));
+    entry->object = p->constant_object_target;
+    entry->offset = (int)c - p->constant_object_offset;
+    entry->zero_size = size;
+    entry->next = constexpr_local_fields[bucket];
+    constexpr_local_fields[bucket] = entry;
+  }
   if (p->sec)
   {
     // nothing to do because globals are already set to zero

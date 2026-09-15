@@ -13,12 +13,21 @@ static CppMemberPointerType *find_cpp_member_pointer_type(CType *type)
   return NULL;
 }
 
+static void check_cpp_member_pointer_base_conversion(int derived, int base, int ignore_access)
+{
+  if (derived == base) return;
+  if (!class_has_unique_base(derived, base) || class_virtual_base_path(derived, base))
+    cprime_error("member-pointer conversion requires an unambiguous non-virtual base");
+  if (!ignore_access && !class_base_accessible(derived, base, active_member_class_tok, 0))
+    cprime_error("member-pointer conversion uses an inaccessible base");
+}
+
 static void mk_cpp_member_pointer(CType *type, int owner_tok)
 {
   CppMemberPointerType *entry;
   CString name;
   Sym *saved_local, *symbol, *field;
-  CType storage_type, word_type;
+  CType storage_type, word_type, target_type;
   int type_tok;
   for (entry = cpp_member_pointer_types; entry; entry = entry->next)
     if (!entry->provisional && entry->owner_tok == owner_tok
@@ -55,8 +64,13 @@ static void mk_cpp_member_pointer(CType *type, int owner_tok)
     symbol->type.ref = symbol;
     word_type.t = VT_LLONG;
     word_type.ref = NULL;
+    target_type = word_type;
+    if ((type->t & VT_BTYPE) == VT_FUNC) {
+      target_type = *type;
+      mk_pointer(&target_type);
+    }
     symbol->next = field = sym_push(tok_alloc_const("__target") | SYM_FIELD,
-                                    &word_type, 0, 0);
+                                    &target_type, 0, 0);
     field->next = sym_push(tok_alloc_const("__adjustment") | SYM_FIELD,
                            &word_type, 0, PTR_SIZE);
   }
@@ -452,6 +466,7 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
       function = resolve_member_func(&owner_type, member_tok);
     if (!function || (function->type.t & VT_BTYPE) != VT_FUNC)
       return 0;
+    cpp_check_deleted_function(&function->type);
     if (function_owner_tok == class_tok)
       function_owner_offset_known = 1;
     else if (class_nonvirtual_subobject_offset(class_tok, function_owner_tok,
@@ -515,6 +530,7 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
              & (VT_CONSTANT | VT_VOLATILE))
         && class_subobject_offset(target->owner_tok, member_owner_tok, &adjust))
     {
+      check_cpp_member_pointer_base_conversion(target->owner_tok, member_owner_tok, 0);
       /* The low bit describes virtual dispatch; the remaining bits are still
          the receiver adjustment and can be folded for a constant initializer.
          A base virtual member pointer converted to a derived owner otherwise
@@ -549,7 +565,9 @@ static int try_form_cpp_member_pointer(int class_tok, int member_tok)
   vpush_ref(&member_type, data_section, location, sizeof(words));
   local_stack = saved_local;
   vtop->sym->cpp_member_address_tok = function ? function->v : member_tok;
-  vtop->r |= VT_LVAL;
+  vtop->sym->cpp_constexpr_object = 1;
+  vtop->sym->type.t |= VT_CONSTANT;
+  vtop->r |= VT_LVAL | VT_CXX_PRVALUE;
   forming_cpp_member_address = 0;
   return 1;
 }
@@ -575,7 +593,6 @@ static void cpp_member_pointer_save_top(CType *type, int slot)
 static int cpp_member_pointer_address_slot(void)
 {
   int slot;
-  cprime_warning("member-pointer address flags %x", vtop->r);
   /* A member-pointer conversion may start from `&Derived::member`, which is
      a prvalue in the lowered two-word representation.  Consumers below read
      both words through an address, so give that prvalue ordinary temporary
@@ -606,6 +623,8 @@ static int cpp_member_pointer_address_slot(void)
   return slot;
 }
 
+/* Modes: implicit (0), static (1), reinterpret (2), C-style (3).
+   C-style base conversions waive access, but retain base-shape constraints. */
 static int convert_cpp_member_pointer(CType *type, int explicit_cast)
 {
   CppMemberPointerType *target = find_cpp_member_pointer_type(type);
@@ -614,7 +633,14 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
   CType writable_type, word_type;
   if (target && source && source->deferred)
   {
-    if (!resolve_deferred_cpp_member_address(type))
+    CType resolution_type = *type;
+    if (explicit_cast >= 2) {
+      /* Explicit cast modes use the signature to select an overload without
+         performing an implicit declaring-class conversion during selection. */
+      resolution_type = target->member_type;
+      mk_cpp_member_pointer(&resolution_type, source->owner_tok);
+    }
+    if (!resolve_deferred_cpp_member_address(&resolution_type))
       return 0;
     source = find_cpp_member_pointer_type(&vtop->type);
   }
@@ -622,6 +648,22 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
   {
     if (source && (type->t & VT_BTYPE) == VT_BOOL)
     {
+      if (constexpr_pointer_evaluation_active()) {
+        CValue target_word, adjustment_word;
+        Sym *target_relocation, *adjustment_relocation;
+        ConstexprPointerBounds bounds;
+        Sym *field = source->symbol->next;
+        if (field && field->next
+            && constexpr_aggregate_field_value(vtop, field, 0, &target_word, &target_relocation, &bounds)
+            && constexpr_aggregate_field_value(vtop, field->next, PTR_SIZE,
+                             &adjustment_word, &adjustment_relocation, &bounds)
+            && !adjustment_relocation) {
+          int nonnull = target_relocation || target_word.i || adjustment_word.i;
+          vpop();
+          vset(type, VT_CONST, nonnull);
+          return 1;
+        }
+      }
       source_slot = cpp_member_pointer_address_slot();
       cpp_member_pointer_load_word(source_slot, 0);
       cpp_member_pointer_load_word(source_slot, PTR_SIZE);
@@ -644,6 +686,8 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
     location = section_add(data_section, 2 * PTR_SIZE, PTR_SIZE);
     memset(data_section->data + location, 0, 2 * PTR_SIZE);
     vpush_ref(type, data_section, location, 2 * PTR_SIZE);
+    vtop->sym->cpp_constexpr_object = 1;
+    vtop->sym->type.t |= VT_CONSTANT;
     vtop->r |= VT_LVAL;
     return 1;
   }
@@ -680,18 +724,56 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
     }
     if (!explicit_cast)
       cast_error(&vtop->type, type);
+    if (explicit_cast != 2)
+      check_cpp_member_pointer_base_conversion(source->owner_tok, target->owner_tok, explicit_cast == 3);
     offset = -offset;
   }
-  else if (explicit_cast < 2
-           && class_virtual_base_path(target->owner_tok, source->owner_tok))
+  else if (explicit_cast != 2)
   {
     /* [conv.mem]: a pointer to member of base `source` converts to a pointer
        to member of derived `target` only when that base is non-virtual.  A
        virtual base subobject has no fixed offset, so the adjustment the
        conversion would need cannot be computed. */
-    cast_error(&vtop->type, type);
+    check_cpp_member_pointer_base_conversion(target->owner_tok, source->owner_tok, explicit_cast == 3);
   }
   if (!offset) { vtop->type = *type; return 1; }
+  if (constexpr_pointer_evaluation_active()) {
+    CValue target_word, adjustment_word;
+    Sym *target_relocation, *adjustment_relocation;
+    ConstexprPointerBounds bounds;
+    Sym *field = source->symbol->next;
+    if (field && field->next
+        && constexpr_aggregate_field_value(vtop, field, 0, &target_word, &target_relocation, &bounds)
+        && constexpr_aggregate_field_value(vtop, field->next, PTR_SIZE,
+                         &adjustment_word, &adjustment_relocation, &bounds)
+        && !adjustment_relocation) {
+      ConstexprTemporaryObject *object = cprime_mallocz(sizeof(*object));
+      ConstexprLocalField *word;
+      int r2, index;
+      if (target_relocation || target_word.i || adjustment_word.i)
+        adjustment_word.i += (long long)offset * 2;
+      object->object.type = *type;
+      object->object.r = VT_LOCAL | VT_LVAL;
+      object->object.c = get_temp_local_var(2 * PTR_SIZE, PTR_SIZE, &r2);
+      object->next = constexpr_temporary_objects;
+      constexpr_temporary_objects = object;
+      for (field = target->symbol->next, index = 0; index < 2; ++index, field = field->next) {
+        word = cprime_mallocz(sizeof(*word));
+        word->object = &object->object;
+        word->offset = index * PTR_SIZE;
+        word->type = field->type;
+        word->value = index ? adjustment_word : target_word;
+        word->relocation = index ? NULL : target_relocation;
+        word->next = constexpr_local_fields[constexpr_local_bucket(&object->object)];
+        constexpr_local_fields[constexpr_local_bucket(&object->object)] = word;
+      }
+      vpop();
+      vset(type, VT_LOCAL | VT_LVAL | VT_CXX_PRVALUE, object->object.c);
+      vtop->r2 = r2;
+      vtop->sym = &object->object;
+      return 1;
+    }
+  }
   source_slot = cpp_member_pointer_address_slot();
   result_slot = loc = (loc - 2 * PTR_SIZE) & -PTR_SIZE;
   word_type.t = VT_LLONG;
@@ -716,6 +798,18 @@ static int convert_cpp_member_pointer(CType *type, int explicit_cast)
   writable_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
   vset(&writable_type, VT_LOCAL | VT_LVAL, result_slot);
   return 1;
+}
+
+static int constexpr_member_pointer_words(SValue *value, CValue *words, Sym **target)
+{
+  CppMemberPointerType *entry = find_cpp_member_pointer_type(&value->type);
+  Sym *field, *adjustment_relocation;
+  ConstexprPointerBounds bounds;
+  if (!entry || !(field = entry->symbol->next) || !field->next) return 0;
+  return constexpr_aggregate_field_value(value, field, 0, words, target, &bounds)
+      && constexpr_aggregate_field_value(value, field->next, PTR_SIZE,
+                        words + 1, &adjustment_relocation, &bounds)
+      && !adjustment_relocation;
 }
 
 static int compare_cpp_member_pointers(int op)
@@ -754,8 +848,24 @@ static int compare_cpp_member_pointers(int op)
     }
   }
   convert_cpp_member_pointer(&common, 0);
-  right_slot = cpp_member_pointer_address_slot();
+  vswap();
   convert_cpp_member_pointer(&common, 0);
+  vswap();
+  if (constexpr_pointer_evaluation_active()) {
+    CValue left_words[2], right_words[2];
+    Sym *left_target, *right_target;
+    if (constexpr_member_pointer_words(vtop - 1, left_words, &left_target)
+        && constexpr_member_pointer_words(vtop, right_words, &right_target)) {
+      int equal = left_target == right_target
+          && left_words[0].i == right_words[0].i
+          && left_words[1].i == right_words[1].i;
+      vpop(); vpop();
+      vpushi(op == TOK_EQ ? equal : !equal);
+      vtop->type.t = VT_BOOL;
+      return 1;
+    }
+  }
+  right_slot = cpp_member_pointer_address_slot();
   left_slot = cpp_member_pointer_address_slot();
   cpp_member_pointer_load_word(left_slot, 0);
   cpp_member_pointer_load_word(right_slot, 0);
@@ -775,6 +885,7 @@ static void bind_cpp_member_pointer(int is_arrow)
   Sym *prototype, *receiver, *saved_local;
   int receiver_slot, member_slot, target_slot, skip_virtual;
   int object_cv;
+  SValue constant_receiver;
   {
     /* The built-in operator applies to a class object (`.*`) or a class
        pointer (`->*`). Any other left operand selects an overloaded
@@ -824,6 +935,8 @@ static void bind_cpp_member_pointer(int is_arrow)
       || (pointed_type(&vtop->type)->t & VT_BTYPE) != VT_STRUCT)
     cprime_error("class pointer required for ->* operator");
   object_type = vtop->type;
+  constexpr_read_local_value(vtop);
+  constant_receiver = *vtop;
   object_cv = pointed_type(&object_type)->t & (VT_CONSTANT | VT_VOLATILE);
   receiver_slot = loc = (loc - PTR_SIZE) & -PTR_SIZE;
   cpp_member_pointer_save_top(&object_type, receiver_slot);
@@ -832,6 +945,45 @@ static void bind_cpp_member_pointer(int is_arrow)
   if (!entry)
     type_incompatibility_error(&vtop->type, &object_type,
       "right operand of member access has type '%s', not a member pointer for '%s'");
+  if (get_struct_type_name_tok(pointed_type(&object_type)) != entry->owner_tok
+      && !class_has_unique_base(get_struct_type_name_tok(pointed_type(&object_type)), entry->owner_tok))
+    cprime_error("pointer-to-member object requires an unambiguous declaring base");
+  if (!class_base_accessible(get_struct_type_name_tok(pointed_type(&object_type)),
+                            entry->owner_tok, active_member_class_tok, 0))
+    cprime_error("pointer-to-member declaring base is inaccessible");
+  if ((CONST_WANTED || integral_constant_expression_wanted || static_initializer_constant_fold)
+      && (entry->member_type.t & VT_BTYPE) == VT_FUNC
+      && constant_receiver.sym
+      && (((constant_receiver.r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_LOCAL
+           && is_active_constexpr_temporary(constant_receiver.sym))
+          || (constant_receiver.r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == (VT_CONST | VT_SYM))) {
+    CValue target, adjustment;
+    Sym *function, *adjustment_relocation;
+    ConstexprPointerBounds bounds;
+    Sym *field = entry->symbol->next;
+    if (field && field->next
+        && constexpr_aggregate_field_value(vtop, field, 0, &target, &function, &bounds)
+        && constexpr_aggregate_field_value(vtop, field->next, PTR_SIZE,
+                       &adjustment, &adjustment_relocation, &bounds)
+        && function && !adjustment_relocation && !(adjustment.i & 1)) {
+      if ((object_cv & VT_CONSTANT) && !(entry->member_type.t & VT_CONSTANT))
+        cprime_error("non-const member function requires a non-const object");
+      vpop();
+      make_class_type_from_tok(&owner_pointer, entry->owner_tok);
+      owner_pointer.t |= object_cv;
+      mk_pointer(&owner_pointer);
+      vpushv(&constant_receiver);
+      if (get_struct_type_name_tok(pointed_type(&object_type)) != entry->owner_tok
+          && !try_adjust_derived_pointer_to_base(&owner_pointer))
+        cprime_error("pointer-to-member object has incompatible class");
+      constant_receiver = *vtop;
+      vpop();
+      vpushsym(&function->type, function);
+      vtop->bound_member_receiver = constant_receiver.c.i + (adjustment.i >> 1);
+      vtop->bound_member_receiver_object = constant_receiver.sym;
+      return;
+    }
+  }
   mk_pointer(&vtop->type);
   gaddrof();
   vtop->type = char_pointer_type;
@@ -868,6 +1020,7 @@ static void bind_cpp_member_pointer(int is_arrow)
   local_stack = NULL;
   prototype = sym_push(SYM_FIELD, &call_type.ref->type, 0, 0);
   prototype->f = call_type.ref->f;
+  prototype->f.func_cpp_member = 1;
   receiver = sym_push(SYM_FIELD, &owner_pointer, 0, 0);
   receiver->next = call_type.ref->next;
   prototype->next = receiver;
