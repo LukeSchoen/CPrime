@@ -16527,11 +16527,18 @@ storage:
         /*
          * cprime class/struct names should be usable directly as type names
          * (C++-style), not only via explicit typedef aliases.
+         *
+         * C keeps the tag namespace separate: after `struct T;` the ordinary
+         * identifier `T` still must not name a type, so only `struct T` or an
+         * explicit typedef may be used.  Accepting the bare tag here also hid
+         * the invalid declaration that the C tag test now rejects.
          */
         n = explicit_global_scope ? tok : find_current_class_nested_type_tok(tok);
         if (n == tok && !explicit_global_scope)
           n = explicit_global_scope ? tok : find_current_namespace_tok(tok);
         s = struct_find(n);
+        if (s && !is_cpp_translation_unit())
+          s = NULL;
         if (!s)
         {
           TemplateDef *class_td = find_class_template_def(n);
