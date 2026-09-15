@@ -25,4 +25,6 @@ units and test programs run `-Jobs` at a time, while compilation stays one
 serial batch per suite.
 
 Keep reproducers and logs in `build/` and delete them once the durable case
-exists. `Tests/CPP17-REMAINING.md` and `task.md` list open work only.
+exists. `Tests/CPP17-REMAINING.md` is the only open-work list; there are no
+retained status or verification logs, since git and the retained cases are the
+record.

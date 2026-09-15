@@ -1,79 +1,47 @@
-# C++17 language support: remaining work
+# Task: finish the C++17 queue
 
-The root `cpc.exe` is the only compiler used for this work, one process at a
-time. Tests live in `Tests/`; generated evidence lives in `build/`.
+Autonomous C/C++ compiler engineer in `C:\Luke\Src\CPrime`. Root `cpc.exe` is
+the only compiler, one process at a time.
 
-## Test loop
+## Read first
 
-```
-Tests\test.exe -All -Tier fast        the loop: 25 representative cases, ~1s
-Tests\test.exe -Suite features/X      one suite, every retained case
-Tests\test.exe -All -Tier pedantic    the full internal inventory, ~20s
-Tests\test.exe -Regression            publication gate (~58 cases)
-scripts\build.exe                     self-host, validate, publish cpc.exe
-```
+1. `AGENTS.md` - binding rules. Follow it exactly; it is not repeated here.
+2. `Tests/CPP17-REMAINING.md` - the only open-work list. It owns the gaps,
+   reproducer shapes, and the fixed-but-unretained backlog.
 
-`Tests/tiers.json` lists the `fast` subset. Every other retained internal case
-runs in the pedantic tier, so a case leaves the loop by not being listed.
-Short self-contained pass cases compile and run in combined units at suite
-scale; a combined unit that fails is recompiled and rerun case by case, and
-`-GroupSize 1` disables combining.
+Those two files plus `Tests/DEVELOPMENT.md` are the whole brief. Do not restate
+them, and do not keep status here: completed work is code, and git is the record
+of what changed.
 
-## Remaining work
+## Loop
 
-### 1. constexpr object evaluation
+- Baseline: `Tests\test.exe -All -Tier fast` plus the suites you will touch.
+- Per gap: minimal reproducer in `build/` -> reproduce with root `cpc.exe` ->
+  repair the shared mechanism -> retain one case in `Tests/features/...` ->
+  run that case, then the suite -> delete the scratch reproducer.
+- Boundaries: fast tier; pedantic tier and `Tests\test.exe -Regression` before
+  publication; `scripts\build.exe` to publish.
 
-- A user-provided `constexpr` constructor is never constant-evaluated:
-  `static_assert(S(1).a == 1)` and `constexpr S g(1);` with
-  `constexpr S(int) : a(v) {}` are rejected with "constant expression
-  expected". Member-function calls on the same object work.
-- A union or bit-field member of a constexpr object cannot be read; writes to a
-  local constexpr object are accepted but never recorded.
-- A reference member cannot be initialized in a constexpr aggregate
-  ("lvalue expected").
-- Returning the address of a function-local object, or of a temporary, from a
-  `constexpr` function is accepted instead of rejected.
-- Reading a member that declaration order has not yet initialized is accepted.
+## Order for speed
 
-### 2. constexpr statements and local state
+- Batch by mechanism, not by file. The five constexpr object-model gaps share
+  the constant evaluator, and the two pack-expansion gaps unblock `make_tuple`,
+  `tie` and `apply` together. Fix a mechanism once, then cover every gap it
+  explains.
+- Highest leverage first: pack expansion, then constexpr object model, then
+  libraries, then the two diagnostics.
+- The retained-case backlog needs no compiler change. Do it first, from the
+  existing suites, and add only what is genuinely missing.
+- Reuse an existing case when it already proves the behavior. If inspection
+  shows a mechanism is already correct and covered, close the gap and move on.
+- Failures stay failures: no expected-failure relabelling, no name-specific
+  hacks, revert failed experiments.
 
-Selection and loop scopes, mutation through subobjects, initialization order,
-references, pointer bounds, and discarded runtime calls.
+## Done
 
-### 3. Literals and diagnostics
-
-- User-defined literals parse but are not constant-evaluated
-  (`2.5_km == 2500.0L` fails a `static_assert`).
-- `sizeof(u"ab")` does not match the encoded-literal element type.
-- Concatenating a wide and a narrow literal (`L"a" "b"`) is accepted.
-- Digit separators, raw strings, Unicode escapes, and the Unicode-escape
-  diagnostics already pass.
-
-### 4. Core C++17 semantics
-
-- A pack expansion nested in a function parameter type
-  (`void f(box<Ts...>)`) is rejected, which is why `std::get`/`std::apply`
-  deduce the whole tuple type instead.
-- Class template argument deduction works only from braced initializers.
-- A trailing return type whose `decltype` names a dependent call does not
-  participate in deduction.
-- `std::is_copy_assignable` is missing.
-
-### 5. Libraries
-
-- `std::variant` holds four alternatives with no copy constructor or copy
-  assignment.
-- `std::tuple` is variadic but `make_tuple`/`tie` spell their parameter lists
-  up to six, because a pack expansion inside a function's template-id is not
-  substituted.
-
-## Rules
-
-- Reproduce first, then repair the shared mechanism, then retain one case. A
-  failed case stays in `pass/`, never relabelled as an expected failure.
-- Keep tests minimal, deterministic, and fast; reuse an existing case when it
-  already proves the behavior.
-- Put one-off reproducers in `build/` and delete them once the durable case
-  exists.
-- Run the exact selected case, then the affected suite, then the fast tier at
-  a boundary, and the pedantic tier before publication.
+- Every queue item fixed with a retained case, or blocked with the exact
+  command and evidence.
+- Pedantic tier, `-Regression`, and `scripts\build.exe` green; root `cpc.exe`
+  still a working published compiler.
+- Tree holds only intended source, test, and queue updates. Report files
+  changed, mechanisms fixed, exact commands run, and any blockers.

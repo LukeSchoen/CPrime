@@ -14,9 +14,9 @@ Run:
 - Tests\test.exe -Suite features/Cpp17Gaps -Select test_clamp.cpp
 
 Gate placement:
-- Unrepaired cases are listed in Tests\tiers.json under "pedantic", so the
-  routine fast gate and the publication -Checks gate are unaffected while the
-  list is outstanding. The pedantic partition therefore reports those cases as
-  failures; that red count is the work list.
-- When a case passes on a published root cpc.exe, remove it from that list so
-  the fast gate keeps it fixed.
+- Every case runs in the pedantic tier, which is every retained internal case
+  that is not excluded. A failing case therefore shows up as a red count in
+  the pedantic run, and that red count is the work list; the fast tier only
+  covers the representative cases listed in Tests\tiers.json.
+- Keep every case in the suite once it passes: it is the regression cover for
+  the repair.
