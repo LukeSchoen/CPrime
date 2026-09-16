@@ -88,8 +88,10 @@ src\scripts\build.exe                                                  publish t
   published and the three floors since closed -- `ordered_range_t()` as a
   constant class initializer, the replayed `std::basic_string` constructor
   under a static initializer fold, and the missing `<cfloat>` runtime header --
-  the build now stops in `boost/mpl/vector/aux_/vector0.hpp:45`; the reduced
-  case and the work it needs are in `Compatibility\KNOWN-ISSUES.md`.
+  and the `boost::mpl` `vector0<>` parse floor now closed, the build stops in
+  `boost/math/special_functions/sign.hpp:126` with
+  `redefinition of template 'T'`.  The reduced case and the work it needs are
+  in `Compatibility\KNOWN-ISSUES.md`.
 - `Compatibility\tests\test.exe -Checks` (the CPC-only publication/development gate) is
   red: the runner self-check `runner rejects false expectation:
   test_valid_without_main.cpp` reports exit 1 and `Summary: 0 passed, 1 failed`
@@ -109,13 +111,15 @@ src\scripts\build.exe                                                  publish t
 
 ## Next action
 
-Retain the reduced `boost::mpl` `vector0<>` floor as one minimal case under
-`features/Templates/pass`, add it to the fast list, reproduce it with root
-`cpc.exe`, repair the nested template-id parse, then run the suite, fast tier,
-regression gate, and publish:
+Retain the reduced `boost/math` parenthesized-template-declarator floor as one
+minimal case under
+`features/Templates/pass/test_parenthesized_template_definition_then_plain.cpp`,
+add it to the fast list, reproduce it with root `cpc.exe`, repair registration
+of the declared function name for a parenthesized function-template
+declarator, then run the suite, fast tier, regression gate, and publish:
 
 ```
-Compatibility\tests\test.exe -Suite features/Templates -Select <retained-case>.cpp
+Compatibility\tests\test.exe -Suite features/Templates -Select test_parenthesized_template_definition_then_plain.cpp
 Compatibility\tests\test.exe -Suite features/Templates
 Compatibility\tests\test.exe -All -Tier fast
 Compatibility\tests\test.exe -Regression
@@ -123,16 +127,21 @@ src\scripts\build.exe
 ```
 
 The reduced case is
-`Compatibility\build\mpl-vector-probes\m1_self_empty_argument.cpp`: inside
-`template<> struct vector0<na>`, the member typedef
-`v_iter<vector0<>, 0> begin;` is rejected with
-`'>' expected after template argument '...vector0...na' opened near line 16
-(got '<')`, while the same shape outside the specialization
-(`m2_outside.cpp`) parses.  The consumer probe log is
-`Compatibility\build\explorer-probe11.log`.  After publishing, re-run
+`Compatibility\build\sign-template-probes\p4_parenthesized_definitions_then_plain_declaration.cpp`:
+two parenthesized function-template definitions are followed by a plain
+same-signature declaration, and the compiler reports
+`redefinition of template 'T'` (`p4.log`).  The
+one-parenthesized-definition variant
+`p6_one_parenthesized_definition_then_plain_declaration.cpp` passes; the
+declaration-only variants also pass.  The consumer probe log is
+`Compatibility\build\explorer-probe12.log`.  After publishing, re-run
 `C:\Luke\Src\Archive\explorerplusplus\build_cpc.cmd Release x64` (it copies
-root `cpc.exe` in first) and reduce the next floor it reports.  Evidence for
-the floors closed this cycle is in `Compatibility\build\`: the `const-class-init-*`,
-`replayed-ctor-*`, `include-cfloat-*`, `container-fwd.*`, `explorer-probe10.log`
-and `explorer-probe11.log` logs and the `pending-flush-probes` scratch cases,
-plus the published suite/gate runs.
+root `cpc.exe` in first) and reduce the next floor it reports.
+
+Evidence for the `vector0<>` closure is in `Compatibility\build\`:
+`mpl-vector-probes\m1_before.log`, `injected-template-empty-before.log`,
+`injected-template-select.after.log`, `injected-template-suite.after.log`,
+`injected-template-fast.after.log`, `injected-template-fast-final.log`,
+`injected-template-regression.after.log`, `injected-template-publish.log`,
+and `explorer-probe12.log`.  The retained case is
+`features/Templates/pass/test_injected_class_template_empty_arguments.cpp`.

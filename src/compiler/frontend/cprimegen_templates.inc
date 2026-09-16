@@ -13180,11 +13180,14 @@ static int parse_one_template_type_arg(void)
       int nested_tok = find_current_class_nested_type_tok(tok);
       if (nested_tok != tok)
       {
-        TemplateDef *nested_template = find_class_template_def(nested_tok);
+        TemplateDef *nested_template = find_class_template_def_for_class_tok(nested_tok);
         next();
         /* A nested class template of the enclosing class spelled
            unqualified in a template argument (X<int> inside Y) keeps its
-           argument list and instantiates here. */
+           argument list and instantiates here.  The same spelling can be an
+           injected class-template name inside its own specialization
+           (`vector0<>` inside `vector0<na>`); its instantiation token still
+           names the owning template. */
         if (nested_template && nested_template->is_class
             && (tok == TOK_LT || tok == '<'))
         {

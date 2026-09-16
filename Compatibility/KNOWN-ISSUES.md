@@ -3,6 +3,31 @@
 Open defects, each with its reduced shape and the work it needs. Completed work
 is code and retained cases; nothing here is a progress log.
 
+## boost/math/special_functions/sign.hpp: parenthesized template declarators
+
+Open.  With the `vector0<>` floor closed, the Explorer++ probe stops in
+`boost/math/special_functions/sign.hpp:126`
+(`Compatibility\build\explorer-probe12.log`) with
+`redefinition of template 'T'` for
+`template<class T> inline T changesign_impl(T x, ieee_copy_all_bits_tag const&)`.
+Two earlier overloads spell the same function name with a parenthesized
+declarator, `inline T (changesign_impl)(...)`.
+
+Reduced to
+`Compatibility\build\sign-template-probes\p4_parenthesized_definitions_then_plain_declaration.cpp`,
+where two parenthesized definition overloads are followed by a plain
+same-signature declaration and the compiler reports `redefinition of template
+'T'` (probe log `p4.log`).  The one-parenthesized-definition variant
+`p6_one_parenthesized_definition_then_plain_declaration.cpp` passes, as do the
+declaration-only variants, so the second parenthesized definition is part of
+the failing shape.
+
+Work required:
+
+- Retain the reduced case under `features/Templates/pass`.
+- Register the declared function name from a parenthesized function-template
+  declarator instead of keying the template on its return-type parameter.
+
 ## clCRC.cpp: a leading `::` in a replayed member function template
 
 An out-of-class member function template whose declaration and definition spell
@@ -193,24 +218,14 @@ Closed.  With the replayed-body floor closed, the consumer probe moved to
 `src/include/runtime/cfloat` now includes `<float.h>`; retained as
 `features/Includes/pass/test_include_cfloat.cpp`.
 
-### The next floor: boost::mpl's `vector0<>` argument list
+### boost::mpl's `vector0<>` argument list
 
-Open.  The consumer probe now stops in
+Closed.  The consumer probe stopped in
 `boost/mpl/vector/aux_/vector0.hpp:45`
-(`Compatibility\build\explorer-probe11.log`) with
-
-```
-'>' expected after template argument '...vector0...na' opened near line 45 (got '<')
-```
-
-for `typedef v_iter<vector0<>,0> begin;` inside the `vector0<na>`
-specialization.  A template-id with an empty argument list that falls back to
-the default `na` fails to parse when it is the first argument of an enclosing
-template-id; the same shape outside the specialization parses.  Reduced to
-`Compatibility\build\mpl-vector-probes\m1_self_empty_argument.cpp` (24 lines,
-compared with the passing `m2_outside.cpp`).
-
-Work required:
-
-- Retain the reduced case under `features/Templates/pass`.
-- Fix the nested template-id parse so `vector0<>` closes its own argument list.
+(`Compatibility\build\explorer-probe11.log`).  Inside `vector0<na>`,
+unqualified `vector0` resolved to its injected specialization token, but the
+template-argument parser only looked for a member template under that token
+and returned before consuming the following `<`.  It now uses the owning
+class-template lookup for an injected class-template name, so `vector0<>`
+closes its empty argument list and instantiates `vector0<na>`.  Retained as
+`features/Templates/pass/test_injected_class_template_empty_arguments.cpp`.
