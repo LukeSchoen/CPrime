@@ -81,60 +81,99 @@ Work required:
 - Retain the reproducer as a regression case.
 - Re-check the isolated SSE GEMM performance after the fix.
 
-## Explorer++ probe: `[[noreturn]]` between declaration specifiers
+## The standard `std::atomic_*` typedefs crash the compiler
 
-Probe: `C:\Luke\Src\Archive\explorerplusplus`, a manifest build of 232
+`std::atomic_int_least32_t` and the rest of the typedefs of
+[atomics.types.generic] are absent from `src/include/runtime/atomic`, so
+`boost/smart_ptr/detail/sp_counted_base_std_atomic.hpp` cannot compile its
+counted base.  Adding them is blocked: with the typedefs in place the compiler
+dies with `0xC0000005` on any translation unit that reaches `<atomic>` through
+`<string>`/`<memory>`, while `<atomic>` on its own and the same typedef list in
+the translation unit proper are both accepted.
+
+The reproducer, the staged include tree, and the bisection table are in
+`Compatibility\build\atomic-alias-crash` (`notes.md`, `probe.cpp`,
+`stage\include\atomic`); the red case is
+`features/Atomics/pass/test_atomic_typedefs.cpp`.
+
+Work required:
+
+- Find why the compiler fails once that typedef set is parsed inside the
+  header, when the same declarations parse in a translation unit.
+- Publish the standard typedefs and make the retained case pass.
+
+## Explorer++ probe: `std::string(begin, end)` from two pointers
+
+The probe is `C:\Luke\Src\Archive\explorerplusplus`, a manifest build of 232
 translation units driven by `src\scripts\project.exe`; entry point
-`build_cpc.cmd`, reduced cases and the re-run command in `Scripts\cpc\gaps` and
-`Scripts\cpc\Test-CpcGaps.ps1`. Compile it with root `cpc.exe`, reduce each
-failure to a minimal local case, and never edit the consumer.
+`build_cpc.cmd`, reduced cases and their probe in the consumer's
+`Scripts\cpc\gaps` and `Scripts\cpc\Test-CpcGaps.ps1`.  Compile it with root
+`cpc.exe`, reduce each failure to a minimal local case, and never edit the
+consumer.  All five reduced cases in `Scripts\cpc\gaps` compile now.
 
-The build stops in `boost/throw_exception.hpp` as reached from
-`boost/type_index/stl_type_index.hpp`: a function template declared
-`[[noreturn]]`. Its replay emits `__attribute((weak)) inline` in front of the
-copied declaration, so the standard attribute lands between declaration
-specifiers, which `parse_btype` rejects with `identifier expected`.
+Closed.  This section is the record of the floor it opened and of the floors
+behind it: the runtime `basic_string` gained the standard iterator-pair
+constructor, the consumer moved on to
+`boost/date_time/gregorian/greg_weekday.hpp`, and every floor it reported
+afterwards is closed below.  The retained case is
+`features/Cpp17Gaps/pass/test_string_iterator_pair_constructor.cpp`.
 
-Reduced shape:
+### boost/date_time: an inherited member typedef of an instance
 
-```cpp
-inline [[noreturn]] void gap_f(int const &e);
-```
+Closed.  `class greg_weekday : public greg_weekday_rep` used `value_type`
+unqualified in its constructor declarator, and `value_type` came from
+`constrained_value<policy>`, a class-template instance.  The instance
+registers a nested typedef under the alias token its replayed body declares
+(`traits__int__value_type`), which an unqualified lookup inside a class
+derived from the instance never consulted.  Retained as
+`features/Classes/pass/test_inherited_typedef_from_template_base.cpp`.
 
-Work required:
+### boost/exception: derived-to-base versus `void*`
 
-- Accept a standard attribute-specifier sequence between declaration
-  specifiers; the fast-tier case
-  `features/Cpp17Gaps/pass/test_attribute_before_function_template.cpp` covers
-  the instantiation shape.
-- Continue from the next floor the consumer build reports.
+Closed.  `copy_boost_exception(exception *, exception const *)` competed with
+`copy_boost_exception(void *, void const *)` for a `clone_impl<T> *`, and the
+pointer tie-break ranked both at the same rank.  [over.ics.rank]/4.4 and
+/4.5.1 are now implemented for pointer conversions.  Retained as
+`features/OperatorOverloads/pass/test_pointer_conversion_base_over_void.cpp`.
 
-## `std::abs` overload set is ambiguous after a using-declaration import
+### boost/operators: qualified lookup through a using-directive
 
-`std::abs(-1L)` reports `ambiguous overloaded function '__cpc_ns_std_abs'`. The
-shipped `<cstdlib>` imports the C declarations into `namespace std` and then
-declares the same signatures again, as the reference implementation does.
-Fast-tier case:
-`features/All/pass/test_runtime_absolute_value_overloads.cpp`.
+Closed.  `boost::less_than_comparable1` is declared in
+`boost::operators_impl` and imported into namespace `boost` with
+`using namespace operators_impl;`; qualified lookup of a type name never
+expanded the qualifier's using-directives, so `boost::date_time`'s base-clause
+and template arguments could not be parsed.  Retained as
+`features/Namespaces/pass/test_qualified_lookup_through_using_directive.cpp`.
 
-Reduced shape:
+### boost::date_time's `bad_weekday`: exception messages
 
-```cpp
-inline int abs(int v) { return v; }
-inline long abs(long v) { return v; }
-inline double abs(double v) { return v; }
+Closed.  `std::out_of_range(std::string(...))` had no viable constructor and
+the runtime exception classes only took a `const char *` and stored it
+without owning it.  `<stdexcept>` now has the standard class set with both
+message constructors and an owned copy.  Retained as
+`features/Exceptions/pass/test_standard_exception_message_from_string.cpp`.
 
-namespace std {
-  using ::abs;
-  inline int abs(int v) { return v; }
-  inline long abs(long v) { return v; }
-}
+### boost::predef: the missing `ntverp.h`
 
-int main() { return (int)std::abs(-1L) == -1 ? 0 : 1; }
-```
+Closed.  `boost/predef/platform/windows_uwp.h` includes `<ntverp.h>`
+unconditionally on Windows and the vendored SDK does not ship it.
+`src/include/runtime/ntverp.h` now reports the pre-UWP Windows 7 SDK build the
+vendored headers match, so UWP detection stays off.  Retained as
+`features/Includes/pass/test_include_ntverp.cpp`.
 
-Work required:
+### boost::numeric::conversion: `std::float_round_style`
 
-- Make an overload set imported by a using-declaration and a same-signature
-  declaration in the importing namespace form one set, so the exact `long` match
-  wins.
+Closed.  `integral_c<std::float_round_style, std::round_toward_zero>` needs
+the floating-point style enumerations of [limits.numeric], which `<limits>`
+did not declare.  The enumerations and the `round_style` member were added.
+Retained as `features/Includes/pass/test_limits_float_round_style.cpp`.
+
+### The next floor: boost::container
+
+This is the floor behind the atomic typedefs: it is what the probe reported
+(`Compatibility\build\explorer-probe7.log`, run while those typedefs were
+temporarily published), and it is not reachable again until they are.  The
+probe stops in `boost/container/container_fwd.hpp` with
+`error: constexpr increment requires an evaluation-owned object`.  That header
+contains no `constexpr` at all, so the diagnostic's file and line do not name
+the real site; reduce it before treating the message as the shape.

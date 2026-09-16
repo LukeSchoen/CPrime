@@ -16501,14 +16501,14 @@ storage:
               parts[nb_parts++] = tok;
               tok_str_add2(replay, tok, &tokc);
               next();
-              qtok = explicit_global_scope ? make_namespace_tok_from_parts(parts, nb_parts)
-                                          : find_namespace_tok_from_parts(parts, nb_parts);
+              qtok = find_qualified_member_tok(parts, nb_parts,
+                                               explicit_global_scope, NULL, NULL);
               s = global_symbol_find(qtok);
               if (struct_find(qtok) || (s && (s->type.t & VT_TYPEDEF)))
                 break;
             }
-            qtok = explicit_global_scope ? make_namespace_tok_from_parts(parts, nb_parts)
-                                        : find_namespace_tok_from_parts(parts, nb_parts);
+            qtok = find_qualified_member_tok(parts, nb_parts,
+                                             explicit_global_scope, NULL, NULL);
             s = struct_find(qtok);
             if (s
                 && (((s->type.t & VT_BTYPE) == VT_STRUCT)
@@ -23316,30 +23316,19 @@ tok_identifier:
               parts[nb_parts++] = tok;
               next();
             }
-            t = find_namespace_tok_from_parts(parts, nb_parts);
-            /* Qualified lookup also names what the namespace inherits
-               through the using-directives declared in it (`A::i` when A
-               contains `using namespace B;` and B declares `i`). */
-            if (nb_parts > 1 && !namespace_member_exists(t))
             {
-              int via[16];
-              int prefix_tok = find_namespace_tok_from_parts(parts,
-                                                             nb_parts - 1);
-              int nb_via = collect_using_directive_member_toks(prefix_tok,
-                             parts[nb_parts - 1], via,
-                             (int)(sizeof(via) / sizeof(via[0])));
-              if (nb_via > 0)
+              int via_prefix = 0;
+              int nb_via = 0;
+              /* Two or more nominated namespaces declaring the name cannot be
+                 named by one token: the call site imports the whole set from
+                 the qualifier.  Qualified lookup stops there and does not walk
+                 enclosing scopes. */
+              t = find_qualified_member_tok(parts, nb_parts, 0, &nb_via,
+                                            &via_prefix);
+              if (nb_via > 1 && is_namespace_scope_tok(via_prefix))
               {
-                t = via[0];
-                /* Two or more nominated namespaces declare the name, so
-                   one token cannot stand for all of them: the call site
-                   imports the whole set from the qualifier.  Qualified
-                   lookup stops there and does not walk enclosing scopes. */
-                if (nb_via > 1 && is_namespace_scope_tok(prefix_tok))
-                {
-                  directive_qualified_ns = prefix_tok;
-                  directive_qualified_ns_name = parts[nb_parts - 1];
-                }
+                directive_qualified_ns = via_prefix;
+                directive_qualified_ns_name = parts[nb_parts - 1];
               }
             }
           }

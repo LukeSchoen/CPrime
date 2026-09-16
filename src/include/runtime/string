@@ -41,6 +41,10 @@ public:
   basic_string(const C* s) : m_data(0), m_len(0), m_capacity(0) { assign(s,Traits::length(s)); }
   basic_string(const C* s,size_t n) : m_data(0), m_len(0), m_capacity(0) { assign(s,n); }
   basic_string(size_t n,C c) : m_data(0), m_len(0), m_capacity(0) { resize(n,c); }
+  template<class Iterator, typename enable_if<!is_integral<Iterator>::value,int>::type = 0>
+  basic_string(Iterator first,Iterator last) : m_data(0), m_len(0), m_capacity(0) {
+    for(;first!=last;++first) push_back(*first);
+  }
   basic_string(const basic_string& s) : m_data(0), m_len(0), m_capacity(0) { assign(s.data(),s.size()); }
   basic_string(basic_string&& s) noexcept : m_data(s.m_data), m_len(s.m_len), m_capacity(s.m_capacity) { s.m_data=0; s.m_len=0; s.m_capacity=0; }
   ~basic_string() { if(m_data) Alloc().deallocate(m_data,m_capacity+1); }

@@ -53,23 +53,46 @@ src\scripts\build.exe                                                  publish t
 
 ## Leads
 
-- Close the two fast-tier gaps, then take the next failure each probe reports.
-  Both shapes and the work they need are in `Compatibility\KNOWN-ISSUES.md`:
-  - `features/Cpp17Gaps/pass/test_attribute_before_function_template.cpp` - a
-    standard attribute between declaration specifiers (`inline [[noreturn]]
-    void f(int const &);`) is rejected; the Explorer++ build reaches this shape
-    through `boost/throw_exception.hpp`.
-  - `features/All/pass/test_runtime_absolute_value_overloads.cpp` -
-    `std::abs(-1L)` is ambiguous where `<cstdlib>` imports the C overload set
-    into `namespace std` and also declares those signatures there.
+- The two fast-tier gaps are closed, and the shape behind them is now covered
+  twice over.  A standard attribute-specifier sequence is accepted anywhere in
+  the decl-specifier-seq and at the end of a function's
+  parameters-and-qualifiers, so `inline [[noreturn]] void f(int const &);` and
+  `int f(int) [[noreturn]];` both parse; retained in
+  `features/Cpp17Gaps/pass/test_attribute_before_function_template.cpp` and
+  `features/Cpp17Gaps/pass/test_attribute_after_parameter_list.cpp`.  Decision:
+  a compiler-side merge of a using-declaration import with a same-signature
+  declaration in the importing namespace must stay rejected, because
+  `features/Namespaces/fail/test_using_merged_overloads_ambiguous.cpp` requires
+  that diagnostic, so the duplicated `<cstdlib>`/`<cmath>` overload set was
+  repaired in the runtime headers, where the reference headers import one set
+  per name instead of redeclaring it in `namespace std`.
+- The fast-tier gap is `features/Atomics/pass/test_atomic_typedefs.cpp`: the
+  standard `std::atomic_*` typedefs of [atomics.types.generic] are missing from
+  `src/include/runtime/atomic`, and adding them makes the compiler die with
+  `0xC0000005` on any translation unit that reaches `<atomic>` through
+  `<string>`/`<memory>`.  `<atomic>` alone and the same typedef list in the
+  translation unit proper are both accepted, so the crash is the compiler's,
+  not the header's.  Reproduce it with the staged tree and probe in
+  `Compatibility\build\atomic-alias-crash` (`notes.md` has the command and the
+  bisection table).  Fix the crash first: publishing the typedefs is what
+  unblocks `boost/smart_ptr/detail/sp_counted_base_std_atomic.hpp` and the
+  consumer floors behind it.  This closed cycle's floors and their retained
+  cases are recorded in `Compatibility\KNOWN-ISSUES.md`; the next floor behind
+  this one is `boost/container/container_fwd.hpp`'s
+  `constexpr increment requires an evaluation-owned object`.
 - Work the defects recorded in `Compatibility\KNOWN-ISSUES.md`: the `::`-spelled
   member function template replay, the `InterlockedIncrement` return value,
   inline SSE asm corrupting surrounding float code, the missing `psapi.h` in the
   vendored Windows SDK, and the `__m256`/`immintrin.h` stub that blocks SSE/AVX
   types.
-- The Explorer++ consumer build (`C:\Luke\Src\Archive\explorerplusplus`,
-  reduced cases and a re-run command in `Scripts\cpc\gaps` and
-  `Scripts\cpc\Test-CpcGaps.ps1`) is the large C++17 probe: compile it with root
+- The Explorer++ consumer build (`C:\Luke\Src\Archive\explorerplusplus`) is the
+  large C++17 probe. Its entry point is `build_cpc.cmd` (it exports the
+  manifest, then drives root `cpc.exe` through `src\scripts\project.exe`); its
+  reduced cases and their probe are the consumer's own
+  `Scripts\cpc\gaps\*.cpp` and `Scripts\cpc\Test-CpcGaps.ps1`. All five reduced
+  cases compile with the published compiler.  The build now stops in
+  `boost/smart_ptr/detail/sp_counted_base_std_atomic.hpp`, which needs the
+  `std::atomic_*` typedefs (see the fast-tier gap above); compile it with root
   `cpc.exe`, reduce each failure to a minimal local case, close the shared
   mechanism, and continue from the next floor.
 - `Compatibility\tests\test.exe -Checks` (the CPC-only publication/development gate) is
@@ -88,3 +111,29 @@ src\scripts\build.exe                                                  publish t
 - Runtime headers and the packaged runtime are part of the contract: a program
   that compiles but misbehaves at run time is a compatibility failure, and its
   reduced case belongs in the suite that owns the behaviour.
+
+## Next action
+
+Reproduce the crash with the exact case, repair the shared mechanism, publish
+the typedefs and republish:
+
+```
+Compatibility\tests\test.exe -Suite features/Atomics -Select test_atomic_typedefs.cpp
+cpc.exe -B Compatibility\build\atomic-alias-crash\stage -std=c++17 Compatibility\build\atomic-alias-crash\probe.cpp -o Compatibility\build\atomic-alias-crash\probe.exe
+Compatibility\tests\test.exe -Suite features/Atomics
+Compatibility\tests\test.exe -All -Tier fast
+Compatibility\tests\test.exe -Regression
+src\scripts\build.exe
+```
+
+The case leaves the fast list by passing, never by removal. Then re-run the
+consumer probe with the published compiler --
+`C:\Luke\Src\Archive\explorerplusplus\build_cpc.cmd Release x64`, which copies
+root `cpc.exe` in first -- and reduce the next floor it reports. Reproduction
+evidence for this cycle is in `Compatibility\build`: the consumer floors in
+`explorer-probe2.log` through `explorer-probe8.log`, the alias crash in
+`atomic-alias-crash`, and the suite/fast/gate runs in `classes-suite-final.log`,
+`atomics-suite.log`, `fast-final.log` and `regression-final.log`.  The
+`gregdur-probe*.cpp` and `small_*.cpp` reductions, `crash_probe1.cpp`,
+`roundstyle_probe.cpp` and `string-pair-*.log` are the reductions behind the
+closed floors.

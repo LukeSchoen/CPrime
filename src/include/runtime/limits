@@ -9,11 +9,28 @@
 #undef max
 #endif
 namespace std {
+/* The floating-point style enumerations of [limits.numeric].  Boost's
+   numeric conversion selects a rounding policy with
+   `integral_c<std::float_round_style, std::round_to_nearest>`, so the
+   enumerators have to name the enumeration type, not bare ints. */
+enum float_round_style {
+  round_indeterminate = -1,
+  round_toward_zero = 0,
+  round_to_nearest = 1,
+  round_toward_infinity = 2,
+  round_toward_neg_infinity = 3
+};
+enum float_denorm_style {
+  denorm_indeterminate = -1,
+  denorm_absent = 0,
+  denorm_present = 1
+};
 template<class T> struct numeric_limits {
   static constexpr bool is_specialized = false;
   static constexpr bool is_signed = false;
   static constexpr bool is_integer = false;
   static constexpr int digits = 0;
+  static constexpr float_round_style round_style = round_toward_zero;
   static constexpr T min() noexcept { return T(); }
   static constexpr T max() noexcept { return T(); }
   static constexpr T lowest() noexcept { return T(); }
@@ -27,6 +44,7 @@ template<> struct numeric_limits<T> { \
   static constexpr bool is_signed = SIGNED; \
   static constexpr bool is_integer = true; \
   static constexpr int digits = sizeof(T)*CHAR_BIT - (SIGNED?1:0); \
+  static constexpr float_round_style round_style = round_toward_zero; \
   static constexpr T min() noexcept { return LO; } \
   static constexpr T max() noexcept { return HI; } \
   static constexpr T lowest() noexcept { return LO; } \
@@ -53,6 +71,7 @@ template<> struct numeric_limits<T> { \
   static constexpr bool is_signed = true; \
   static constexpr bool is_integer = false; \
   static constexpr int digits = PREFIX##_MANT_DIG; \
+  static constexpr float_round_style round_style = round_to_nearest; \
   static constexpr T min() noexcept { return PREFIX##_MIN; } \
   static constexpr T max() noexcept { return PREFIX##_MAX; } \
   static constexpr T lowest() noexcept { return -PREFIX##_MAX; } \

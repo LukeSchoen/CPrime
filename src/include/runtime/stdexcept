@@ -2,31 +2,80 @@
 #define _CPC_STDEXCEPT
 
 #include <exception>
+#include <string>
 
 namespace std
 {
+  /* The message is owned, as the standard requires: a caller may throw an
+     exception built from a temporary string and still read what() in the
+     handler, which is what `bad_weekday` in boost::date_time does. */
   class logic_error : public exception
   {
   public:
+    explicit logic_error(const string &message) : m_message(message) {}
     explicit logic_error(const char *message) : m_message(message) {}
-    const char *what() const noexcept override { return m_message; }
+    const char *what() const noexcept override { return m_message.c_str(); }
   private:
-    const char *m_message;
+    string m_message;
+  };
+
+  class domain_error : public logic_error
+  {
+  public:
+    explicit domain_error(const string &message) : logic_error(message) {}
+    explicit domain_error(const char *message) : logic_error(message) {}
+  };
+
+  class invalid_argument : public logic_error
+  {
+  public:
+    explicit invalid_argument(const string &message) : logic_error(message) {}
+    explicit invalid_argument(const char *message) : logic_error(message) {}
+  };
+
+  class length_error : public logic_error
+  {
+  public:
+    explicit length_error(const string &message) : logic_error(message) {}
+    explicit length_error(const char *message) : logic_error(message) {}
   };
 
   class out_of_range : public logic_error
   {
   public:
+    explicit out_of_range(const string &message) : logic_error(message) {}
     explicit out_of_range(const char* message) : logic_error(message) {}
   };
 
   class runtime_error : public exception
   {
   public:
+    explicit runtime_error(const string &message) : m_message(message) {}
     explicit runtime_error(const char *message) : m_message(message) {}
-    const char *what() const noexcept override { return m_message; }
+    const char *what() const noexcept override { return m_message.c_str(); }
   private:
-    const char *m_message;
+    string m_message;
+  };
+
+  class range_error : public runtime_error
+  {
+  public:
+    explicit range_error(const string &message) : runtime_error(message) {}
+    explicit range_error(const char *message) : runtime_error(message) {}
+  };
+
+  class overflow_error : public runtime_error
+  {
+  public:
+    explicit overflow_error(const string &message) : runtime_error(message) {}
+    explicit overflow_error(const char *message) : runtime_error(message) {}
+  };
+
+  class underflow_error : public runtime_error
+  {
+  public:
+    explicit underflow_error(const string &message) : runtime_error(message) {}
+    explicit underflow_error(const char *message) : runtime_error(message) {}
   };
 }
 

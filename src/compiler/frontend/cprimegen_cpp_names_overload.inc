@@ -52,6 +52,25 @@ static int find_class_scope_type_tok(int class_tok, int name_tok)
     alias = global_symbol_find(nested_tok);
     if (alias && (alias->type.t & VT_TYPEDEF))
       return nested_tok;
+    /* A class-template instance declares a nested typedef under the alias
+       token its replayed body spells (B__int__value_type), not under the
+       primary template's joined spelling (B_value_type), and it is not
+       reachable through the instance's own member list.  Consult the
+       recorded instance alias so an unqualified use inside the instance's
+       bases resolves. */
+    {
+      int scoped_tok = template_member_scoped_alias_tok(class_tok, name_tok);
+      if (scoped_tok && scoped_tok != nested_tok)
+      {
+        if (find_class_template_def(scoped_tok))
+          return scoped_tok;
+        if (struct_find(scoped_tok))
+          return scoped_tok;
+        alias = global_symbol_find(scoped_tok);
+        if (alias && (alias->type.t & VT_TYPEDEF))
+          return scoped_tok;
+      }
+    }
     {
       ClassBaseInfo *base;
       for (base = class_base_candidates(class_tok); base; base = base->bucket_next)
@@ -520,6 +539,38 @@ static int collect_using_directive_member_toks(int ns_tok, int name_tok,
     }
   }
   return count;
+}
+
+/* Qualified lookup also names what the qualifier namespace inherits through
+   the using-directives declared in it (`A::T` when A contains
+   `using namespace B;` and B declares T).  The declared member token is
+   returned when a nominated namespace provides one; `via_count` and
+   `via_prefix` report how many did and which qualifier was expanded, so a
+   caller that has to import a whole overload set can name it. */
+static int find_qualified_member_tok(const int *parts, int nb_parts,
+                                     int explicit_global_scope,
+                                     int *via_count, int *via_prefix)
+{
+  int t = explicit_global_scope ? make_namespace_tok_from_parts(parts, nb_parts)
+                                : find_namespace_tok_from_parts(parts, nb_parts);
+  if (via_count) *via_count = 0;
+  if (via_prefix) *via_prefix = 0;
+  if (nb_parts > 1 && !namespace_member_exists(t))
+  {
+    int via[16];
+    int prefix_tok = explicit_global_scope
+        ? make_namespace_tok_from_parts(parts, nb_parts - 1)
+        : find_namespace_tok_from_parts(parts, nb_parts - 1);
+    int nb_via = collect_using_directive_member_toks(prefix_tok,
+        parts[nb_parts - 1], via, (int)(sizeof(via) / sizeof(via[0])));
+    if (nb_via > 0)
+    {
+      if (via_count) *via_count = nb_via;
+      if (via_prefix) *via_prefix = prefix_tok;
+      t = via[0];
+    }
+  }
+  return t;
 }
 
 /* Record that a namespace-scope using-declaration imports `target_tok`
@@ -3105,6 +3156,30 @@ static int cpp_compare_argument_conversion_overloads(Sym *left, Sym *right,
          pointer conversions do not form a qualification subsequence. */
       if (right_from_left > 0 && left_from_right < 0) current = 1;
       else if (left_from_right > 0 && right_from_left < 0) current = -1;
+      else if (current == 0) {
+        CType left_pointed = *pointed_type(&l->type);
+        CType right_pointed = *pointed_type(&r->type);
+        int left_void = (left_pointed.t & VT_BTYPE) == VT_VOID;
+        int right_void = (right_pointed.t & VT_BTYPE) == VT_VOID;
+        /* [over.ics.rank]/4.4: a derived-to-base conversion is better than a
+           conversion to void*, so an object pointer target beats void* even
+           though both are Conversion rank. */
+        if (left_void != right_void)
+          current = left_void ? -1 : 1;
+        else if (!left_void) {
+          /* [over.ics.rank]/4.5.1-/4.5.4: a nearer base is a better target
+             than a farther one for the same derived-to-base source. */
+          int left_class = get_struct_type_name_tok(&left_pointed);
+          int right_class = get_struct_type_name_tok(&right_pointed);
+          int source_class = get_struct_type_name_tok(pointed_type(&source_value));
+          if (source_class && left_class && right_class
+              && class_has_base(source_class, left_class)
+              && class_has_base(source_class, right_class)) {
+            if (class_has_base(left_class, right_class)) current = 1;
+            else if (class_has_base(right_class, left_class)) current = -1;
+          }
+        }
+      }
     }
     if (arguments[i].t == VT_BRACED_LIST) {
       CType left_target = is_reference_type(&l->type) ? *pointed_type(&l->type) : l->type;

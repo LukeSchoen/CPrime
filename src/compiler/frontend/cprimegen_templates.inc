@@ -13219,7 +13219,8 @@ static int parse_one_template_type_arg(void)
         parts[nb_parts++] = tok;
         next();
       }
-      name_tok = find_namespace_tok_from_parts(parts, nb_parts);
+      name_tok = find_qualified_member_tok(parts, nb_parts,
+                                           global_scope ? 1 : 0, NULL, NULL);
       td = find_class_template_def(name_tok);
       if (td && td->is_class && tok == TOK_LT)
       {
