@@ -123,6 +123,23 @@ static unsigned constexpr_local_bucket(Sym *object)
   return ((uintptr_t)object >> 4) & 255;
 }
 
+/* Record that a region of an evaluation-owned object holds zero bytes.  The
+   constant evaluator answers scalar reads in that region from the record, so a
+   value-initialized object can supply a constant initializer's bytes. */
+static void constexpr_record_zero_fill(Sym *object, int offset, int size)
+{
+  unsigned bucket;
+  ConstexprLocalField *entry;
+  if (!object || size <= 0) return;
+  bucket = constexpr_local_bucket(object);
+  entry = cprime_mallocz(sizeof(*entry));
+  entry->object = object;
+  entry->offset = offset;
+  entry->zero_size = size;
+  entry->next = constexpr_local_fields[bucket];
+  constexpr_local_fields[bucket] = entry;
+}
+
 static void free_constexpr_local_fields(Sym *object)
 {
   unsigned first = object ? constexpr_local_bucket(object) : 0;

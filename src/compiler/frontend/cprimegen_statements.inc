@@ -1996,15 +1996,9 @@ static void init_assert(init_params *p, int offset)
 static void init_putz(init_params *p, unsigned long c, int size)
 {
   init_assert(p, c + size);
-  if (p->constant_object_target && size > 0) {
-    unsigned bucket = constexpr_local_bucket(p->constant_object_target);
-    ConstexprLocalField *entry = cprime_mallocz(sizeof(*entry));
-    entry->object = p->constant_object_target;
-    entry->offset = (int)c - p->constant_object_offset;
-    entry->zero_size = size;
-    entry->next = constexpr_local_fields[bucket];
-    constexpr_local_fields[bucket] = entry;
-  }
+  if (p->constant_object_target)
+    constexpr_record_zero_fill(p->constant_object_target,
+                               (int)c - p->constant_object_offset, size);
   if (p->sec)
   {
     // nothing to do because globals are already set to zero

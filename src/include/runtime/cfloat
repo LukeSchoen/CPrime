@@ -1,0 +1,6 @@
+#ifndef _CPC_CFLOAT
+#define _CPC_CFLOAT
+
+#include <float.h>
+
+#endif

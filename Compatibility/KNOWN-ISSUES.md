@@ -156,18 +156,61 @@ the floating-point style enumerations of [limits.numeric], which `<limits>`
 did not declare.  The enumerations and the `round_style` member were added.
 Retained as `features/Includes/pass/test_limits_float_round_style.cpp`.
 
-### The next floor: boost::container
+### boost::container's `ordered_range`: a constant class initializer
 
-Open.  With the atomic typedefs published, the consumer probe reaches this
-floor (`Compatibility\build\explorer-probe9.log`) and stops in
-`boost/container/container_fwd.hpp` with
-`error: constexpr increment requires an evaluation-owned object`, reported at
-line 46, which is only a comment.  The real failing declaration is line 249:
+Closed.  `static const ordered_range_t ordered_range = ordered_range_t();` is a
+constant initializer: the class has no user-provided constructor, so `T()` is a
+constant expression, while `can_lower_global_dynamic_init` refuses to lower a
+`const` class to a dynamic initializer.  The static initializer path now owns a
+class-typed value: a value-initialized trivially constructible temporary is
+recorded as zero bytes for its scalar subobjects during a constant evaluation,
+and `init_putv` writes the recorded bytes as static data.  Retained as
+`features/Cpp17Gaps/pass/test_const_class_functional_initializer.cpp`.
 
-```cpp
-static const ordered_range_t ordered_range = ordered_range_t();
+### Explorer++ probe: a replayed constructor body under a static initializer
+
+Closed.  The probe log
+`Compatibility\build\explorer-probe9.log` reported
+`boost/container/container_fwd.hpp:46: error: constexpr increment requires an
+evaluation-owned object`.  That header was only where the parser happened to
+be: while folding a namespace-scope static initializer, resolving the
+initializer's constructor call flushed the queued member bodies, and each
+replayed body inherited the fold state, so the ordinary `++` in
+`std::basic_string`'s iterator constructor was read as constant evaluation.
+`compile_pending_member_funcs` now suspends the static-initializer fold and the
+evaluation-owned temporary depth while it compiles a member body for emission.
+The local reduction is
+`Compatibility\build\pending-flush-probes\h6_unused_make_box.cpp` (27 lines);
+retained as
+`features/Cpp17Gaps/pass/test_static_initializer_template_constructor_replay.cpp`.
+
+### The missing `<cfloat>` runtime header
+
+Closed.  With the replayed-body floor closed, the consumer probe moved to
+`boost/math/tools/config.hpp:21: error: include file 'cfloat' not found`
+(`Compatibility\build\explorer-stdafx.candidate.log`).  The runtime shipped
+`<climits>`, `<cmath>` and `<float.h>` but no `<cfloat>` wrapper.
+`src/include/runtime/cfloat` now includes `<float.h>`; retained as
+`features/Includes/pass/test_include_cfloat.cpp`.
+
+### The next floor: boost::mpl's `vector0<>` argument list
+
+Open.  The consumer probe now stops in
+`boost/mpl/vector/aux_/vector0.hpp:45`
+(`Compatibility\build\explorer-probe11.log`) with
+
+```
+'>' expected after template argument '...vector0...na' opened near line 45 (got '<')
 ```
 
-`Compatibility\build\ordered-range-probe.cpp` reduces it to a local class with
-a trivial default constructor, and root `cpc.exe` rejects it with
-`initializer element is not constant`.
+for `typedef v_iter<vector0<>,0> begin;` inside the `vector0<na>`
+specialization.  A template-id with an empty argument list that falls back to
+the default `na` fails to parse when it is the first argument of an enclosing
+template-id; the same shape outside the specialization parses.  Reduced to
+`Compatibility\build\mpl-vector-probes\m1_self_empty_argument.cpp` (24 lines,
+compared with the passing `m2_outside.cpp`).
+
+Work required:
+
+- Retain the reduced case under `features/Templates/pass`.
+- Fix the nested template-id parse so `vector0<>` closes its own argument list.

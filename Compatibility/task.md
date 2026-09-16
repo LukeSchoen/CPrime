@@ -85,8 +85,11 @@ src\scripts\build.exe                                                  publish t
   reduced cases and their probe are the consumer's own
   `Scripts\cpc\gaps\*.cpp` and `Scripts\cpc\Test-CpcGaps.ps1`. All five reduced
   cases compile with the published compiler.  With the atomic typedefs
-  published, the build now stops in `boost/container/container_fwd.hpp`; the
-  next floor and its local reduction are in `Compatibility\KNOWN-ISSUES.md`.
+  published and the three floors since closed -- `ordered_range_t()` as a
+  constant class initializer, the replayed `std::basic_string` constructor
+  under a static initializer fold, and the missing `<cfloat>` runtime header --
+  the build now stops in `boost/mpl/vector/aux_/vector0.hpp:45`; the reduced
+  case and the work it needs are in `Compatibility\KNOWN-ISSUES.md`.
 - `Compatibility\tests\test.exe -Checks` (the CPC-only publication/development gate) is
   red: the runner self-check `runner rejects false expectation:
   test_valid_without_main.cpp` reports exit 1 and `Summary: 0 passed, 1 failed`
@@ -106,26 +109,30 @@ src\scripts\build.exe                                                  publish t
 
 ## Next action
 
-Retain the reduced `boost/container/container_fwd.hpp` floor as one minimal
-case under `features/Cpp17Gaps/pass`, add it to the fast list, reproduce it
-with root `cpc.exe`, repair the shared initialization mechanism, then run the
-suite, fast tier, regression gate, and publish:
+Retain the reduced `boost::mpl` `vector0<>` floor as one minimal case under
+`features/Templates/pass`, add it to the fast list, reproduce it with root
+`cpc.exe`, repair the nested template-id parse, then run the suite, fast tier,
+regression gate, and publish:
 
 ```
-Push-Location Compatibility
-..\cpc.exe -std=c++17 build\ordered-range-probe.cpp -o build\ordered-range-probe.exe
-Pop-Location
-Compatibility\tests\test.exe -Suite features/Cpp17Gaps -Select <retained-case>.cpp
-Compatibility\tests\test.exe -Suite features/Cpp17Gaps
+Compatibility\tests\test.exe -Suite features/Templates -Select <retained-case>.cpp
+Compatibility\tests\test.exe -Suite features/Templates
 Compatibility\tests\test.exe -All -Tier fast
 Compatibility\tests\test.exe -Regression
 src\scripts\build.exe
 ```
 
-The reduced case is exactly `static const T x = T();` at namespace scope; root
-`cpc.exe` reports `initializer element is not constant`.  The consumer probe
-log is `Compatibility\build\explorer-probe9.log`.  After publishing, re-run
+The reduced case is
+`Compatibility\build\mpl-vector-probes\m1_self_empty_argument.cpp`: inside
+`template<> struct vector0<na>`, the member typedef
+`v_iter<vector0<>, 0> begin;` is rejected with
+`'>' expected after template argument '...vector0...na' opened near line 16
+(got '<')`, while the same shape outside the specialization
+(`m2_outside.cpp`) parses.  The consumer probe log is
+`Compatibility\build\explorer-probe11.log`.  After publishing, re-run
 `C:\Luke\Src\Archive\explorerplusplus\build_cpc.cmd Release x64` (it copies
 root `cpc.exe` in first) and reduce the next floor it reports.  Evidence for
-the closed atomic floor is in `Compatibility\build\atomic-alias-crash` and the
-published suite/gate runs from this cycle.
+the floors closed this cycle is in `Compatibility\build\`: the `const-class-init-*`,
+`replayed-ctor-*`, `include-cfloat-*`, `container-fwd.*`, `explorer-probe10.log`
+and `explorer-probe11.log` logs and the `pending-flush-probes` scratch cases,
+plus the published suite/gate runs.

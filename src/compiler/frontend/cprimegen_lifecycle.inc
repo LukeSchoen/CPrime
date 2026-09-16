@@ -1896,7 +1896,18 @@ static int try_parse_cpp_functional_constructor(int type_tok)
     else addr = get_temp_local_var(size, align, &r2);
     vset(&type, storage, addr);
     vtop->r2 = r2;
-    {
+    /* Value-initialization of an object with no constructor to run writes all
+       zero bytes.  When a constant evaluation owns the temporary, record that
+       zero fill as its subobject values instead of an opaque memset call, so
+       the construction can supply a constant initializer's bytes. */
+    object = !direct_destination && !type_requires_class_construction(&type)
+             && constexpr_pointer_evaluation_active()
+             ? constexpr_evaluation_object(&type, storage, addr) : NULL;
+    if (object) {
+      vtop->sym = object;
+      constexpr_record_zero_fill(object, 0, size);
+    }
+    else {
       SValue address;
       vdup();
       mk_pointer(&vtop->type);
@@ -6879,6 +6890,8 @@ static void compile_pending_member_funcs(int start)
   int saved_local_scope;
   int saved_defer_pending_member_funcs;
   int saved_vstack_depth;
+  int saved_static_initializer_constant_fold;
+  int saved_constexpr_temporary_expression_depth;
   int isolate_local_scope;
   CValue saved_tokc;
   Sym *saved_local_stack;
@@ -6899,6 +6912,13 @@ static void compile_pending_member_funcs(int start)
           && !compile_local_member_funcs_now))
     return;
   compiling_pending_member_funcs++;
+  /* A member body compiled here is emitted as an ordinary function, not
+     evaluated.  An enclosing static initializer's fold must not turn the
+     body's own runtime operations into constant-evaluation faults. */
+  saved_static_initializer_constant_fold = static_initializer_constant_fold;
+  saved_constexpr_temporary_expression_depth = constexpr_temporary_expression_depth;
+  static_initializer_constant_fold = 0;
+  constexpr_temporary_expression_depth = 0;
 
   saved_tok = tok;
   saved_tokc = tokc;
@@ -7070,6 +7090,8 @@ static void compile_pending_member_funcs(int start)
   vtop = vstack + saved_vstack_depth - 1;
   tok = saved_tok;
   tokc = saved_tokc;
+  static_initializer_constant_fold = saved_static_initializer_constant_fold;
+  constexpr_temporary_expression_depth = saved_constexpr_temporary_expression_depth;
   compiling_pending_member_funcs--;
 }
 

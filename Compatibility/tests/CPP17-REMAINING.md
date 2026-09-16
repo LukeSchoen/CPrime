@@ -27,11 +27,17 @@ scale; a combined unit that fails is recompiled and rerun case by case, and
 ## Open gaps
 
 `Compatibility/tests/tiers.json` holds one fast-tier case per gap that is still
-red, so a green fast run means the queue is empty. The fast list is empty after
-the atomic typedef floor closed. The next known consumer floor is the
-namespace-scope `static const T x = T();` shape reduced in
-`Compatibility\build\ordered-range-probe.cpp`; it is recorded in
-`Compatibility\KNOWN-ISSUES.md` and still needs a retained fast case and repair.
+red, so a green fast run means the queue is empty. The fast list is empty: the
+namespace-scope `static const T x = T();` shape, the replayed template
+constructor body that a static initializer fold misread, and the missing
+`<cfloat>` runtime header are closed and retained as
+`features/Cpp17Gaps/pass/test_const_class_functional_initializer.cpp`,
+`features/Cpp17Gaps/pass/test_static_initializer_template_constructor_replay.cpp`
+and `features/Includes/pass/test_include_cfloat.cpp`. The next known consumer
+floor is the `boost::mpl` `vector0<>` argument list reduced in
+`Compatibility\build\mpl-vector-probes\m1_self_empty_argument.cpp`; it is
+recorded in `Compatibility\KNOWN-ISSUES.md` and still needs a retained fast
+case and repair.
 
 To add a gap: add one minimal case under `features/Cpp17Gaps/pass`, list it in
 the fast list, reproduce it with root `cpc.exe`, repair the shared mechanism,

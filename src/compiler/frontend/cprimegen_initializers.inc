@@ -1,3 +1,10 @@
+static int constexpr_collect_object_fields(CType *object_type, CType *type,
+                                           Sym *object, int offset,
+                                           ConstexprLocalField ***tail);
+static int emit_constant_fields_at(Section *sec, long long base,
+                                   ConstexprLocalField *fields);
+static void free_constexpr_object_fields(ConstexprLocalField *fields);
+
 static void decl_design_delrels(Section *sec, int c, int size)
 {
   ObjW_Rel *rel, *rel2, *rel_end;
@@ -688,6 +695,25 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       if ((vtop->r & (VT_SYM | VT_CONST)) != (VT_SYM | VT_CONST)
           || !vtop->sym || vtop->sym->v < SYM_FIRST_ANOM)
         cprime_error("initializer element is not constant");
+    }
+
+    /* A class value the constant evaluator owns carries a recorded value for
+       every scalar subobject, so its bytes are load-time constants.  Write
+       them here; a no-data probe only needs to know every value is present. */
+    if (bt == VT_STRUCT && vtop->sym && constexpr_local_object_view(vtop)
+        && is_compatible_unqualified_types(&dtype, &vtop->type))
+    {
+      ConstexprLocalField *fields = NULL, **tail = &fields;
+      int start = (int)vtop->c.i - (int)vtop->sym->c;
+      int valid = constexpr_collect_object_fields(&dtype, &dtype, vtop->sym,
+                                                  start, &tail);
+      if (valid && !NODATA_WANTED)
+        valid = emit_constant_fields_at(sec, (long long)c - start, fields);
+      free_constexpr_object_fields(fields);
+      if (!valid)
+        cprime_error("initializer element is not constant");
+      vtop--;
+      return;
     }
 
     if ((vtop->r & VT_SYM)
@@ -2607,32 +2633,24 @@ static int constant_class_object_evaluate(CType *type, TokenString *initializer,
   return done;
 }
 
-/* Write collected constant subobject values into a static object's storage. */
-static int emit_constant_object_fields(Sym *symbol, ConstexprLocalField *fields)
+/* Write recorded constant subobject values at BASE in a section. */
+static int emit_constant_fields_at(Section *sec, long long base,
+                                   ConstexprLocalField *fields)
 {
-  ObjSym *object_sym;
-  Section *section;
   ConstexprLocalField *entry;
-  unsigned long base;
-  if (!symbol) return 0;
-  /* An object with no scalar subobjects needs no bytes of its own. */
   if (!fields) return 1;
-  object_sym = elfsym(symbol);
-  if (!object_sym || object_sym->st_shndx == 0
-      || object_sym->st_shndx >= cprime_state->nb_sections) {
-    return 0;
-  }
-  section = cprime_state->sections[object_sym->st_shndx];
-  if (!section || !section->data) return 0;
-  base = object_sym->st_value;
+  if (!sec || !sec->data || base < 0) return 0;
   for (entry = fields; entry; entry = entry->next) {
     unsigned char *destination;
+    long long offset = base + entry->offset;
     int align, size = type_size(&entry->type, &align);
-    if (size <= 0 || (unsigned long)entry->offset + size > section->data_offset)
+    if (size <= 0 || offset < 0
+        || (unsigned long long)offset + (unsigned long long)size
+             > sec->data_offset)
       return 0;
-    destination = (unsigned char *)section->data + base + entry->offset;
+    destination = (unsigned char *)sec->data + offset;
     if (entry->relocation) {
-      greloca(section, entry->relocation, base + entry->offset, R_DATA_PTR,
+      greloca(sec, entry->relocation, (unsigned long)offset, R_DATA_PTR,
               entry->value.i);
       continue;
     }
@@ -2669,6 +2687,24 @@ static int emit_constant_object_fields(Sym *symbol, ConstexprLocalField *fields)
     }
   }
   return 1;
+}
+
+/* Write collected constant subobject values into a static object's storage. */
+static int emit_constant_object_fields(Sym *symbol, ConstexprLocalField *fields)
+{
+  ObjSym *object_sym;
+  Section *section;
+  if (!symbol) return 0;
+  /* An object with no scalar subobjects needs no bytes of its own. */
+  if (!fields) return 1;
+  object_sym = elfsym(symbol);
+  if (!object_sym || object_sym->st_shndx == 0
+      || object_sym->st_shndx >= cprime_state->nb_sections) {
+    return 0;
+  }
+  section = cprime_state->sections[object_sym->st_shndx];
+  if (!section || !section->data) return 0;
+  return emit_constant_fields_at(section, object_sym->st_value, fields);
 }
 
 /* Constant initialization of a class object: run the construction the
