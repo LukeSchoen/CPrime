@@ -13,6 +13,16 @@ public:
   typedef typename Period::type period;
   constexpr duration() : value() {}
   explicit constexpr duration(const Rep& count) : value(count) {}
+  /* A duration converts from another period and representation by scaling
+     its count; an integral target truncates toward zero exactly as
+     duration_cast does. */
+  template<class Rep2, class Period2>
+  constexpr duration(const duration<Rep2, Period2>& other)
+    : value(static_cast<Rep>(static_cast<double>(other.count())
+                             * static_cast<double>(Period2::num)
+                             * static_cast<double>(Period::den)
+                             / (static_cast<double>(Period2::den)
+                                * static_cast<double>(Period::num)))) {}
   constexpr Rep count() const { return value; }
   static constexpr duration zero() { return duration(0); }
   static constexpr duration min() { return duration(numeric_limits<Rep>::lowest()); }
@@ -24,12 +34,54 @@ template<class R,class P> constexpr duration<R,P> operator-(duration<R,P> a,dura
 template<class R,class P> constexpr duration<R,P> operator+(duration<R,P> a,duration<R,P> b) { return duration<R,P>(a.count()+b.count()); }
 template<class R,class P> constexpr bool operator<(duration<R,P> a,duration<R,P> b) { return a.count()<b.count(); }
 template<class R,class P> constexpr bool operator==(duration<R,P> a,duration<R,P> b) { return a.count()==b.count(); }
+template<class R,class P> constexpr bool operator!=(duration<R,P> a,duration<R,P> b) { return !(a==b); }
+template<class R,class P> constexpr bool operator>(duration<R,P> a,duration<R,P> b) { return b<a; }
+template<class R,class P> constexpr bool operator<=(duration<R,P> a,duration<R,P> b) { return !(b<a); }
+template<class R,class P> constexpr bool operator>=(duration<R,P> a,duration<R,P> b) { return !(a<b); }
 template<class To,class R,class P> constexpr To duration_cast(const duration<R,P>& from) {
   typedef typename To::period target_period;
   typedef typename To::rep target_rep;
   typedef ratio<P::num * target_period::den, P::den * target_period::num> factor;
   typedef decltype(R() + target_rep() + intmax_t()) calculation;
   return To(static_cast<target_rep>(static_cast<calculation>(from.count()) * factor::num / factor::den));
+}
+
+/* The C++17 duration rounding helpers.  Each scales the count into the
+   target period exactly and then adjusts the truncated quotient. */
+template<class To,class R,class P> constexpr To floor(const duration<R,P>& from) {
+  typedef typename To::rep target_rep;
+  typedef typename To::period target_period;
+  typedef ratio<P::num * target_period::den, P::den * target_period::num> factor;
+  typedef decltype(from.count() + target_rep() + intmax_t()) calculation;
+  calculation scaled = static_cast<calculation>(from.count()) * factor::num;
+  calculation quotient = scaled / factor::den;
+  calculation remainder = scaled - quotient * factor::den;
+  if (remainder < 0) --quotient;
+  return To(static_cast<target_rep>(quotient));
+}
+template<class To,class R,class P> constexpr To ceil(const duration<R,P>& from) {
+  typedef typename To::rep target_rep;
+  typedef typename To::period target_period;
+  typedef ratio<P::num * target_period::den, P::den * target_period::num> factor;
+  typedef decltype(from.count() + target_rep() + intmax_t()) calculation;
+  calculation scaled = static_cast<calculation>(from.count()) * factor::num;
+  calculation quotient = scaled / factor::den;
+  calculation remainder = scaled - quotient * factor::den;
+  if (remainder > 0) ++quotient;
+  return To(static_cast<target_rep>(quotient));
+}
+template<class To,class R,class P> constexpr To round(const duration<R,P>& from) {
+  typedef typename To::rep target_rep;
+  typedef typename To::period target_period;
+  typedef ratio<P::num * target_period::den, P::den * target_period::num> factor;
+  typedef decltype(from.count() + target_rep() + intmax_t()) calculation;
+  calculation scaled = static_cast<calculation>(from.count()) * factor::num;
+  calculation quotient = scaled / factor::den;
+  calculation remainder = scaled - quotient * factor::den;
+  /* Halfway values round away from zero. */
+  if (remainder * 2 >= factor::den) ++quotient;
+  else if (remainder * 2 <= -factor::den) --quotient;
+  return To(static_cast<target_rep>(quotient));
 }
 typedef duration<long long,nano> nanoseconds;
 typedef duration<long long,micro> microseconds;

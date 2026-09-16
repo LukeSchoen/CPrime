@@ -20,6 +20,25 @@ namespace std
     return initial;
   }
 
+  /* reduce is accumulate with a reorderable operation: the elements need no
+     particular order, so this left fold is one valid evaluation. */
+  template<class InputIterator, class T>
+  T reduce(InputIterator first, InputIterator last, T initial)
+  {
+    for (; first != last; ++first)
+      initial = initial + *first;
+    return initial;
+  }
+
+  template<class InputIterator, class T, class BinaryOperation>
+  T reduce(InputIterator first, InputIterator last, T initial,
+           BinaryOperation operation)
+  {
+    for (; first != last; ++first)
+      initial = operation(initial, *first);
+    return initial;
+  }
+
   template<class ForwardIterator, class T>
   void iota(ForwardIterator first, ForwardIterator last, T value)
   {

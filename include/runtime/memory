@@ -117,6 +117,14 @@ public:
   __cpc_shared_pointer_control(T* p) : pointer(p) {}
   void dispose() override { delete pointer; }
 };
+/* An array shared pointer owns what `new[]` allocated, so disposal must
+   match the allocation form. */
+template<class T> class __cpc_shared_array_control : public __cpc_shared_control {
+  T* pointer;
+public:
+  __cpc_shared_array_control(T* p) : pointer(p) {}
+  void dispose() override { delete[] pointer; }
+};
 template<class T> class weak_ptr;
 template<class T> class shared_ptr {
   template<class U> friend class shared_ptr;
@@ -139,6 +147,32 @@ public:
   T* get() const noexcept { return pointer; }
   T* operator->() const noexcept { return pointer; }
   T& operator*() const noexcept { return *pointer; }
+  explicit operator bool() const noexcept { return pointer!=0; }
+  long use_count() const noexcept { return control?control->strong.load():0; }
+};
+/* The C++17 array form: the pointer names an array, so indexing replaces the
+   dereference operators and disposal uses delete[]. */
+template<class T> class shared_ptr<T[]> {
+  template<class U> friend class shared_ptr;
+  T* pointer;
+  __cpc_shared_control* control;
+  shared_ptr(T* p, __cpc_shared_control* c) : pointer(p), control(c) {}
+public:
+  typedef T element_type;
+
+  shared_ptr() noexcept : pointer(0), control(0) {}
+  shared_ptr(decltype(nullptr)) noexcept : pointer(0), control(0) {}
+  template<class U> explicit shared_ptr(U* p) : pointer(p), control(new __cpc_shared_array_control<U>(p)) {}
+  shared_ptr(const shared_ptr& s) noexcept : pointer(s.pointer), control(s.control) { if(control) control->strong.fetch_add(1); }
+  template<class U> shared_ptr(const shared_ptr<U>& s) noexcept : pointer(s.pointer), control(s.control) { if(control) control->strong.fetch_add(1); }
+  shared_ptr(shared_ptr&& s) noexcept : pointer(s.pointer), control(s.control) { s.pointer=0; s.control=0; }
+  ~shared_ptr() { if(control) control->release(); }
+  shared_ptr& operator=(shared_ptr s) noexcept { swap(s); return *this; }
+  void swap(shared_ptr& s) noexcept { T* p=pointer; pointer=s.pointer; s.pointer=p; __cpc_shared_control* c=control; control=s.control; s.control=c; }
+  void reset() noexcept { shared_ptr().swap(*this); }
+  template<class U> void reset(U* p) { shared_ptr(p).swap(*this); }
+  T* get() const noexcept { return pointer; }
+  T& operator[](size_t index) const { return pointer[index]; }
   explicit operator bool() const noexcept { return pointer!=0; }
   long use_count() const noexcept { return control?control->strong.load():0; }
 };

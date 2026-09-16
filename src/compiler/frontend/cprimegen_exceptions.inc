@@ -946,6 +946,9 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment,
   int old_depth, count_slot, pointer_slot, allocation_slot, placement_index;
   int cookie = cpp_array_cookie_size(type, destructor), context = 0;
   int index_slot, loop, done, value_initialize = 0, null_allocation_jump = 0;
+  TokenString **initializer_elements = NULL;
+  int initializer_count = 0, element_index;
+  long long constant_bound = -1;
   (void)alignment;
   cpp_check_abstract_object(type);
   if (destructor) {
@@ -957,6 +960,8 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment,
     try_call_cpp_conversion_operator(&count_type, 0);
   if (!is_integer_btype(vtop->type.t & VT_BTYPE))
     cprime_error("array new bound requires an integral expression");
+  if ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST)
+    constant_bound = vtop->c.i;
   if (tok == '[') {
     TokenString *dimensions = tok_str_alloc();
     int extent_size, extent_align;
@@ -979,8 +984,11 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment,
     constructor = resolve_autoctor_func(type);
     if (constructor) cpp_noexcept_note_call(&constructor->type);
     if (tok == '(' || tok == '{') {
-      int end = tok == '(' ? ')' : '}';
-      next(); skip(end);
+      if (tok == '{')
+        skip_or_save_block(NULL);
+      else {
+        next(); skip(')');
+      }
     }
     vpop(); vset(&pointer, VT_CONST, 0);
     return;
@@ -991,8 +999,21 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment,
   vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
   vswap(); vstore(); vpop();
   if (tok == '(' || tok == '{') {
-    int end = tok == '(' ? ')' : '}';
-    next(); skip(end); value_initialize = 1;
+    /* A braced list initializes the first elements and value-initializes the
+       rest, so the list is kept for the element stores below. */
+    if (tok == '{' && !type_requires_class_construction(type)) {
+      TokenString *initializer = NULL;
+      skip_or_save_block(&initializer);
+      initializer_count = split_saved_array_initializer(initializer,
+                                                        &initializer_elements);
+      tok_str_free(initializer);
+      if (constant_bound >= 0 && initializer_count > constant_bound)
+        cprime_error("too many initializers for array new");
+    } else {
+      int end = tok == '(' ? ')' : '}';
+      next(); skip(end);
+    }
+    value_initialize = 1;
   }
   vpushsym(&allocation->type, allocation);
   vset(&count_type, VT_LOCAL | VT_LVAL, count_slot);
@@ -1042,6 +1063,34 @@ static void cpp_new_array(CType *type, Sym *allocation, int size, int alignment,
       vpushi(size); gen_op('*');
       gfunc_call(3);
     }
+    for (element_index = 0; element_index < initializer_count; ++element_index) {
+      TokenString macro = *initializer_elements[element_index];
+      TokenString *saved_macro_stack = macro_stack;
+      const int *saved_macro_parent = macro_ptr;
+      int saved_element_tok = tok;
+      CValue saved_element_tokc = tokc;
+      vset(&pointer, VT_LOCAL | VT_LVAL, pointer_slot);
+      /* The element index is scaled by the pointer arithmetic below. */
+      vpushi(element_index);
+      gen_op('+');
+      vtop->type = *type;
+      vtop->r |= VT_LVAL;
+      save_lvalues();
+      begin_macro(&macro, 0);
+      next();
+      expr_eq();
+      while (macro_stack && macro_stack != saved_macro_stack)
+        end_macro();
+      macro_ptr = saved_macro_parent;
+      tok = saved_element_tok;
+      tokc = saved_element_tokc;
+      if (!is_compatible_unqualified_types(&vtop->type, type))
+        gen_cast(type);
+      vstore();
+      vpop();
+    }
+    if (initializer_elements)
+      free_saved_array_elements(initializer_elements, initializer_count);
     gsym(null_allocation_jump);
     vset(&pointer, VT_LOCAL | VT_LVAL, allocation_slot);
     if (cookie) {

@@ -5,6 +5,8 @@
 #include <cstddef>
 
 namespace std {
+  enum class align_val_t : __SIZE_TYPE__ {};
+
   struct nothrow_t {
     explicit nothrow_t() = default;
   };
@@ -27,12 +29,20 @@ void* operator new(std::size_t);
 void* operator new[](std::size_t);
 void* operator new(std::size_t, const std::nothrow_t&) noexcept;
 void* operator new[](std::size_t, const std::nothrow_t&) noexcept;
+void* operator new(std::size_t, std::align_val_t);
+void* operator new[](std::size_t, std::align_val_t);
+void* operator new(std::size_t, std::align_val_t, const std::nothrow_t&) noexcept;
+void* operator new[](std::size_t, std::align_val_t, const std::nothrow_t&) noexcept;
 void operator delete(void*) noexcept;
 void operator delete[](void*) noexcept;
 void operator delete(void*, std::size_t) noexcept;
 void operator delete[](void*, std::size_t) noexcept;
 void operator delete(void*, const std::nothrow_t&) noexcept;
 void operator delete[](void*, const std::nothrow_t&) noexcept;
+void operator delete(void*, std::align_val_t) noexcept;
+void operator delete[](void*, std::align_val_t) noexcept;
+void operator delete(void*, std::size_t, std::align_val_t) noexcept;
+void operator delete[](void*, std::size_t, std::align_val_t) noexcept;
 
 /* Placement new is handled natively by the compiler. */
 

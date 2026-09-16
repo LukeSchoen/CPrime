@@ -2,12 +2,29 @@
 #define _CPC_VARIANT
 
 #include <stddef.h>
+#include <exception>
 #include <new>
 #include <type_traits>
 #include <utility>
 
 namespace std
 {
+  /* The alternative of a valueless-by-exception-free variant: it holds no
+     value, so its comparisons are constant. */
+  struct monostate {};
+  inline constexpr bool operator==(monostate, monostate) noexcept { return true; }
+  inline constexpr bool operator!=(monostate, monostate) noexcept { return false; }
+  inline constexpr bool operator<(monostate, monostate) noexcept { return false; }
+  inline constexpr bool operator>(monostate, monostate) noexcept { return false; }
+  inline constexpr bool operator<=(monostate, monostate) noexcept { return true; }
+  inline constexpr bool operator>=(monostate, monostate) noexcept { return true; }
+
+  class bad_variant_access : public exception
+  {
+  public:
+    const char *what() const noexcept override { return "bad variant access"; }
+  };
+
   struct __variant_empty
   {
     __variant_empty() {}
@@ -166,7 +183,89 @@ namespace std
         !is_same<typename decay<T>::type, Variant>::value
         && index_of<typename decay<T>::type, Types...>::value >= 0;
     };
+
+    /* One visitor call per alternative, selected by the stored index through
+       a table built from the alternatives themselves. */
+    template<class Result, class Visitor, class Variant, class Alternative>
+    Result visit_thunk(Visitor &visitor, Variant &value)
+    {
+      return static_cast<Result>(
+          visitor(value.template alternative_value<Alternative>()));
+    }
+
+    template<class Result, class Visitor, class Variant, class... Types>
+    Result visit_dispatch(Visitor &visitor, Variant &value, size_t index)
+    {
+      typedef Result (*thunk_type)(Visitor &, Variant &);
+      static thunk_type table[sizeof...(Types)] = {
+        &visit_thunk<Result, Visitor, Variant, Types>...
+      };
+      return table[index](visitor, value);
+    }
+
+    /* The visitor's result for the first alternative is the variant's common
+       result type, which every other alternative must also produce. */
+    template<class Visitor, class Variant, size_t Index>
+    struct visit_result
+    {
+      typedef decltype(declval<Visitor>()(
+                  declval<Variant &>().template get<Index>())) type;
+    };
+
+    template<size_t Index, size_t Count, class Variant>
+    struct equal_step
+    {
+      static bool apply(const Variant &left, const Variant &right)
+      {
+        if (left.index() == Index)
+          return left.template get<Index>() == right.template get<Index>();
+        return equal_step<Index + 1, Count, Variant>::apply(left, right);
+      }
+    };
+
+    template<size_t Count, class Variant>
+    struct equal_step<Count, Count, Variant>
+    {
+      static bool apply(const Variant &, const Variant &) { return false; }
+    };
+
+    template<size_t Index, size_t Count, class Variant>
+    struct less_step
+    {
+      static bool apply(const Variant &left, const Variant &right)
+      {
+        if (left.index() == Index)
+          return left.template get<Index>() < right.template get<Index>();
+        return less_step<Index + 1, Count, Variant>::apply(left, right);
+      }
+    };
+
+    template<size_t Count, class Variant>
+    struct less_step<Count, Count, Variant>
+    {
+      static bool apply(const Variant &, const Variant &) { return false; }
+    };
   }
+
+  template<class T> struct variant_size;
+  template<class... Types>
+  struct variant_size<variant<Types...> >
+  {
+    static const size_t value = sizeof...(Types);
+    typedef size_t value_type;
+  };
+  template<class T> struct variant_size<const T> : variant_size<T> {};
+  template<class T> struct variant_size<volatile T> : variant_size<T> {};
+  template<class T> inline constexpr size_t variant_size_v = variant_size<T>::value;
+
+  template<size_t Index, class T> struct variant_alternative;
+  template<size_t Index, class... Types>
+  struct variant_alternative<Index, variant<Types...> >
+  {
+    typedef typename __cpc_variant_detail::type_at<Index, Types...>::type type;
+  };
+  template<size_t Index, class T>
+  using variant_alternative_t = typename variant_alternative<Index, T>::type;
 
   template<class... Types>
   class variant
@@ -306,6 +405,19 @@ namespace std
       return *static_cast<const type *>(static_cast<const void *>(&m_storage));
     }
 
+    /* The stored alternative by type, for the visit dispatch table. */
+    template<class Alternative>
+    Alternative &alternative_value()
+    {
+      return *static_cast<Alternative *>(static_cast<void *>(&m_storage));
+    }
+    template<class Alternative>
+    const Alternative &alternative_value() const
+    {
+      return *static_cast<const Alternative *>(
+          static_cast<const void *>(&m_storage));
+    }
+
   private:
     void destroy()
     {
@@ -383,6 +495,66 @@ namespace std
   {
     return value && value->index() == Index
              ? &value->template get<Index>() : 0;
+  }
+
+  /* visit calls the visitor with the stored alternative.  The result type is
+     the visitor's result for the first alternative, which every alternative
+     must also produce. */
+  template<class Visitor, class... Types>
+  typename __cpc_variant_detail::visit_result<Visitor, variant<Types...>,
+                                              0>::type
+  visit(Visitor &&visitor, variant<Types...> &value)
+  {
+    typedef typename __cpc_variant_detail::visit_result<Visitor,
+        variant<Types...>, 0>::type result_type;
+    return __cpc_variant_detail::visit_dispatch<result_type, Visitor,
+        variant<Types...>, Types...>(visitor, value, value.index());
+  }
+
+  template<class Visitor, class... Types>
+  typename __cpc_variant_detail::visit_result<Visitor,
+                                              const variant<Types...>, 0>::type
+  visit(Visitor &&visitor, const variant<Types...> &value)
+  {
+    typedef typename __cpc_variant_detail::visit_result<Visitor,
+        const variant<Types...>, 0>::type result_type;
+    return __cpc_variant_detail::visit_dispatch<result_type, Visitor,
+        const variant<Types...>, const Types...>(visitor, value, value.index());
+  }
+
+  template<class... Types>
+  bool operator==(const variant<Types...> &left, const variant<Types...> &right)
+  {
+    if (left.index() != right.index()) return false;
+    return __cpc_variant_detail::equal_step<0, sizeof...(Types),
+        variant<Types...> >::apply(left, right);
+  }
+  template<class... Types>
+  bool operator!=(const variant<Types...> &left, const variant<Types...> &right)
+  {
+    return !(left == right);
+  }
+  template<class... Types>
+  bool operator<(const variant<Types...> &left, const variant<Types...> &right)
+  {
+    if (left.index() != right.index()) return left.index() < right.index();
+    return __cpc_variant_detail::less_step<0, sizeof...(Types),
+        variant<Types...> >::apply(left, right);
+  }
+  template<class... Types>
+  bool operator>(const variant<Types...> &left, const variant<Types...> &right)
+  {
+    return right < left;
+  }
+  template<class... Types>
+  bool operator<=(const variant<Types...> &left, const variant<Types...> &right)
+  {
+    return !(right < left);
+  }
+  template<class... Types>
+  bool operator>=(const variant<Types...> &left, const variant<Types...> &right)
+  {
+    return !(left < right);
   }
 }
 

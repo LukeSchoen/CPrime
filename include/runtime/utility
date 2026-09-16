@@ -170,6 +170,9 @@ namespace std
   template<class T1, class T2> bool operator>=(const pair<T1,T2>& a,const pair<T1,T2>& b) { return !(a<b); }
   template<class T1, class T2> void swap(pair<T1,T2>& a,pair<T1,T2>& b) { a.swap(b); }
 
+  template<class T1, class T2>
+  pair(T1, T2) -> pair<T1, T2>;
+
 }
 
 #endif

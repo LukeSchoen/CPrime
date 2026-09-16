@@ -14005,7 +14005,6 @@ static void parse_cpp_class_using_member(CType *derived, int first_name)
   }
   if (!found) cprime_error("no base member '%s' for using declaration", get_tok_str(name, NULL));
   if (conversion_tokens) tok_str_free(conversion_tokens);
-  skip(';');
 }
 
 static void struct_decl(CType *type, int u, int is_class_tag)
@@ -14465,6 +14464,9 @@ do_decl:
         if (v < TOK_UIDENT)
           expect("identifier");
         next();
+        /* Attributes may follow an enumerator's identifier and, as GCC also
+           accepts, its value.  They are parsed and ignored. */
+        parse_attribute(NULL);
         if (tok == '=')
         {
           next();
@@ -14472,6 +14474,7 @@ do_decl:
           if (is_cpp_translation_unit() && !bt)
             t.t = (vtop[1].type.t & (VT_BTYPE | VT_UNSIGNED | VT_LONG))
                   | VT_STATIC | VT_ENUM_VAL;
+          parse_attribute(NULL);
         }
         if (bt && !in_range(ll, t.t))
           cprime_error("enumerator '%s' out of range of its type",
@@ -14717,7 +14720,19 @@ enum_done:
           alias_tok = tok;
           next();
           if (tok != '=') {
+            /* C++17 using-declarator-list: one using-declarator per element
+               of an expanded pack, comma separated. */
             parse_cpp_class_using_member(type, alias_tok);
+            while (tok == ',') {
+              next();
+              if (tok == CPP_TOK_TYPENAME) next();
+              if (tok < TOK_UIDENT)
+                expect("using alias name");
+              alias_tok = tok;
+              next();
+              parse_cpp_class_using_member(type, alias_tok);
+            }
+            skip(';');
             continue;
           }
           skip('=');
@@ -16567,6 +16582,21 @@ storage:
                 if (t)
                   parse_btype_qualify(type, t);
                 t = type->t;
+                typespec_found = 1;
+                st = bt = -2;
+                break;
+              }
+              if (td && td->is_class && is_cpp_translation_unit()
+                  && tok != TOK_LT && tok != '<')
+              {
+                /* A qualified class template spelling without an argument
+                   list is a provisional type until its initializer supplies
+                   the arguments, exactly like the unqualified form. */
+                tok_str_free(replay);
+                pending_braced_ctad_template = td;
+                t &= ~(VT_BTYPE | VT_LONG);
+                type->t = t | VT_STRUCT;
+                type->ref = NULL;
                 typespec_found = 1;
                 st = bt = -2;
                 break;
@@ -29575,7 +29605,10 @@ static int decl_context(int l, int condition)
         saved_macro_ptr = macro_ptr;
         begin_macro(binding_replay, 1);
         next();
-        decl_context(l, condition);
+        /* The replay holds the hidden object followed by every binding, so it
+           is parsed as ordinary local declarations: a VT_JMP context returns
+           after the first one and would leave the bindings undeclared. */
+        decl_context(VT_LOCAL, condition);
           for (i = 0; i < binding_count; ++i)
           {
             Sym *binding = sym_find(binding_names->str[i]);
@@ -29593,6 +29626,14 @@ static int decl_context(int l, int condition)
         macro_ptr = saved_macro_ptr;
         tok = saved_delimiter_tok;
         tokc = saved_tokc;
+        /* A declaration statement keeps its terminating ';' for the caller
+           that parses the selection or loop header. */
+        if (l == VT_JMP)
+        {
+          if (tok != ';')
+            cprime_error("structured binding declaration cannot be a condition");
+          return 1;
+        }
         skip(';');
         continue;
       }
@@ -29667,33 +29708,59 @@ static int decl_context(int l, int condition)
         count = direct_initializer
                     ? split_saved_paren_arguments(initializer, &elements)
                     : split_saved_array_initializer(initializer, &elements);
-        if (count < ctad->nb_required_type_params)
-          cprime_error("not enough initializer expressions for class template argument deduction");
-        if (ctad->value_param_mask)
-          cprime_error("class template argument deduction for value parameters is not implemented");
         if (count > CPC_MAX_TEMPLATE_ARGUMENTS)
           cprime_error("too many initializer expressions for class template argument deduction");
-        memset(&arguments, 0, sizeof(arguments));
-        arguments.nb = count;
-        for (i = 0; i < count; ++i)
+        if (ctad->value_param_mask)
         {
-          infer_saved_arg_type(elements[i], &actual);
-          if (actual.t == VT_BRACED_LIST)
-            cprime_error("cannot deduce class template argument from nested braced initializer");
-          if (is_reference_type(&actual)) actual = *pointed_type(&actual);
-          actual.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE
-                        | VT_RVALUE_REFERENCE | VT_ARRAY | VT_NULLPTR_TYPE);
-          if ((actual.t & VT_BTYPE) == VT_FUNC) mk_pointer(&actual);
-          arguments.toks[i] = template_exact_type_tok_from_ctype(&actual);
+          /* A class whose parameters are not one type per element deduces
+             through its deduction guides: the initializer list is the
+             argument list of the guide, and its result names the type. */
+          CType element_types[CPC_MAX_CALL_ARGUMENTS];
+          TemplateArgList bindings;
+          TemplateDef *guide = find_deduction_guide(ctad);
+          int class_tok;
+          if (!guide)
+            cprime_error("class template argument deduction for value parameters requires a deduction guide");
+          infer_saved_arg_types(elements, element_types, count);
+          if (!infer_template_args_from_call(guide, element_types, count,
+                                             &bindings))
+            cprime_error("deduction guide arguments do not match '%s'",
+                         get_tok_str(ctad->name_tok, NULL));
+          class_tok = template_guide_class_tok(guide, &bindings);
+          if (!class_tok)
+            cprime_error("deduction guide for '%s' has no class result",
+                         get_tok_str(ctad->name_tok, NULL));
+          if (!make_class_type_from_tok(&type, class_tok))
+            cprime_error("deduction guide result for '%s' is incomplete",
+                         get_tok_str(ctad->name_tok, NULL));
+          materialize_incomplete_template_type(&type);
+        }
+        else
+        {
+          if (count < ctad->nb_required_type_params)
+            cprime_error("not enough initializer expressions for class template argument deduction");
+          memset(&arguments, 0, sizeof(arguments));
+          arguments.nb = count;
+          for (i = 0; i < count; ++i)
+          {
+            infer_saved_arg_type(elements[i], &actual);
+            if (actual.t == VT_BRACED_LIST)
+              cprime_error("cannot deduce class template argument from nested braced initializer");
+            if (is_reference_type(&actual)) actual = *pointed_type(&actual);
+            actual.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE
+                          | VT_RVALUE_REFERENCE | VT_ARRAY | VT_NULLPTR_TYPE);
+            if ((actual.t & VT_BTYPE) == VT_FUNC) mk_pointer(&actual);
+            arguments.toks[i] = template_exact_type_tok_from_ctype(&actual);
+          }
+          instance_tok = instantiate_template_declaration_type(ctad, &arguments, 0);
+          compile_pending_template_specs_without_member_flush();
+          instance = struct_find(instance_tok);
+          if (!instance)
+            cprime_error("class template argument deduction did not produce a specialization");
+          type.t = instance->type.t;
+          type.ref = instance;
         }
         free_saved_array_elements(elements, count);
-        instance_tok = instantiate_template_declaration_type(ctad, &arguments, 0);
-        compile_pending_template_specs_without_member_flush();
-        instance = struct_find(instance_tok);
-        if (!instance)
-          cprime_error("class template argument deduction did not produce a specialization");
-        type.t = instance->type.t;
-        type.ref = instance;
         /* Restore the initializer and its following delimiter as one parser
            stream, as deferred class-lifecycle initializers do. */
         --initializer->len;
@@ -30125,9 +30192,31 @@ found:
               int auto_storage = type.t & VT_STATIC;
               int saved_tok;
               CValue saved_tokc;
-              if (!has_init
-                  || has_direct_init || has_ctor_init || tok != '=')
+              if (!has_init || has_ctor_init
+                  || (tok != '=' && !(has_direct_init && tok == '{')))
                 cprime_error("unsupported auto declaration '%s'", get_tok_str(v, NULL));
+              if (tok == '{')
+              {
+                /* C++17 direct-list-initialization of 'auto': a single
+                   element names the deduced type, and the braced list still
+                   initializes the object. */
+                TokenString *braced = NULL, **elements;
+                int count;
+                skip_or_save_block(&braced);
+                count = split_saved_array_initializer(braced, &elements);
+                if (count != 1)
+                  cprime_error("direct-list-initialization of 'auto' requires exactly one element");
+                deduce_cpp_auto_initializer_type(&type, elements[0]);
+                if (type.t == VT_BRACED_LIST)
+                  cprime_error("cannot deduce 'auto' from a nested braced initializer");
+                free_saved_array_elements(elements, count);
+                type.t &= ~(VT_EXTERN | VT_TYPEDEF);
+                type.t |= auto_storage;
+                --braced->len; /* drop the saved end-of-stream boundary */
+                restore_cpp_lifecycle_probe(braced);
+              }
+              else
+              {
               next();
               skip_or_save_block(&auto_init_str);
               saved_tok = tok;
@@ -30188,6 +30277,7 @@ found:
                 tok_str_free(auto_init_str);
               auto_init_str = NULL;
               goto after_decl_initializer_alloc;
+              }
             }
             if (l == VT_CONST && has_ctor_init)
             {

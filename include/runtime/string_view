@@ -34,6 +34,175 @@ namespace std
     constexpr const C &operator[](size_type index) const { return m_data[index]; }
     constexpr const C &front() const { return m_data[0]; }
     constexpr const C &back() const { return m_data[m_size - 1]; }
+    static constexpr size_type npos = (size_type)-1;
+
+    constexpr int compare(basic_string_view other) const
+    {
+      size_type count = m_size < other.m_size ? m_size : other.m_size;
+      for (size_type i = 0; i < count; ++i)
+        if (m_data[i] != other.m_data[i])
+          return m_data[i] < other.m_data[i] ? -1 : 1;
+      if (m_size == other.m_size) return 0;
+      return m_size < other.m_size ? -1 : 1;
+    }
+    constexpr int compare(const C *text) const
+    {
+      return compare(basic_string_view(text));
+    }
+    constexpr int compare(const C *text, size_type count) const
+    {
+      return compare(basic_string_view(text, count));
+    }
+    constexpr int compare(size_type position, size_type count,
+                          basic_string_view other) const
+    {
+      return substr(position, count).compare(other);
+    }
+    constexpr int compare(size_type position, size_type count,
+                          const C *text) const
+    {
+      return substr(position, count).compare(basic_string_view(text));
+    }
+    constexpr int compare(size_type position, size_type count,
+                          const C *text, size_type text_count) const
+    {
+      return substr(position, count).compare(basic_string_view(text, text_count));
+    }
+
+    constexpr size_type find(basic_string_view needle, size_type position = 0) const
+    {
+      if (needle.m_size == 0)
+        return position <= m_size ? position : npos;
+      for (size_type i = position; i + needle.m_size <= m_size; ++i)
+      {
+        size_type j = 0;
+        while (j < needle.m_size && m_data[i + j] == needle.m_data[j]) ++j;
+        if (j == needle.m_size) return i;
+      }
+      return npos;
+    }
+    constexpr size_type find(C character, size_type position = 0) const
+    {
+      for (size_type i = position; i < m_size; ++i)
+        if (m_data[i] == character) return i;
+      return npos;
+    }
+    constexpr size_type find(const C *text, size_type position, size_type count) const
+    {
+      return find(basic_string_view(text, count), position);
+    }
+    constexpr size_type find(const C *text, size_type position = 0) const
+    {
+      return find(basic_string_view(text), position);
+    }
+
+    constexpr size_type rfind(basic_string_view needle, size_type position = npos) const
+    {
+      if (needle.m_size == 0)
+        return position < m_size ? position : m_size;
+      if (needle.m_size > m_size) return npos;
+      size_type last = m_size - needle.m_size;
+      size_type start = position < last ? position : last;
+      for (size_type i = start; ; --i)
+      {
+        size_type j = 0;
+        while (j < needle.m_size && m_data[i + j] == needle.m_data[j]) ++j;
+        if (j == needle.m_size) return i;
+        if (i == 0) break;
+      }
+      return npos;
+    }
+    constexpr size_type rfind(C character, size_type position = npos) const
+    {
+      if (m_size == 0) return npos;
+      size_type start = position < m_size ? position : m_size - 1;
+      for (size_type i = start; ; --i)
+      {
+        if (m_data[i] == character) return i;
+        if (i == 0) break;
+      }
+      return npos;
+    }
+    constexpr size_type rfind(const C *text, size_type position, size_type count) const
+    {
+      return rfind(basic_string_view(text, count), position);
+    }
+    constexpr size_type rfind(const C *text, size_type position = npos) const
+    {
+      return rfind(basic_string_view(text), position);
+    }
+
+    constexpr size_type find_first_of(basic_string_view characters,
+                                      size_type position = 0) const
+    {
+      for (size_type i = position; i < m_size; ++i)
+        for (size_type j = 0; j < characters.m_size; ++j)
+          if (m_data[i] == characters.m_data[j]) return i;
+      return npos;
+    }
+    constexpr size_type find_first_of(C character, size_type position = 0) const
+    {
+      return find(character, position);
+    }
+    constexpr size_type find_last_of(basic_string_view characters,
+                                     size_type position = npos) const
+    {
+      if (m_size == 0) return npos;
+      size_type start = position < m_size ? position : m_size - 1;
+      for (size_type i = start; ; --i)
+      {
+        for (size_type j = 0; j < characters.m_size; ++j)
+          if (m_data[i] == characters.m_data[j]) return i;
+        if (i == 0) break;
+      }
+      return npos;
+    }
+    constexpr size_type find_last_of(C character, size_type position = npos) const
+    {
+      return rfind(character, position);
+    }
+    constexpr size_type find_first_not_of(basic_string_view characters,
+                                          size_type position = 0) const
+    {
+      for (size_type i = position; i < m_size; ++i)
+      {
+        size_type j = 0;
+        while (j < characters.m_size && m_data[i] != characters.m_data[j]) ++j;
+        if (j == characters.m_size) return i;
+      }
+      return npos;
+    }
+    constexpr size_type find_first_not_of(C character, size_type position = 0) const
+    {
+      for (size_type i = position; i < m_size; ++i)
+        if (m_data[i] != character) return i;
+      return npos;
+    }
+    constexpr size_type find_last_not_of(basic_string_view characters,
+                                         size_type position = npos) const
+    {
+      if (m_size == 0) return npos;
+      size_type start = position < m_size ? position : m_size - 1;
+      for (size_type i = start; ; --i)
+      {
+        size_type j = 0;
+        while (j < characters.m_size && m_data[i] != characters.m_data[j]) ++j;
+        if (j == characters.m_size) return i;
+        if (i == 0) break;
+      }
+      return npos;
+    }
+    constexpr size_type find_last_not_of(C character, size_type position = npos) const
+    {
+      if (m_size == 0) return npos;
+      size_type start = position < m_size ? position : m_size - 1;
+      for (size_type i = start; ; --i)
+      {
+        if (m_data[i] != character) return i;
+        if (i == 0) break;
+      }
+      return npos;
+    }
 
     constexpr basic_string_view substr(size_type position = 0,
                                        size_type count = (size_type)-1) const
@@ -92,6 +261,21 @@ namespace std
       if (left[i] < right[i]) return true;
       else if (right[i] < left[i]) return false;
     return left.size() < right.size();
+  }
+  template<class C>
+  bool operator>(basic_string_view<C> left, basic_string_view<C> right)
+  {
+    return right < left;
+  }
+  template<class C>
+  bool operator<=(basic_string_view<C> left, basic_string_view<C> right)
+  {
+    return !(right < left);
+  }
+  template<class C>
+  bool operator>=(basic_string_view<C> left, basic_string_view<C> right)
+  {
+    return !(left < right);
   }
 }
 

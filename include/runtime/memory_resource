@@ -3,6 +3,7 @@
 
 #include <stddef.h>
 #include <stdlib.h>
+#include <malloc.h>
 #include <new>
 
 namespace std
@@ -34,6 +35,97 @@ namespace std
 
   namespace pmr
   {
+    /* The default resource hands every request to the runtime's aligned
+       heap, so over-aligned types get the alignment they ask for. */
+    class __new_delete_resource : public std::memory_resource
+    {
+    public:
+      __new_delete_resource() {}
+    protected:
+      void *do_allocate(size_t bytes, size_t alignment) override
+      {
+        void *result = _aligned_malloc(bytes ? bytes : 1, alignment);
+        if (!result) throw std::bad_alloc();
+        return result;
+      }
+      void do_deallocate(void *pointer, size_t, size_t) override
+      {
+        _aligned_free(pointer);
+      }
+      bool do_is_equal(const std::memory_resource &other) const noexcept override
+      {
+        return this == &other;
+      }
+    };
+
+    inline std::memory_resource *new_delete_resource() noexcept
+    {
+      static __new_delete_resource resource;
+      return &resource;
+    }
+
+    inline std::memory_resource *get_default_resource() noexcept
+    {
+      return new_delete_resource();
+    }
+
+    /* A pmr container's allocator: the resource is fixed at construction and
+       every allocation goes through it. */
+    template<class T>
+    class polymorphic_allocator
+    {
+    public:
+      typedef T value_type;
+
+      polymorphic_allocator() noexcept : m_resource(new_delete_resource()) {}
+      polymorphic_allocator(std::memory_resource *resource) noexcept
+        : m_resource(resource ? resource : new_delete_resource()) {}
+      polymorphic_allocator(const polymorphic_allocator &) noexcept = default;
+      template<class U>
+      polymorphic_allocator(const polymorphic_allocator<U> &other) noexcept
+        : m_resource(other.resource()) {}
+
+      T *allocate(size_t count)
+      {
+        return static_cast<T *>(m_resource->allocate(count * sizeof(T),
+                                                     alignof(T)));
+      }
+      void deallocate(T *pointer, size_t count)
+      {
+        m_resource->deallocate(pointer, count * sizeof(T), alignof(T));
+      }
+
+      std::memory_resource *resource() const { return m_resource; }
+
+      template<class U, class... Args>
+      void construct(U *pointer, Args &&...arguments)
+      {
+        ::new (static_cast<void *>(pointer))
+            U(static_cast<Args &&>(arguments)...);
+      }
+      template<class U>
+      void destroy(U *pointer)
+      {
+        pointer->~U();
+      }
+
+    private:
+      std::memory_resource *m_resource;
+    };
+
+    template<class T, class U>
+    inline bool operator==(const polymorphic_allocator<T> &left,
+                           const polymorphic_allocator<U> &right) noexcept
+    {
+      return *left.resource() == *right.resource();
+    }
+    template<class T, class U>
+    inline bool operator!=(const polymorphic_allocator<T> &left,
+                           const polymorphic_allocator<U> &right) noexcept
+    {
+      return !(left == right);
+    }
+
     class monotonic_buffer_resource : public std::memory_resource
     {
     public:

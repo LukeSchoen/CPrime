@@ -5205,7 +5205,22 @@ static TokenString *expand_template_expression_packs(TokenString *source,
           continue;
         }
         if (!parens && !brackets && !braces && !angles
-            && (t == ',' || t == ';' || t == TOK_RETURN || t == '=')) break;
+            && (t == ',' || t == ';' || t == TOK_RETURN || t == '='
+                || t == CPP_TOK_USING)) break;
+        /* A base-clause pack expansion begins after the single ':' that
+           starts the base list; the colons of a scope qualifier stay inside
+           the pattern.  Including the class header in the pattern repeats it
+           once per element and makes the class its own base. */
+        if (!parens && !brackets && !braces && !angles && t == ':')
+        {
+          int before = tok_str_prev_token_index(result->str, result->len,
+                                                position);
+          int after = tok_str_next_non_linenum_index(result->str, result->len,
+                                                     position + 1);
+          if ((before < 0 || result->str[before] != ':')
+              && (after >= result->len || result->str[after] != ':'))
+            break;
+        }
         if (t == ')') ++parens;
         else if (t == '(') { if (!parens) break; --parens; }
         else if (t == ']') ++brackets;
@@ -18803,6 +18818,25 @@ static TemplateDef *find_explicit_function_template_for_call(int name,
 /* The class a deduction guide names: substitute the guide's deduced bindings
    into its written result type (`-> Class<...>`) and probe it, which
    instantiates the class template specialization. */
+/* The deduction guide declared for a class template, if any:
+   `template<...> Name(arguments) -> Name<result>;`. */
+static TemplateDef *find_deduction_guide(TemplateDef *class_td)
+{
+  int lookups[2], nb_lookups = 1, lookup;
+  TemplateDef *candidate;
+
+  lookups[0] = class_td->name_tok;
+  if (class_td->lookup_tok && class_td->lookup_tok != class_td->name_tok)
+    lookups[nb_lookups++] = class_td->lookup_tok;
+  for (lookup = 0; lookup < nb_lookups; ++lookup)
+    for (candidate = template_def_candidates(lookups[lookup]); candidate;
+         candidate = candidate->lookup_bucket_next)
+      if (candidate->is_guide
+          && template_def_lookup_tok(candidate) == lookups[lookup])
+        return candidate;
+  return NULL;
+}
+
 static int template_guide_class_tok(TemplateDef *guide, TemplateArgList *bindings)
 {
   TokenString *tokens = tok_str_alloc();
@@ -18859,10 +18893,42 @@ static int template_guide_class_tok(TemplateDef *guide, TemplateArgList *binding
       tok_str_add_record(tokens, guide->def_str->str, guide->def_str->len, &i);
       continue;
     }
-    tok_str_add(tokens, template_subst_token(guide, bindings, 0, NULL, NULL, 0,
-                                             token));
+    tok_str_add(tokens, token);
   }
   tok_str_add(tokens, TOK_EOF);
+  /* An element count written as `1 + sizeof...(U)` only exists after the
+     guide's pack is expanded, so expand the result spelling first and
+     substitute the remaining parameters afterwards. */
+  if (guide->variadic_param_index >= 0)
+  {
+    int pack = guide->variadic_param_index;
+    int pack_is_value = (guide->value_param_mask & (1u << pack)) != 0;
+    TokenString *expanded = expand_template_expression_packs(
+        tokens, pack_is_value ? 0 : guide->type_param_toks[pack],
+        pack_is_value ? guide->type_param_toks[pack] : 0, 0,
+        &bindings->toks[pack], bindings->nb - pack);
+    tok_str_free(tokens);
+    tokens = expanded;
+  }
+  {
+    TokenString *substituted = tok_str_alloc();
+    for (i = 0; i < tokens->len; ++i)
+    {
+      int token = tokens->str[i];
+      if (token == TOK_EOF)
+        break;
+      if (TOK_HAS_VALUE(token))
+      {
+        tok_str_add_record(substituted, tokens->str, tokens->len, &i);
+        continue;
+      }
+      tok_str_add(substituted, template_subst_token(guide, bindings, 0, NULL,
+                                                    NULL, 0, token));
+    }
+    tok_str_add(substituted, TOK_EOF);
+    tok_str_free(tokens);
+    tokens = substituted;
+  }
   valid = template_probe_type(tokens, 0, guide->namespace_tok, &result);
   tok_str_free(tokens);
   if (!valid || (result.t & VT_BTYPE) != VT_STRUCT)

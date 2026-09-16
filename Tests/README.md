@@ -54,6 +54,10 @@ Leading source comments: `EXPECT_EXIT`, `EXPECT_STDOUT`, `EXPECT_COMPILE_FAIL`,
 `EXPECT_LINK_FAIL`, `EXPECT_COMPILE_ONLY`, `EXPECT_COMPILE_ARGS`,
 `EXPECT_SOURCES`. A case with none of them must compile, run, and exit 0.
 
+A case that crashes the compiler goes into its own suite while it is red, so
+the crash cannot abort a shared compile batch and mask unrelated cases. It
+moves to the suite that owns the repaired behavior once it compiles.
+
 Generated files belong in `build/` and are disposable. Only the case itself is
 durable.
 

@@ -3,10 +3,43 @@
 
 #include <utility>
 #include <iterator>
+#include <functional>
 #include <stdlib.h>
 
 namespace std
 {
+  template<class InputIterator, class Size, class Function>
+  InputIterator for_each_n(InputIterator first, Size count, Function function)
+  {
+    for (Size index = 0; index < count; ++index, ++first)
+      function(*first);
+    return first;
+  }
+
+  template<class ForwardIt1, class ForwardIt2>
+  ForwardIt1 search(ForwardIt1 first, ForwardIt1 last,
+                    ForwardIt2 pattern_first, ForwardIt2 pattern_last)
+  {
+    for (; ; ++first)
+    {
+      ForwardIt1 candidate = first;
+      for (ForwardIt2 pattern = pattern_first; ; ++candidate, ++pattern)
+      {
+        if (pattern == pattern_last) return first;
+        if (candidate == last) return last;
+        if (!(*candidate == *pattern)) break;
+      }
+    }
+  }
+
+  /* The C++17 searcher form: the searcher owns the pattern and answers the
+     search over one range. */
+  template<class ForwardIt, class Searcher>
+  ForwardIt search(ForwardIt first, ForwardIt last, const Searcher &searcher)
+  {
+    return searcher(first, last);
+  }
+
   template<class BidirectionalIterator>
   void reverse(BidirectionalIterator first, BidirectionalIterator last)
   {

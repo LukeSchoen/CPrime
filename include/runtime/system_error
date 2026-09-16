@@ -7,7 +7,8 @@ namespace std
   {
     success = 0,
     invalid_argument = 22,
-    result_out_of_range = 34
+    result_out_of_range = 34,
+    value_too_large = 75
   };
 
   class error_code

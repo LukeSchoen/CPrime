@@ -45,17 +45,33 @@ private:
     if(!n->left){*extracted=n;return n->right;}
     n->left=extract_first(n->left,extracted);return balance(n);
   }
-  Node* remove(Node* n,const Key& key,bool* erased){
+  Node* remove(Node* n,const Key& key,bool* erased,Node** removed){
     if(!n)return 0;
-    if(compare_(key,n->value.first))n->left=remove(n->left,key,erased);
-    else if(compare_(n->value.first,key))n->right=remove(n->right,key,erased);
+    if(compare_(key,n->value.first))n->left=remove(n->left,key,erased,removed);
+    else if(compare_(n->value.first,key))n->right=remove(n->right,key,erased,removed);
     else {
       Node* replacement;
       if(!n->right)replacement=n->left;
       else {Node* successor=0;Node* right=extract_first(n->right,&successor);successor->left=n->left;successor->right=right;replacement=balance(successor);}
       if(n->prev)n->prev->next=n->next;else first_=n->next;if(n->next)n->next->prev=n->prev;else last_=n->prev;
-      n->~Node();allocator_.deallocate(n,1);--size_;*erased=true;return replacement;
+      if(removed){n->left=n->right=n->next=n->prev=0;n->height=1;*removed=n;}
+      else {n->~Node();allocator_.deallocate(n,1);}
+      --size_;*erased=true;return replacement;
     }
+    return balance(n);
+  }
+  /* Attach an already allocated node, which is how a node handle moves into
+     a container without allocating or copying its value. */
+  Node* attach(Node* n,Node* fresh,Node* before,Node* after,Node** result,bool* inserted){
+    if(!n){
+      fresh->left=fresh->right=0;fresh->height=1;fresh->prev=before;fresh->next=after;
+      if(before)before->next=fresh;else first_=fresh;
+      if(after)after->prev=fresh;else last_=fresh;
+      ++size_;*result=fresh;*inserted=true;return fresh;
+    }
+    if(compare_(fresh->value.first,n->value.first))n->left=attach(n->left,fresh,before,n,result,inserted);
+    else if(compare_(n->value.first,fresh->value.first))n->right=attach(n->right,fresh,n,after,result,inserted);
+    else {*result=n;*inserted=false;return n;}
     return balance(n);
   }
   Node* lookup(const Key& key)const{Node* n=root_;while(n){if(compare_(key,n->value.first))n=n->left;else if(compare_(n->value.first,key))n=n->right;else return n;}return 0;}
@@ -76,6 +92,31 @@ public:
     template<bool C>bool operator!=(const cursor<C>& o)const{return node_!=o.node_;}
   };
   typedef cursor<false> iterator;typedef cursor<true> const_iterator;
+  /* A node handle owns one extracted node and its allocator, so it can be
+     reinserted into this or another container without copying the value. */
+  class node_type {
+    friend class map;
+    Node* node_;node_allocator allocator_;
+    node_type(Node* node,const node_allocator& allocator):node_(node),allocator_(allocator){}
+    void release(){if(node_){node_->~Node();allocator_.deallocate(node_,1);node_=0;}}
+  public:
+    node_type():node_(0),allocator_(){}
+    node_type(node_type&& other)noexcept:node_(other.node_),allocator_(other.allocator_){other.node_=0;}
+    node_type& operator=(node_type&& other)noexcept{if(this!=&other){release();node_=other.node_;allocator_=other.allocator_;other.node_=0;}return *this;}
+    node_type(const node_type&)=delete;node_type& operator=(const node_type&)=delete;
+    ~node_type(){release();}
+    explicit operator bool()const noexcept{return node_!=0;}
+    bool empty()const noexcept{return node_==0;}
+    key_type& key()const{return const_cast<key_type&>(node_->value.first);}
+    mapped_type& mapped()const{return node_->value.second;}
+    value_type& value()const{return node_->value;}
+  };
+  struct insert_return_type {
+    iterator position;bool inserted;node_type node;
+    insert_return_type():position(),inserted(false),node(){}
+    insert_return_type(iterator where,bool done,node_type&& handle)
+      :position(where),inserted(done),node(static_cast<node_type&&>(handle)){}
+  };
   map():root_(0),first_(0),last_(0),size_(0),compare_(),allocator_(){}
   explicit map(const Compare& comp,const Alloc& alloc=Alloc()):root_(0),first_(0),last_(0),size_(0),compare_(comp),allocator_(alloc){}
   map(initializer_list<value_type> values):map(){for(const auto& v:values)insert(v);}
@@ -101,11 +142,63 @@ public:
   pair<iterator,bool> insert(const value_type& value){return insert_value(value);}pair<iterator,bool>insert(value_type&& value){return insert_value(std::move(value));}
   template<class P>pair<iterator,bool>insert(P&& value){value_type converted(std::forward<P>(value));return insert_value(std::move(converted));}
   template<class... Args>pair<iterator,bool>emplace(Args&&... args){value_type value(std::forward<Args>(args)...);return insert_value(std::move(value));}
+  /* try_emplace builds the mapped value only when the key is absent, and
+     insert_or_assign overwrites an existing mapping instead of leaving it. */
+  template<class... Args>pair<iterator,bool>try_emplace(const Key& key,Args&&... args){
+    iterator found=find(key);
+    if(found!=end())return pair<iterator,bool>(found,false);
+    return insert_value(value_type(key,T(std::forward<Args>(args)...)));
+  }
+  template<class... Args>pair<iterator,bool>try_emplace(Key&& key,Args&&... args){
+    iterator found=find(key);
+    if(found!=end())return pair<iterator,bool>(found,false);
+    return insert_value(value_type(std::move(key),T(std::forward<Args>(args)...)));
+  }
+  template<class M>pair<iterator,bool>insert_or_assign(const Key& key,M&& value){
+    iterator found=find(key);
+    if(found!=end()){found->second=std::forward<M>(value);return pair<iterator,bool>(found,false);}
+    return insert_value(value_type(key,T(std::forward<M>(value))));
+  }
+  template<class M>pair<iterator,bool>insert_or_assign(Key&& key,M&& value){
+    iterator found=find(key);
+    if(found!=end()){found->second=std::forward<M>(value);return pair<iterator,bool>(found,false);}
+    return insert_value(value_type(std::move(key),T(std::forward<M>(value))));
+  }
+  /* A node handle reinserts the same node when its key is absent, and the
+     handle keeps ownership when the key is already present. */
+  insert_return_type insert(node_type&& handle){
+    if(!handle.node_)return insert_return_type(end(),false,node_type());
+    Node* result=0;bool inserted=false;
+    root_=attach(root_,handle.node_,0,0,&result,&inserted);
+    if(!inserted)return insert_return_type(iterator(result,this),false,static_cast<node_type&&>(handle));
+    handle.node_=0;
+    return insert_return_type(iterator(result,this),true,node_type());
+  }
+  node_type extract(const Key& key){
+    Node* removed=0;bool erased=false;
+    root_=remove(root_,key,&erased,&removed);
+    return node_type(removed,allocator_);
+  }
+  node_type extract(const_iterator position){
+    if(!position.node_)return node_type();
+    Node* removed=0;bool erased=false;
+    root_=remove(root_,position.node_->value.first,&erased,&removed);
+    return node_type(removed,allocator_);
+  }
+  template<class C2>void merge(map<Key,T,C2,Alloc>& source){
+    iterator p=source.begin();
+    while(p!=source.end()){
+      iterator next=p;++next;
+      node_type handle=source.extract(p);
+      insert(static_cast<node_type&&>(handle));
+      p=next;
+    }
+  }
   T& operator[](const Key& key){iterator p=find(key);if(p!=end())return p->second;return insert(value_type(key,T())).first->second;}
   T& operator[](Key&& key){iterator p=find(key);if(p!=end())return p->second;return insert(value_type(std::move(key),T())).first->second;}
   T& at(const Key& key){iterator p=find(key);if(p==end())throw out_of_range("map::at");return p->second;}
   const T& at(const Key& key)const{const_iterator p=find(key);if(p==end())throw out_of_range("map::at");return p->second;}
-  size_t erase(const Key& key){bool erased=false;root_=remove(root_,key,&erased);return erased?1:0;}
+  size_t erase(const Key& key){bool erased=false;root_=remove(root_,key,&erased,0);return erased?1:0;}
   iterator erase(const_iterator p){Node* next=p.node_->next;erase(p->first);return iterator(next,this);}
   iterator erase(iterator p){Node* next=p.node_->next;erase(p->first);return iterator(next,this);}
   void clear()noexcept{Node* p=first_;while(p){Node* next=p->next;p->~Node();allocator_.deallocate(p,1);p=next;}root_=first_=last_=0;size_=0;}

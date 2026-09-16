@@ -2033,6 +2033,9 @@ do_init_list:
       element_type = field ? pointed_type(&field->type) : NULL;
       if (!field || !element_type)
         cprime_error("initializer_list layout missing array field");
+      /* A braced list can be the first place a template element type is
+         required, so materialize the class before its size is read. */
+      materialize_incomplete_template_type(element_type);
       element_size = type_size(element_type, &element_align);
       if (element_size < 0)
         cprime_error("initializer_list element has incomplete type");

@@ -2,9 +2,30 @@
 #define _CPC_CHARCONV
 
 #include <system_error>
+#include <stdio.h>
+#include <stdlib.h>
 
 namespace std
 {
+  enum class chars_format
+  {
+    scientific = 1,
+    fixed = 2,
+    general = 3,
+    hex = 4
+  };
+
+  constexpr chars_format operator|(chars_format left, chars_format right)
+  {
+    return static_cast<chars_format>(static_cast<int>(left)
+                                     | static_cast<int>(right));
+  }
+  constexpr chars_format operator&(chars_format left, chars_format right)
+  {
+    return static_cast<chars_format>(static_cast<int>(left)
+                                     & static_cast<int>(right));
+  }
+
   struct from_chars_result
   {
     const char *ptr;
@@ -16,6 +37,254 @@ namespace std
     char *ptr;
     errc ec;
   };
+
+  /* Floating-point conversion goes through the C runtime's formatter and
+     parser: the shortest precision that round-trips is the value's shortest
+     representation, which is what to_chars produces. */
+  namespace __charconv
+  {
+    inline char conversion_for(chars_format format)
+    {
+      if (format == chars_format::hex)
+        return 'a';
+      if (format == chars_format::fixed)
+        return 'f';
+      if (format == chars_format::scientific)
+        return 'e';
+      return 'g';
+    }
+
+    inline int format_double(char *text, int size, double value,
+                             chars_format format, int precision)
+    {
+      char specifier[8];
+      int index = 0;
+      int count;
+      specifier[index++] = '%';
+      specifier[index++] = '.';
+      specifier[index++] = '*';
+      specifier[index++] = conversion_for(format);
+      specifier[index] = 0;
+      count = snprintf(text, size, specifier, precision, value);
+      return count;
+    }
+
+    /* The shortest precision in [1, 17] whose text reads back as the same
+       value.  Fixed conversion also tries zero fraction digits. */
+    inline int shortest_double(char *text, int size, double value,
+                               chars_format format)
+    {
+      int precision;
+      int count = 0;
+      int first = (format & chars_format::fixed) != chars_format()
+                    && (format & chars_format::scientific) == chars_format()
+                  ? 0 : 1;
+      for (precision = first; precision <= 17; ++precision)
+      {
+        count = format_double(text, size, value, format, precision);
+        if (count > 0 && count < size && strtod(text, NULL) == value)
+          break;
+      }
+      return count;
+    }
+  }
+
+  inline to_chars_result to_chars(char *first, char *last, double value)
+  {
+    to_chars_result result;
+    int count = __charconv::shortest_double(first, (int)(last - first), value,
+                                            chars_format::general);
+    if (count <= 0 || count >= (int)(last - first))
+    {
+      result.ptr = last;
+      result.ec = errc::value_too_large;
+      return result;
+    }
+    result.ptr = first + count;
+    result.ec = errc();
+    return result;
+  }
+
+  inline to_chars_result to_chars(char *first, char *last, float value)
+  {
+    return to_chars(first, last, (double)value);
+  }
+
+  inline to_chars_result to_chars(char *first, char *last, double value,
+                                  chars_format format)
+  {
+    to_chars_result result;
+    int count = __charconv::shortest_double(first, (int)(last - first), value,
+                                            format);
+    if (count <= 0 || count >= (int)(last - first))
+    {
+      result.ptr = last;
+      result.ec = errc::value_too_large;
+      return result;
+    }
+    result.ptr = first + count;
+    result.ec = errc();
+    return result;
+  }
+
+  inline to_chars_result to_chars(char *first, char *last, float value,
+                                  chars_format format)
+  {
+    return to_chars(first, last, (double)value, format);
+  }
+
+  inline to_chars_result to_chars(char *first, char *last, double value,
+                                  chars_format format, int precision)
+  {
+    to_chars_result result;
+    int count = __charconv::format_double(first, (int)(last - first), value,
+                                          format, precision);
+    if (count <= 0 || count >= (int)(last - first))
+    {
+      result.ptr = last;
+      result.ec = errc::value_too_large;
+      return result;
+    }
+    result.ptr = first + count;
+    result.ec = errc();
+    return result;
+  }
+
+  inline to_chars_result to_chars(char *first, char *last, float value,
+                                  chars_format format, int precision)
+  {
+    return to_chars(first, last, (double)value, format, precision);
+  }
+
+  /* from_chars accepts the value grammar, not the C parser's wider input:
+     no leading space, no trailing characters, and the range ends where the
+     value ends. */
+  inline from_chars_result from_chars(const char *first, const char *last,
+                                      double &value, chars_format format)
+  {
+    from_chars_result result;
+    const char *at = first;
+    char text[64];
+    int count = 0;
+    bool digits = false;
+    result.ptr = first;
+    result.ec = errc::invalid_argument;
+    if (first == last)
+      return result;
+    if (at != last && (*at == '-' || *at == '+'))
+    {
+      if (count < (int)sizeof(text) - 1) text[count++] = *at;
+      ++at;
+    }
+    if ((format & chars_format::hex) != chars_format())
+    {
+      if (at + 1 < last && at[0] == '0' && (at[1] == 'x' || at[1] == 'X'))
+      {
+        if (count < (int)sizeof(text) - 3)
+        {
+          text[count++] = *at++;
+          text[count++] = *at++;
+        }
+        while (at != last
+               && ((*at >= '0' && *at <= '9') || (*at >= 'a' && *at <= 'f')
+                   || (*at >= 'A' && *at <= 'F') || *at == '.'))
+        {
+          digits = digits || *at != '.';
+          if (count < (int)sizeof(text) - 1) text[count++] = *at;
+          ++at;
+        }
+        if (at != last && (*at == 'p' || *at == 'P'))
+        {
+          if (count < (int)sizeof(text) - 1) text[count++] = *at;
+          ++at;
+          if (at != last && (*at == '-' || *at == '+'))
+          {
+            if (count < (int)sizeof(text) - 1) text[count++] = *at;
+            ++at;
+          }
+          while (at != last && *at >= '0' && *at <= '9')
+          {
+            if (count < (int)sizeof(text) - 1) text[count++] = *at;
+            ++at;
+          }
+        }
+        if (!digits)
+          return result;
+      }
+    }
+    else
+    {
+      while (at != last && *at >= '0' && *at <= '9')
+      {
+        digits = true;
+        if (count < (int)sizeof(text) - 1) text[count++] = *at;
+        ++at;
+      }
+      if (at != last && *at == '.')
+      {
+        if (count < (int)sizeof(text) - 1) text[count++] = *at;
+        ++at;
+        while (at != last && *at >= '0' && *at <= '9')
+        {
+          digits = true;
+          if (count < (int)sizeof(text) - 1) text[count++] = *at;
+          ++at;
+        }
+      }
+      if (!digits)
+        return result;
+      if (at != last && (*at == 'e' || *at == 'E'))
+      {
+        const char *exponent = at;
+        int exponent_count = count;
+        if (count < (int)sizeof(text) - 1) text[count++] = *at;
+        ++at;
+        if (at != last && (*at == '-' || *at == '+'))
+        {
+          if (count < (int)sizeof(text) - 1) text[count++] = *at;
+          ++at;
+        }
+        if (at == last || *at < '0' || *at > '9')
+        {
+          at = exponent;
+          count = exponent_count;
+        }
+        else
+          while (at != last && *at >= '0' && *at <= '9')
+          {
+            if (count < (int)sizeof(text) - 1) text[count++] = *at;
+            ++at;
+          }
+      }
+    }
+    text[count] = 0;
+    value = strtod(text, NULL);
+    result.ptr = at;
+    result.ec = errc();
+    return result;
+  }
+
+  inline from_chars_result from_chars(const char *first, const char *last,
+                                      double &value)
+  {
+    return from_chars(first, last, value, chars_format::general);
+  }
+
+  inline from_chars_result from_chars(const char *first, const char *last,
+                                      float &value, chars_format format)
+  {
+    double parsed = 0;
+    from_chars_result result = from_chars(first, last, parsed, format);
+    if (result.ec == errc())
+      value = (float)parsed;
+    return result;
+  }
+
+  inline from_chars_result from_chars(const char *first, const char *last,
+                                      float &value)
+  {
+    return from_chars(first, last, value, chars_format::general);
+  }
 
   template<class T>
   from_chars_result from_chars(const char *first, const char *last,

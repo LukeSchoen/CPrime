@@ -52,6 +52,11 @@ namespace std
       }
     }
   };
+
+  /* The element count comes from the initializer list, so the brace form
+     deduces through this guide rather than one parameter per element. */
+  template<class T, class... U>
+  array(T, U...) -> array<T, 1 + sizeof...(U)>;
 }
 
 #endif

@@ -5168,7 +5168,16 @@ static int try_call_cpp_call_operator(void)
 
   mk_pointer(&vtop->type);
   gaddrof();
-  gv(RC_INT);
+  /* Mirror the member-call receiver: while a constant expression is wanted,
+     a temporary's address stays in its constant form so the evaluator can
+     still fold the call. */
+  if (!(CONST_WANTED || integral_constant_expression_wanted
+        || static_initializer_constant_fold)
+      || !(((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST))
+              == (VT_CONST | VT_SYM))
+           || ((vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST))
+              == VT_LOCAL && is_active_constexpr_temporary(vtop->sym))))
+    gv(RC_INT);
   save_lvalues();
   vpushsym(&func_sym->type, func_sym);
   vswap();
@@ -5193,6 +5202,22 @@ static int try_call_cpp_call_operator(void)
   }
 
   next();
+  /* A call through a function object folds to its value in a constant
+     expression exactly like a direct member call. */
+  if (!direct_result
+      && (CONST_WANTED || integral_constant_expression_wanted
+          || static_initializer_constant_fold))
+  {
+    SValue constant;
+    if (evaluate_constexpr_function(func_sym, vtop + 1 - nb_args, nb_args,
+                                    &constant))
+    {
+      vtop -= nb_args;
+      *vtop = constant;
+      maybe_indir_call_result();
+      return 1;
+    }
+  }
   finish_cpp_member_func_call_to(func_type, nb_args, direct_result,
                                 result_storage, result_address);
   return 1;

@@ -8,6 +8,53 @@
 
 namespace std
 {
+  /* Searcher elements are compared through this predicate: it accepts any
+     two element types, which one fixed `equal_to<T>` cannot express. */
+  struct __equal_to_any
+  {
+    template<class T, class U>
+    bool operator()(const T &left, const U &right) const { return left == right; }
+  };
+
+  /* C++17 default searcher: the pattern is held and the range search runs
+     when the searcher is called. */
+  template<class ForwardIterator1, class BinaryPredicate = __equal_to_any>
+  class default_searcher
+  {
+  public:
+    default_searcher(ForwardIterator1 pattern_begin, ForwardIterator1 pattern_end,
+                     BinaryPredicate predicate = BinaryPredicate())
+      : m_pattern_begin(pattern_begin), m_pattern_end(pattern_end),
+        m_predicate(predicate) {}
+
+    ForwardIterator1 begin() const { return m_pattern_begin; }
+    ForwardIterator1 end() const { return m_pattern_end; }
+
+    template<class ForwardIterator2>
+    ForwardIterator2 operator()(ForwardIterator2 first, ForwardIterator2 last) const
+    {
+      if (m_pattern_begin == m_pattern_end) return first;
+      for (; first != last; ++first)
+      {
+        ForwardIterator2 candidate = first;
+        ForwardIterator1 pattern = m_pattern_begin;
+        while (pattern != m_pattern_end && candidate != last
+               && m_predicate(*pattern, *candidate))
+        {
+          ++pattern;
+          ++candidate;
+        }
+        if (pattern == m_pattern_end) return first;
+      }
+      return last;
+    }
+
+  private:
+    ForwardIterator1 m_pattern_begin;
+    ForwardIterator1 m_pattern_end;
+    BinaryPredicate m_predicate;
+  };
+
   template<class T> class reference_wrapper;
 
   // Expression substitution selects the applicable INVOKE rule. Each int

@@ -994,6 +994,13 @@ static void parse_cpp_lambda_expression(void)
       }
       tok_str_add(declaration, TOK_GT);
     }
+    /* C++17 makes a lambda's call operator implicitly constexpr, so the
+       synthesized member is usable in a constant expression.  A generic
+       lambda's operator is a member template with a deduced auto return
+       type; marking that form constexpr still misreplays a body that returns
+       another closure, so only the non-template operator is marked here. */
+    if (!lambda->generic)
+      tok_str_add(declaration, tok_constexpr);
     if (lambda->generic && !lambda->explicit_return)
       tok_str_add(declaration, TOK_AUTO);
     else

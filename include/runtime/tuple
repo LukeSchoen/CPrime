@@ -239,6 +239,46 @@ namespace std
   {
     return std::forward<Function>(function)(arguments.first, arguments.second);
   }
+
+  /* make_from_tuple builds the target from the tuple's elements, reusing the
+     leaf walk that turns them into a constructor argument list. */
+  template<class T>
+  struct __from_tuple_constructor
+  {
+    template<class... Arguments>
+    T operator()(Arguments &&...arguments) const
+    {
+      return T(static_cast<Arguments &&>(arguments)...);
+    }
+  };
+
+  template<class T, class... Types>
+  T make_from_tuple(tuple<Types...> &arguments)
+  {
+    return arguments.__apply(__from_tuple_constructor<T>());
+  }
+
+  template<class T, class... Types>
+  T make_from_tuple(const tuple<Types...> &arguments)
+  {
+    return arguments.__apply(__from_tuple_constructor<T>());
+  }
+
+  template<class T, class... Types>
+  T make_from_tuple(tuple<Types...> &&arguments)
+  {
+    return static_cast<tuple<Types...> &>(arguments).__apply(
+        __from_tuple_constructor<T>());
+  }
+
+  template<class T, class... Types>
+  T make_from_tuple(const tuple<Types...> &&arguments)
+  {
+    return arguments.__apply(__from_tuple_constructor<T>());
+  }
+
+  template<class... Types>
+  tuple(Types...) -> tuple<Types...>;
 }
 
 #endif

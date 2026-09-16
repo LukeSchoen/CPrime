@@ -13,6 +13,8 @@ namespace std
     class path
     {
     public:
+      typedef string::size_type size_type;
+
       path() {}
       path(const char *text) : m_text(text) {}
       path(const string &text) : m_text(text) {}
@@ -21,10 +23,133 @@ namespace std
       const char *c_str() const { return m_text.c_str(); }
       const string &string_value() const { return m_text; }
       string &string_value() { return m_text; }
+      void clear() { m_text.clear(); }
+
+      bool has_filename() const { return !filename().empty(); }
+      bool has_parent_path() const { return !parent_path().empty(); }
+      bool has_extension() const { return !extension().empty(); }
+
+      /* The name after the last separator, and its period suffix. */
+      path filename() const
+      {
+        size_type slash = last_separator(m_text);
+        return slash == string::npos ? *this : path(m_text.substr(slash + 1));
+      }
+
+      size_type size() const { return m_text.size(); }
+
+      path extension() const
+      {
+        string name = filename().m_text;
+        if (name == "." || name == "..") return path();
+        size_type dot = last_period(name);
+        return dot == string::npos ? path() : path(name.substr(dot));
+      }
+
+      path stem() const
+      {
+        string name = filename().m_text;
+        if (name == "." || name == "..") return path(name);
+        size_type dot = last_period(name);
+        return dot == string::npos ? path(name) : path(name.substr(0, dot));
+      }
+
+      /* The prefix before the last separator.  A separator at the first
+         position is the root and stays, as `dir` for "dir/name". */
+      path parent_path() const
+      {
+        size_type slash = last_separator(m_text);
+        if (slash == string::npos) return path();
+        if (slash == 0) return path(m_text.substr(0, 1));
+        return path(m_text.substr(0, slash));
+      }
+
+      path &replace_extension(const path &replacement = path())
+      {
+        path prefix = parent_path();
+        string name = stem().m_text;
+        string suffix = replacement.m_text;
+        if (!suffix.empty() && suffix[0] != '.') suffix = "." + suffix;
+        m_text = prefix.m_text;
+        if (!m_text.empty() && m_text[m_text.size() - 1] != '/'
+            && m_text[m_text.size() - 1] != '\\')
+          m_text += "/";
+        m_text += name;
+        m_text += suffix;
+        return *this;
+      }
+
+      bool is_absolute() const
+      {
+        if (m_text.empty()) return false;
+        if (m_text[0] == '/' || m_text[0] == '\\') return true;
+        return m_text.size() > 1 && m_text[1] == ':';
+      }
+
+      path &operator/=(const path &other)
+      {
+        if (other.m_text.empty()) return *this;
+        if (is_absolute() || m_text.empty())
+        {
+          if (m_text.empty() || other.is_absolute()) m_text = other.m_text;
+          else
+          {
+            if (m_text[m_text.size() - 1] != '/' && m_text[m_text.size() - 1] != '\\')
+              m_text += "/";
+            m_text += other.m_text;
+          }
+          return *this;
+        }
+        if (m_text[m_text.size() - 1] != '/' && m_text[m_text.size() - 1] != '\\')
+          m_text += "/";
+        m_text += other.m_text;
+        return *this;
+      }
+
+      path &operator+=(const path &other)
+      {
+        m_text += other.m_text;
+        return *this;
+      }
+
+      int compare(const path &other) const { return m_text.compare(other.m_text); }
 
     private:
+      static size_type last_separator(const string &text)
+      {
+        size_type index = text.size();
+        while (index > 0)
+        {
+          --index;
+          if (text[index] == '/' || text[index] == '\\') return index;
+        }
+        return string::npos;
+      }
+      static size_type last_period(const string &text)
+      {
+        size_type index = text.size();
+        while (index > 0)
+        {
+          --index;
+          if (text[index] == '.') return index;
+        }
+        return string::npos;
+      }
       string m_text;
     };
+
+    inline bool operator==(const path &left, const path &right) { return left.compare(right) == 0; }
+    inline bool operator!=(const path &left, const path &right) { return left.compare(right) != 0; }
+    inline bool operator<(const path &left, const path &right) { return left.compare(right) < 0; }
+    inline bool operator>(const path &left, const path &right) { return left.compare(right) > 0; }
+    inline bool operator<=(const path &left, const path &right) { return left.compare(right) <= 0; }
+    inline bool operator>=(const path &left, const path &right) { return left.compare(right) >= 0; }
+    inline path operator/(const path &left, const path &right)
+    {
+      path result(left);
+      result /= right;
+      return result;
+    }
 
     inline bool exists(const path &value)
     {
