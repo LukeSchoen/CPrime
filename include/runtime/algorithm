@@ -200,6 +200,27 @@ namespace std
       *other = value;
     }
   }
+  /* The C++11 form takes the uniform random bit generator: the swap index
+     comes from the generator scaled into the remaining range. */
+  template<class RandomIt, class URBG>
+  void shuffle(RandomIt first, RandomIt last, URBG &&generator)
+  {
+    typedef typename iterator_traits<RandomIt>::difference_type difference;
+    difference remaining = last - first;
+    while (remaining > 1)
+    {
+      difference offset = (difference)(generator() % (unsigned long long)remaining);
+      --remaining;
+      if (offset != remaining)
+      {
+        RandomIt other = first + offset;
+        RandomIt current = first + remaining;
+        typename iterator_traits<RandomIt>::value_type value = *current;
+        *current = *other;
+        *other = value;
+      }
+    }
+  }
   template<class Input,class Output,class Operation>
   Output transform(Input first,Input last,Output result,Operation operation) {
     for(;first!=last;++first,++result) *result=operation(*first);

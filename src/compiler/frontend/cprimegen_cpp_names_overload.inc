@@ -2783,7 +2783,7 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
         return qualification ? 1 : 0;
       if ((arg_type->t & VT_RVALUE_REFERENCE)
           && (pointed_type(param_type)->t & VT_CONSTANT))
-        return 2;
+        return 1;
     }
     /* A direct reference binding is an exact match. Adding top-level
        cv-qualification to the referent keeps both bindings exact

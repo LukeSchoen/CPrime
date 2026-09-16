@@ -75,6 +75,17 @@ namespace std
     rhs = std::move(temporary);
   }
 
+  /* C++11 gives swap an array overload so that swapping two arrays of the
+     same length is well-formed. Without it the value overload above is
+     selected with T deduced as the array type, and its body cannot declare
+     an array temporary. */
+  template<class T, size_t N>
+  void swap(T (&lhs)[N], T (&rhs)[N])
+  {
+    for (size_t index = 0; index < N; ++index)
+      swap(lhs[index], rhs[index]);
+  }
+
   template<class T> class reference_wrapper;
   template<class T> struct __unwrap_reference { typedef T type; };
   template<class T> struct __unwrap_reference<reference_wrapper<T>> { typedef T& type; };

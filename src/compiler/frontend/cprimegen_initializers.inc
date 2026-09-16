@@ -1478,6 +1478,17 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
       if (rank > best_rank) continue;
       if (rank == best_rank && constructor && constructor != function) {
         int order = compare_member_function_template_order(function->v, constructor->v);
+        /* C++ prefers a non-template member over a member template
+           specialization.  Once a constructor template has been materialized
+           its parameters can be indistinguishable from an ordinary
+           constructor's, and the specialization is not a template definition
+           for the ordering above, so separate the two here. */
+        if (!order) {
+          int candidate_is_template = member_function_is_template(function->v);
+          int constructor_is_template = member_function_is_template(constructor->v);
+          if (candidate_is_template != constructor_is_template)
+            order = candidate_is_template ? -1 : 1;
+        }
         if (order < 0) continue;
         if (!order) { ambiguous = 1; continue; }
       }

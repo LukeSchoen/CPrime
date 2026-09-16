@@ -1,8 +1,50 @@
 #ifndef _CPC_RANDOM
 #define _CPC_RANDOM
 
+#include <stdlib.h>
+#include <time.h>
+
 namespace std
 {
+  /* The CRT's non-deterministic generator.  It is declared here because the
+     SDK's stdlib.h only declares it for callers that define _CRT_RAND_S
+     before including it. */
+  extern "C" int __cdecl rand_s(unsigned int *value);
+
+  class random_device
+  {
+  public:
+    typedef unsigned int result_type;
+
+    random_device() {}
+    explicit random_device(const char *) {}
+
+    static constexpr result_type min() { return 0; }
+    static constexpr result_type max() { return 0xffffffffu; }
+    double entropy() const { return 32.0; }
+
+    result_type operator()()
+    {
+      unsigned int value = 0;
+      if (rand_s(&value) != 0)
+      {
+        /* rand_s reports failure rather than throwing; keep the generator
+           usable by mixing the monotonic clock with a counter. */
+        static unsigned long long sequence;
+        unsigned long long mixed =
+          (unsigned long long)clock() + (++sequence * 2654435761ull);
+        mixed ^= mixed >> 33;
+        mixed *= 0xff51afd7ed558ccdull;
+        mixed ^= mixed >> 33;
+        value = (unsigned int)mixed;
+      }
+      return value;
+    }
+
+    random_device(const random_device &) = delete;
+    random_device &operator=(const random_device &) = delete;
+  };
+
   class mt19937
   {
   public:

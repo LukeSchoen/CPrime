@@ -2869,7 +2869,7 @@ static int template_member_def_min_param_count_uncached(TemplateMemberDef *md, i
   for (i = 0; i + 1 < n; ++i)
   {
     int j, angle = 0, paren = 0, bracket = 0, brace = 0;
-    int required = 0, saw = 0, has_default = 0;
+    int required = 0, saw = 0, has_default = 0, is_pack = 0;
 
     if (TOK_HAS_VALUE(md->def_str->str[i]))
     {
@@ -2926,7 +2926,7 @@ static int template_member_def_min_param_count_uncached(TemplateMemberDef *md, i
         --paren;
       else if (t == ')' && !paren && !angle && !bracket && !brace)
       {
-        if (saw && !has_default)
+        if (saw && !has_default && !is_pack)
           ++required;
         return required;
       }
@@ -2950,12 +2950,17 @@ static int template_member_def_min_param_count_uncached(TemplateMemberDef *md, i
       }
       else if (t == '=' && !paren && !angle && !bracket && !brace)
         has_default = 1;
+      /* A trailing parameter pack absorbs any number of arguments, so the
+         parameter that declares it is never required. */
+      else if (t == TOK_DOTS && !paren && !angle && !bracket && !brace)
+        is_pack = 1;
       else if (t == ',' && !paren && !angle && !bracket && !brace)
       {
-        if (saw && !has_default)
+        if (saw && !has_default && !is_pack)
           ++required;
         saw = 0;
         has_default = 0;
+        is_pack = 0;
         continue;
       }
       if (t != TOK_LINENUM)
@@ -8123,9 +8128,13 @@ static int resolve_qualified_static_template_call(int class_tok, int method_tok)
         || template_member_def_method_tok(member) != method_tok
         || !template_member_definition_is_static(member)
         || !template_member_is_call_specialized(member)) continue;
-    if (!address && !template_member_has_variadic_pack(member)
+    /* A parameter pack makes the maximum unbounded, but the parameters in
+       front of it are still required. */
+    if (!address
         && (argument_count < template_member_def_min_param_count(member, method_tok)
-            || argument_count > template_member_def_param_count(member, method_tok)))
+            || (!template_member_has_variadic_pack(member)
+                && argument_count
+                     > template_member_def_param_count(member, method_tok))))
       continue;
     if (key)
     {
@@ -8561,13 +8570,15 @@ static void instantiate_template_member_for_call(CType *type, int method_tok,
             /* Defaults on another overload do not make a member-template
                candidate viable. Only an out-of-class non-template definition
                can inherit defaults from its previously declared interface. */
-            if ((!overload_ok || template_member_is_call_specialized(md))
-                && !template_member_has_variadic_pack(md))
+            if (!overload_ok || template_member_is_call_specialized(md))
             {
               int min_param_count =
                 template_member_def_min_param_count(md, method_tok);
+              /* The parameters before a pack are still required; only the
+                 maximum is unbounded when the member is variadic. */
               if (explicit_arg_count < min_param_count
-                  || explicit_arg_count > param_count)
+                  || (!template_member_has_variadic_pack(md)
+                      && explicit_arg_count > param_count))
                 continue;
             }
           }
@@ -8835,13 +8846,15 @@ concrete_member_templates:
       continue;
     param_count = template_member_def_param_count(md, method_tok);
     if (explicit_arg_count >= 0
-        && param_count >= 0
-        && !template_member_has_variadic_pack(md))
+        && param_count >= 0)
     {
       int min_param_count = template_member_def_min_param_count(md,
                                                                 method_tok);
+      /* A variadic member is unbounded above, but the required parameters
+         that precede its pack still reject a shorter call. */
       if (explicit_arg_count < min_param_count
-          || explicit_arg_count > param_count)
+          || (!template_member_has_variadic_pack(md)
+              && explicit_arg_count > param_count))
         continue;
     }
     if (arg_types && explicit_arg_count > 0)
@@ -11258,6 +11271,27 @@ static int validate_template_value_parameter_type(TemplateDef *definition,
   owner_tok = record ? record->owner_tok : 0;
   valid = template_probe_type_ex(replay, 0, definition->namespace_tok,
                                  owner_tok, 0, &type);
+  if (getenv("CPC_TRACE_VALUE_PARAM"))
+  {
+    int at;
+    char text[128];
+    fprintf(stderr, "[value-param] %s param=%d valid=%d",
+            get_tok_str(definition->name_tok, NULL), parameter, valid);
+    if (valid) {
+      type_to_str(text, sizeof(text), &type, NULL);
+      fprintf(stderr, " type=%s", text);
+    }
+    fprintf(stderr, " tokens:");
+    for (at = 0; at < replay->len; ++at)
+    {
+      int t = replay->str[at];
+      if (t == TOK_EOF) break;
+      if (t >= TOK_IDENT) fprintf(stderr, " %s", get_tok_str(t, NULL));
+      else if (t > 32 && t < 127) fprintf(stderr, " %c", t);
+      else fprintf(stderr, " #%d", t);
+    }
+    fprintf(stderr, "\n");
+  }
   tok_str_free(replay);
   if (valid) {
     canonicalize_cpp_member_pointer_declarator(&type);

@@ -708,6 +708,62 @@ if_finished:
   return evaluate_constexpr_local_statement(0);
 }
 
+/* Nested evaluations of the same function with the same constant arguments
+   cannot make progress, so the repeat reports "not constant" instead of
+   recursing until the stack is exhausted. */
+typedef struct ConstexprActiveCall {
+  int token;
+  int count;
+  long long values[CPC_MAX_CALL_ARGUMENTS];
+  unsigned char known[CPC_MAX_CALL_ARGUMENTS];
+} ConstexprActiveCall;
+
+static ConstexprActiveCall constexpr_active_calls[128];
+static int nb_constexpr_active_calls;
+
+static int constexpr_call_repeats(int token, SValue *arguments, int count)
+{
+  int i, j;
+  if (count > CPC_MAX_CALL_ARGUMENTS)
+    return 0;
+  for (i = 0; i < nb_constexpr_active_calls; ++i)
+  {
+    ConstexprActiveCall *active = &constexpr_active_calls[i];
+    if (active->token != token || active->count != count)
+      continue;
+    for (j = 0; j < count; ++j)
+    {
+      if (!active->known[j]
+          || (arguments[j].r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST))
+             != VT_CONST
+          || active->values[j] != arguments[j].c.i)
+        break;
+    }
+    if (j == count)
+      return 1;
+  }
+  return 0;
+}
+
+static void constexpr_push_active_call(int token, SValue *arguments, int count)
+{
+  ConstexprActiveCall *active;
+  int j;
+  if (nb_constexpr_active_calls
+      >= (int)(sizeof(constexpr_active_calls) / sizeof(constexpr_active_calls[0])))
+    return;
+  active = &constexpr_active_calls[nb_constexpr_active_calls];
+  active->token = token;
+  active->count = count;
+  for (j = 0; j < count; ++j)
+  {
+    active->known[j] = (arguments[j].r
+                        & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST;
+    active->values[j] = active->known[j] ? arguments[j].c.i : 0;
+  }
+  ++nb_constexpr_active_calls;
+}
+
 static int evaluate_constexpr_function(Sym *function, SValue *arguments, int count, SValue *result)
 {
   ConstexprFunction *entry;
@@ -787,6 +843,12 @@ static int evaluate_constexpr_function(Sym *function, SValue *arguments, int cou
   }
   if (!constexpr_evaluation_depth) constexpr_evaluation_steps = 0;
   if (++constexpr_evaluation_depth > 128) cprime_error("constexpr evaluation depth exceeded");
+  if (constexpr_call_repeats(function->v, arguments, count))
+  {
+    --constexpr_evaluation_depth;
+    return 0;
+  }
+  constexpr_push_active_call(function->v, arguments, count);
   saved_invalid = constexpr_evaluation_invalid;
   constexpr_evaluation_invalid = 0;
   saved_tok = tok; saved_tokc = tokc;
@@ -959,6 +1021,8 @@ static int evaluate_constexpr_function(Sym *function, SValue *arguments, int cou
     }
   }
   --constexpr_evaluation_depth;
+  if (nb_constexpr_active_calls)
+    --nb_constexpr_active_calls;
   return valid;
 }
 
@@ -982,4 +1046,5 @@ static void free_constexpr_functions(void)
   constexpr_evaluation_depth = 0;
   constexpr_evaluation_steps = 0;
   constexpr_evaluation_invalid = 0;
+  nb_constexpr_active_calls = 0;
 }

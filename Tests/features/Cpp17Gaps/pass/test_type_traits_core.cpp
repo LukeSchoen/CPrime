@@ -20,6 +20,33 @@ static_assert(std::is_pointer_v<int *>, "is_pointer_v");
 static_assert(!std::is_floating_point_v<int>, "is_floating_point_v");
 static_assert(std::is_convertible_v<long, double>, "is_convertible_v");
 
+// Trivial special members: scalars and pointers are trivial even though the
+// legacy __has_trivial_destructor spelling answers false for them.
+struct Plain
+{
+  int value;
+};
+
+struct WithVirtual
+{
+  virtual ~WithVirtual();
+};
+
+static_assert(std::is_trivially_destructible<int>::value, "int is trivially destructible");
+static_assert(std::is_trivially_destructible<int *>::value, "pointer is trivially destructible");
+static_assert(std::is_trivially_destructible<Plain>::value, "plain is trivially destructible");
+static_assert(!std::is_trivially_destructible<WithVirtual>::value, "virtual destructor is not trivial");
+static_assert(std::is_trivially_constructible<Plain, const Plain &>::value, "trivial copy construction");
+static_assert(std::is_trivially_constructible<Plain, Plain &&>::value, "trivial move construction");
+static_assert(std::is_trivially_copy_constructible<Plain>::value, "trivially copy constructible");
+static_assert(std::is_trivially_move_constructible<Plain>::value, "trivially move constructible");
+static_assert(std::is_trivially_copy_assignable<int>::value, "int is trivially copy assignable");
+static_assert(std::is_trivially_copy_assignable<Plain>::value, "plain is trivially copy assignable");
+static_assert(std::is_trivially_move_assignable<Plain>::value, "plain is trivially move assignable");
+static_assert(!std::is_trivially_copy_assignable<const int>::value, "const is not assignable");
+static_assert(std::is_trivially_destructible_v<Plain>, "is_trivially_destructible_v");
+static_assert(std::is_trivially_copy_assignable_v<Plain>, "is_trivially_copy_assignable_v");
+
 int main()
 {
   return 0;

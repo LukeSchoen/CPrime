@@ -879,6 +879,12 @@ static void parse_explicit_specialization_body(int instantiation)
   }
   if (owner) tok_str_add(definition, name);
   else {
+    /* The replay below rebuilds the definition from its parts.  A
+       `constexpr` free-function specialization must keep the specifier so
+       the replayed body is recorded for constant evaluation like any other
+       constexpr definition; a member definition takes the flag directly. */
+    if (attributes.is_constexpr)
+      tok_str_add(definition, tok_constexpr);
     add_ctype_tokens(definition, &result);
     tok_str_add(definition, function_tok);
   }

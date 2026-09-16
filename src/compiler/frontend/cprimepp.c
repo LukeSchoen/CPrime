@@ -2093,7 +2093,9 @@ static int cprime_has_attribute(int attribute)
 
 /* Names GCC answers __has_builtin() for in both languages. Some are declared
    through cprimedefs.h rather than through a compiler token, and the library
-   aliases (abs, isalpha) have no __builtin_ spelling. */
+   aliases (abs, isalpha) have no __builtin_ spelling. The
+   `__builtin_*_overflow` family is deliberately absent until the frontend
+   implements it, so callers keep their portable fallbacks. */
 static const char *const cprime_common_builtin_names[] =
 {
   "abs",
@@ -2115,9 +2117,6 @@ static const char *const cprime_common_builtin_names[] =
   "__builtin_return",
   "__builtin_setjmp",
   "__builtin_trap",
-  "__builtin_add_overflow",
-  "__builtin_add_overflow_p",
-  "__builtin_sadd_overflow",
   "__sync_add_and_fetch",
   "__sync_and_and_fetch",
   "__sync_bool_compare_and_swap",

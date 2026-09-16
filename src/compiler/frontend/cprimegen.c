@@ -18641,8 +18641,10 @@ static int cpp_type_trait_name_tok(int name_tok)
          || !strcmp(name, "__is_trivially_copyable")
          || !strcmp(name, "__is_constructible")
          || !strcmp(name, "__is_assignable")
+         || !strcmp(name, "__is_trivially_assignable")
          || !strcmp(name, "__is_trivially_constructible")
          || !strcmp(name, "__is_base_of")
+         || !strcmp(name, "__is_trivially_destructible")
          || !strcmp(name, "__has_trivial_destructor")
          || !strcmp(name, "__has_trivial_constructor")
          || !strcmp(name, "__has_trivial_copy")
@@ -18886,7 +18888,17 @@ static int cpp_type_trivially_constructible_from(CType *type, CType *args,
   if (cpp_class_has_user_ctor(type) || cpp_class_has_virtual_table(type)
       || type->ref->a.cpp_user_destructor || type->ref->a.lifecycle_dtor)
     return 0;
-  return count == 1 && is_compatible_unqualified_types(type, &args[0]);
+  if (count != 1)
+    return 0;
+  {
+    /* The trait spells the source as `const T &` or `T &&`, so the reference
+       and its qualifiers are the value type's. */
+    CType source = args[0];
+    if (is_reference_type(&source))
+      source = *pointed_type(&source);
+    source.t &= ~(VT_CONSTANT | VT_VOLATILE);
+    return is_compatible_unqualified_types(type, &source);
+  }
 }
 
 static int cpp_type_is_pod(CType *type);
@@ -18969,6 +18981,24 @@ static int cpp_type_has_trivial_special_member(CType *type, int destructor)
   return cpp_subobject_has_trivial_special_member(type, destructor);
 }
 
+/* The standard trait's spelling: unlike the legacy `__has_trivial_destructor`
+   above, every object type without a user-provided destructor is trivially
+   destructible, so scalars, pointers, enumerations and arrays of such
+   objects answer true.  A reference keeps the legacy reading; void and
+   function types have no destructor at all. */
+static int cpp_type_is_trivially_destructible(CType *type)
+{
+  if ((type->t & VT_ARRAY) && type->ref)
+    return cpp_type_is_trivially_destructible(pointed_type(type));
+  if (is_reference_type(type))
+    return 1;
+  if ((type->t & VT_BTYPE) == VT_VOID || (type->t & VT_BTYPE) == VT_FUNC)
+    return 0;
+  if ((type->t & VT_BTYPE) != VT_STRUCT || !type->ref)
+    return 1;
+  return cpp_subobject_has_trivial_special_member(type, 1);
+}
+
 static int cpp_type_trivially_copyable(CType *type)
 {
   Sym *field;
@@ -19026,6 +19056,8 @@ static int cpp_type_trait_value(int name_tok, CType *args, int count)
     return count == 1 && cpp_type_is_pod(&args[0]);
   if (!strcmp(name, "__has_trivial_destructor"))
     return count == 1 && cpp_type_has_trivial_special_member(&args[0], 1);
+  if (!strcmp(name, "__is_trivially_destructible"))
+    return count == 1 && cpp_type_is_trivially_destructible(&args[0]);
   if (!strcmp(name, "__has_trivial_constructor")
       || !strcmp(name, "__has_trivial_copy")
       || !strcmp(name, "__has_trivial_assign")
@@ -19058,6 +19090,25 @@ static int cpp_type_trait_value(int name_tok, CType *args, int count)
         && cpp_type_constructible_from(&args[0], args + 1, count - 1);
   if (!strcmp(name, "__is_assignable"))
     return count == 2 && cpp_type_assignable_from(&args[0], &args[1]);
+  if (!strcmp(name, "__is_trivially_assignable"))
+  {
+    /* A trivial assignment is the implicit one: the expression must be
+       well-formed and both sides must name the same unqualified value type,
+       which excludes conversions and user-declared assignment operators. */
+    CType target, source, target_value, source_value;
+    if (count != 2)
+      return 0;
+    target = args[0];
+    source = args[1];
+    target_value = is_reference_type(&target) ? *pointed_type(&target) : target;
+    source_value = is_reference_type(&source) ? *pointed_type(&source) : source;
+    if (!cpp_type_assignable_from(&target, &source))
+      return 0;
+    if ((target_value.t & VT_BTYPE) != VT_STRUCT || !target_value.ref)
+      return 1;
+    return is_compatible_unqualified_types(&target_value, &source_value)
+        && cpp_type_trivially_copyable(&target_value);
+  }
   return cpp_type_trivially_constructible_from(&args[0], args + 1, count - 1);
 }
 

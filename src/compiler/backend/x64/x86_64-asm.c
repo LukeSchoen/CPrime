@@ -1322,6 +1322,10 @@ static inline int constraint_priority(const char *str)
       pr = 1;
       break;
     case 'q':
+    case 'Q':
+      /* 'Q' selects the byte-addressable general registers, which is what
+         the `%b`/`%h` operand modifiers of an in-place byte swap require
+         (SDL's x86_64 SDL_Swap16 spells the constraint that way). */
       pr = 2;
       break;
     case 'r':
@@ -1541,7 +1545,8 @@ alloc_reg:
         goto try_next;
       goto reg_found;
     case 'q':
-      // Eax, Ebx, Ecx Or Edx
+    case 'Q':
+      // Eax, Ebx, Ecx Or Edx (the byte-addressable registers)
       if (op->reg >= 0)
       {
         if ((reg = op->reg) < 4)

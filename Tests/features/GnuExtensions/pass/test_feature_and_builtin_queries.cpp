@@ -36,6 +36,11 @@ static int check_has_builtin()
   if (!__has_builtin(__builtin_alloca)) { return 1; }
   if (!__has_builtin(__builtin_unreachable)) { return 1; }
   if (__has_builtin(__builtin_cpc_missing_builtin)) { return 1; }
+  /* The overflow family is not implemented yet, so it must not be
+     advertised: callers feature-test it and then compile their own
+     fallback, which would not build if the query answered true. */
+  if (__has_builtin(__builtin_add_overflow)) { return 1; }
+  if (__has_builtin(__builtin_mul_overflow)) { return 1; }
   return 0;
 }
 

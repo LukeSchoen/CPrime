@@ -1,0 +1,18 @@
+#ifndef _CINTTYPES
+#define _CINTTYPES
+
+/* The C names and the PRI/SCN format macros live in the C header. */
+#include <inttypes.h>
+
+namespace std
+{
+  using ::imaxdiv_t;
+  using ::imaxabs;
+  using ::imaxdiv;
+  using ::strtoimax;
+  using ::strtoumax;
+  using ::wcstoimax;
+  using ::wcstoumax;
+}
+
+#endif
