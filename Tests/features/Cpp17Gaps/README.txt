@@ -3,9 +3,12 @@ C++17 gap suite
 Scope:
 - Minimal, standalone reproducers for the CPC deficiencies found by the CL
   repository's C++17 gap probe (C:\Luke\Src\CL\CpcRegressions.txt).
-- Every case is a valid program that must compile, link, and exit 0. Cases live
-  in pass/ and stay there until the shared compiler or runtime behavior is
-  repaired; none of them is relabeled an expected failure.
+- pass/ holds valid programs that must compile, link and exit 0. They stay
+  there until the shared compiler or runtime behavior is repaired; none of them
+  is relabeled an expected failure.
+- fail/ holds programs that must be rejected, with EXPECT_COMPILE_FAIL. Those
+  guard diagnostics, so they pass while the defect they describe is present and
+  must keep passing once it is repaired.
 - Cases whose only cost is a missing header keep one header and one minimal use
   per file so a failure names one facility.
 
@@ -16,7 +19,11 @@ Run:
 Gate placement:
 - Every case runs in the pedantic tier, which is every retained internal case
   that is not excluded. A failing case therefore shows up as a red count in
-  the pedantic run, and that red count is the work list; the fast tier only
-  covers the representative cases listed in Tests\tiers.json.
+  the pedantic run, and that red count is the work list.
+- The suite is red by exactly the number of open gaps. As of 2026-09-16 that is
+  18 cases: 17 in pass/ for missing facilities and one in fail/ for a missing
+  diagnostic. Tests\CPP17-REMAINING.md owns the list.
+- Those 18 cases are also listed in the fast tier so the routine loop reports
+  the work list; the rest of fast stays on the representative cases.
 - Keep every case in the suite once it passes: it is the regression cover for
   the repair.
