@@ -37,6 +37,35 @@ namespace std
   {
     return error_code(value);
   }
+
+  /* The condition half of <system_error>.  The shipped runtime has no error
+     categories, so a condition carries its value exactly like a code does. */
+  class error_condition
+  {
+  public:
+    error_condition() noexcept : m_value(0) {}
+    error_condition(errc value) noexcept : m_value(static_cast<int>(value)) {}
+    error_condition(int value) noexcept : m_value(value) {}
+
+    int value() const noexcept { return m_value; }
+    explicit operator bool() const noexcept { return m_value != 0; }
+
+  private:
+    int m_value;
+  };
+
+  inline bool operator==(const error_condition &left, const error_condition &right) noexcept
+  {
+    return left.value() == right.value();
+  }
+  inline bool operator!=(const error_condition &left, const error_condition &right) noexcept
+  {
+    return !(left == right);
+  }
+  inline error_condition make_error_condition(errc value) noexcept
+  {
+    return error_condition(value);
+  }
 }
 
 #endif

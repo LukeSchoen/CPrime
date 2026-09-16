@@ -15386,29 +15386,6 @@ static int instantiate_template_if_needed(TemplateDef *td,
   return instantiate_template_named_if_needed(td, args, 0);
 }
 
-/* TEMPORARY DIAGNOSTIC: dump a generated specialization token stream. */
-static void dump_spec_stream(const char *label, TokenString *ts)
-{
-  int i;
-  if (!getenv("CPRIME_DUMP_SPEC") || !ts)
-    return;
-  fprintf(stderr, "SPEC %s:", label);
-  for (i = 0; i < ts->len; ++i)
-  {
-    int t = ts->str[i];
-    if (TOK_HAS_VALUE(t))
-    {
-      CValue cv;
-      cv.i = 0;
-      fprintf(stderr, "%s ", get_tok_str(t, &cv));
-      i += tok_str_value_extra_words(ts->str, ts->len, i);
-      continue;
-    }
-    fprintf(stderr, "%s ", get_tok_str(t, NULL));
-  }
-  fprintf(stderr, "\n");
-}
-
 static int instantiate_template_named_if_needed(TemplateDef *td,
                                                  TemplateArgList *args,
                                                  int specialization_name_tok)
@@ -16691,9 +16668,13 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
         tok_str_add(self_tokens, TOK_EOF);
         if (self_arg_needs_replay && class_body_started)
         {
-          /* Emit the source spelling with the substituted arguments and let
-             the declaration parse instantiate the id in member order, exactly
-             as it does for any other template-id in the body. */
+          /* Emit the template name with the substituted arguments and let the
+             declaration parse instantiate the id in member order.  The
+             explicit global scope keeps the spelling off the injected class
+             name, which is what the bare name denotes inside this class; the
+             template's lookup token always names the template. */
+          tok_str_add(spec, ':');
+          tok_str_add(spec, ':');
           tok_str_add(spec, td->lookup_tok ? td->lookup_tok : td->name_tok);
           for (i = 0; i < self_tokens->len; ++i)
           {
@@ -17235,7 +17216,6 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
     }
     if (!materialize_function_body) return mangled_tok;
   }
-  dump_spec_stream("queue", spec);
   queue_pending_template_spec_in_namespace_bound(spec,
                               td->friend_class_tok ? td->friend_class_tok :
                               incomplete_dependency_tok ? incomplete_dependency_tok :

@@ -8,6 +8,25 @@
 
 namespace std
 {
+  /* C++17 deprecates but keeps the function base classes for libraries
+     written before the call wrappers; C++20 removes them.  A C++17 runtime
+     header has to provide them, with the argument and result typedefs the
+     adapted functors use. */
+  template<class Argument, class Result>
+  struct unary_function
+  {
+    typedef Argument argument_type;
+    typedef Result result_type;
+  };
+
+  template<class Argument1, class Argument2, class Result>
+  struct binary_function
+  {
+    typedef Argument1 first_argument_type;
+    typedef Argument2 second_argument_type;
+    typedef Result result_type;
+  };
+
   /* Searcher elements are compared through this predicate: it accepts any
      two element types, which one fixed `equal_to<T>` cannot express. */
   struct __equal_to_any
