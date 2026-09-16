@@ -11,10 +11,10 @@ user's control surface, and other worker folders may be in use on other days.
 
 ## What to make faster
 
-1. The compiler building itself: `scripts\build.exe` (serial C-only self-host,
+1. The compiler building itself: `src\scripts\build.exe` (serial C-only self-host,
    cached package, validate, publish). Time the whole run. The per-cycle proxy
    is the retained `c.self.driver` case
-   (`Tests/benchmarks/compile/costs/self_driver.c`), which compiles the complete
+   (`Speed/tests/compile/costs/self_driver.c`), which compiles the complete
    driver translation unit.
 2. Compiling C and C++ translation units, hardest case first:
    - heavy headers: long include chains, repeated inclusion, large declarations,
@@ -29,22 +29,26 @@ user's control surface, and other worker folders may be in use on other days.
 ## Measure, every cycle, before and after
 
 ```
-scripts\performance.exe -Root . -CpcOnly -NoGate -Quiet -Results build\worker\speed\perf-cycle-NNNN.tsv
-scripts\performance.exe -Root . -CpcOnly -NoGate -Iterations 5 -Warmups 1 -RawSamples build\perf\raw.tsv
-scripts\build.exe                                    full self-host, publish on success
+src\scripts\performance.exe -Root . -CpcOnly -NoGate -Quiet -Results Speed\build\perf-cycle-NNNN.tsv
+src\scripts\performance.exe -Root . -CpcOnly -NoGate -Iterations 5 -Warmups 1 -RawSamples Speed\build\raw.tsv
+src\scripts\build.exe                                  full self-host, publish on success
 ```
+
+The worker runs the first command every cycle (its rows also land in
+`Speed\build\cycles.csv`), and `Compatibility\tests\test.exe -Regression` as the
+gate.
 
 - The harness reads case metadata (`PERF_NAME`, `PERF_TIER`, `PERF_ITERATIONS`,
   `PERF_ARGS`, `PERF_SOURCE`) from the leading comment lines of
-  `Tests/benchmarks/compile/*.c`, runs strictly one compiler at a time and
+  `Speed/tests/compile/*.c`, runs strictly one compiler at a time and
   reports medians.
 - Read the spread with `src/tools/perf_dispersion.c` (build it with root
-  `cpc.exe` into `build\perf\perf-dispersion.exe`) before claiming a win. One
+  `cpc.exe` into `Speed\build\perf-dispersion.exe`) before claiming a win. One
   sample is not a result; repeat a serial run on the same input, flags and
   output path and compare medians.
 - Record with every number: the exact command, the input, the flags, the output
   directory and what the machine was doing. Keep raw evidence under
-  `build\worker\speed`.
+  `Speed\build`.
 - `cpc -bench` and `CPC_PROFILE_SCANS` show where compilation time goes; use
   them to choose the next target instead of guessing.
 
@@ -54,22 +58,22 @@ scripts\build.exe                                    full self-host, publish on 
   runs are unauthorized unless the user authorizes them for a measurement; when
   that happens they are references only, never a build path. Record unauthorized
   checks as blocked rather than working around them.
-- The C++ compile cases (`Tests/benchmarks/compile/*.cpp`, `competitive/`) are
+- The C++ compile cases (`Speed/tests/compile/*.cpp`, `competitive/`) are
   not wired into the harness yet: it scans only `*.c`. Bringing the hardest C++
   inputs into the measurement is fair game and is often the difference between
   measuring and guessing.
 - After changing `src/tools/*.c`, rebuild the workflow executables with
-  `scripts\tool-build.exe` (serial).
+  `src\scripts\tool-build.exe` (serial).
 - Verify correctness with the exact case, then the affected suite, then
-  `Tests\test.exe -All -Tier fast` and `Tests\test.exe -Regression`. Do not run
-  the pedantic tier. Publish with `scripts\build.exe` only when packaging and
+  `Compatibility\tests\test.exe -All -Tier fast` and `Compatibility\tests\test.exe -Regression`. Do not run
+  the pedantic tier. Publish with `src\scripts\build.exe` only when packaging and
   the regression gate pass.
 - Keep one focused change per cycle and revert experiments that do not hold up.
   No name-specific hacks, no disabling or relabelling cases, no retained scratch
   files.
 - New compile-stress inputs are welcome when a hard aspect has no case, and are
   authorized by this worker's purpose: keep them deterministic, fast,
-  self-contained and in `Tests/benchmarks/compile`, with the case metadata in
+  self-contained and in `Speed/tests/compile`, with the case metadata in
   the leading comment.
 
 ## Leads
@@ -82,7 +86,7 @@ scripts\build.exe                                    full self-host, publish on 
   lookups, repeated path construction, token copying, linear scans over saved
   bodies or overload sets, per-token allocation, unbounded output writes.
 - Batch and incremental paths (`--batch`, `-M` dependency runs, the tool chain
-  in `scripts/`) compile many units with one compiler invocation: their state
+  in `src/scripts/`) compile many units with one compiler invocation: their state
   reset and cache validation are part of compile speed.
-- `Performance\baseline\perf-baseline.tsv` records the retained numbers the
+- `Speed\baseline\perf-baseline.tsv` records the retained numbers the
   harness gates against; keep the baseline meaningful when a case changes.

@@ -40,7 +40,7 @@ rem   NO_CHECK         set to 1 to skip the per-cycle correctness probe
 rem   NO_MEASURE       set to 1 to skip the per-cycle speed measurement
 rem   SKIP_COMMIT      set to 1 to leave the tree dirty instead of committing (default 0)
 rem
-rem Logs live in build\worker\speed: cycles.csv has one row per cycle,
+rem Logs live in Speed\build: cycles.csv has one row per cycle,
 rem cycle-NNNN.log is the full codex transcript, cycle-NNNN-result.txt its final
 rem message, cycle-NNNN-check.log the probe output and perf-cycle-NNNN.tsv the
 rem per-case compile times of that cycle.
@@ -62,13 +62,17 @@ if not defined FAIL_SLEEP set "FAIL_SLEEP=60"
 if not defined CHECK_ARGS set "CHECK_ARGS=-All -Tier fast"
 if not defined PERF_ARGS set "PERF_ARGS=-CpcOnly -NoGate -Quiet"
 
-set "LOG_DIR=%ROOT%\build\worker\%AREA%"
+set "LOG_DIR=%ROOT%\%TITLE%\build"
 set "CYCLES=%LOG_DIR%\cycles.csv"
 set "PERF_PREFIX=%LOG_DIR%\perf-cycle-"
+set "CHECK_EXE=%ROOT%\%TITLE%\tests\test.exe"
+set "GATE_EXE=%ROOT%\Compatibility\tests\test.exe"
+if not defined GATE set "GATE=1"
 set "SESSION=0"
 set "FAILS=0"
 set "RC=0"
 set "CHECK_RC=-"
+set "GATE_RC=-"
 set "MEASURE_RC=-"
 set "HEAD=-"
 set "TAG=0000"
@@ -99,6 +103,8 @@ echo [%DATE% %TIME%] directory   : %ROOT%
 echo [%DATE% %TIME%] codex       : %CODEX_EXE% ^(effort %REASONING%^)
 echo [%DATE% %TIME%] cycle logs  : %LOG_DIR%\cycle-NNNN.log
 echo [%DATE% %TIME%] cycle rows  : %CYCLES%
+echo [%DATE% %TIME%] probe       : %CHECK_EXE% %CHECK_ARGS%
+if "%GATE%"=="1" echo [%DATE% %TIME%] gate        : %GATE_EXE% -Regression
 echo [%DATE% %TIME%] stop marker : %DONE% ^(create this file to stop after the current cycle^)
 echo [%DATE% %TIME%] pacing      : codex runs in the foreground; the next cycle starts when it exits
 echo [%DATE% %TIME%] one at once : run this worker or another one, never two: they share this tree
@@ -125,6 +131,7 @@ set "TAG=!TAG:~-4!"
 set "CYCLE_LOG=%LOG_DIR%\cycle-!TAG!.log"
 set "CYCLE_LAST=%LOG_DIR%\cycle-!TAG!-result.txt"
 set "CHECK_LOG=%LOG_DIR%\cycle-!TAG!-check.log"
+set "GATE_LOG=%LOG_DIR%\cycle-!TAG!-gate.log"
 set "MEASURE_LOG=%LOG_DIR%\cycle-!TAG!-measure.log"
 set "MEASURE_OUT=%PERF_PREFIX%!TAG!.tsv"
 set "START_DATE=%DATE%"
@@ -188,18 +195,29 @@ exit /b 0
 
 :check
 set "CHECK_RC=-"
+set "GATE_RC=-"
 if "%NO_CHECK%"=="1" exit /b 0
-if not exist "%ROOT%\Tests\test.exe" (
-    echo [%DATE% %TIME%] no Tests\test.exe; correctness probe skipped.
-    exit /b 0
-)
-"%ROOT%\Tests\test.exe" %CHECK_ARGS% > "%CHECK_LOG%" 2>&1
-set "CHECK_RC=!ERRORLEVEL!"
-if "!CHECK_RC!"=="0" (
-    echo [%DATE% %TIME%] probe ok   : Tests\test.exe %CHECK_ARGS%
+if not exist "%CHECK_EXE%" (
+    echo [%DATE% %TIME%] no %CHECK_EXE%; area probe skipped.
 ) else (
-    echo [%DATE% %TIME%] probe FAIL : Tests\test.exe %CHECK_ARGS% returned !CHECK_RC!; %CHECK_LOG%
-    type "%CHECK_LOG%"
+    "%CHECK_EXE%" %CHECK_ARGS% > "%CHECK_LOG%" 2>&1
+    set "CHECK_RC=!ERRORLEVEL!"
+    if "!CHECK_RC!"=="0" (
+        echo [%DATE% %TIME%] probe ok   : %CHECK_ARGS% [%CHECK_EXE%]
+    ) else (
+        echo [%DATE% %TIME%] probe FAIL : %CHECK_ARGS% exit !CHECK_RC!; %CHECK_LOG%
+        type "%CHECK_LOG%"
+    )
+)
+if "%GATE%"=="1" if exist "%GATE_EXE%" (
+    "%GATE_EXE%" -Regression > "%GATE_LOG%" 2>&1
+    set "GATE_RC=!ERRORLEVEL!"
+    if "!GATE_RC!"=="0" (
+        echo [%DATE% %TIME%] gate ok    : Compatibility regression
+    ) else (
+        echo [%DATE% %TIME%] gate FAIL  : Compatibility regression exit !GATE_RC!; %GATE_LOG%
+        type "%GATE_LOG%"
+    )
 )
 exit /b 0
 
@@ -210,11 +228,11 @@ if not exist "%ROOT%\cpc.exe" (
     echo [%DATE% %TIME%] no root cpc.exe; speed measurement skipped.
     exit /b 0
 )
-if not exist "%ROOT%\scripts\performance.exe" (
-    echo [%DATE% %TIME%] no scripts\performance.exe; speed measurement skipped.
+if not exist "%ROOT%\src\scripts\performance.exe" (
+    echo [%DATE% %TIME%] no src\scripts\performance.exe; speed measurement skipped.
     exit /b 0
 )
-"%ROOT%\scripts\performance.exe" -Root "%ROOT%" %PERF_ARGS% -Results "%MEASURE_OUT%" > "%MEASURE_LOG%" 2>&1
+"%ROOT%\src\scripts\performance.exe" -Root "%ROOT%" %PERF_ARGS% -Results "%MEASURE_OUT%" > "%MEASURE_LOG%" 2>&1
 set "MEASURE_RC=!ERRORLEVEL!"
 if "!MEASURE_RC!"=="0" (
     echo [%DATE% %TIME%] measured     : %MEASURE_OUT%
@@ -226,9 +244,9 @@ if exist "%MEASURE_OUT%" findstr /b /c:"c.self.driver" /c:"c.empty.main" "%MEASU
 exit /b 0
 
 :record
-set "ROW=!CYCLE!;%TITLE%;!START_DATE!;!START_TIME!;%DATE%;%TIME%;codex=!RC!;check=!CHECK_RC!;measure=!MEASURE_RC!;head=!HEAD!"
+set "ROW=!CYCLE!;%TITLE%;!START_DATE!;!START_TIME!;%DATE%;%TIME%;codex=!RC!;check=!CHECK_RC!;gate=!GATE_RC!;measure=!MEASURE_RC!;head=!HEAD!"
 >>"%CYCLES%" echo !ROW!
-echo [%DATE% %TIME%] cycle !CYCLE! recorded: codex=!RC! check=!CHECK_RC! measure=!MEASURE_RC! head=!HEAD!
+echo [%DATE% %TIME%] cycle !CYCLE! recorded: codex=!RC! check=!CHECK_RC! gate=!GATE_RC! measure=!MEASURE_RC! head=!HEAD!
 exit /b 0
 
 :read_last

@@ -1320,7 +1320,7 @@ static int project_main(int argc,char **argv) {
     if(!projectroot)projectroot=absolute(cwd,".");
     if(!compiler)compiler=absolute(repo,
 #ifdef BUILD_PROJECT_EXTERNAL
-        "third-party/clang/bin/clang.exe"
+        "src/third-party/clang/bin/clang.exe"
 #else
         "cpc.exe"
 #endif

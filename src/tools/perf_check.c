@@ -18,8 +18,8 @@
 
    Usage: perf-check [options]
      -Root DIR        tree root (default ".")
-     -Baseline FILE   baseline TSV (default ROOT/Performance/baseline/checks.tsv)
-     -Out FILE        current counts TSV (default ROOT/build/perf/perf-checks.tsv)
+     -Baseline FILE   baseline TSV (default ROOT/Speed/baseline/checks.tsv)
+     -Out FILE        current counts TSV (default ROOT/Speed/build/perf/perf-checks.tsv)
      -UpdateBaseline  record the current counts and do not gate them
      -NoGate          report only; never fail on a new finding
      -Log FILE        append one summary row to a shared performance log
@@ -70,8 +70,8 @@ typedef struct {
 static const char help_text[] =
   "usage: perf-check [options]\n"
   "  -Root DIR        tree root (default \".\")\n"
-  "  -Baseline FILE   baseline TSV (default ROOT/Performance/baseline/checks.tsv)\n"
-  "  -Out FILE        current counts TSV (default ROOT/build/perf/perf-checks.tsv)\n"
+  "  -Baseline FILE   baseline TSV (default ROOT/Speed/baseline/checks.tsv)\n"
+  "  -Out FILE        current counts TSV (default ROOT/Speed/build/perf/perf-checks.tsv)\n"
   "  -UpdateBaseline  record the current counts\n"
   "  -NoGate          report only; never fail on a new finding\n"
   "  -Log FILE        append one summary row to a shared performance log\n"
@@ -327,8 +327,8 @@ int main(int argc, char **argv)
   (void)cpc_only_note;
 
   absolute_path(root, sizeof root, root);
-  if (!baseline_path[0]) join_path(baseline_path, sizeof baseline_path, root, "Performance\\baseline\\checks.tsv");
-  if (!out_path[0]) join_path(out_path, sizeof out_path, root, "build\\perf\\perf-checks.tsv");
+  if (!baseline_path[0]) join_path(baseline_path, sizeof baseline_path, root, "Speed\\baseline\\checks.tsv");
+  if (!out_path[0]) join_path(out_path, sizeof out_path, root, "Speed\\build\\perf\\perf-checks.tsv");
   absolute_path(baseline_path, sizeof baseline_path, baseline_path);
   absolute_path(out_path, sizeof out_path, out_path);
   if (log_path[0]) absolute_path(log_path, sizeof log_path, log_path);

@@ -1,0 +1,73 @@
+# Native test workflow
+
+`test.exe` is the CPC-only harness. It discovers suites in its own directory
+(any subdirectory holding `pass/` or `fail/` cases, plus every `features/<name>`
+directory), sends each suite's compile jobs through one serial CPC batch, and
+runs the resulting programs. Every area keeps a copy of the harness beside its
+own cases, and `test.exe` writes its scratch and evidence into the `build/`
+directory next to that copy.
+
+```
+Compatibility\tests\test.exe -All -Tier fast                    the routine loop (~0.2s)
+Compatibility\tests\test.exe -Suite features/Templates          every case in one suite
+Compatibility\tests\test.exe -Suite features/Templates -Select test_name.cpp
+Compatibility\tests\test.exe -Regression                        publication gate (~2s)
+Compatibility\tests\test.exe -RunnerChecks                      harness self-checks
+```
+
+Options: `-CompilerPath`, `-RuntimeRoot`, `-Timeout SECONDS`, `-Jobs N`
+(parallel test programs, default 4), `-GroupSize N` (combined short cases per
+unit, default 6, `1` disables), `-Verbose` (print PASS lines).
+
+## Tiers
+
+`Compatibility/tests/tiers.json` holds the `fast` list and an `excluded` list.
+
+- **fast** is the open-work list: one case per gap that is still red, so a
+  green fast run means the queue is empty. It is deliberately tiny, so a fixed
+  case leaves the loop simply by not being listed.
+- **pedantic** is every retained internal case that is not excluded, so it
+  covers the whole corpus. Do not run it: it is close to banned, allowed only
+  as the last and only step of an important confirmation. `-Regression` is the
+  publication gate instead.
+- **all** is the same as pedantic, and carries the same restriction.
+
+Incremental runs:
+
+```
+Compatibility\tests\test.exe -Suite features/Templates -Select test_x.cpp
+Compatibility\tests\test.exe -Suite features/Templates
+Compatibility\tests\test.exe -All -Tier fast
+Compatibility\tests\test.exe -Regression
+```
+
+## Combined execution
+
+Suites with at least 16 selected cases combine short, self-contained pass cases
+into unity units: includes are hoisted and deduplicated, each body is wrapped
+in its own namespace, and the unit returns the first failing member's status.
+The case files never change; a combined unit that fails to compile or run is
+recompiled and rerun case by case, so failures stay per case. Fail cases,
+multi-source cases, and cases with output expectations always compile on their
+own.
+
+## Test metadata
+
+Leading source comments: `EXPECT_EXIT`, `EXPECT_STDOUT`, `EXPECT_COMPILE_FAIL`,
+`EXPECT_LINK_FAIL`, `EXPECT_COMPILE_ONLY`, `EXPECT_COMPILE_ARGS`,
+`EXPECT_SOURCES`. A case with none of them must compile, run, and exit 0.
+
+A case that crashes the compiler goes into its own suite while it is red, so
+the crash cannot abort a shared compile batch and mask unrelated cases. It
+moves to the suite that owns the repaired behavior once it compiles.
+
+Generated files belong in `build/` and are disposable. Only the case itself is
+durable.
+
+## Rebuilding the workflows
+
+The harness and other native workflows are first-party C sources:
+
+```
+scripts\tool-build.exe
+```

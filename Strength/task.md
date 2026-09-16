@@ -28,7 +28,7 @@ Making them mean something, and documenting them in `cpc -h`, is the work.
 
 - Runtime speed of generated executables: fixed workloads, repeated runs,
   medians, same machine state, exact flags recorded. Workloads live in
-  `Tests\benchmarks\runtime\`, `Tests\pedantic\performance\pass\` (measured
+  `Strength\tests\runtime\`, `Strength\tests\performance\pass\` (measured
   directly, not through the pedantic tier), and new runtime benchmark inputs
   authorized by this worker's purpose: deterministic, fast, self-contained, and
   kept with their inputs.
@@ -36,11 +36,11 @@ Making them mean something, and documenting them in `cpc -h`, is the work.
   disassembly comparison settles an argument, and the reported `-bench`
   statistics.
 - Compile-time budget: the cycle already runs
-  `scripts\performance.exe -Root . -CpcOnly -NoGate -Quiet`. An optimization
+  `src\scripts\performance.exe -Root . -CpcOnly -NoGate -Quiet`. An optimization
   that multiplies compile time is a regression even when the output is faster,
   so state both numbers for every change.
-- Raw evidence, commands and timings stay under `build\worker\strength` and
-  `build\`. One sample is not a result.
+- Raw evidence, commands and timings stay under `Strength\build`. One sample is
+  not a result.
 
 ## Invariants
 
@@ -49,8 +49,8 @@ Making them mean something, and documenting them in `cpc -h`, is the work.
   RTTI, volatile access, atomics, floating-point behaviour and the Microsoft
   x64 ABI facts are unchanged; no object is read past its lifetime.
 - Keep the retained cases green: the exact case, the affected suite,
-  `Tests\test.exe -All -Tier fast`, `Tests\test.exe -Regression`. Do not run the
-  pedantic tier. Publish with `scripts\build.exe` once packaging and the gate
+  `Compatibility\tests\test.exe -All -Tier fast`, `Compatibility\tests\test.exe -Regression`. Do not run the
+  pedantic tier. Publish with `src\scripts\build.exe` once packaging and the gate
   pass.
 - Never make speed by weakening a case, relabelling a failure, or special-casing
   a benchmark by name. Revert experiments that fail; keep the tree self-hosting.

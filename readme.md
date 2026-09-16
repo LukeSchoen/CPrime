@@ -23,17 +23,25 @@ C++ semantics must therefore be implemented directly in the parser / code genera
   to machine code with MUCH-LESS machinery. The tradeoff is optimization depth: CPC’s optimizer is a bounded peephole
   register-promotion passes and small inlining CPC -O2 is not remotely equivalent to the -O2 mode in Clang or GCC.
 
-Use root `cpc.exe` for development. `scripts/build.exe` rebuilds it serially with
-that same CPC host and replaces root `cpc.exe` after validation. There are no
-host-selection flags or alternate working compiler copies. Failure preserves
+Use root `cpc.exe` for development. `src/scripts/build.exe` rebuilds it serially
+with that same CPC host and replaces root `cpc.exe` after validation. There are
+no host-selection flags or alternate working compiler copies. Failure preserves
 the working compiler and stops the build.
-The C-only seed proof is `scripts/seed-tcc.exe -RunExternal`; the resulting CPC
-is built before any packaged C++ runtime source is compiled.
-Agents must not switch to Clang, GCC, MSVC, or another compiler for builds,
+The C-only seed proof is `src/scripts/seed-tcc.exe -RunExternal`; the resulting
+CPC is built before any packaged C++ runtime source is compiled.
+Agents must not switch to Clang, GCC, MSVC, or another compiler for builds.
+
+Layout:
+ - `src/` - the toolchain: compiler, runtime, native tools, workflow scripts,
+   headers (`src/include`), bootstrap libraries (`src/lib`), the shipped
+   libcprime SDK (`src/deploy`) and vendored sources (`src/third-party`)
+ - `Compatibility/` - C++17 correctness: retained cases, harness and gate
+ - `Speed/` - compile speed: compile-cost cases, baselines, worker
+ - `Strength/` - generated-program speed and quality: runtime cases, worker
 
 Open work:
- - `Tests/CPP17-REMAINING.md` - tracked C++17 completion queue
- - `KNOWN-ISSUES.md` - external consumer bug reports
+ - `Compatibility/tests/CPP17-REMAINING.md` - tracked C++17 completion queue
+ - `Compatibility/KNOWN-ISSUES.md` - external consumer bug reports
 
 notes:
  - inline SSE runs at the same speed anyway with either clang or cprime and cpc builds is much faster

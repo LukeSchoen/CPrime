@@ -39,7 +39,7 @@ rem   CHECK_ARGS       per-cycle correctness probe (default "-Regression")
 rem   NO_CHECK         set to 1 to skip the per-cycle correctness probe
 rem   SKIP_COMMIT      set to 1 to leave the tree dirty instead of committing (default 0)
 rem
-rem Logs live in build\worker\compatibility: cycles.csv has one row per cycle,
+rem Logs live in Compatibility\build: cycles.csv has one row per cycle,
 rem cycle-NNNN.log is the full codex transcript, cycle-NNNN-result.txt its final
 rem message and cycle-NNNN-check.log the probe output.
 
@@ -59,8 +59,10 @@ if not defined FAIL_EXIT_LIMIT set "FAIL_EXIT_LIMIT=5"
 if not defined FAIL_SLEEP set "FAIL_SLEEP=60"
 if not defined CHECK_ARGS set "CHECK_ARGS=-Regression"
 
-set "LOG_DIR=%ROOT%\build\worker\%AREA%"
+set "LOG_DIR=%ROOT%\%TITLE%\build"
 set "CYCLES=%LOG_DIR%\cycles.csv"
+set "CHECK_EXE=%ROOT%\%TITLE%\tests\test.exe"
+if not defined GATE set "GATE=0"
 set "SESSION=0"
 set "FAILS=0"
 set "RC=0"
@@ -95,6 +97,7 @@ echo [%DATE% %TIME%] directory   : %ROOT%
 echo [%DATE% %TIME%] codex       : %CODEX_EXE% ^(effort %REASONING%^)
 echo [%DATE% %TIME%] cycle logs  : %LOG_DIR%\cycle-NNNN.log
 echo [%DATE% %TIME%] cycle rows  : %CYCLES%
+echo [%DATE% %TIME%] probe       : %CHECK_EXE% %CHECK_ARGS%
 echo [%DATE% %TIME%] stop marker : %DONE% ^(create this file to stop after the current cycle^)
 echo [%DATE% %TIME%] pacing      : codex runs in the foreground; the next cycle starts when it exits
 echo [%DATE% %TIME%] one at once : run this worker or another one, never two: they share this tree
@@ -181,16 +184,16 @@ exit /b 0
 :check
 set "CHECK_RC=-"
 if "%NO_CHECK%"=="1" exit /b 0
-if not exist "%ROOT%\Tests\test.exe" (
-    echo [%DATE% %TIME%] no Tests\test.exe; correctness probe skipped.
+if not exist "%CHECK_EXE%" (
+    echo [%DATE% %TIME%] no %CHECK_EXE%; correctness probe skipped.
     exit /b 0
 )
-"%ROOT%\Tests\test.exe" %CHECK_ARGS% > "%CHECK_LOG%" 2>&1
+"%CHECK_EXE%" %CHECK_ARGS% > "%CHECK_LOG%" 2>&1
 set "CHECK_RC=!ERRORLEVEL!"
 if "!CHECK_RC!"=="0" (
-    echo [%DATE% %TIME%] probe ok   : Tests\test.exe %CHECK_ARGS%
+    echo [%DATE% %TIME%] probe ok   : %CHECK_ARGS% [%CHECK_EXE%]
 ) else (
-    echo [%DATE% %TIME%] probe FAIL : Tests\test.exe %CHECK_ARGS% returned !CHECK_RC!; %CHECK_LOG%
+    echo [%DATE% %TIME%] probe FAIL : %CHECK_ARGS% exit !CHECK_RC!; %CHECK_LOG%
     type "%CHECK_LOG%"
 )
 exit /b 0

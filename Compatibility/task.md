@@ -12,13 +12,14 @@ days.
 ## Where compatibility evidence comes from
 
 1. Retained internal cases, which are the record of what works:
-   `Tests\features\**`, `Tests\integration\**`, `Tests\abi\**`,
-   `Tests\runtime\**`, `Tests\payload\**`, `Tests\c_compat\**`. The Microsoft
-   x64 ABI facts live in `Tests\features\Abi`.
+   `Compatibility\tests\features\**`, `Compatibility\tests\integration\**`,
+   `Compatibility\tests\abi\**`, `Compatibility\tests\runtime\**`,
+   `Compatibility\tests\payload\**`, `Compatibility\tests\c_compat\**`. The Microsoft
+   x64 ABI facts live in `Compatibility\tests\features\Abi`.
 2. Large C++ projects used as probes: the vendored competitive inputs under
-   `Tests\benchmarks\compile\competitive\` (xBRZ and the functions/pch cases),
+   `Speed\tests\compile\competitive\` (xBRZ and the functions/pch cases),
    and the user's own consumers (for example `C:\Luke\Src\Kinect`, which is read
-   only and whose findings are recorded in `KNOWN-ISSUES.md`). Compile a project
+   only and whose findings are recorded in `Compatibility\KNOWN-ISSUES.md`). Compile a project
    with root `cpc.exe`, reduce each failure to a minimal local case, and never
    edit the consumer.
 3. Language unit tests and compiler test suites from clang, gcc and msvc used as
@@ -30,31 +31,33 @@ days.
 ## The loop
 
 ```
-Tests\test.exe -Suite features/X -Select test_y.cpp     reproduce, minimal case
-Tests\test.exe -Suite features/X                        the affected suite
-Tests\test.exe -All -Tier fast                          the open-work list
-Tests\test.exe -Regression                              publication gate
-scripts\build.exe                                       publish the compiler
+Compatibility\tests\test.exe -Suite features/X -Select test_y.cpp     reproduce, minimal case
+Compatibility\tests\test.exe -Suite features/X                        the affected suite
+Compatibility\tests\test.exe -All -Tier fast                          the open-work list
+Compatibility\tests\test.exe -Regression                              publication gate
+src\scripts\build.exe                                                  publish the compiler
 ```
 
 - Reproduce first with the exact case; repair the shared mechanism, not the
   symptom; retain one minimal case in `pass/`. A gap that is still red is listed
-  in `Tests\tiers.json` and leaves the list by passing, never by removal.
+  in `Compatibility\tests\tiers.json` and leaves the list by passing, never by removal.
 - A case that crashes the compiler starts in a suite of its own so the crash
   cannot abort a shared batch.
 - Do not run the pedantic tier. The affected suite plus `-Regression` is the
-  broad check. Publish with `scripts\build.exe` once packaging and the gate pass.
+  broad check. Publish with `src\scripts\build.exe` once packaging and the gate
+  pass.
 - Do not relabel a failing case, weaken an expectation, or delete coverage to
-  make the tree green. `Tests\CPP17-REMAINING.md` and `KNOWN-ISSUES.md` are the
-  open-work lists; keep them accurate as work completes.
+  make the tree green. `Compatibility\tests\CPP17-REMAINING.md` and
+  `Compatibility\KNOWN-ISSUES.md` are the open-work lists; keep them accurate as
+  work completes.
 
 ## Leads
 
-- `KNOWN-ISSUES.md` records reported defects with reduced shapes: the
+- `Compatibility\KNOWN-ISSUES.md` records reported defects with reduced shapes: the
   `InterlockedIncrement` return value, inline SSE asm corrupting surrounding
   float code, the missing `psapi.h` in the vendored Windows SDK, and the
   `__m256`/`immintrin.h` stub that blocks SSE/AVX types.
-- `Tests\test.exe -Checks` (the CPC-only publication/development gate) is
+- `Compatibility\tests\test.exe -Checks` (the CPC-only publication/development gate) is
   currently red: the runner self-check `runner rejects false expectation:
   test_valid_without_main.cpp` reports exit 1 and `Summary: 0 passed, 1 failed`
   but the retained diagnostic string no longer matches. Find out whether the

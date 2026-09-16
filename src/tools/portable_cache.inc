@@ -100,9 +100,9 @@ static int hash_tree(CacheHash *h, const char *directory) {
 }
 
 static int cache_digest(const char *cache, const char *root, const char *runtime, unsigned char digest[32]) {
-    static const char *trees[] = { "include/runtime", "src/runtime",
-        "third-party/quickjs-regexp", "third-party/win32-sdk/include",
-        "third-party/win32-sdk/lib" };
+    static const char *trees[] = { "src/include/runtime", "src/runtime",
+        "src/third-party/quickjs-regexp", "src/third-party/win32-sdk/include",
+        "src/third-party/win32-sdk/lib" };
     static const char *files[] = { "src/tools/portable_payload.c", "src/tools/portable_cache.inc",
         "src/tools/check_runtime_abi.c", "src/tools/check_runtime_abi.S" };
     static const char *dlls[] = { "kernel32", "user32", "gdi32", "ws2_32", "msvcrt", "ucrtbase",
@@ -128,7 +128,7 @@ static int cache_digest(const char *cache, const char *root, const char *runtime
         sprintf(name, "%s.def", dlls[i]);
         join_path(path, sizeof path, runtime, name);
         if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) continue;
-        sprintf(name, "third-party/win32-sdk/lib/%s.def", dlls[i]);
+        sprintf(name, "src/third-party/win32-sdk/lib/%s.def", dlls[i]);
         join_path(path, sizeof path, root, name);
         if (GetFileAttributesA(path) != INVALID_FILE_ATTRIBUTES) continue;
         if (!GetSystemDirectoryA(system, sizeof system)) { ok = 0; continue; }

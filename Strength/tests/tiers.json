@@ -1,0 +1,9 @@
+{
+    "schema":  2,
+    "comment":  "Strength keeps generated-code runtime and correctness cases: the measurement inputs under runtime/ and the pass cases under performance/. This list is the open-work subset; a case leaves it by passing. The routine gate for compiler changes is Compatibility\\tests\\test.exe -Regression.",
+    "fast":  [
+             ],
+    "excluded":  [
+
+                 ]
+}
