@@ -10225,7 +10225,14 @@ static int register_explicit_nested_class_specialization(TemplateDef *outer,
   if (tok != ':') return 0;
   next();
   if (tok != ':')
-    cprime_error("':' expected");
+  {
+    /* A single colon here starts the base-clause of an explicit class
+       template specialization (`template<> class X<A> : public Base`), not a
+       nested-name qualifier (`template<> class Owner::Member<A>`). Push it
+       back and let the caller parse the specialization. */
+    unget_tok(':');
+    return 0;
+  }
   next();
   if (tok < TOK_UIDENT)
     cprime_error("nested class name in explicit specialization");
@@ -12703,6 +12710,70 @@ static int template_next_token_is_paren(void)
   return t == '(';
 }
 
+/* True when the parentheses that follow start a parameter list rather than a
+   parenthesized expression: `bool()` and `bool(int)` name function types,
+   while `bool(1)` and `bool(flag)` stay functional-cast expressions. */
+static int template_paren_starts_parameter_list(void)
+{
+  const int *p = macro_ptr;
+  CValue cv;
+  int t;
+
+  if (!p)
+    return 0;
+  do
+  {
+    TOK_GET(&t, &p, &cv);
+  }
+  while (t == TOK_LINENUM);
+  if (t != '(')
+    return 0;
+  do
+  {
+    TOK_GET(&t, &p, &cv);
+  }
+  while (t == TOK_LINENUM);
+  /* `bool(Args...)`: an identifier followed by an ellipsis can only be a
+     parameter pack, never the operand of a functional cast. */
+  if (t >= TOK_UIDENT)
+  {
+    int pack_t;
+    do
+    {
+      TOK_GET(&pack_t, &p, &cv);
+    }
+    while (pack_t == TOK_LINENUM);
+    if (pack_t == TOK_DOTS)
+      return 1;
+  }
+  switch (t)
+  {
+  case ')':
+  case TOK_INT:
+  case TOK_CHAR:
+  case TOK_SHORT:
+  case TOK_LONG:
+  case TOK_FLOAT:
+  case TOK_DOUBLE:
+  case TOK_VOID:
+  case TOK_BOOL:
+  case TOK_BOOL2:
+  case TOK_SIGNED1:
+  case TOK_SIGNED2:
+  case TOK_SIGNED3:
+  case TOK_UNSIGNED:
+  case TOK_CONST1:
+  case TOK_CONST2:
+  case TOK_CONST3:
+  case TOK_VOLATILE1:
+  case TOK_VOLATILE2:
+  case TOK_VOLATILE3:
+    return 1;
+  default:
+    return 0;
+  }
+}
+
 static int template_type_tok_from_ctype(CType *type)
 {
   int bt = type->t &VT_BTYPE;
@@ -12929,9 +13000,12 @@ static int parse_one_template_type_arg(void)
   try_expand_cpp_alias_template(global_scope);
   /* `bool(1)` is a functional cast expression, not a type-id followed by
      an abstract declarator. Preserve the source stream for the constant
-     evaluator; parenthesized casts already take that path above. */
+     evaluator; parenthesized casts already take that path above.  A
+     parameter list is different: `std::function<bool(int)>` names a function
+     type whose argument has to stay a type. */
   if ((tok == TOK_BOOL || tok == TOK_BOOL2)
-      && template_next_token_is_paren())
+      && template_next_token_is_paren()
+      && !template_paren_starts_parameter_list())
     return parse_template_constant_expression_arg();
   /* Numeric literals are non-type template arguments.  Check them before
      the builtin-type parser, which otherwise normalizes their token kind to
