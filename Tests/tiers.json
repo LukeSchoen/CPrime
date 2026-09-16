@@ -6,9 +6,6 @@
                  "features/Cpp17Gaps/pass/test_constexpr_union_member_write_read.cpp",
                  "features/Cpp17Gaps/pass/test_constexpr_bitfield_read.cpp",
                  "features/Cpp17Gaps/pass/test_constexpr_reference_member.cpp",
-                 "features/Cpp17Gaps/pass/test_ctad_parenthesized_initializer.cpp",
-                 "features/Cpp17Gaps/pass/test_is_copy_assignable.cpp",
-                 "features/Cpp17Gaps/pass/test_cpp17_tuple_high_arity.cpp",
                  "features/Cpp17Gaps/pass/test_variant_more_than_four_alternatives.cpp",
                  "features/Cpp17Gaps/pass/test_variant_converting_construction.cpp",
                  "features/Cpp17Gaps/pass/test_variant_get_by_index.cpp",
@@ -17,8 +14,7 @@
                  "features/Cpp17Gaps/pass/test_variant_noncopyable_assignment.cpp",
                  "features/Cpp17Gaps/pass/test_tuple_get_by_type.cpp",
                  "features/Cpp17Gaps/pass/test_optional_constexpr.cpp",
-                 "features/Cpp17Gaps/pass/test_optional_copy_constructible_trait.cpp",
-                 "features/Cpp17Gaps/fail/test_fold_operand_cast_expression.cpp"
+                 "features/Cpp17Gaps/pass/test_optional_copy_constructible_trait.cpp"
              ],
     "excluded":  [
 

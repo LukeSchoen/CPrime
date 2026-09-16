@@ -31,8 +31,8 @@ scale; a combined unit that fails is recompiled and rerun case by case, and
 ## The gate is red on purpose
 
 `features/Cpp17Gaps` carries one case per open gap, so the fast tier is red by
-exactly the number of open gaps: 17 cases, 16 in `pass/` and one in `fail/`.
-That count is the work list, and it falls as gaps close.
+exactly the number of open gaps: 13 cases, all in `pass/`. That count is the
+work list, and it falls as gaps close.
 
 The open-gap cases are the whole of `Tests/tiers.json`'s fast list, so the
 routine loop reports the work list instead of hiding it until the pedantic run,
@@ -81,40 +81,34 @@ neighbour's prefix, and `"a" L"b"` is valid wide concatenation that
 asserts. The earlier entry here described valid code as if it were a defect.
 `fail/test_incompatible_literal_prefix_concatenation.cpp` guards the rejection.
 
-## Core C++17
-
-- class template argument deduction works only from braced initializers;
-  `W w(3);` gives `class template argument deduction requires a braced
-  initializer`
-- `std::is_copy_assignable` is missing (`'__cpc_ns_std_is_copy_assignable'
-  undeclared`)
-
-Cases: `test_ctad_parenthesized_initializer.cpp`,
-`test_is_copy_assignable.cpp`.
-
 ## Pack expansion
 
 No open gap. A pack expansion whose argument is a pattern around the pack
 (`Tup<typename decay<Ts>::type...>`) expands in a template-id argument list,
-in a function's return type and in a local declaration; the body-level pattern
-boundary that truncated `Tup<...>` to the enclosing `Tuple` name is fixed.
-`test_pack_expansion_in_return_template_id.cpp` retains that.
+in a function's return type, in a local declaration and in a namespace-scoped
+class template; the body-level pattern boundary that truncated `Tup<...>` to
+the enclosing `Tuple` name is fixed. `test_pack_expansion_in_return_template_id.cpp`
+retains that.
 
 A non-type pack element as an explicit template argument (`at<I>()...`,
-`std::get<I>(t)...`) also compiles and runs, and has left this queue.
+`std::get<I>(t)...`) also compiles and runs.
+
+The call expansion over a forwarding pack
+(`return result_type(static_cast<Ts &&>(values)...)`) also works, so
+`make_tuple`, `tie` and `apply` in `include/runtime/tuple` are one pack
+expansion each. Three defects stood in the way, all repaired: a variadic
+constructor template with an unnamed parameter pack declared a single
+parameter (`constructor target is not declared as function`), the fold
+detector claimed a nested declaration's `U &&...` as a fold of the enclosing
+template's pack (`fold expression requires an unexpanded parameter pack`), and
+the pattern scan only recognised a class template name in the global
+namespace, so a namespace-scoped `Tuple<...>` pattern absorbed its own head.
+`test_cpp17_tuple_high_arity.cpp` retains seven-argument `make_tuple`, `get`
+and `apply`, and `test_variadic_constructor_pack.cpp` the unnamed constructor
+parameter pack the reduced shape needs.
 
 Deduction from a parameter type (`void f(box<Ts...>)`), a pack deduced from two
 positions, and plain `f(v...)` expansion have always worked.
-
-What still keeps `make_tuple`, `tie` and `apply` spelled out to six parameters
-is the *call* expansion over a forwarding pack inside the body
-(`return result_type(std::forward<Ts>(values)...)`, reduced case
-`return result_type(static_cast<Ts &&>(values)...)`): it fails with `fold
-expression requires an unexpanded parameter pack`, and the variadic constructor
-template that would receive the arguments reports `constructor target is not
-declared as function`. `include/runtime/tuple` keeps its 1..6 overloads, and
-seven-argument `make_tuple` still fails (`test_cpp17_tuple_high_arity.cpp`).
-Collapsing them is the payoff for that fix, not a separate gap.
 
 ## Libraries
 
@@ -138,19 +132,23 @@ Cases: `test_variant_more_than_four_alternatives.cpp`,
 `test_variant_noncopyable_assignment.cpp`.
 
 `std::get<double>(tuple)` (get by type) fails inside `include/runtime/tuple`.
-Case: `test_tuple_get_by_type.cpp`.
+Case: `test_tuple_get_by_type.cpp`. The index of `double` has to come from a
+helper class, and a template-id that spells a pack inside a replayed template
+body resolves to a specialization that kept only the pack's first argument:
+`template<class T, class First, class... Rest> struct Idx { static const
+size_t value = 1 + Idx<T, Rest...>::value; };` used as
+`at<Idx<T, Types...>::value>()` in a function taking `Box<Types...>` fails with
+`'Idx__double_value' undeclared` at global and namespace scope alike, and a
+partial specialization whose pattern is `Box<Types...>` deduces only the first
+element (`cannot convert 'Box__int__double' to 'Box__int &'`). `get<T>` needs
+that substitution path fixed before it can be one recursive index helper plus
+one indirection.
 
 `std::optional` is unusable in constant expressions (`constexpr
 std::optional<int> o{5}` gives `constant expression expected`), and
 `std::is_copy_constructible<std::optional<NC> >` is wrongly true.
 Cases: `test_optional_constexpr.cpp`,
 `test_optional_copy_constructible_trait.cpp`.
-
-## Diagnostics
-
-- `(t + 1 + ...)` is accepted although fold operands must be cast-expressions
-
-Case: `fail/test_fold_operand_cast_expression.cpp`.
 
 ## Closed and covered
 
@@ -159,6 +157,9 @@ work left in this list:
 
 - non-type pack element as an explicit template argument (`at<I>()...`,
   `std::get<I>(t)...`) - `test_explicit_template_argument_from_pack.cpp`
+- assignment to a class that only declares a move assignment operator is
+  rejected, and `std::is_assignable`/`is_copy_assignable`/`is_move_assignable`
+  answer from the same rule - `test_is_copy_assignable.cpp`
 - user-defined literals constant-evaluate (`2.5_km == 2500.0L`)
   - `features/Expressions/pass/test_cooked_numeric_literal_types.cpp`
 - encoded-literal sizes match the Microsoft x64 ABI: `sizeof(u"ab")` 6,
@@ -176,6 +177,10 @@ work left in this list:
 - rejection of an empty unary fold - `features/Templates/fail/test_cpp17_fold_empty_add.cpp`
 - a dependent trailing return type whose `decltype` names a dependent call
   - `features/Templates/pass/test_trailing_return_overload_substitution.cpp`
+- a fold operand that is not a cast-expression (`(t + 1 + ...)`) is rejected
+  - `fail/test_fold_operand_cast_expression.cpp`
+- class template argument deduction from a parenthesized initializer
+  - `test_ctad_parenthesized_initializer.cpp`
 
 ## Where the cases live
 

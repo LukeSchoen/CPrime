@@ -4956,6 +4956,84 @@ static void template_fold_operand(TokenString *result, TokenString *source,
   tok_str_add(result, ')');
 }
 
+/* Whether `name_tok` spells a class template that is visible in some
+   namespace.  A namespace-scoped class template registers under its qualified
+   token, so the plain lookup alone misses `std::tuple<...>`. */
+static int class_template_name_tok(int name_tok)
+{
+  int i;
+
+  if (name_tok < TOK_UIDENT)
+    return 0;
+  if (find_class_template_def(name_tok))
+    return 1;
+  for (i = 0; i < nb_namespace_scopes; ++i)
+    if (find_class_template_def(
+          make_static_member_tok(namespace_scopes[i].name_tok, name_tok)))
+      return 1;
+  return 0;
+}
+
+/* Whether the token can end an operand, which makes a following fold operator
+   binary rather than a prefix operator. */
+static int template_fold_operand_can_end(int token)
+{
+  if (token < 0 || token == TOK_LINENUM)
+    return 0;
+  if (TOK_HAS_VALUE(token))
+    return 1;
+  if (token >= TOK_UIDENT)
+    return 1;
+  return token == ')' || token == ']' || token == TOK_GT || token == '>';
+}
+
+/* Each fold operand is a cast-expression ([expr.prim.fold]), so a top-level
+   binary operator inside the operand has no parse.  Unary uses, the member
+   pointer operator (`x.*p`) and the angles of a template-id are not binary. */
+static int template_fold_operand_is_cast_expression(TokenString *source,
+                                                    int begin, int end)
+{
+  int i, depth = 0, angles = 0, previous = -1;
+
+  for (i = begin; i < end; ++i)
+  {
+    int t = source->str[i];
+    if (TOK_HAS_VALUE(t))
+    {
+      i += tok_str_value_extra_words(source->str, source->len, i);
+      previous = t;
+      continue;
+    }
+    if (t == '(' || t == '[' || t == '{') { ++depth; previous = t; continue; }
+    if (t == ')' || t == ']' || t == '}') { if (depth) --depth; previous = t; continue; }
+    if (depth) { previous = t; continue; }
+    if (angles)
+    {
+      if (t == TOK_GT || t == '>') --angles;
+      else if (t == TOK_SAR) angles = angles > 1 ? angles - 1 : 0;
+      previous = t;
+      continue;
+    }
+    if ((t == TOK_LT || t == '<') && previous >= TOK_UIDENT
+        && (find_class_template_def(previous)
+            || find_function_template_def(previous)))
+    {
+      ++angles;
+      previous = t;
+      continue;
+    }
+    if (t == '*' && (previous == '.' || previous == TOK_ARROW))
+    {
+      previous = t;
+      continue;
+    }
+    if (template_fold_operator(t) && template_fold_operand_can_end(previous))
+      return 0;
+    previous = t;
+  }
+  return 1;
+}
+
 /* Recognize a fold at its enclosing parentheses, not at the ellipsis: an
    ordinary pack expansion is comma separated, whereas folds preserve both
    their operator and their explicitly specified association. */
@@ -5017,8 +5095,16 @@ static int expand_template_fold(TokenString *source, int start, TokenString *res
     seed_begin = left ? first : right_operand;
     seed_end = left ? before : end;
   } else return -1;
+  /* Fold syntax whose operand does not mention the pack being expanded is
+     not a fold of this pack.  A nested declaration can spell its own
+     unnamed parameter pack that way (`U &&...`), so decline and let the
+     ordinary ellipsis handling decide. */
   if (!template_fold_uses_pack(source, pattern_begin, pattern_end, type_pack, value_pack))
-    cprime_error("fold expression requires an unexpanded parameter pack");
+    return -1;
+  if (!template_fold_operand_is_cast_expression(source, pattern_begin, pattern_end)
+      || (seed_end != 0
+          && !template_fold_operand_is_cast_expression(source, seed_begin, seed_end)))
+    cprime_error("fold operand must be a cast-expression");
   terms = count + (seed_end != 0);
   if (!terms) {
     if (op == TOK_LAND || op == TOK_LOR) {
@@ -5141,8 +5227,8 @@ static TokenString *expand_template_expression_packs(TokenString *source,
             int before = tok_str_prev_token_index(result->str, result->len,
                                                    position);
             if (!value_pack
-                || (before >= 0 && result->str[before] >= TOK_UIDENT
-                    && find_class_template_def(result->str[before])))
+                || (before >= 0
+                    && class_template_name_tok(result->str[before])))
               break;
           }
         }
@@ -6132,6 +6218,32 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
             tok_str_add(params_str, tok_alloc_const(expanded_name));
           }
         }
+        else
+        {
+          /* An unnamed pack parameter (`U &&...`) still declares one
+             parameter per call argument; the definition simply has no name
+             for the expanded declarators. */
+          for (pack_call_index = pack_arg_start + 1;
+               pack_arg_start >= 0
+                 && pack_call_index < replay_nb_call_arg_types;
+               ++pack_call_index)
+          {
+            int concrete_tok = pack_pattern_parameter >= 0
+              ? deduce_direct_template_type(md->def_str, pack_pattern_start,
+                    pack_pattern_parameter, pack_pattern_end,
+                    &replay_call_arg_types[pack_call_index], 0)
+              : template_type_tok_from_ctype(&replay_call_arg_types[pack_call_index]);
+            int pi;
+            tok_str_add(params_str, ',');
+            for (pi = pattern_start; pi < pattern_end; ++pi)
+            {
+              int pt = params_str->str[pi];
+              tok_str_add(params_str,
+                          pt == pack_type_arg_tok && concrete_tok
+                            ? concrete_tok : pt);
+            }
+          }
+        }
         continue;
       }
       if (pack_is_empty && tok == TOK_DOTS && paren == 0)
@@ -6178,7 +6290,7 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
     }
   }
   skip(')');
-  if (pack_name_tok && pack_arg_start >= 0) {
+  if ((pack_name_tok || pack_type_param_tok) && pack_arg_start >= 0) {
     int types[CPC_MAX_CALL_ARGUMENTS], element, count = replay_nb_call_arg_types - pack_arg_start;
     for (element = 0; element < count; ++element)
       types[element] = deduce_direct_template_type(md->def_str,

@@ -5257,8 +5257,12 @@ static int try_call_cpp_assignment_operator(void)
     }
     vtop->type.t &= ~VT_NULLPTR_TYPE;
   }
+  /* A class that declares a copy or move assignment operator has no implicit
+     one, so a source none of the declared operators accepts leaves the
+     assignment ill formed rather than falling back to a memberwise store. */
   if (!func_sym && receiver_type.ref
-      && receiver_type.ref->a.cpp_nontrivial_copy_assignment)
+      && (receiver_type.ref->a.cpp_nontrivial_copy_assignment
+          || cpp_class_declares_assignment_operator(&receiver_type)))
     cprime_error("no matching user-declared copy assignment operator");
   if (!func_sym)
     return 0;

@@ -5298,6 +5298,66 @@ static int split_saved_array_initializer(TokenString *initializer,
   return count;
 }
 
+/* Split a parenthesized initializer `(a, b, ...)` into its top-level argument
+   token strings.  Class template argument deduction reads a direct
+   initialization the same way it reads the braced form. */
+static int split_saved_paren_arguments(TokenString *initializer,
+                                        TokenString ***elements)
+{
+  int i, level = 0, angle = 0, previous = 0, count = 0, have_value = 0;
+  TokenString *element;
+
+  *elements = NULL;
+  if (!initializer) return 0;
+  i = tok_str_next_non_linenum_index(initializer->str, initializer->len, 0);
+  if (i >= initializer->len || initializer->str[i] != '(') return 0;
+  element = tok_str_alloc();
+  for (++i; i < initializer->len; ++i)
+  {
+    int token = initializer->str[i];
+    if (TOK_HAS_VALUE(token))
+    {
+      tok_str_add_record(element, initializer->str, initializer->len, &i);
+      if (token != TOK_LINENUM) have_value = 1;
+      continue;
+    }
+    if (!level && !angle && (token == ',' || token == ')'))
+    {
+      if (have_value)
+      {
+        tok_str_add(element, TOK_EOF);
+        dynarray_add(elements, &count, element);
+        element = tok_str_alloc();
+        have_value = 0;
+      }
+      else if (token == ',')
+        cprime_error("deduction argument expected");
+      if (token == ')') break;
+      previous = 0;
+      continue;
+    }
+    if (token == TOK_EOF) cprime_error("unterminated initializer");
+    tok_str_add(element, token);
+    have_value = 1;
+    if (token == '(' || token == '[' || token == '{'
+        || is_cpp_lambda_marker(token))
+      ++level;
+    else if (token == ')' || token == ']' || token == '}')
+      --level;
+    else if ((token == TOK_LT || token == '<')
+             && (angle
+                 || (previous >= TOK_UIDENT
+                     && cpp_saved_angle_opener_tok(previous))))
+      ++angle;
+    else if (token == TOK_GT && angle) --angle;
+    else if ((token == TOK_SAR || token == TOK_SHR) && angle)
+      angle = angle > 1 ? angle - 2 : 0;
+    previous = token;
+  }
+  tok_str_free(element);
+  return count;
+}
+
 static void free_saved_array_elements(TokenString **elements, int count)
 {
   int i;

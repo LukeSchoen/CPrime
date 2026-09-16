@@ -27,6 +27,17 @@ namespace std
     __tuple_impl() {}
     template<class... Values>
     explicit __tuple_impl(Values &&...) {}
+
+    /* The end of the leaf chain: every element has been appended to the
+       argument list, so the function is ready to be called. */
+    template<class Function, class... Arguments>
+    auto __apply(Function &&function, Arguments &&...arguments) const
+      -> decltype(static_cast<Function &&>(function)(
+                    static_cast<Arguments &&>(arguments)...))
+    {
+      return static_cast<Function &&>(function)(
+          static_cast<Arguments &&>(arguments)...);
+    }
   };
 
   template<size_t Index, class First, class... Rest>
@@ -43,6 +54,35 @@ namespace std
     template<class U, class... Values>
     explicit __tuple_impl(U &&value, Values &&...rest)
       : __head(std::forward<U>(value)), __tail(std::forward<Values>(rest)...) {}
+
+    /* Append this element to the call under construction and let the tail
+       append its own: the argument list then keeps tuple order without an
+       index sequence. */
+    template<class Function, class... Arguments>
+    auto __apply(Function &&function, Arguments &&...arguments)
+      -> decltype(static_cast<__tail &>(*this).__apply(
+                    static_cast<Function &&>(function),
+                    static_cast<Arguments &&>(arguments)...,
+                    static_cast<__head &>(*this).__value))
+    {
+      return static_cast<__tail &>(*this).__apply(
+          static_cast<Function &&>(function),
+          static_cast<Arguments &&>(arguments)...,
+          static_cast<__head &>(*this).__value);
+    }
+
+    template<class Function, class... Arguments>
+    auto __apply(Function &&function, Arguments &&...arguments) const
+      -> decltype(static_cast<const __tail &>(*this).__apply(
+                    static_cast<Function &&>(function),
+                    static_cast<Arguments &&>(arguments)...,
+                    static_cast<const __head &>(*this).__value))
+    {
+      return static_cast<const __tail &>(*this).__apply(
+          static_cast<Function &&>(function),
+          static_cast<Arguments &&>(arguments)...,
+          static_cast<const __head &>(*this).__value);
+    }
   };
 
   template<class... Types>
@@ -110,173 +150,47 @@ namespace std
     return static_cast<const __tuple_leaf<Index, type> &>(value).__value;
   }
 
-  /* make_tuple and tie name their parameters explicitly: a pack expansion
-     written inside a function's template-id (`tuple<decay<Ts>::type...>`) is
-     not part of the compiler's function-template substitution path yet. */
-  template<class T1>
-  tuple<typename decay<T1>::type>
-  make_tuple(T1 &&a)
+  /* One pack expansion each: the answer type is built from `decay<Types>...`
+     and the values are forwarded one per parameter. */
+  template<class... Types>
+  tuple<typename decay<Types>::type...>
+  make_tuple(Types &&...values)
   {
-    typedef tuple<typename decay<T1>::type> result_type;
-    return result_type(std::forward<T1>(a));
+    typedef tuple<typename decay<Types>::type...> result_type;
+    return result_type(std::forward<Types>(values)...);
   }
 
-  template<class T1, class T2>
-  tuple<typename decay<T1>::type, typename decay<T2>::type>
-  make_tuple(T1 &&a, T2 &&b)
+  template<class... Types>
+  tuple<Types &...> tie(Types &...values)
   {
-    typedef tuple<typename decay<T1>::type, typename decay<T2>::type> result_type;
-    return result_type(std::forward<T1>(a), std::forward<T2>(b));
+    return tuple<Types &...>(values...);
   }
 
-  template<class T1, class T2, class T3>
-  tuple<typename decay<T1>::type, typename decay<T2>::type,
-        typename decay<T3>::type>
-  make_tuple(T1 &&a, T2 &&b, T3 &&c)
+  /* apply walks the storage chain: every leaf appends its own element, so one
+     element list becomes one argument list. */
+  template<class Function, class... Types>
+  struct __apply_result
   {
-    typedef tuple<typename decay<T1>::type, typename decay<T2>::type,
-                  typename decay<T3>::type> result_type;
-    return result_type(std::forward<T1>(a), std::forward<T2>(b),
-                       std::forward<T3>(c));
+    typedef decltype(declval<Function>()(declval<Types &>()...)) type;
+  };
+  template<class Function, class... Types>
+  struct __apply_const_result
+  {
+    typedef decltype(declval<Function>()(declval<const Types &>()...)) type;
+  };
+
+  template<class Function, class... Types>
+  typename __apply_result<Function &&, Types...>::type
+  apply(Function &&function, tuple<Types...> &arguments)
+  {
+    return arguments.__apply(std::forward<Function>(function));
   }
 
-  template<class T1, class T2, class T3, class T4>
-  tuple<typename decay<T1>::type, typename decay<T2>::type,
-        typename decay<T3>::type, typename decay<T4>::type>
-  make_tuple(T1 &&a, T2 &&b, T3 &&c, T4 &&d)
+  template<class Function, class... Types>
+  typename __apply_const_result<Function &&, Types...>::type
+  apply(Function &&function, const tuple<Types...> &arguments)
   {
-    typedef tuple<typename decay<T1>::type, typename decay<T2>::type,
-                  typename decay<T3>::type, typename decay<T4>::type>
-        result_type;
-    return result_type(std::forward<T1>(a), std::forward<T2>(b),
-                       std::forward<T3>(c), std::forward<T4>(d));
-  }
-
-  template<class T1, class T2, class T3, class T4, class T5>
-  tuple<typename decay<T1>::type, typename decay<T2>::type,
-        typename decay<T3>::type, typename decay<T4>::type,
-        typename decay<T5>::type>
-  make_tuple(T1 &&a, T2 &&b, T3 &&c, T4 &&d, T5 &&e)
-  {
-    typedef tuple<typename decay<T1>::type, typename decay<T2>::type,
-                  typename decay<T3>::type, typename decay<T4>::type,
-                  typename decay<T5>::type> result_type;
-    return result_type(std::forward<T1>(a), std::forward<T2>(b),
-                       std::forward<T3>(c), std::forward<T4>(d),
-                       std::forward<T5>(e));
-  }
-
-  template<class T1, class T2, class T3, class T4, class T5, class T6>
-  tuple<typename decay<T1>::type, typename decay<T2>::type,
-        typename decay<T3>::type, typename decay<T4>::type,
-        typename decay<T5>::type, typename decay<T6>::type>
-  make_tuple(T1 &&a, T2 &&b, T3 &&c, T4 &&d, T5 &&e, T6 &&f)
-  {
-    typedef tuple<typename decay<T1>::type, typename decay<T2>::type,
-                  typename decay<T3>::type, typename decay<T4>::type,
-                  typename decay<T5>::type, typename decay<T6>::type>
-        result_type;
-    return result_type(std::forward<T1>(a), std::forward<T2>(b),
-                       std::forward<T3>(c), std::forward<T4>(d),
-                       std::forward<T5>(e), std::forward<T6>(f));
-  }
-
-  template<class T1>
-  tuple<T1 &> tie(T1 &a)
-  {
-    return tuple<T1 &>(a);
-  }
-
-  template<class T1, class T2>
-  tuple<T1 &, T2 &> tie(T1 &a, T2 &b)
-  {
-    return tuple<T1 &, T2 &>(a, b);
-  }
-
-  template<class T1, class T2, class T3>
-  tuple<T1 &, T2 &, T3 &> tie(T1 &a, T2 &b, T3 &c)
-  {
-    return tuple<T1 &, T2 &, T3 &>(a, b, c);
-  }
-
-  template<class T1, class T2, class T3, class T4>
-  tuple<T1 &, T2 &, T3 &, T4 &> tie(T1 &a, T2 &b, T3 &c, T4 &d)
-  {
-    return tuple<T1 &, T2 &, T3 &, T4 &>(a, b, c, d);
-  }
-
-  /* apply expands the element list over an index sequence. That needs a pack
-     expansion inside `index_sequence<Indices...>`, which this compiler does
-     not accept in a function parameter, so each arity is written out. */
-  template<class Function, class T1>
-  auto apply(Function &&function, tuple<T1> &arguments)
-    -> decltype(function(std::get<0>(arguments)))
-  {
-    return function(std::get<0>(arguments));
-  }
-
-  template<class Function, class T1, class T2>
-  auto apply(Function &&function, tuple<T1, T2> &arguments)
-    -> decltype(function(std::get<0>(arguments), std::get<1>(arguments)))
-  {
-    return function(std::get<0>(arguments), std::get<1>(arguments));
-  }
-
-  template<class Function, class T1, class T2, class T3>
-  auto apply(Function &&function, tuple<T1, T2, T3> &arguments)
-    -> decltype(function(std::get<0>(arguments), std::get<1>(arguments),
-                         std::get<2>(arguments)))
-  {
-    return function(std::get<0>(arguments), std::get<1>(arguments),
-                    std::get<2>(arguments));
-  }
-
-  template<class Function, class T1, class T2, class T3, class T4>
-  auto apply(Function &&function, tuple<T1, T2, T3, T4> &arguments)
-    -> decltype(function(std::get<0>(arguments), std::get<1>(arguments),
-                         std::get<2>(arguments), std::get<3>(arguments)))
-  {
-    return function(std::get<0>(arguments), std::get<1>(arguments),
-                    std::get<2>(arguments), std::get<3>(arguments));
-  }
-
-  template<class Function, class T1, class T2, class T3, class T4, class T5>
-  auto apply(Function &&function, tuple<T1, T2, T3, T4, T5> &arguments)
-    -> decltype(function(std::get<0>(arguments), std::get<1>(arguments),
-                         std::get<2>(arguments), std::get<3>(arguments),
-                         std::get<4>(arguments)))
-  {
-    return function(std::get<0>(arguments), std::get<1>(arguments),
-                    std::get<2>(arguments), std::get<3>(arguments),
-                    std::get<4>(arguments));
-  }
-
-  template<class Function, class T1, class T2, class T3, class T4, class T5,
-           class T6>
-  auto apply(Function &&function, tuple<T1, T2, T3, T4, T5, T6> &arguments)
-    -> decltype(function(std::get<0>(arguments), std::get<1>(arguments),
-                         std::get<2>(arguments), std::get<3>(arguments),
-                         std::get<4>(arguments), std::get<5>(arguments)))
-  {
-    return function(std::get<0>(arguments), std::get<1>(arguments),
-                    std::get<2>(arguments), std::get<3>(arguments),
-                    std::get<4>(arguments), std::get<5>(arguments));
-  }
-
-  template<class Function, class T1, class T2>
-  auto apply(Function &&function, const tuple<T1, T2> &arguments)
-    -> decltype(function(std::get<0>(arguments), std::get<1>(arguments)))
-  {
-    return function(std::get<0>(arguments), std::get<1>(arguments));
-  }
-
-  template<class Function, class T1, class T2, class T3>
-  auto apply(Function &&function, const tuple<T1, T2, T3> &arguments)
-    -> decltype(function(std::get<0>(arguments), std::get<1>(arguments),
-                         std::get<2>(arguments)))
-  {
-    return function(std::get<0>(arguments), std::get<1>(arguments),
-                    std::get<2>(arguments));
+    return arguments.__apply(std::forward<Function>(function));
   }
 
   template<class Function, class T1, class T2>

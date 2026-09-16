@@ -382,6 +382,10 @@ static int template_trailing_return_type(TemplateDef *definition,
   int i, j, start, end, close = -1, depth = 0, valid;
   int pack = definition->variadic_param_index;
   int pack_type = pack >= 0 ? definition->type_param_toks[pack] : 0;
+  /* A non-type pack (`size_t... Indices`) is spelled by name, so its elements
+     in a parameter type and in the trailing return type are values rather
+     than types, and the parameter list needs no per-element declarator. */
+  int pack_is_value = pack >= 0 && (definition->value_param_mask & (1u << pack));
   int pack_name = 0;
   for (i = name_index + 1; i < source->len; ++i) {
     int token = source->str[i];
@@ -415,7 +419,8 @@ static int template_trailing_return_type(TemplateDef *definition,
   tok_str_add(header, '(');
   start = name_index + 2;
   while (start < close) {
-    int parens = 0, brackets = 0, angles = 0, has_pack = 0, element, count = 1;
+    int parens = 0, brackets = 0, angles = 0, has_pack = 0, pack_in_type = 0;
+    int element, count = 1;
     for (end = start; end < close; ++end) {
       int token = source->str[end];
       if (TOK_HAS_VALUE(token)) {
@@ -430,7 +435,14 @@ static int template_trailing_return_type(TemplateDef *definition,
       else if (!parens && !brackets && token == TOK_LT) ++angles;
       else if (!parens && !brackets && token == TOK_GT) --angles;
       else if (!parens && !brackets && token == TOK_SAR) angles -= 2;
-      if (token == TOK_DOTS && pack_type) has_pack = 1;
+      if (token == TOK_DOTS && pack_type) {
+        has_pack = 1;
+        /* A pack inside the parameter's type (`integer_sequence<size_t, I...>`)
+           declares one parameter whose type lists every element, while a
+           function parameter pack (`T &&...values`) declares one parameter per
+           element. */
+        if (parens || brackets || angles) pack_in_type = 1;
+      }
     }
     if (has_pack) {
       count = bindings->nb - pack;
@@ -445,7 +457,27 @@ static int template_trailing_return_type(TemplateDef *definition,
           pack_name = token;
       }
     }
-    for (element = 0; element < count; ++element) {
+    if (has_pack && pack_in_type) {
+      TokenString *parameter = tok_str_alloc(), *expanded_parameter;
+      if (header->str[header->len - 1] != '(') tok_str_add(header, ',');
+      for (j = start; j < end; ++j)
+        tok_str_add_record(parameter, source->str, source->len, &j);
+      tok_str_add(parameter, TOK_EOF);
+      expanded_parameter = expand_template_expression_packs(parameter,
+          pack_type, 0, 0, bindings->toks + pack, count);
+      for (j = 0; j < expanded_parameter->len; ++j) {
+        int token = expanded_parameter->str[j];
+        if (token == TOK_EOF) break;
+        if (TOK_HAS_VALUE(token))
+          tok_str_add_record(header, expanded_parameter->str,
+                             expanded_parameter->len, &j);
+        else tok_str_add(header, template_subst_token(definition, bindings, 0,
+                                                      NULL, NULL, 0, token));
+      }
+      if (expanded_parameter != parameter) tok_str_free(expanded_parameter);
+      tok_str_free(parameter);
+    }
+    else for (element = 0; element < count; ++element) {
       char name[256];
       if (header->str[header->len - 1] != '(') tok_str_add(header, ',');
       for (j = start; j < end; ++j) {
@@ -453,7 +485,7 @@ static int template_trailing_return_type(TemplateDef *definition,
         if (has_pack && token == TOK_DOTS) continue;
         if (has_pack && token == pack_type)
           tok_str_add(header, bindings->toks[pack + element]);
-        else if (has_pack && token == pack_name && element) {
+        else if (has_pack && token == pack_name && element && !pack_is_value) {
           snprintf(name, sizeof(name), "%s__pack%d", get_tok_str(pack_name, NULL), element);
           tok_str_add(header, tok_alloc_const(name));
         }
@@ -476,8 +508,14 @@ static int template_trailing_return_type(TemplateDef *definition,
     tok_str_add_record(tail, source->str, source->len, &i);
   }
   tok_str_add(tail, TOK_EOF);
-  expanded = pack_name ? expand_template_expression_packs(tail, pack_type,
-      pack_name, pack_name, bindings->toks + pack, bindings->nb - pack) : tail;
+  if (pack_name && !pack_is_value)
+    expanded = expand_template_expression_packs(tail, pack_type, pack_name,
+        pack_name, bindings->toks + pack, bindings->nb - pack);
+  else if (pack_is_value)
+    expanded = expand_template_expression_packs(tail, pack_type, 0, 0,
+        bindings->toks + pack, bindings->nb - pack);
+  else
+    expanded = tail;
   for (i = 0; i < expanded->len; ++i) {
     int token = expanded->str[i];
     if (token == TOK_EOF) break;

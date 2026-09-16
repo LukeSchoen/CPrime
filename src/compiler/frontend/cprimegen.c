@@ -462,11 +462,14 @@ static int class_has_single_arg_constructor_for(CType *class_type,
 static int member_func_arg_match_rank(Sym *s, CType *arg_types,
                                       int explicit_arg_count);
 static int lowered_member_func_single_param_is_self(CType *type, Sym *s);
+static int cpp_class_declares_assignment_operator(CType *type);
 static int type_is_std_initializer_list(CType *type);
 static Sym *resolve_implicit_constructor_func(CType *type, CType *arguments,
                                                int argument_count);
 static int split_saved_array_initializer(TokenString *initializer,
                                           TokenString ***elements);
+static int split_saved_paren_arguments(TokenString *initializer,
+                                        TokenString ***elements);
 static void free_saved_array_elements(TokenString **elements, int count);
 static int same_lowered_member_func_signature(CType *type1, CType *type2);
 static int type_has_member_func_name(CType *type, int member_tok);
@@ -18447,6 +18450,7 @@ static int cpp_type_trait_name_tok(int name_tok)
          || !strcmp(name, "__is_union")
          || !strcmp(name, "__is_trivially_copyable")
          || !strcmp(name, "__is_constructible")
+         || !strcmp(name, "__is_assignable")
          || !strcmp(name, "__is_trivially_constructible")
          || !strcmp(name, "__is_base_of")
          || !strcmp(name, "__has_trivial_destructor")
@@ -18608,6 +18612,74 @@ static int cpp_type_constructible_from(CType *type, CType *args, int count)
     return 1;
   }
   return count == 1 && is_compatible_unqualified_types(type, &args[0]);
+}
+
+/* A copy or move assignment operator declared in the class itself suppresses
+   the implicit copy assignment operator, so a source the declared operators
+   reject leaves the object unassignable. */
+static int cpp_class_declares_assignment_operator(CType *type)
+{
+  int class_tok = get_struct_type_name_tok(type);
+  MemberFuncOverload *candidate;
+
+  if (!class_tok)
+    return 0;
+  for (candidate = member_func_candidates(class_tok, CPP_TOK_ASSIGN);
+       candidate; candidate = candidate->bucket_next)
+  {
+    Sym *function;
+    if (candidate->struct_tok != class_tok
+        || candidate->method_tok != CPP_TOK_ASSIGN)
+      continue;
+    function = global_symbol_find(candidate->mangled_tok);
+    if (!function)
+      function = sym_find(candidate->mangled_tok);
+    if (!function)
+      continue;
+    use_overload_func_type(function, &candidate->func_type);
+    if (lowered_member_func_single_param_is_self(type, function))
+      return 1;
+  }
+  return 0;
+}
+
+/* `__is_assignable(To, From)` answers whether `declval<To>() = declval<From>()`
+   is well formed.  The source keeps its value category, so a move assignment
+   operator does not make a const lvalue assignable. */
+static int cpp_type_assignable_from(CType *type, CType *source)
+{
+  CType target = *type;
+  CType assigned = *source;
+
+  /* Only an lvalue accepts assignment, so `To` must be an lvalue reference. */
+  if (!is_reference_type(type) || (type->t & VT_RVALUE_REFERENCE))
+    return 0;
+  target = *pointed_type(&target);
+  if ((target.t & VT_BTYPE) == VT_ARRAY || (target.t & VT_BTYPE) == VT_FUNC
+      || (target.t & VT_BTYPE) == VT_VOID)
+    return 0;
+  if ((target.t & VT_BTYPE) != VT_STRUCT || !target.ref)
+    return !(target.t & VT_CONSTANT)
+        && call_arg_match_rank_standard(&target, &assigned) >= 0;
+  {
+    Sym *operation = resolve_member_func_by_arg_types(&target, CPP_TOK_ASSIGN,
+                                                      source, 1);
+    if (operation)
+    {
+      const CppMemberDeclInfo *declaration = lookup_cpp_member_decl(operation->v);
+      return !operation->type.ref->f.func_cpp_deleted
+          && (!declaration || !declaration->access_known || !declaration->access);
+    }
+  }
+  if (cpp_class_declares_assignment_operator(&target))
+    return 0;
+  if (target.t & VT_CONSTANT)
+    return 0;
+  if (is_reference_type(&assigned))
+    assigned = *pointed_type(&assigned);
+  assigned.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  return is_compatible_unqualified_types(&target, &assigned)
+      || class_value_is_derived_from(&assigned, &target);
 }
 
 static int cpp_type_trivially_constructible_from(CType *type, CType *args,
@@ -18794,6 +18866,8 @@ static int cpp_type_trait_value(int name_tok, CType *args, int count)
   if (!strcmp(name, "__is_constructible"))
     return cpp_trait_object_available(&args[0])
         && cpp_type_constructible_from(&args[0], args + 1, count - 1);
+  if (!strcmp(name, "__is_assignable"))
+    return count == 2 && cpp_type_assignable_from(&args[0], &args[1]);
   return cpp_type_trivially_constructible_from(&args[0], args + 1, count - 1);
 }
 
@@ -24531,7 +24605,8 @@ cpp_object_member_destructor:
              memberwise assignment path used by `*this = rhs`. */
           if (!func_sym && v == CPP_TOK_ASSIGN
               && call_arg_count == 1
-              && (vtop->type.t & VT_BTYPE) == VT_STRUCT)
+              && (vtop->type.t & VT_BTYPE) == VT_STRUCT
+              && !cpp_class_declares_assignment_operator(&vtop->type))
           {
             emit_saved_arg_for_param(call_args[0], NULL);
             tok_str_free(call_args[0]);
@@ -29365,15 +29440,18 @@ static int decl_context(int l, int condition)
         CType actual;
         Sym *instance;
         int count, i, instance_tok;
+        int direct_initializer = tok == '(';
 
         pending_braced_ctad_template = NULL;
-        if (tok != '{')
-          cprime_error("class template argument deduction requires a braced initializer");
+        if (tok != '{' && tok != '(')
+          cprime_error("class template argument deduction requires an initializer");
         /* Save and replay the ordinary initializer.  Type deduction must not
            consume it: aggregate initialization below still owns validation,
            conversions, and member-wise lowering. */
         skip_or_save_block(&initializer);
-        count = split_saved_array_initializer(initializer, &elements);
+        count = direct_initializer
+                    ? split_saved_paren_arguments(initializer, &elements)
+                    : split_saved_array_initializer(initializer, &elements);
         if (count < ctad->nb_required_type_params)
           cprime_error("not enough initializer expressions for class template argument deduction");
         if (ctad->value_param_mask)
