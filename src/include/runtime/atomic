@@ -1,6 +1,9 @@
 #ifndef _CPC_ATOMIC
 #define _CPC_ATOMIC
 
+#include <cstddef>
+#include <cstdint>
+
 #define __CPC_ATOMIC_RELAXED 0
 #define __CPC_ATOMIC_CONSUME 1
 #define __CPC_ATOMIC_ACQUIRE 2
@@ -97,6 +100,43 @@ namespace std
   private:
     T m_value;
   };
+  typedef atomic<bool> atomic_bool;
+  typedef atomic<char> atomic_char;
+  typedef atomic<signed char> atomic_schar;
+  typedef atomic<unsigned char> atomic_uchar;
+  typedef atomic<short> atomic_short;
+  typedef atomic<unsigned short> atomic_ushort;
+  typedef atomic<int> atomic_int;
+  typedef atomic<unsigned int> atomic_uint;
+  typedef atomic<long> atomic_long;
+  typedef atomic<unsigned long> atomic_ulong;
+  typedef atomic<long long> atomic_llong;
+  typedef atomic<unsigned long long> atomic_ullong;
+  typedef atomic<char16_t> atomic_char16_t;
+  typedef atomic<char32_t> atomic_char32_t;
+  typedef atomic<wchar_t> atomic_wchar_t;
+  typedef atomic<int_least8_t> atomic_int_least8_t;
+  typedef atomic<uint_least8_t> atomic_uint_least8_t;
+  typedef atomic<int_least16_t> atomic_int_least16_t;
+  typedef atomic<uint_least16_t> atomic_uint_least16_t;
+  typedef atomic<int_least32_t> atomic_int_least32_t;
+  typedef atomic<uint_least32_t> atomic_uint_least32_t;
+  typedef atomic<int_least64_t> atomic_int_least64_t;
+  typedef atomic<uint_least64_t> atomic_uint_least64_t;
+  typedef atomic<int_fast8_t> atomic_int_fast8_t;
+  typedef atomic<uint_fast8_t> atomic_uint_fast8_t;
+  typedef atomic<int_fast16_t> atomic_int_fast16_t;
+  typedef atomic<uint_fast16_t> atomic_uint_fast16_t;
+  typedef atomic<int_fast32_t> atomic_int_fast32_t;
+  typedef atomic<uint_fast32_t> atomic_uint_fast32_t;
+  typedef atomic<int_fast64_t> atomic_int_fast64_t;
+  typedef atomic<uint_fast64_t> atomic_uint_fast64_t;
+  typedef atomic<intptr_t> atomic_intptr_t;
+  typedef atomic<uintptr_t> atomic_uintptr_t;
+  typedef atomic<size_t> atomic_size_t;
+  typedef atomic<ptrdiff_t> atomic_ptrdiff_t;
+  typedef atomic<intmax_t> atomic_intmax_t;
+  typedef atomic<uintmax_t> atomic_uintmax_t;
 }
 
 #endif

@@ -11168,7 +11168,6 @@ static int take_cpp_conversion_operator_target_type(CType *target)
   if (!conversion)
     return 0;
   ok = make_type_from_saved_type_tokens(target, conversion);
-  tok_str_free(conversion);
   return ok;
 }
 
@@ -14817,7 +14816,6 @@ cpp_conversion_operator:
             if (!make_type_from_saved_type_tokens(&conversion_ret_type,
                                                    conversion_tokens))
               cprime_error("unsupported conversion operator type");
-            tok_str_free(conversion_tokens);
           }
           else if (is_cpp_translation_unit() && file && file->sys_header)
           {

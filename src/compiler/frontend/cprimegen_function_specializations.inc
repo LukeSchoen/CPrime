@@ -518,7 +518,6 @@ static void parse_explicit_specialization_body(int instantiation)
     if (!conversion_tokens
         || !make_type_from_saved_type_tokens(&result, conversion_tokens))
       cprime_error("unsupported conversion operator type");
-    tok_str_free(conversion_tokens);
   } else if (!parse_btype(&result, &attributes, 0)) expect("specialization return type");
   is_inline = !!(result.t & VT_INLINE);
   while (tok == '*' || tok == '&' || tok == TOK_LAND) {

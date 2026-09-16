@@ -27,17 +27,11 @@ scale; a combined unit that fails is recompiled and rerun case by case, and
 ## Open gaps
 
 `Compatibility/tests/tiers.json` holds one fast-tier case per gap that is still
-red, so a green fast run means the queue is empty. The open gaps:
-
-- `features/Cpp17Gaps/pass/test_attribute_before_function_template.cpp` - a
-  standard attribute between declaration specifiers (`inline [[noreturn]] void
-  f(int const &);`) is rejected. The Explorer++ probe reaches this shape through
-  `boost/throw_exception.hpp`; the shape and the work required are in
-  `Compatibility\KNOWN-ISSUES.md`.
-- `features/All/pass/test_runtime_absolute_value_overloads.cpp` -
-  `std::abs(-1L)` is ambiguous where `<cstdlib>` imports the C overload set into
-  `namespace std` and also declares those signatures there; the shape and the
-  work required are in `Compatibility\KNOWN-ISSUES.md`.
+red, so a green fast run means the queue is empty. The fast list is empty after
+the atomic typedef floor closed. The next known consumer floor is the
+namespace-scope `static const T x = T();` shape reduced in
+`Compatibility\build\ordered-range-probe.cpp`; it is recorded in
+`Compatibility\KNOWN-ISSUES.md` and still needs a retained fast case and repair.
 
 To add a gap: add one minimal case under `features/Cpp17Gaps/pass`, list it in
 the fast list, reproduce it with root `cpc.exe`, repair the shared mechanism,

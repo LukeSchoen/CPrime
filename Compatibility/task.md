@@ -66,20 +66,14 @@ src\scripts\build.exe                                                  publish t
   that diagnostic, so the duplicated `<cstdlib>`/`<cmath>` overload set was
   repaired in the runtime headers, where the reference headers import one set
   per name instead of redeclaring it in `namespace std`.
-- The fast-tier gap is `features/Atomics/pass/test_atomic_typedefs.cpp`: the
-  standard `std::atomic_*` typedefs of [atomics.types.generic] are missing from
-  `src/include/runtime/atomic`, and adding them makes the compiler die with
-  `0xC0000005` on any translation unit that reaches `<atomic>` through
-  `<string>`/`<memory>`.  `<atomic>` alone and the same typedef list in the
-  translation unit proper are both accepted, so the crash is the compiler's,
-  not the header's.  Reproduce it with the staged tree and probe in
-  `Compatibility\build\atomic-alias-crash` (`notes.md` has the command and the
-  bisection table).  Fix the crash first: publishing the typedefs is what
-  unblocks `boost/smart_ptr/detail/sp_counted_base_std_atomic.hpp` and the
-  consumer floors behind it.  This closed cycle's floors and their retained
-  cases are recorded in `Compatibility\KNOWN-ISSUES.md`; the next floor behind
-  this one is `boost/container/container_fwd.hpp`'s
-  `constexpr increment requires an evaluation-owned object`.
+- The `features/Atomics/pass/test_atomic_typedefs.cpp` floor is closed: the
+  standard typedefs are published in `src/include/runtime/atomic`.  The crash
+  was a double free in conversion-operator parsing:
+  `make_type_from_saved_type_tokens` consumes its token string, but three
+  callers freed it again.  The token-pool corruption became fatal once the
+  typedef set enlarged the stream.  The fast list is now empty.  The known
+  closed floors and retained cases are recorded in
+  `Compatibility\KNOWN-ISSUES.md`.
 - Work the defects recorded in `Compatibility\KNOWN-ISSUES.md`: the `::`-spelled
   member function template replay, the `InterlockedIncrement` return value,
   inline SSE asm corrupting surrounding float code, the missing `psapi.h` in the
@@ -90,11 +84,9 @@ src\scripts\build.exe                                                  publish t
   manifest, then drives root `cpc.exe` through `src\scripts\project.exe`); its
   reduced cases and their probe are the consumer's own
   `Scripts\cpc\gaps\*.cpp` and `Scripts\cpc\Test-CpcGaps.ps1`. All five reduced
-  cases compile with the published compiler.  The build now stops in
-  `boost/smart_ptr/detail/sp_counted_base_std_atomic.hpp`, which needs the
-  `std::atomic_*` typedefs (see the fast-tier gap above); compile it with root
-  `cpc.exe`, reduce each failure to a minimal local case, close the shared
-  mechanism, and continue from the next floor.
+  cases compile with the published compiler.  With the atomic typedefs
+  published, the build now stops in `boost/container/container_fwd.hpp`; the
+  next floor and its local reduction are in `Compatibility\KNOWN-ISSUES.md`.
 - `Compatibility\tests\test.exe -Checks` (the CPC-only publication/development gate) is
   red: the runner self-check `runner rejects false expectation:
   test_valid_without_main.cpp` reports exit 1 and `Summary: 0 passed, 1 failed`
@@ -114,26 +106,26 @@ src\scripts\build.exe                                                  publish t
 
 ## Next action
 
-Reproduce the crash with the exact case, repair the shared mechanism, publish
-the typedefs and republish:
+Retain the reduced `boost/container/container_fwd.hpp` floor as one minimal
+case under `features/Cpp17Gaps/pass`, add it to the fast list, reproduce it
+with root `cpc.exe`, repair the shared initialization mechanism, then run the
+suite, fast tier, regression gate, and publish:
 
 ```
-Compatibility\tests\test.exe -Suite features/Atomics -Select test_atomic_typedefs.cpp
-cpc.exe -B Compatibility\build\atomic-alias-crash\stage -std=c++17 Compatibility\build\atomic-alias-crash\probe.cpp -o Compatibility\build\atomic-alias-crash\probe.exe
-Compatibility\tests\test.exe -Suite features/Atomics
+Push-Location Compatibility
+..\cpc.exe -std=c++17 build\ordered-range-probe.cpp -o build\ordered-range-probe.exe
+Pop-Location
+Compatibility\tests\test.exe -Suite features/Cpp17Gaps -Select <retained-case>.cpp
+Compatibility\tests\test.exe -Suite features/Cpp17Gaps
 Compatibility\tests\test.exe -All -Tier fast
 Compatibility\tests\test.exe -Regression
 src\scripts\build.exe
 ```
 
-The case leaves the fast list by passing, never by removal. Then re-run the
-consumer probe with the published compiler --
-`C:\Luke\Src\Archive\explorerplusplus\build_cpc.cmd Release x64`, which copies
-root `cpc.exe` in first -- and reduce the next floor it reports. Reproduction
-evidence for this cycle is in `Compatibility\build`: the consumer floors in
-`explorer-probe2.log` through `explorer-probe8.log`, the alias crash in
-`atomic-alias-crash`, and the suite/fast/gate runs in `classes-suite-final.log`,
-`atomics-suite.log`, `fast-final.log` and `regression-final.log`.  The
-`gregdur-probe*.cpp` and `small_*.cpp` reductions, `crash_probe1.cpp`,
-`roundstyle_probe.cpp` and `string-pair-*.log` are the reductions behind the
-closed floors.
+The reduced case is exactly `static const T x = T();` at namespace scope; root
+`cpc.exe` reports `initializer element is not constant`.  The consumer probe
+log is `Compatibility\build\explorer-probe9.log`.  After publishing, re-run
+`C:\Luke\Src\Archive\explorerplusplus\build_cpc.cmd Release x64` (it copies
+root `cpc.exe` in first) and reduce the next floor it reports.  Evidence for
+the closed atomic floor is in `Compatibility\build\atomic-alias-crash` and the
+published suite/gate runs from this cycle.

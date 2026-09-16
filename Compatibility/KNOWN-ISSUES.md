@@ -83,24 +83,12 @@ Work required:
 
 ## The standard `std::atomic_*` typedefs crash the compiler
 
-`std::atomic_int_least32_t` and the rest of the typedefs of
-[atomics.types.generic] are absent from `src/include/runtime/atomic`, so
-`boost/smart_ptr/detail/sp_counted_base_std_atomic.hpp` cannot compile its
-counted base.  Adding them is blocked: with the typedefs in place the compiler
-dies with `0xC0000005` on any translation unit that reaches `<atomic>` through
-`<string>`/`<memory>`, while `<atomic>` on its own and the same typedef list in
-the translation unit proper are both accepted.
-
-The reproducer, the staged include tree, and the bisection table are in
-`Compatibility\build\atomic-alias-crash` (`notes.md`, `probe.cpp`,
-`stage\include\atomic`); the red case is
+Closed.  The standard typedefs are now in `src/include/runtime/atomic`.  The
+crash was a double free while parsing conversion operators:
+`make_type_from_saved_type_tokens` consumes its token string, but three
+callers released it again.  The pool corruption became fatal once the
+`<atomic>` typedef set enlarged the token stream.  Retained as
 `features/Atomics/pass/test_atomic_typedefs.cpp`.
-
-Work required:
-
-- Find why the compiler fails once that typedef set is parsed inside the
-  header, when the same declarations parse in a translation unit.
-- Publish the standard typedefs and make the retained case pass.
 
 ## Explorer++ probe: `std::string(begin, end)` from two pointers
 
@@ -170,10 +158,16 @@ Retained as `features/Includes/pass/test_limits_float_round_style.cpp`.
 
 ### The next floor: boost::container
 
-This is the floor behind the atomic typedefs: it is what the probe reported
-(`Compatibility\build\explorer-probe7.log`, run while those typedefs were
-temporarily published), and it is not reachable again until they are.  The
-probe stops in `boost/container/container_fwd.hpp` with
-`error: constexpr increment requires an evaluation-owned object`.  That header
-contains no `constexpr` at all, so the diagnostic's file and line do not name
-the real site; reduce it before treating the message as the shape.
+Open.  With the atomic typedefs published, the consumer probe reaches this
+floor (`Compatibility\build\explorer-probe9.log`) and stops in
+`boost/container/container_fwd.hpp` with
+`error: constexpr increment requires an evaluation-owned object`, reported at
+line 46, which is only a comment.  The real failing declaration is line 249:
+
+```cpp
+static const ordered_range_t ordered_range = ordered_range_t();
+```
+
+`Compatibility\build\ordered-range-probe.cpp` reduces it to a local class with
+a trivial default constructor, and root `cpc.exe` rejects it with
+`initializer element is not constant`.
