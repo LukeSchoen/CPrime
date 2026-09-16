@@ -49,26 +49,22 @@ of what changed.
 ## Next steps
 
 Verified against root `cpc.exe` on 2026-09-16: fast is red by exactly the
-cases in `Tests/tiers.json`. Details and reproducer shapes live in
-`Tests/CPP17-REMAINING.md`; this is the order to work them in.
+cases in `Tests/tiers.json` - 20 `features/Cpp17Gaps` cases and one
+`features/CompilerCrash` case. Follow the ordered completion plan in
+`Tests/CPP17-REMAINING.md`; it owns the current mechanism grouping and case
+list.
 
-1. Baseline `Tests\test.exe -All -Tier fast` plus the suite you will touch.
-2. Constexpr object model: both cases share the constant evaluator, so fix the
-   mechanism once and cover both.
-   `test_constexpr_user_provided_constructor.cpp` first: a local constexpr
-   object of a class type with a user-provided constructor is not
-   constant-evaluated, which is also what blocks `std::optional` below.
-   Then `test_constexpr_reference_member.cpp`: a reference member read has to
-   keep referring to the referent object.
-   Re-check `fail/test_constexpr_constructor_member_order.cpp` afterwards - it
-   must still be rejected, now for declaration order.
-3. Libraries: `test_optional_constexpr.cpp` should fall out of step 2;
-   `test_optional_copy_constructible_trait.cpp` needs the storage union whose
-   copy operation is defaulted behind a conditionally deleted base.
-4. `test_function_template_address_argument.cpp` fails with `no matching
-   function template 'run_char'`; it is listed in `fast` now and needs a fix.
-5. Per closed case: run the selected case, then the suite, then remove that
-   case from the `fast` list in `Tests/tiers.json` once it passes. Delete
-   scratch reproducers from `build/` as each durable case lands.
+1. Baseline the affected suite and `Tests\test.exe -All -Tier fast`.
+2. Fix the structured-binding selection-initializer crash first.
+3. Fill the type-traits foundation, then finish the remaining language
+   semantics.
+4. Work the runtime/library groups in dependency order: core surfaces,
+   algorithms/utilities, conversion-heavy numerics, containers/memory/variant,
+   then filesystem.
+5. Per closed case: run the selected case, run the suite, delete the scratch
+   reproducer, then remove that case from the `fast` list.
 6. Boundary: affected suites plus `Tests\test.exe -Regression`, then
    `scripts\build.exe` to publish. Pedantic only as a last confirmation.
+
+RTMPose performance context and the two external CPC bug reports are recorded
+in `KNOWN-ISSUES.md`.

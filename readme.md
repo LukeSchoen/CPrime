@@ -31,9 +31,11 @@ The C-only seed proof is `scripts/seed-tcc.exe -RunExternal`; the resulting CPC
 is built before any packaged C++ runtime source is compiled.
 Agents must not switch to Clang, GCC, MSVC, or another compiler for builds,
 
+Open work:
+ - `Tests/CPP17-REMAINING.md` - tracked C++17 completion queue
+ - `KNOWN-ISSUES.md` - external consumer bug reports
 
 notes:
  - inline SSE runs at the same speed anyway with either clang or cprime and cpc builds is much faster
  - cpc provides a lib with on file or in memory code compilation with working ABIs at near-instant speeds
    - In-Memory Generated Functions Become directly callable functions at full speed (supporting scripting)
-
