@@ -1509,6 +1509,10 @@ extern "C" {
   WINBASEAPI WINBOOL WINAPI FileTimeToDosDateTime(CONST FILETIME *lpFileTime,LPWORD lpFatDate,LPWORD lpFatTime);
   WINBASEAPI WINBOOL WINAPI DosDateTimeToFileTime(WORD wFatDate,WORD wFatTime,LPFILETIME lpFileTime);
   WINBASEAPI DWORD WINAPI GetTickCount(VOID);
+  /* GetTickCount64 lives in sysinfoapi.h in the current Windows SDK; this
+     vendored winbase.h predates that split and kernel32.def already exports
+     the function, so declare it next to GetTickCount. */
+  WINBASEAPI ULONGLONG WINAPI GetTickCount64(VOID);
   WINBASEAPI WINBOOL WINAPI SetSystemTimeAdjustment(DWORD dwTimeAdjustment,WINBOOL bTimeAdjustmentDisabled);
   WINBASEAPI WINBOOL WINAPI GetSystemTimeAdjustment(PDWORD lpTimeAdjustment,PDWORD lpTimeIncrement,PBOOL lpTimeAdjustmentDisabled);
   WINBASEAPI DWORD WINAPI FormatMessageA(DWORD dwFlags,LPCVOID lpSource,DWORD dwMessageId,DWORD dwLanguageId,LPSTR lpBuffer,DWORD nSize,va_list *Arguments);
