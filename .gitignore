@@ -33,7 +33,6 @@
 /*.pdb
 /*.bak
 /tmp_*
-/done.x
 
 # Local diagnostics
 *.log

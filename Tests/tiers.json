@@ -5,7 +5,8 @@
                  "features/Cpp17Gaps/pass/test_constexpr_user_provided_constructor.cpp",
                  "features/Cpp17Gaps/pass/test_constexpr_reference_member.cpp",
                  "features/Cpp17Gaps/pass/test_optional_constexpr.cpp",
-                 "features/Cpp17Gaps/pass/test_optional_copy_constructible_trait.cpp"
+                 "features/Cpp17Gaps/pass/test_optional_copy_constructible_trait.cpp",
+                 "features/Templates/pass/test_function_template_address_argument.cpp"
              ],
     "excluded":  [
 

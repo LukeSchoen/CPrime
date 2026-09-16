@@ -45,3 +45,30 @@ of what changed.
   still a working published compiler.
 - Tree holds only intended source, test, and queue updates. Report files
   changed, mechanisms fixed, exact commands run, and any blockers.
+
+## Next steps
+
+Verified against root `cpc.exe` on 2026-09-16: fast is red by exactly the
+cases in `Tests/tiers.json`. Details and reproducer shapes live in
+`Tests/CPP17-REMAINING.md`; this is the order to work them in.
+
+1. Baseline `Tests\test.exe -All -Tier fast` plus the suite you will touch.
+2. Constexpr object model: both cases share the constant evaluator, so fix the
+   mechanism once and cover both.
+   `test_constexpr_user_provided_constructor.cpp` first: a local constexpr
+   object of a class type with a user-provided constructor is not
+   constant-evaluated, which is also what blocks `std::optional` below.
+   Then `test_constexpr_reference_member.cpp`: a reference member read has to
+   keep referring to the referent object.
+   Re-check `fail/test_constexpr_constructor_member_order.cpp` afterwards - it
+   must still be rejected, now for declaration order.
+3. Libraries: `test_optional_constexpr.cpp` should fall out of step 2;
+   `test_optional_copy_constructible_trait.cpp` needs the storage union whose
+   copy operation is defaulted behind a conditionally deleted base.
+4. `test_function_template_address_argument.cpp` fails with `no matching
+   function template 'run_char'`; it is listed in `fast` now and needs a fix.
+5. Per closed case: run the selected case, then the suite, then remove that
+   case from the `fast` list in `Tests/tiers.json` once it passes. Delete
+   scratch reproducers from `build/` as each durable case lands.
+6. Boundary: affected suites plus `Tests\test.exe -Regression`, then
+   `scripts\build.exe` to publish. Pedantic only as a last confirmation.
