@@ -4270,6 +4270,12 @@ static int token_string_is_auto_type(TokenString *str)
     }
     if (str->str[i] == TOK_AUTO)
       saw_auto = 1;
+    /* Declaration specifiers may precede the placeholder's type spelling
+       (`constexpr auto f()`), so they do not disqualify it. */
+    else if (str->str[i] == tok_constexpr || str->str[i] == TOK_STATIC
+             || str->str[i] == TOK_EXTERN || str->str[i] == TOK_INLINE1
+             || str->str[i] == TOK_INLINE2 || str->str[i] == TOK_INLINE3)
+      ;
     else if (str->str[i] != TOK_CONST1 && str->str[i] != TOK_CONST2
              && str->str[i] != TOK_CONST3 && str->str[i] != TOK_VOLATILE1
              && str->str[i] != TOK_VOLATILE2 && str->str[i] != TOK_VOLATILE3
@@ -7232,6 +7238,36 @@ finish_member_signature_replay:
     pm->replay_bound = md->func_bound;
     pm->replay_class_tok = md->class_tok;
     note_member_function_scope(member_func_tok, class_mangled_tok);
+    /* A `constexpr` member template's instantiated body takes part in
+       constant evaluation exactly like a non-template member's, so register
+       the definition the pending queue is about to replay. */
+    if (function && token_string_contains_tok(md->def_str, tok_constexpr))
+    {
+      int scan, depth = 0, body_at = -1;
+      TokenString *body_tokens = tok_str_alloc();
+      for (scan = 0; scan < body_def->len; ++scan)
+      {
+        int token = body_def->str[scan];
+        if (TOK_HAS_VALUE(token))
+        {
+          scan += tok_str_value_extra_words(body_def->str, body_def->len, scan);
+          continue;
+        }
+        if (token == '(') ++depth;
+        else if (token == ')' && depth) --depth;
+        else if (token == '{' && !depth) { body_at = scan; break; }
+        else if (token == ';' || token == TOK_EOF) break;
+      }
+      if (body_at >= 0)
+      {
+        for (scan = body_at; scan < body_def->len; ++scan)
+          tok_str_add_record(body_tokens, body_def->str, body_def->len, &scan);
+        if (!body_tokens->len || body_tokens->str[body_tokens->len - 1] != TOK_EOF)
+          tok_str_add(body_tokens, TOK_EOF);
+        note_constexpr_function(function, body_tokens);
+      }
+      tok_str_free(body_tokens);
+    }
     queue_pending_member(pm);
   }
   if (template_member_is_call_specialized(md))

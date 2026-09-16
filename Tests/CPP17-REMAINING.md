@@ -28,8 +28,8 @@ scale; a combined unit that fails is recompiled and rerun case by case, and
 
 `features/Cpp17Gaps` carries one case per gap that is still red, and the fast
 list in `Tests/tiers.json` is exactly those cases, so a green fast run means
-the queue is empty. It is empty: every case below the gap suite's older
-entries passes, and the fast list holds no case.
+the queue is empty. It is empty: every case in the gap suite passes, and the
+fast list holds no case.
 
 A new gap enters the queue the same way the closed ones did: add one minimal
 case under `features/Cpp17Gaps/pass`, list it in the fast list, reproduce it

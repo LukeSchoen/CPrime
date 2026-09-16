@@ -30193,9 +30193,24 @@ found:
               int saved_tok;
               CValue saved_tokc;
               if (!has_init || has_ctor_init
-                  || (tok != '=' && !(has_direct_init && tok == '{')))
+                  || (tok != '='
+                      && !(has_direct_init && (tok == '{' || has_paren_init))))
                 cprime_error("unsupported auto declaration '%s'", get_tok_str(v, NULL));
-              if (tok == '{')
+              if (has_paren_init)
+              {
+                /* C++17 direct-initialization of 'auto' with a parenthesized
+                   element: that element names the deduced type. */
+                TokenString *arguments = NULL;
+                skip_or_save_block(&arguments);
+                if (tok == ',')
+                  cprime_error("direct-initialization of 'auto' requires exactly one element");
+                deduce_cpp_auto_initializer_type(&type, arguments);
+                type.t &= ~(VT_EXTERN | VT_TYPEDEF);
+                type.t |= auto_storage;
+                --arguments->len; /* drop the saved end-of-stream boundary */
+                restore_cpp_lifecycle_probe(arguments);
+              }
+              else if (tok == '{')
               {
                 /* C++17 direct-list-initialization of 'auto': a single
                    element names the deduced type, and the braced list still

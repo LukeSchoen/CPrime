@@ -6,5 +6,6 @@
 int main()
 {
   constexpr int answer = [] { return 42; }();
-  return answer == 42 ? 0 : 1;
+  constexpr int generic = [](auto value) { return static_cast<int>(value); }(7);
+  return answer == 42 && generic == 7 ? 0 : 1;
 }

@@ -763,6 +763,25 @@ static int evaluate_constexpr_function(Sym *function, SValue *arguments, int cou
     for (entry = constexpr_functions; entry; entry = entry->next)
       if (entry->token == function->v) break;
   }
+  /* A member function template's body is materialized from its class's
+     member definition rather than from a function template definition, so a
+     call to one reaches its recorded body only after this instantiation. */
+  if (!entry && !constexpr_function_materialization)
+  {
+    const CppMemberDeclInfo *member = lookup_cpp_member_decl(function->v);
+    CType owner_type;
+    if (member && member->owner_tok && member->source_name_tok
+        && make_class_type_from_tok(&owner_type, member->owner_tok))
+    {
+      ++constexpr_function_materialization;
+      instantiate_template_member_body_for_func_tok(&owner_type,
+                                                    member->source_name_tok,
+                                                    function->v);
+      --constexpr_function_materialization;
+      for (entry = constexpr_functions; entry; entry = entry->next)
+        if (entry->token == function->v) break;
+    }
+  }
   if (!entry || entry->parameter_count != count) {
     return 0;
   }
