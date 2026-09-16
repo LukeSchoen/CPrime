@@ -170,6 +170,18 @@ namespace std
     return begin;
   }
 
+  template<class Iterator, class T, class Compare>
+  Iterator lower_bound(Iterator begin, Iterator end, const T &value, Compare compare)
+  {
+    while (begin < end)
+    {
+      Iterator middle = begin + (end - begin) / 2;
+      if (compare(*middle, value)) begin = middle + 1;
+      else end = middle;
+    }
+    return begin;
+  }
+
   template<class Iterator, class T>
   Iterator upper_bound(Iterator begin, Iterator end, const T &value)
   {
@@ -177,6 +189,18 @@ namespace std
     {
       Iterator middle = begin + (end - begin) / 2;
       if (!(value < *middle)) begin = middle + 1;
+      else end = middle;
+    }
+    return begin;
+  }
+
+  template<class Iterator, class T, class Compare>
+  Iterator upper_bound(Iterator begin, Iterator end, const T &value, Compare compare)
+  {
+    while (begin < end)
+    {
+      Iterator middle = begin + (end - begin) / 2;
+      if (!compare(value, *middle)) begin = middle + 1;
       else end = middle;
     }
     return begin;
