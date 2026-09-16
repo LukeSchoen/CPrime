@@ -239,6 +239,89 @@ static unsigned getclock_ms(void)
 #endif
 }
 
+/* Opt-in driver phase timings; the disabled path is a flag check per switch. */
+enum
+{
+  PROFILE_PHASE_SETUP,
+  PROFILE_PHASE_COMPILE,
+  PROFILE_PHASE_WRITE,
+  PROFILE_PHASE_CLEANUP,
+  PROFILE_PHASE_COUNT
+};
+
+static int profile_phases_enabled;
+static int profile_phases_initialized;
+static int profile_active_phase = -1;
+static unsigned long long profile_phase_started;
+static unsigned long long profile_phase_ns[PROFILE_PHASE_COUNT];
+static unsigned long long profile_process_started;
+
+static unsigned long long profile_now_ns(void)
+{
+#ifdef _WIN32
+  LARGE_INTEGER counter, frequency;
+  QueryPerformanceCounter(&counter);
+  QueryPerformanceFrequency(&frequency);
+  return (unsigned long long)(counter.QuadPart / frequency.QuadPart) * 1000000000ULL
+       + (unsigned long long)(counter.QuadPart % frequency.QuadPart) * 1000000000ULL
+         / (unsigned long long)frequency.QuadPart;
+#else
+  struct timeval tv;
+  gettimeofday(&tv, NULL);
+  return (unsigned long long)tv.tv_sec * 1000000000ULL
+       + (unsigned long long)tv.tv_usec * 1000ULL;
+#endif
+}
+
+static void profile_phases_init(void)
+{
+  if (profile_phases_initialized)
+    return;
+  profile_phases_initialized = 1;
+  profile_phases_enabled = getenv("CPC_PROFILE_PHASES") != NULL;
+  if (profile_phases_enabled)
+  {
+    profile_process_started = profile_now_ns();
+    profile_active_phase = PROFILE_PHASE_SETUP;
+    profile_phase_started = profile_process_started;
+  }
+}
+
+static void profile_phase_switch(int phase)
+{
+  unsigned long long now;
+
+  if (!profile_phases_enabled)
+    return;
+  now = profile_now_ns();
+  if (profile_active_phase >= 0 && profile_active_phase < PROFILE_PHASE_COUNT)
+    profile_phase_ns[profile_active_phase] += now - profile_phase_started;
+  profile_active_phase = phase;
+  profile_phase_started = now;
+}
+
+static void profile_phases_report(void)
+{
+  unsigned long long now, total;
+
+  if (!profile_phases_enabled)
+    return;
+  now = profile_now_ns();
+  if (profile_active_phase >= 0 && profile_active_phase < PROFILE_PHASE_COUNT)
+    profile_phase_ns[profile_active_phase] += now - profile_phase_started;
+  profile_active_phase = -1;
+  total = now - profile_process_started;
+  fprintf(stderr,
+          "CPC_PROFILE_PHASES setup_ms=%.3f compile_ms=%.3f write_ms=%.3f "
+          "cleanup_ms=%.3f total_ms=%.3f\n",
+          profile_phase_ns[PROFILE_PHASE_SETUP] / 1000000.0,
+          profile_phase_ns[PROFILE_PHASE_COMPILE] / 1000000.0,
+          profile_phase_ns[PROFILE_PHASE_WRITE] / 1000000.0,
+          profile_phase_ns[PROFILE_PHASE_CLEANUP] / 1000000.0,
+          total / 1000000.0);
+  fflush(stderr);
+}
+
 typedef struct {
   char **argv;
   int argc;
@@ -296,6 +379,7 @@ static int cprime_run_job(int argc, char **argv)
 
   s = cprime_new();
   s1 = s;
+  profile_phase_switch(PROFILE_PHASE_SETUP);
   opt = cprime_parse_args(s, &argc, &argv);
 
   ret = 0;
@@ -380,6 +464,7 @@ help2: fputs(help2, stdout);
       --n;
   }
 
+  profile_phase_switch(PROFILE_PHASE_COMPILE);
   first_file = NULL;
   do
   {
@@ -403,6 +488,7 @@ help2: fputs(help2, stdout);
   if (s->do_bench)
     end_time = getclock_ms();
 
+  profile_phase_switch(PROFILE_PHASE_WRITE);
   if (s->run_test)
     t = 0;
   else if (s->output_type == CPRIME_OUTPUT_PREPROCESS)
@@ -437,6 +523,7 @@ help2: fputs(help2, stdout);
     cprime_print_stats(s, end_time - start_time);
 
 cleanup:
+  profile_phase_switch(PROFILE_PHASE_CLEANUP);
   cprime_delete(s);
   if (ppfp && ppfp != stdout)
     fclose(ppfp);
@@ -506,13 +593,19 @@ static int cprime_run_batch_file(const char *path, int keep_going)
 
 int main(int argc, char **argv)
 {
+  int ret;
+
+  profile_phases_init();
   if (argc == 2 && argv[1] && argv[1][0] == '@' && argv[1][1])
-    return cprime_run_batch_file(argv[1] + 1, 0);
-  if (argc == 3 && !strcmp(argv[1], "--batch"))
-    return cprime_run_batch_file(argv[2], 0);
-  if (argc == 3 && !strcmp(argv[1], "--batch-continue"))
-    return cprime_run_batch_file(argv[2], 1);
-  return cprime_run_job(argc, argv);
+    ret = cprime_run_batch_file(argv[1] + 1, 0);
+  else if (argc == 3 && !strcmp(argv[1], "--batch"))
+    ret = cprime_run_batch_file(argv[2], 0);
+  else if (argc == 3 && !strcmp(argv[1], "--batch-continue"))
+    ret = cprime_run_batch_file(argv[2], 1);
+  else
+    ret = cprime_run_job(argc, argv);
+  profile_phases_report();
+  return ret;
 }
 
 

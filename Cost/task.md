@@ -90,3 +90,41 @@ gate.
   reset and cache validation are part of compile speed.
 - `Cost\baseline\perf-baseline.tsv` records the retained numbers the
   harness gates against; keep the baseline meaningful when a case changes.
+
+## Current cycle
+
+The earliest open package is still item 1: self-build latency, using
+`c.self.driver`. This cycle added the requested opt-in
+`CPC_PROFILE_PHASES=1` driver measurement. It reports non-overlapping
+setup, translation-unit parse/emission, output-writing and cleanup times once
+at process exit. With the variable absent, the measurement is one environment
+check plus predictable disabled branches.
+
+Evidence is under `Cost\build`:
+
+- The pre-change root compiler measured `c.self.driver` at 391.089 ms in
+  `perf-cycle-0002.tsv` and 425.807 ms in `raw-before-phases.tsv`.
+- The published compiler measured 433.291 ms in `perf-cycle-0004.tsv`. The
+  repeated final interleaved runs `perf-final-3.tsv` / `raw-final-3.tsv` and
+  `perf-final-4.tsv` / `raw-final-4.tsv` measured `1.00x` and `1.01x` against
+  the saved reference; the matching `dispersion-final-3.log` and
+  `dispersion-final-4.log` record the spread.
+- Five serial phase runs are in `phases-self-driver-5.log`. Quiet samples
+  showed setup 2.0-2.4 ms, compile 416-502 ms, write 6.8-7.2 ms, cleanup
+  0.5-0.8 ms; earlier samples were higher while the system was busy.
+  Parse/emission is over 99% of the measured work.
+- `profile-phases.txt` refreshes the stream sample: `decl`, `expr_eq`,
+  `gen_function`, and `next_nomacro` dominate. `next_nomacro` is the largest
+  leaf at about 13%; no single leaf exceeds about 15%.
+- `src\scripts\build.exe -Map` passed packaging and regression, and
+  `check-final-fast.log` / `gate-final.log` record 28 fast cases and 58
+  regression cases passing. `build-final-2.log` records the final self-host and
+  publish.
+
+The remaining blocker is that `compile_ms` still hides the split between token
+acquisition/preprocessing and semantic parsing/backend emission. The exact next
+action is to add opt-in, depth-aware call-count and timing accumulators for
+`next_nomacro` and the function-emission path, with nested template replay
+counted once, then rebuild with `src\scripts\build.exe -Map` and sample the
+same `Cost\build\self-driver-profile.rsp` with `src\scripts\profile.exe` before
+choosing a source change.
