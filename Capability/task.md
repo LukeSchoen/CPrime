@@ -1,4 +1,4 @@
-# Strength: faster, better generated programs
+# Capability: faster, better generated programs
 
 Improve the quality and runtime speed of the executables root `cpc.exe`
 produces, with real optimization levels, while keeping compilation fast. Aim at
@@ -6,7 +6,7 @@ the runtime speed of the equivalent clang, gcc or msvc build at comparable
 flags, without ever becoming a shell around another backend. Never create
 `done.x`: the bar keeps moving.
 
-Work in this tree only. Delete nothing: `Strength\worker.cmd` and this file are
+Work in this tree only. Delete nothing: `Capability\worker.cmd` and this file are
 the user's control surface, and other worker folders may be in use on other
 days.
 
@@ -28,7 +28,7 @@ Making them mean something, and documenting them in `cpc -h`, is the work.
 
 - Runtime speed of generated executables: fixed workloads, repeated runs,
   medians, same machine state, exact flags recorded. Workloads live in
-  `Strength\tests\runtime\`, `Strength\tests\performance\pass\` (measured
+  `Capability\tests\runtime\`, `Capability\tests\performance\pass\` (measured
   directly, not through the pedantic tier), and new runtime benchmark inputs
   authorized by this worker's purpose: deterministic, fast, self-contained, and
   kept with their inputs.
@@ -39,7 +39,7 @@ Making them mean something, and documenting them in `cpc -h`, is the work.
   `src\scripts\performance.exe -Root . -CpcOnly -NoGate -Quiet`. An optimization
   that multiplies compile time is a regression even when the output is faster,
   so state both numbers for every change.
-- Raw evidence, commands and timings stay under `Strength\build`. One sample is
+- Raw evidence, commands and timings stay under `Capability\build`. One sample is
   not a result.
 
 ## Invariants

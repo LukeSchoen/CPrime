@@ -5,12 +5,12 @@
 
 typedef struct Case { const char *name, *source; int self, cpp, stl; } Case;
 static const Case cases[] = {
-    {"empty_cpp", "Speed/tests/compile/competitive/empty.cpp", 0, 1, 0},
-    {"template_lookup", "Speed/tests/compile/test_static_template_lookup.cpp", 0, 1, 0},
-    {"template_conversion", "Speed/tests/compile/test_conversion_template_owner_lookup.cpp", 0, 1, 0},
-    {"cpp_functions", "Speed/tests/compile/competitive/functions.cpp", 0, 1, 0},
+    {"empty_cpp", "Cost/tests/compile/competitive/empty.cpp", 0, 1, 0},
+    {"template_lookup", "Cost/tests/compile/test_static_template_lookup.cpp", 0, 1, 0},
+    {"template_conversion", "Cost/tests/compile/test_conversion_template_owner_lookup.cpp", 0, 1, 0},
+    {"cpp_functions", "Cost/tests/compile/competitive/functions.cpp", 0, 1, 0},
     {"stl_vector", "Compatibility/tests/features/Templates/pass/test_std_vector_nested.cpp", 0, 1, 1},
-    {"xbrz", "Speed/tests/compile/competitive/xbrz_check.cpp", 0, 1, 1},
+    {"xbrz", "Cost/tests/compile/competitive/xbrz_check.cpp", 0, 1, 1},
     {"compiler_c", "src/compiler/driver/cprime.c", 1, 0, 0}
 };
 static const char *modes[] = {"cpc_self", "cpc_clang", "clang_O0", "clang_fast", "minimal_fast", "clang_pch", "minimal_pch"};
@@ -34,7 +34,7 @@ static int prepare_pch(int mode) {
     args[n++]="-O0"; args[n++]="-g0"; args[n++]="-std=c++17";
     for(i=0; clang_fast_flags[i]; ++i) args[n++]=clang_fast_flags[i];
     args[n++]="-x"; args[n++]="c++-header";
-    args[n++]="Speed/tests/compile/competitive/pch.hpp";
+    args[n++]="Cost/tests/compile/competitive/pch.hpp";
     args[n++]="-o"; args[n++]=output; args[n]=NULL;
     for(i=0;i<n;++i) { if(i) nt_buffer_text(&line," "); nt_quote(&line,args[i]); }
     fprintf(commands,"pch\t%s\tprepare\t0\t%s\n",modes[mode],line.data); fflush(commands); nt_buffer_free(&line);

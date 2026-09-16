@@ -15,7 +15,7 @@ rem Compatibility\task.md holds the goal, the evidence sources, the rules and th
 rem current leads, and codex keeps it current as work completes.
 rem
 rem This loop is additive and never destructive. It creates
-rem build\worker\compatibility, writes its own logs there, and never deletes,
+rem Compatibility\build, writes its own logs there, and never deletes,
 rem moves or renames any file. It never creates the stop marker: only you do. A
 rem failed cycle leaves the tree committed and usable, so the next cycle, or the
 rem next day, continues from where it stopped instead of starting over.
@@ -53,7 +53,7 @@ set "ROOT=%CD%"
 if not defined DONE set "DONE=%TITLE%\done.x"
 if not defined CODEX_EXE set "CODEX_EXE=codex.exe"
 if not defined REASONING set "REASONING=high"
-if not defined TASK_PROMPT set "TASK_PROMPT=Read %TITLE%\task.md and continue its earliest unfinished work package, following AGENTS.md. Use only root cpc.exe, one compiler process at a time. Reproduce each gap with the exact case before repairing it, keep one minimal retained case, and keep the evidence under build\worker\compatibility. Finish by updating %TITLE%\task.md with the remaining work and the exact next action. Never create %TITLE%\done.x, never delete or weaken a retained case, and never delete, move or rewrite %TITLE%\worker.cmd."
+if not defined TASK_PROMPT set "TASK_PROMPT=Read %TITLE%\task.md and continue its earliest unfinished work package, following AGENTS.md. Use only root cpc.exe, one compiler process at a time. Reproduce each gap with the exact case before repairing it, keep one minimal retained case, and keep the evidence under Compatibility\build. Finish by updating %TITLE%\task.md with the remaining work and the exact next action. Never create %TITLE%\done.x, never delete or weaken a retained case, and never delete, move or rewrite %TITLE%\worker.cmd."
 if not defined MAX_CYCLES set "MAX_CYCLES=0"
 if not defined FAIL_EXIT_LIMIT set "FAIL_EXIT_LIMIT=5"
 if not defined FAIL_SLEEP set "FAIL_SLEEP=60"

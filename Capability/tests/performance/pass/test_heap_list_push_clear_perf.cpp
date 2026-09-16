@@ -1,5 +1,5 @@
 // EXPECT_EXIT: 0
-// EXPECT_COMPILE_ARGS: -Isrc/include/runtime -Isrc/include/cprime -Isrc/third-party/win32-sdk/include -Isrc/third-party/win32-sdk/include/winapi -IStrength/tests/include
+// EXPECT_COMPILE_ARGS: -Isrc/include/runtime -Isrc/include/cprime -Isrc/third-party/win32-sdk/include -Isrc/third-party/win32-sdk/include/winapi -ICapability/tests/include
 
 #include <stdio.h>
 #include <stdlib.h>

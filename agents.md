@@ -24,7 +24,7 @@
   Keep tests minimal, deterministic, and fast; reuse helpers and remove redundant
   fixtures without losing distinct behavior coverage.
 - The top level is only `readme.md`, `agents.md`, `.gitignore`,
-  `.gitattributes`, `cpc.exe`, `src/`, `Speed/`, `Strength/` and
+  `.gitattributes`, `cpc.exe`, `src/`, `Cost/`, `Capability/` and
   `Compatibility/`. Everything else belongs under `src/` or inside the area it
   serves.
 - `src/` is the toolchain: `src/compiler/`, `src/runtime/`, `src/tools/`
@@ -33,7 +33,7 @@
   `src/lib/` (bootstrap link definitions and the bootstrap runtime archive),
   `src/deploy/` (the shipped libcprime SDK) and `src/third-party/` (vendored
   sources). Generated toolchain output lives in `src/build/`.
-- Each area owns its own directory: `Speed/` (compile speed), `Strength/`
+- Each area owns its own directory: `Cost/` (compile speed), `Capability/`
   (generated-program speed and quality) and `Compatibility/` (C++17
   correctness). An area holds `worker.cmd`, `task.md`, `tests/`, optional
   `tools/`, its retained baselines and its own generated `build/`.
@@ -45,7 +45,7 @@
   live in `src/scripts/` and `src/tools/`; do not add batch, cmd, PowerShell, or
   Python.
   Leave third-party sources/tooling unchanged; documentation and data are exempt.
-- `Speed\worker.cmd`, `Compatibility\worker.cmd` and `Strength\worker.cmd` are the
+- `Cost\worker.cmd`, `Compatibility\worker.cmd` and `Capability\worker.cmd` are the
   user's agent-loop control surface, are tracked in the repository and are exempt
   from the rule above. They start their own area's TASK_PROMPT file (`task.md`) and
   commit each cycle, so an agent must never delete, move, rename or rewrite any
@@ -95,8 +95,8 @@ Metrics include elapsed and CPU seconds for each tool process.
 Compatibility/tests/test.exe -All -Tier fast
 Compatibility/tests/test.exe -Suite features/Templates
 Compatibility/tests/test.exe -Regression
-Speed/tests/test.exe -All -Tier fast
-Strength/tests/test.exe -All -Tier fast
+Cost/tests/test.exe -All -Tier fast
+Capability/tests/test.exe -All -Tier fast
 ```
 
 `tiers.json` lists the `fast` subset, which is the open-work list; every other
@@ -114,8 +114,8 @@ behavior.
 `Compatibility/tests/test.exe -Regression` is the publication gate, which
 `src/scripts/build.exe` runs on its own. Suites are discovered under the tests
 directory of the harness that runs them, so each area can keep its own cases;
-measurement inputs stay in `Speed/tests/compile` (compile cost) and
-`Strength/tests/runtime` with `Strength/tests/performance` (generated-code
+measurement inputs stay in `Cost/tests/compile` (compile cost) and
+`Capability/tests/runtime` with `Capability/tests/performance` (generated-code
 runtime and correctness). Tests are CPC-only; a change that would need a second
 compiler belongs in an explicitly named tool and needs separate authorization.
 

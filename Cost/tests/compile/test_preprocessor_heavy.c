@@ -1,5 +1,5 @@
 // PERF_NAME: c.preprocessor.heavy
-// PERF_ARGS: -ISpeed/tests/compile/include
+// PERF_ARGS: -ICost/tests/compile/include
 /* Preprocessing volume: nested macro expansion, conditional chains and a
    generated header included through the quoted search path. */
 

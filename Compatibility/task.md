@@ -17,7 +17,7 @@ days.
    `Compatibility\tests\payload\**`, `Compatibility\tests\c_compat\**`. The Microsoft
    x64 ABI facts live in `Compatibility\tests\features\Abi`.
 2. Large C++ projects used as probes: the vendored competitive inputs under
-   `Speed\tests\compile\competitive\` (xBRZ and the functions/pch cases),
+   `Cost\tests\compile\competitive\` (xBRZ and the functions/pch cases),
    and the user's own consumers (for example `C:\Luke\Src\Kinect`, which is read
    only and whose findings are recorded in `Compatibility\KNOWN-ISSUES.md`). Compile a project
    with root `cpc.exe`, reduce each failure to a minimal local case, and never

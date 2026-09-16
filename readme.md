@@ -36,8 +36,8 @@ Layout:
    headers (`src/include`), bootstrap libraries (`src/lib`), the shipped
    libcprime SDK (`src/deploy`) and vendored sources (`src/third-party`)
  - `Compatibility/` - C++17 correctness: retained cases, harness and gate
- - `Speed/` - compile speed: compile-cost cases, baselines, worker
- - `Strength/` - generated-program speed and quality: runtime cases, worker
+ - `Cost/` - compile speed: compile-cost cases, baselines, worker
+ - `Capability/` - generated-program speed and quality: runtime cases, worker
 
 Open work:
  - `Compatibility/tests/CPP17-REMAINING.md` - tracked C++17 completion queue

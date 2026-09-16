@@ -1,0 +1,9 @@
+{
+    "schema":  2,
+    "comment":  "Cost keeps compile-time and compile-cost measurements; its retained cases are the PERF_* inputs under compile/ that scripts\\performance.exe measures. Keep this list empty unless a harness case is red. The routine gate for compiler changes is Compatibility\\tests\\test.exe -Regression.",
+    "fast":  [
+             ],
+    "excluded":  [
+
+                 ]
+}

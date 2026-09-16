@@ -7,7 +7,7 @@ typedef struct ToolSpec {
 } ToolSpec;
 
 static const ToolSpec tools[] = {
-    {"Speed\\tools\\benchmark_clang.c", "src\\scripts\\benchmark-clang.exe", NULL},
+    {"Cost\\tools\\benchmark_clang.c", "src\\scripts\\benchmark-clang.exe", NULL},
     {"src\\scripts\\build-clang-minimal.c", "src\\scripts\\build-clang-minimal.exe", NULL},
     {"src\\scripts\\build.c", "src\\scripts\\build.exe", NULL},
     {"src\\scripts\\project.c", "src\\scripts\\project.exe", "-ladvapi32"},
@@ -21,8 +21,8 @@ static const ToolSpec tools[] = {
     {"src\\scripts\\build-clang.c", "src\\scripts\\build-clang.exe", NULL},
     {"src\\scripts\\seed-tcc.c", "src\\scripts\\seed-tcc.exe", NULL},
     {"src\\tools\\test_runner.c", "Compatibility\\tests\\test.exe", NULL},
-    {"src\\tools\\test_runner.c", "Speed\\tests\\test.exe", NULL},
-    {"src\\tools\\test_runner.c", "Strength\\tests\\test.exe", NULL}
+    {"src\\tools\\test_runner.c", "Cost\\tests\\test.exe", NULL},
+    {"src\\tools\\test_runner.c", "Capability\\tests\\test.exe", NULL}
 };
 
 static void replace_file(const char *from, const char *to) {

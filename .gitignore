@@ -28,16 +28,16 @@ build/
 /Compatibility/tests/**/*.o
 /Compatibility/tests/**/*.s
 /Compatibility/tests/**/*.err
-/Speed/tests/**/*.exe
-!/Speed/tests/test.exe
-/Speed/tests/**/*.obj
-/Speed/tests/**/*.o
-/Speed/tests/**/*.err
-/Strength/tests/**/*.exe
-!/Strength/tests/test.exe
-/Strength/tests/**/*.obj
-/Strength/tests/**/*.o
-/Strength/tests/**/*.err
+/Cost/tests/**/*.exe
+!/Cost/tests/test.exe
+/Cost/tests/**/*.obj
+/Cost/tests/**/*.o
+/Cost/tests/**/*.err
+/Capability/tests/**/*.exe
+!/Capability/tests/test.exe
+/Capability/tests/**/*.obj
+/Capability/tests/**/*.o
+/Capability/tests/**/*.err
 /*.o
 /*.obj
 /*.pdb
@@ -50,9 +50,9 @@ build/
 *.out
 
 # Worker stop markers: created by hand to stop a worker, never committed
-/Speed/done.x
+/Cost/done.x
 /Compatibility/done.x
-/Strength/done.x
+/Capability/done.x
 
 # Vendored TCC build output
 /src/third-party/tcc/config.h

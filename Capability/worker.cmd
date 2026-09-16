@@ -1,7 +1,7 @@
 @echo off
 setlocal EnableExtensions EnableDelayedExpansion
 
-rem CPrime Strength worker: run codex in the foreground, one work cycle at a
+rem CPrime Capability worker: run codex in the foreground, one work cycle at a
 rem time, and make the executables cpc.exe produces better.
 rem
 rem Scope: quality and runtime speed of generated code, with real optimization
@@ -12,11 +12,11 @@ rem take on much more, aiming at the runtime speed of the equivalent clang, gcc
 rem or msvc build while still compiling fast.
 rem
 rem Codex decides what to change. This script only checks, measures the
-rem compile-time budget, reports and loops; Strength\task.md holds the goal, the
+rem compile-time budget, reports and loops; Capability\task.md holds the goal, the
 rem measurement commands, the invariants and the current leads, and codex keeps
 rem it current as work completes.
 rem
-rem This loop is additive and never destructive. It creates build\worker\strength,
+rem This loop is additive and never destructive. It creates Capability\build,
 rem writes its own logs there, and never deletes, moves or renames any file. It
 rem never creates the stop marker: only you do. A failed cycle leaves the tree
 rem committed and usable, so the next cycle, or the next day, continues from
@@ -29,11 +29,11 @@ rem already holds, so start from a clean tree or expect that work to be
 rem committed as "<Area> cycle 0".
 rem
 rem Optional environment overrides:
-rem   DONE             stop marker file (default Strength\done.x)
+rem   DONE             stop marker file (default Capability\done.x)
 rem   CODEX_EXE        codex executable (default codex.exe)
 rem   MODEL            model name for codex (default: codex configuration)
 rem   REASONING        model reasoning effort (default high)
-rem   TASK_PROMPT      prompt handed to codex (default: continue Strength\task.md)
+rem   TASK_PROMPT      prompt handed to codex (default: continue Capability\task.md)
 rem   MAX_CYCLES       stop after N cycles this session, 0 = unlimited (default 0)
 rem   FAIL_EXIT_LIMIT  stop after N consecutive nonzero codex exits, 0 = keep going (default 5)
 rem   FAIL_SLEEP       seconds to wait after a failed cycle (default 60)
@@ -43,14 +43,14 @@ rem   NO_CHECK         set to 1 to skip the per-cycle correctness probe
 rem   NO_MEASURE       set to 1 to skip the per-cycle compile-time measurement
 rem   SKIP_COMMIT      set to 1 to leave the tree dirty instead of committing (default 0)
 rem
-rem Logs live in Strength\build: cycles.csv has one row per cycle,
+rem Logs live in Capability\build: cycles.csv has one row per cycle,
 rem cycle-NNNN.log is the full codex transcript, cycle-NNNN-result.txt its final
 rem message, cycle-NNNN-check.log the probe output and perf-cycle-NNNN.tsv the
 rem per-case compile times of that cycle. Runtime-speed evidence from the
 rem generated executables is kept by the cycle itself under build\.
 
-set "AREA=strength"
-set "TITLE=Strength"
+set "AREA=capability"
+set "TITLE=Capability"
 set "GOAL=make the generated executables faster and the optimization levels real, without losing compile speed"
 
 cd /d "%~dp0.."
@@ -59,7 +59,7 @@ set "ROOT=%CD%"
 if not defined DONE set "DONE=%TITLE%\done.x"
 if not defined CODEX_EXE set "CODEX_EXE=codex.exe"
 if not defined REASONING set "REASONING=high"
-if not defined TASK_PROMPT set "TASK_PROMPT=Read %TITLE%\task.md and continue its earliest unfinished work package, following AGENTS.md. Use only root cpc.exe, one compiler process at a time. Measure runtime speed and compile time before and after with the commands %TITLE%\task.md names, keep the evidence under build\worker\strength, and keep the retained cases green. Finish by updating %TITLE%\task.md with the remaining work and the exact next action. Never create %TITLE%\done.x, never make a case pass by weakening it, and never delete, move or rewrite %TITLE%\worker.cmd."
+if not defined TASK_PROMPT set "TASK_PROMPT=Read %TITLE%\task.md and continue its earliest unfinished work package, following AGENTS.md. Use only root cpc.exe, one compiler process at a time. Measure runtime speed and compile time before and after with the commands %TITLE%\task.md names, keep the evidence under Capability\build, and keep the retained cases green. Finish by updating %TITLE%\task.md with the remaining work and the exact next action. Never create %TITLE%\done.x, never make a case pass by weakening it, and never delete, move or rewrite %TITLE%\worker.cmd."
 if not defined MAX_CYCLES set "MAX_CYCLES=0"
 if not defined FAIL_EXIT_LIMIT set "FAIL_EXIT_LIMIT=5"
 if not defined FAIL_SLEEP set "FAIL_SLEEP=60"

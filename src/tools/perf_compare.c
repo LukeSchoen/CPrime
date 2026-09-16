@@ -1,5 +1,5 @@
 /* Compare CPC compilation speed against tcc, and against an optional reference
-   CPC build, over the portable compile-speed cases under Speed/tests/compile.
+   CPC build, over the portable compile-speed cases under Cost/tests/compile.
 
    Every case is one translation unit.  A case carries metadata in the leading
    comment lines of its file:
@@ -23,10 +23,10 @@
      -Cpc EXE          compiler under test (default ROOT/cpc.exe)
      -Tcc EXE          vendored tcc (default ROOT/src/third-party/tcc/win32/tcc.exe)
      -Reference EXE    reference CPC build, compared when given
-     -Cases DIR        case directory (default ROOT/Speed/tests/compile)
-     -Out DIR          executables, logs and results (default ROOT/Speed/build/perf)
+     -Cases DIR        case directory (default ROOT/Cost/tests/compile)
+     -Out DIR          executables, logs and results (default ROOT/Cost/build/perf)
      -Results FILE     results TSV (default OUT/perf-results.tsv)
-     -Baseline FILE    baseline TSV (default ROOT/Speed/baseline/perf-baseline.tsv)
+     -Baseline FILE    baseline TSV (default ROOT/Cost/baseline/perf-baseline.tsv)
      -Iterations N     measured runs per case (default 5; PERF_ITERATIONS wins)
      -Warmups N        discarded runs per case (default 1)
      -Tolerance PCT    allowed slowdown over the baseline (default 25)
@@ -107,8 +107,8 @@ static const char help_text[] =
   "  -Cpc EXE         compiler under test (default ROOT/cpc.exe)\n"
   "  -Tcc EXE         vendored tcc (default ROOT/src/third-party/tcc/win32/tcc.exe)\n"
   "  -Reference EXE   reference CPC build, compared when given\n"
-  "  -Cases DIR       case directory (default ROOT/Speed/tests/compile)\n"
-  "  -Out DIR         executables, logs and results (default ROOT/Speed/build/perf)\n"
+  "  -Cases DIR       case directory (default ROOT/Cost/tests/compile)\n"
+  "  -Out DIR         executables, logs and results (default ROOT/Cost/build/perf)\n"
   "  -Results FILE    results TSV (default OUT/perf-results.tsv)\n"
   "  -RawSamples FILE write individual wall/CPU/load samples\n"
   "  -Baseline FILE   baseline TSV\n"
@@ -797,11 +797,11 @@ static void parse_options(int argc, char **argv, Options *options)
   absolute_path(options->root, sizeof options->root, options->root);
   if (!options->cpc[0]) join_path(options->cpc, sizeof options->cpc, options->root, "cpc.exe");
   if (!options->tcc[0]) join_path(options->tcc, sizeof options->tcc, options->root, "src\\third-party\\tcc\\win32\\tcc.exe");
-  if (!options->cases[0]) join_path(options->cases, sizeof options->cases, options->root, "Speed\\tests\\compile");
-  if (!options->out[0]) join_path(options->out, sizeof options->out, options->root, "Speed\\build\\perf");
+  if (!options->cases[0]) join_path(options->cases, sizeof options->cases, options->root, "Cost\\tests\\compile");
+  if (!options->out[0]) join_path(options->out, sizeof options->out, options->root, "Cost\\build\\perf");
   if (!options->results[0]) join_path(options->results, sizeof options->results, options->out, "perf-results.tsv");
   if (!options->raw_samples[0]) join_path(options->raw_samples, sizeof options->raw_samples, options->out, "perf-samples.tsv");
-  if (!options->baseline[0]) join_path(options->baseline, sizeof options->baseline, options->root, "Speed\\baseline\\perf-baseline.tsv");
+  if (!options->baseline[0]) join_path(options->baseline, sizeof options->baseline, options->root, "Cost\\baseline\\perf-baseline.tsv");
   absolute_path(options->cpc, sizeof options->cpc, options->cpc);
   absolute_path(options->tcc, sizeof options->tcc, options->tcc);
   absolute_path(options->cases, sizeof options->cases, options->cases);
