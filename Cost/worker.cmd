@@ -27,7 +27,7 @@ rem committed as "<Area> cycle 0".
 rem
 rem Optional environment overrides:
 rem   DONE             stop marker file (default Cost\done.x)
-rem   CODEX_EXE        codex executable (default codex.exe)
+rem   CODEX_EXE        codex executable (default %USERPROFILE%\.local\bin\deepseek.exe)
 rem   MODEL            model name for codex (default: codex configuration)
 rem   REASONING        model reasoning effort (default high)
 rem   TASK_PROMPT      prompt handed to codex (default: continue Cost\task.md)
@@ -53,7 +53,8 @@ cd /d "%~dp0.."
 set "ROOT=%CD%"
 
 if not defined DONE set "DONE=%TITLE%\done.x"
-if not defined CODEX_EXE set "CODEX_EXE=codex.exe"
+rem DeepSeek is the working account for this loop; set CODEX_EXE to run another one.
+if not defined CODEX_EXE set "CODEX_EXE=%USERPROFILE%\.local\bin\deepseek.exe"
 if not defined REASONING set "REASONING=high"
 if not defined TASK_PROMPT set "TASK_PROMPT=Read %TITLE%\task.md and continue its earliest unfinished work package, following AGENTS.md. Use only root cpc.exe, one compiler process at a time. Measure before and after with the commands %TITLE%\task.md names and keep the evidence under Cost\build. Finish by updating %TITLE%\task.md with the remaining work and the exact next action. Never create %TITLE%\done.x and never delete, move or rewrite %TITLE%\worker.cmd."
 if not defined MAX_CYCLES set "MAX_CYCLES=0"
