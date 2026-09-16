@@ -1,5 +1,17 @@
 # Known CPC issues
 
+━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+   clCRC.cpp            Compiler bug, reproduced in ~20 lines: an out-of-class member function template whose
+                        declaration and definition spell a parameter type with a leading :: (::G) is replayed
+                        without its declarator → incompatible types for redefinition … versus 'inline unsigned long
+                        long'. Last compiler bug before the build proceeds.
+  ───────────────────  ──────────────────────────────────────────────────────────────────────────────────────────────
+   faceDetectCNN.cpp    __m256 undeclared — CPrime's immintrin.h is a stub; AVX vector types are unimplemented. (we want sse / avx implemented)
+  ───────────────────  ──────────────────────────────────────────────────────────────────────────────────────────────
+   clProcessList.cpp    psapi.h is absent from third-party/win32-sdk/include. The installed Windows SDK has um/
+                        Psapi.h; vendoring one is a packaging call I left to you.
+
+
 ## RTMPose / Kpose findings (2026-09-16)
 
 Measured on the development machine (Intel i5-8250U, 4 cores/8 threads):
