@@ -61,10 +61,12 @@ src\scripts\build.exe                                                  publish t
   reduced cases and a re-run command in `Scripts\cpc\gaps` and
   `Scripts\cpc\Test-CpcGaps.ps1`) now compiles every reduced floor case. The
   packaged SDK includes gdiplus, and the first translation units get through
-  the Windows headers, the locale/classification headers, and into the
-  `result_of` support headers. The current floor is the compiler's 16-template-
-  parameter limit in `boost/utility/detail/result_of_iterate.hpp`. Shapes and
-  the remaining work are in `Compatibility\KNOWN-ISSUES.md`.
+  the Windows headers, the locale/classification headers, and Boost's
+  generated `result_of` specializations. Template parameter storage now
+  supports 32 parameters. The current floor is
+  `boost/container_hash/detail/float_functions.hpp`, where CPC reports
+  `base class type expected`. Shapes and the remaining work are in
+  `Compatibility\KNOWN-ISSUES.md`.
 - `Compatibility\tests\test.exe -Checks` (the CPC-only publication/development gate) is
   currently red: the runner self-check `runner rejects false expectation:
   test_valid_without_main.cpp` reports exit 1 and `Summary: 0 passed, 1 failed`

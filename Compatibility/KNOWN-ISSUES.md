@@ -88,8 +88,9 @@ unmodified headers plus a generated `gdiplus.def`. Local regression cases live
 in `Compatibility\tests\features\Declarations` and
 `Compatibility\tests\features\Includes`.
 
-The consumer build now gets through the Boost locale/classification chain and
-stops in `boost/utility/detail/result_of_iterate.hpp`: a generated
-`result_of` specialization exceeds the compiler's 16-parameter template limit.
-Work required: make the template parameter storage grow beyond 16, then
-continue the consumer build from the next reduced failure.
+The template-parameter capacity is now 32, which gets the consumer build
+through Boost's generated `result_of` specializations. The next floor is
+`boost/container_hash/detail/float_functions.hpp`, where CPC reports
+`base class type expected` while parsing a generated floating-point function
+specialization. Work required: reproduce that shape locally and continue from
+the next reduced failure.

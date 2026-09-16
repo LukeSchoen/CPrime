@@ -5471,7 +5471,7 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
   TemplateArgList explicit_arguments;
   TemplateArgList linkage_arguments = {{0}, 0};
   unsigned explicit_type_mask = 0, linkage_value_mask = 0;
-  int explicit_param_names[16] = {0}, explicit_param_index = 0;
+  int explicit_param_names[CPC_MAX_TEMPLATE_PARAMETERS] = {0}, explicit_param_index = 0;
   int pack_is_empty = member_type_arg_tok == -1;
   int pack_name_tok = 0, pack_type_param_tok = 0, pack_type_arg_tok = 0;
   int pack_type_param_index = -1;
@@ -7950,7 +7950,7 @@ static int deduce_member_template_argument_key(TemplateMemberDef *md,
   TokenString replay, *saved_stack, *specialized_definition;
   const int *saved_ptr;
   CValue saved_tokc;
-  int names[16], value_parameters[16] = {0}, count = 0, required = 0, i, saved_tok;
+  int names[CPC_MAX_TEMPLATE_PARAMETERS], value_parameters[CPC_MAX_TEMPLATE_PARAMETERS] = {0}, count = 0, required = 0, i, saved_tok;
   int has_pack = 0, pack_index = -1, key = 0;
   int definition_end;
   if (!template_member_is_call_specialized(md)
@@ -9985,7 +9985,7 @@ static int template_template_parameter_kinds(TokenString *signature, int *kinds)
 
 static int template_template_parameter_kinds_differ(TokenString *first, TokenString *second)
 {
-  int a[16], b[16], na = template_template_parameter_kinds(first, a);
+  int a[CPC_MAX_TEMPLATE_PARAMETERS], b[CPC_MAX_TEMPLATE_PARAMETERS], na = template_template_parameter_kinds(first, a);
   int nb = template_template_parameter_kinds(second, b), i;
   if (na < 0 || nb < 0) return (na < 0) != (nb < 0);
   if (na != nb) return 1;
@@ -10337,11 +10337,11 @@ static int register_explicit_nested_class_specialization(TemplateDef *outer,
 static void parse_template_decl(void)
 {
   int friend_owner = friend_template_declaration_owner;
-  int type_param_toks[16], nb_type_params = 0;
-  int type_param_is_type[16] = { 0 };
+  int type_param_toks[CPC_MAX_TEMPLATE_PARAMETERS], nb_type_params = 0;
+  int type_param_is_type[CPC_MAX_TEMPLATE_PARAMETERS] = { 0 };
   unsigned type_param_pointer_mask = 0;
-  TokenString *default_arg_strs[16] = { 0 };
-  TokenString *value_type_strs[16] = { 0 };
+  TokenString *default_arg_strs[CPC_MAX_TEMPLATE_PARAMETERS] = { 0 };
+  TokenString *value_type_strs[CPC_MAX_TEMPLATE_PARAMETERS] = { 0 };
   int nb_required_type_params = 0;
   int variadic_param_index = -1;
   int name_tok = 0, member_class_tok, prev_ident = 0, prev_tok = 0;
@@ -10862,8 +10862,8 @@ static void parse_template_decl(void)
   if (member_class_tok)
   {
     TemplateDef *member_class_td = find_class_template_def(find_current_namespace_tok(member_class_tok));
-    int stripped_type_params[16], nb_stripped_type_params = 0;
-    int stripped_value_params[16], nb_stripped_value_params = 0;
+    int stripped_type_params[CPC_MAX_TEMPLATE_PARAMETERS], nb_stripped_type_params = 0;
+    int stripped_value_params[CPC_MAX_TEMPLATE_PARAMETERS], nb_stripped_value_params = 0;
     unsigned stripped_value_mask = 0;
     if (!member_class_td || !member_class_td->is_class)
     {
@@ -15386,6 +15386,29 @@ static int instantiate_template_if_needed(TemplateDef *td,
   return instantiate_template_named_if_needed(td, args, 0);
 }
 
+/* TEMPORARY DIAGNOSTIC: dump a generated specialization token stream. */
+static void dump_spec_stream(const char *label, TokenString *ts)
+{
+  int i;
+  if (!getenv("CPRIME_DUMP_SPEC") || !ts)
+    return;
+  fprintf(stderr, "SPEC %s:", label);
+  for (i = 0; i < ts->len; ++i)
+  {
+    int t = ts->str[i];
+    if (TOK_HAS_VALUE(t))
+    {
+      CValue cv;
+      cv.i = 0;
+      fprintf(stderr, "%s ", get_tok_str(t, &cv));
+      i += tok_str_value_extra_words(ts->str, ts->len, i);
+      continue;
+    }
+    fprintf(stderr, "%s ", get_tok_str(t, NULL));
+  }
+  fprintf(stderr, "\n");
+}
+
 static int instantiate_template_named_if_needed(TemplateDef *td,
                                                  TemplateArgList *args,
                                                  int specialization_name_tok)
@@ -16297,9 +16320,17 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
         continue;
       }
     }
+    /* A qualified template-id names a member of its qualifier, so the terminal
+       name is not this template's namespace member.  Collapsing it to the
+       instantiated name here would leave the qualifier in front of a name that
+       already spells its own namespace (`boost::hash_detail::base_t<double>`
+       became `boost::hash_detail::__cpc_ns_boost_hash_detail_base_t__double`).
+       Leave the id for the declaration parser, which resolves a qualified
+       name exactly as it does in a field or a body. */
     if ((!td->is_class ? !function_body_started : !class_body_started)
         && tok >= TOK_UIDENT
-        && tok != td->name_tok)
+        && tok != td->name_tok
+        && !template_body_token_follows_scope(spec))
     {
       int class_template_tok = tok;
       TemplateDef *class_td = td->namespace_tok
@@ -16602,6 +16633,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
         const int *resume_macro_ptr;
         CValue resume_tokc;
         int i, same_self_args = 1, self_mangled_tok, resume_tok;
+        int self_arg_needs_replay = 0;
         int angle = 0, paren = 0, bracket = 0, brace = 0;
         /* Substitute the entire argument expression before parsing it. A
            parameter may occur inside a cast or arithmetic expression, not
@@ -16638,7 +16670,16 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
               break;
             }
           if (!replacement && tok >= TOK_UIDENT)
+          {
             replacement = template_alias_lookup(alias_from, alias_to, nb_aliases, tok);
+            /* A name this replay does not substitute is bound by the member
+               declaration parsed before this one, or by the enclosing scope:
+               `choose<2 * c>` where `c` is an earlier static member.  Only the
+               declaration parser has that state, so this id cannot be
+               instantiated while the replay is still being assembled. */
+            if (!replacement)
+              self_arg_needs_replay = 1;
+          }
           if (replacement)
             tok_str_add(self_tokens, replacement);
           else
@@ -16648,6 +16689,21 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
             break;
         }
         tok_str_add(self_tokens, TOK_EOF);
+        if (self_arg_needs_replay && class_body_started)
+        {
+          /* Emit the source spelling with the substituted arguments and let
+             the declaration parse instantiate the id in member order, exactly
+             as it does for any other template-id in the body. */
+          tok_str_add(spec, td->lookup_tok ? td->lookup_tok : td->name_tok);
+          for (i = 0; i < self_tokens->len; ++i)
+          {
+            if (self_tokens->str[i] == TOK_EOF)
+              break;
+            tok_str_add_record(spec, self_tokens->str, self_tokens->len, &i);
+          }
+          tok_str_free(self_tokens);
+          continue;
+        }
         resume_tok = tok;
         resume_tokc = tokc;
         resume_macro_stack = macro_stack;
@@ -17179,6 +17235,7 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
     }
     if (!materialize_function_body) return mangled_tok;
   }
+  dump_spec_stream("queue", spec);
   queue_pending_template_spec_in_namespace_bound(spec,
                               td->friend_class_tok ? td->friend_class_tok :
                               incomplete_dependency_tok ? incomplete_dependency_tok :

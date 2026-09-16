@@ -684,6 +684,8 @@ static CType make_member_func_type_from_saved_params(CType *ret_type,
 
 typedef struct TemplateArgList TemplateArgList;
 
+#define CPC_MAX_TEMPLATE_PARAMETERS 32
+
 typedef struct TemplateDef
 {
   int name_tok;
@@ -694,8 +696,8 @@ typedef struct TemplateDef
   int *type_param_toks;
   unsigned value_param_mask;
   unsigned type_param_pointer_mask;
-  TokenString *default_arg_strs[16];
-  TokenString *value_type_strs[16];
+  TokenString *default_arg_strs[CPC_MAX_TEMPLATE_PARAMETERS];
+  TokenString *value_type_strs[CPC_MAX_TEMPLATE_PARAMETERS];
   int nb_type_params;
   int nb_required_type_params;
   int variadic_param_index;
@@ -751,7 +753,7 @@ static int friend_template_declaration_owner;
 typedef struct TemplateStaticDataDef {
   TemplateDef *owner;
   TokenString *declaration;
-  int parameters[16], parameter_count;
+  int parameters[CPC_MAX_TEMPLATE_PARAMETERS], parameter_count;
   int class_begin, class_end, member_tok, namespace_tok;
   int *emitted, emitted_count;
   struct TemplateStaticDataDef *next;
@@ -763,7 +765,7 @@ static TemplateStaticDataDef *template_static_data_defs;
 typedef struct TemplateVariableDef {
   TemplateDef pattern;
   int name_tok;
-  int parameters[16], parameter_count;
+  int parameters[CPC_MAX_TEMPLATE_PARAMETERS], parameter_count;
   int namespace_tok;
   int name_index, arguments_end, has_initializer;
   TokenString *declaration;
@@ -841,11 +843,11 @@ typedef struct TemplateMemberDef
   unsigned syntax_known;
   int syntax_cache[TMS_COUNT];
   int type_param_tok;
-  int stripped_member_type_param_toks[16];
+  int stripped_member_type_param_toks[CPC_MAX_TEMPLATE_PARAMETERS];
   int nb_stripped_member_type_params;
-  int stripped_member_value_param_toks[16];
+  int stripped_member_value_param_toks[CPC_MAX_TEMPLATE_PARAMETERS];
   int nb_stripped_member_value_params;
-  int stripped_member_param_toks[16];
+  int stripped_member_param_toks[CPC_MAX_TEMPLATE_PARAMETERS];
   int nb_stripped_member_params;
   unsigned stripped_member_value_mask;
   /* Namespace-scope declaration order visible when this member's definition
