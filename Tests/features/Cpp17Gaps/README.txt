@@ -17,13 +17,12 @@ Run:
 - Tests\test.exe -Suite features/Cpp17Gaps -Select test_clamp.cpp
 
 Gate placement:
-- Every case runs in the pedantic tier, which is every retained internal case
-  that is not excluded. A failing case therefore shows up as a red count in
-  the pedantic run, and that red count is the work list.
+- The open-gap cases are the whole of the fast tier, so the routine loop is the
+  work list and its red count is visible on every pass.
 - The suite is red by exactly the number of open gaps. As of 2026-09-16 that is
   18 cases: 17 in pass/ for missing facilities and one in fail/ for a missing
   diagnostic. Tests\CPP17-REMAINING.md owns the list.
-- Those 18 cases are also listed in the fast tier so the routine loop reports
-  the work list; the rest of fast stays on the representative cases.
+- Every other retained case belongs to the pedantic tier. Do not run that tier:
+  it is close to banned, and `-Regression` is the publication gate.
 - Keep every case in the suite once it passes: it is the regression cover for
   the repair.

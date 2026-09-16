@@ -5131,8 +5131,20 @@ static TokenString *expand_template_expression_packs(TokenString *source,
           if (t == TOK_GT || t == '>') ++angles;
           else if (t == TOK_SAR) angles += 2;
           else if ((t == TOK_LT || t == '<') && angles) --angles;
-          else if ((t == TOK_LT || t == '<') && !value_pack)
-            break; /* type-id pack: the enclosing template argument list */
+          else if (t == TOK_LT || t == '<')
+          {
+            /* A pattern that is a type-id stops at the template-id that
+               encloses it, so `Tuple<decay<T>::type...>` expands the
+               argument and leaves `Tuple` outside.  A value pack can hold
+               `a < b`, so only an angle that follows a class template name
+               is that enclosing list rather than a comparison. */
+            int before = tok_str_prev_token_index(result->str, result->len,
+                                                   position);
+            if (!value_pack
+                || (before >= 0 && result->str[before] >= TOK_UIDENT
+                    && find_class_template_def(result->str[before])))
+              break;
+          }
         }
         if (t == type_pack || t == declared_value_pack) uses_pack = 1;
         begin = position;
@@ -13115,6 +13127,16 @@ static int append_template_pack_substitutions(TemplateArgList *out,
 
 static int parse_one_template_type_arg_subst_with_alias(
     TemplateDef *ctx_td, TemplateArgList *ctx_args,
+    int *alias_from, int *alias_to, int nb_aliases);
+static int append_expanded_pack_pattern_argument(
+    TemplateArgList *out, TemplateDef *ctx_td, TemplateArgList *ctx_args,
+    int *alias_from, int *alias_to, int nb_aliases);
+static void append_one_template_argument_subst(
+    TemplateArgList *out, TemplateDef *ctx_td, TemplateArgList *ctx_args,
+    int *alias_from, int *alias_to, int nb_aliases);
+
+static int parse_one_template_type_arg_subst_with_alias(
+    TemplateDef *ctx_td, TemplateArgList *ctx_args,
     int *alias_from, int *alias_to, int nb_aliases)
 {
   int type_tok;
@@ -13319,10 +13341,8 @@ static int parse_one_template_type_arg_subst_with_alias(
         {
           if (nested_args.nb >= (int)(sizeof(nested_args.toks) / sizeof(nested_args.toks[0])))
             cprime_error("too many template type arguments");
-          if (!append_template_pack_substitutions(&nested_args, ctx_td, ctx_args))
-            nested_args.toks[nested_args.nb++] =
-              parse_one_template_type_arg_subst_with_alias(
-                  ctx_td, ctx_args, alias_from, alias_to, nb_aliases);
+          append_one_template_argument_subst(&nested_args, ctx_td, ctx_args,
+                                             alias_from, alias_to, nb_aliases);
           if (tok == TOK_SAR)
           {
           tok = TOK_GT;
@@ -13369,6 +13389,109 @@ static int parse_one_template_type_arg_subst_with_alias(
   return 0;
 }
 
+/* A pack expansion whose argument is a pattern around the pack, such as
+   `typename decay<Ts>::type...` in a template-id.  The bare `Ts...` spelling
+   is handled by append_template_pack_substitutions(); every other pattern is
+   substituted once per element the enclosing template deduced for the pack,
+   which is what lets a return type like `Tuple<decay_t<Ts>...>` be written
+   with one parameter instead of one overload per arity.
+
+   Called with the cursor at the first token of the argument.  Returns 1 when
+   the argument is such an expansion, with the pattern and its ellipsis
+   consumed and one substituted argument appended per pack element; otherwise
+   returns 0 without consuming anything. */
+static int append_expanded_pack_pattern_argument(
+    TemplateArgList *out, TemplateDef *ctx_td, TemplateArgList *ctx_args,
+    int *alias_from, int *alias_to, int nb_aliases)
+{
+  int pack, element, token, depth = 0, saw_pack = 0, ends_with_dots = 0;
+  int first_token;
+  CValue value, first_value;
+  const int *cursor, *first_cursor;
+  TokenString *parent_stack;
+
+  if (!ctx_td || !ctx_args || !macro_ptr)
+    return 0;
+  pack = ctx_td->variadic_param_index;
+  if (pack < 0)
+    return 0;
+  /* Locate the end of the argument without consuming it.  A pack expansion
+     ends with an ellipsis at the argument's own nesting level, so a nested
+     `Ts...` inside the pattern is not mistaken for the expansion itself. */
+  first_token = tok;
+  first_value = tokc;
+  first_cursor = macro_ptr;
+  token = tok;
+  value = tokc;
+  cursor = macro_ptr;
+  while (token != 0 && token != TOK_EOF)
+  {
+    if (!depth
+        && (token == ',' || token == TOK_GT || token == '>' || token == TOK_SAR))
+      break;
+    if (token == TOK_LINENUM)
+    {
+      TOK_GET(&token, &cursor, &value);
+      continue;
+    }
+    /* Only an ellipsis at the argument's own nesting level expands the
+       argument; one inside a nested template-id belongs to that list. */
+    ends_with_dots = token == TOK_DOTS && depth == 0;
+    if ((token & ~SYM_FIELD) == ctx_td->type_param_toks[pack])
+      saw_pack = 1;
+    if (token == '(' || token == '[' || token == TOK_LT || token == '<')
+      ++depth;
+    else if (token == ')' || token == ']' || token == TOK_GT || token == '>')
+      --depth;
+    else if (token == TOK_SAR)
+      depth -= 2;
+    TOK_GET(&token, &cursor, &value);
+  }
+  if (!ends_with_dots || !saw_pack)
+    return 0;
+  parent_stack = macro_stack;
+  for (element = pack; element < ctx_args->nb; ++element)
+  {
+    TemplateArgList narrowed;
+    if (out->nb >= (int)(sizeof(out->toks) / sizeof(out->toks[0])))
+      cprime_error("too many template type arguments");
+    /* The pack tail is replaced by the one element this pass substitutes, so
+       the pattern names a single argument for the re-parse below. */
+    narrowed = *ctx_args;
+    narrowed.nb = pack + 1;
+    narrowed.toks[pack] = ctx_args->toks[element];
+    macro_ptr = first_cursor;
+    tok = first_token;
+    tokc = first_value;
+    out->toks[out->nb++] = parse_one_template_type_arg_subst_with_alias(
+        ctx_td, &narrowed, alias_from, alias_to, nb_aliases);
+    while (macro_stack && macro_stack != parent_stack)
+      end_macro();
+  }
+  /* An empty pack expands to nothing, and every pass above left the cursor on
+     the ellipsis; either way the scan already located the token that follows
+     the whole expansion. */
+  macro_ptr = cursor;
+  tok = token;
+  tokc = value;
+  return 1;
+}
+
+static void append_one_template_argument_subst(
+    TemplateArgList *out, TemplateDef *ctx_td, TemplateArgList *ctx_args,
+    int *alias_from, int *alias_to, int nb_aliases)
+{
+  if (out->nb >= (int)(sizeof(out->toks) / sizeof(out->toks[0])))
+    cprime_error("too many template type arguments");
+  if (append_template_pack_substitutions(out, ctx_td, ctx_args))
+    return;
+  if (append_expanded_pack_pattern_argument(out, ctx_td, ctx_args,
+                                            alias_from, alias_to, nb_aliases))
+    return;
+  out->toks[out->nb++] = parse_one_template_type_arg_subst_with_alias(
+      ctx_td, ctx_args, alias_from, alias_to, nb_aliases);
+}
+
 static int parse_one_template_type_arg_subst(TemplateDef *ctx_td,
                                              TemplateArgList *ctx_args)
 {
@@ -13391,10 +13514,8 @@ static void parse_template_type_args_subst_with_alias(
   {
     if (out_args->nb >= (int)(sizeof(out_args->toks) / sizeof(out_args->toks[0])))
       cprime_error("too many template type arguments");
-    if (!append_template_pack_substitutions(out_args, ctx_td, ctx_args))
-      out_args->toks[out_args->nb++] =
-        parse_one_template_type_arg_subst_with_alias(
-            ctx_td, ctx_args, alias_from, alias_to, nb_aliases);
+    append_one_template_argument_subst(out_args, ctx_td, ctx_args,
+                                       alias_from, alias_to, nb_aliases);
     if (tok == TOK_SAR)
     {
       tok = TOK_GT;
@@ -17648,6 +17769,28 @@ static int template_definition_has_unbound_parameter(TemplateDef *td,
   return 0;
 }
 
+/* A written value such as `f<1>` binds only a value parameter and a written
+   type such as `f<char>` only a type parameter, so `get<1>` and `get<char>`
+   select different overloads of the same name instead of one candidate
+   mangling the other's argument as its own kind. */
+static int template_explicit_argument_kind_mismatch(TemplateDef *td,
+                                                    TemplateArgList *explicit_args)
+{
+  int i;
+  if (!td || !explicit_args)
+    return 0;
+  for (i = 0; i < explicit_args->nb; ++i)
+  {
+    int parameter = i < td->nb_type_params ? i : td->variadic_param_index;
+    int written_value = (explicit_args->value_mask >> i) & 1;
+    if (parameter < 0 || parameter >= td->nb_type_params)
+      return 1;
+    if (written_value != !!(td->value_param_mask & (1u << parameter)))
+      return 1;
+  }
+  return 0;
+}
+
 /* True when `name_tok` names a parameter declared earlier in the definition's
    parameter list.  The declarator name is the last top-level identifier of a
    complete parameter, matching how the replay binds parameters in order. */
@@ -18478,6 +18621,8 @@ static TemplateDef *find_explicit_function_template_for_call(int name,
        instantiate a class template on behalf of a call that overload
        resolution has to discard. */
     if (template_definition_has_unbound_parameter(definition, explicit_arguments))
+      continue;
+    if (template_explicit_argument_kind_mismatch(definition, explicit_arguments))
       continue;
     if (!infer_template_args_from_call_with_explicit(definition, arguments,
                    argument_count, &bindings, explicit_arguments)) continue;

@@ -123,46 +123,53 @@ static int cprime_mkdirs(const char *path)
   return 0;
 }
 
-static int cprime_manifest_matches(const char *path, const char *exe)
+/* The unpacked runtime is keyed by the payload it came from, not by the
+   module carrying it: several hosts (the compiler, an application embedding
+   libcprime.dll) share one cache directory and must not evict each other. */
+static unsigned long long cprime_payload_id(const unsigned char *packed, size_t packed_len)
+{
+  unsigned long long h = 1469598103934665603ULL;
+  size_t i;
+  for (i = 0; i < packed_len; ++i)
+  {
+    h ^= packed[i];
+    h *= 1099511628211ULL;
+  }
+  return h;
+}
+
+/* A loaded image cannot change, so the identity is computed once per process:
+   every cprime_new() would otherwise re-read the whole payload. */
+static unsigned long long cprime_payload_id_cache;
+static int cprime_payload_id_cached;
+
+static int cprime_manifest_matches(const char *path, unsigned long long payload_id)
 {
   FILE *fp;
-  long long size = 0, mtime = 0, got_size = -1, got_mtime = -1;
-  WIN32_FILE_ATTRIBUTE_DATA data;
-
-  if (!GetFileAttributesExA(exe, GetFileExInfoStandard, &data))
-    return 0;
-  size = ((long long)data.nFileSizeHigh << 32) | data.nFileSizeLow;
-  mtime = ((long long)data.ftLastWriteTime.dwHighDateTime << 32) | data.ftLastWriteTime.dwLowDateTime;
+  unsigned long long got_id = 0;
 
   fp = fopen(path, "rb");
   if (!fp)
     return 0;
-  if (fscanf(fp, "size=%lld\nmtime=%lld\n", &got_size, &got_mtime) != 2)
+  if (fscanf(fp, "payload=%llx\n", &got_id) != 1)
   {
     fclose(fp);
     return 0;
   }
   fclose(fp);
-  return got_size == size && got_mtime == mtime;
+  return got_id == payload_id;
 }
 
-static int cprime_write_manifest(const char *root, const char *exe)
+static int cprime_write_manifest(const char *root, unsigned long long payload_id)
 {
   FILE *fp;
   char path[MAX_PATH * 4];
-  WIN32_FILE_ATTRIBUTE_DATA data;
-  long long size, mtime;
-
-  if (!GetFileAttributesExA(exe, GetFileExInfoStandard, &data))
-    return -1;
-  size = ((long long)data.nFileSizeHigh << 32) | data.nFileSizeLow;
-  mtime = ((long long)data.ftLastWriteTime.dwHighDateTime << 32) | data.ftLastWriteTime.dwLowDateTime;
 
   snprintf(path, sizeof(path), "%s/manifest.ok", root);
   fp = fopen(path, "wb");
   if (!fp)
     return -1;
-  fprintf(fp, "size=%lld\nmtime=%lld\n", size, mtime);
+  fprintf(fp, "payload=%llx\n", payload_id);
   fclose(fp);
   return 0;
 }
@@ -329,17 +336,18 @@ static char *cprime_try_portable_extract_w32(char *out, size_t n)
 {
   char exe[MAX_PATH * 4], marker_path[MAX_PATH * 4];
   FILE *fp;
-  unsigned long long payload_off;
+  unsigned long long payload_off, unpacked_len64, packed_len64, payload_id;
   char footer_magic[8];
   long long endpos;
   if (!cprime_portable_root_w32(out, n))
     return NULL;
   GetModuleFileNameA(cprime_module, exe, sizeof(exe));
-  snprintf(marker_path, sizeof(marker_path), "%s/manifest.ok", out);
-  if (cprime_manifest_matches(marker_path, exe))
-    return out;
-  if (cprime_mkdirs(out) < 0)
-    return NULL;
+  if (cprime_payload_id_cached)
+  {
+    snprintf(marker_path, sizeof(marker_path), "%s/manifest.ok", out);
+    if (cprime_manifest_matches(marker_path, cprime_payload_id_cache))
+      return out;
+  }
   fp = fopen(exe, "rb");
   if (!fp)
     return NULL;
@@ -385,7 +393,6 @@ static char *cprime_try_portable_extract_w32(char *out, size_t n)
     return NULL;
   }
   {
-    unsigned long long unpacked_len64, packed_len64;
     size_t packed_len, unpacked_len;
     unsigned char *packed, *payload;
     int rc;
@@ -417,6 +424,22 @@ static char *cprime_try_portable_extract_w32(char *out, size_t n)
       fclose(fp);
       return NULL;
     }
+    payload_id = cprime_payload_id(packed, packed_len);
+    cprime_payload_id_cache = payload_id;
+    cprime_payload_id_cached = 1;
+    snprintf(marker_path, sizeof(marker_path), "%s/manifest.ok", out);
+    if (cprime_manifest_matches(marker_path, payload_id))
+    {
+      cprime_free(packed);
+      fclose(fp);
+      return out;
+    }
+    if (cprime_mkdirs(out) < 0)
+    {
+      cprime_free(packed);
+      fclose(fp);
+      return NULL;
+    }
     payload = cprime_decompress_payload(packed, packed_len, unpacked_len);
     cprime_free(packed);
     if (!payload)
@@ -433,7 +456,7 @@ static char *cprime_try_portable_extract_w32(char *out, size_t n)
     }
   }
   fclose(fp);
-  if (cprime_write_manifest(out, exe) < 0)
+  if (cprime_write_manifest(out, payload_id) < 0)
     return NULL;
   return out;
 }

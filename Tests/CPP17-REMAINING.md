@@ -11,30 +11,34 @@ before trusting an entry that has aged.
 ## Test loop
 
 ```
-Tests\test.exe -All -Tier fast        the loop: 25 representative cases, ~1s
+Tests\test.exe -All -Tier fast        the loop: the open gaps below, ~0.2s
 Tests\test.exe -Suite features/X      one suite, every retained case
-Tests\test.exe -All -Tier pedantic    the full internal inventory, ~20s
 Tests\test.exe -Regression            publication gate
 scripts\build.exe                     self-host, validate, publish cpc.exe
 ```
 
-`Tests/tiers.json` lists the fast subset; every other retained internal case
-runs in the pedantic tier, so a case leaves the loop by not being listed.
+Do not run the pedantic tier. It is close to banned: run it only as the last
+and only step of an important confirmation, and avoid it if at all possible.
+The affected suite plus `-Regression` is the broad check.
+
+`Tests/tiers.json` lists the fast subset, which is the open work list; every
+other retained internal case belongs to the pedantic tier, so a case leaves the
+loop by not being listed.
 Short self-contained pass cases compile and run in combined units at suite
 scale; a combined unit that fails is recompiled and rerun case by case, and
 `-GroupSize 1` disables combining.
 
 ## The gate is red on purpose
 
-`features/Cpp17Gaps` carries one case per open gap, so both tiers are red by
-exactly the number of open gaps: 18 cases, 17 in `pass/` and one in `fail/`.
+`features/Cpp17Gaps` carries one case per open gap, so the fast tier is red by
+exactly the number of open gaps: 17 cases, 16 in `pass/` and one in `fail/`.
 That count is the work list, and it falls as gaps close.
 
-The open-gap cases are listed in `Tests/tiers.json` deliberately, so the
-routine loop reports the work list instead of hiding it until the pedantic run.
-The fast tier stays within its budget at ~1.2s with them included. A case that
-has been fixed can leave `fast` by not being listed, and should once the loop no
-longer needs that behavior covered on every pass.
+The open-gap cases are the whole of `Tests/tiers.json`'s fast list, so the
+routine loop reports the work list instead of hiding it until the pedantic run,
+and a green fast run means the queue is empty. Fast is ~0.2s; pedantic carries
+every representative case. A fixed case leaves `fast` by not being listed, and
+returns only if the routine loop needs that behavior covered on every pass.
 
 Each case names its facility, so a fix starts by running it:
 
@@ -90,23 +94,27 @@ Cases: `test_ctad_parenthesized_initializer.cpp`,
 
 ## Pack expansion
 
-- a pack expansion inside a template-id in a function's return type
-  (`Tup<typename decay<Ts>::type...>`) gives `'>' expected after substituted
-  template argument 'int' (got '...')`
-
-Case: `test_pack_expansion_in_return_template_id.cpp`.
+No open gap. A pack expansion whose argument is a pattern around the pack
+(`Tup<typename decay<Ts>::type...>`) expands in a template-id argument list,
+in a function's return type and in a local declaration; the body-level pattern
+boundary that truncated `Tup<...>` to the enclosing `Tuple` name is fixed.
+`test_pack_expansion_in_return_template_id.cpp` retains that.
 
 A non-type pack element as an explicit template argument (`at<I>()...`,
-`std::get<I>(t)...`) now compiles and runs, so it has left this queue.
+`std::get<I>(t)...`) also compiles and runs, and has left this queue.
 
 Deduction from a parameter type (`void f(box<Ts...>)`), a pack deduced from two
 positions, and plain `f(v...)` expansion have always worked.
 
-The return-type expansion is now all that keeps `make_tuple`, `tie` and `apply`
-spelled out to six parameters: `include/runtime/tuple` still carries the 1..6
-overloads, and seven-argument `make_tuple` fails with `no matching function
-template` (`test_cpp17_tuple_high_arity.cpp`). Collapsing them is the payoff for
-this fix, not a separate gap.
+What still keeps `make_tuple`, `tie` and `apply` spelled out to six parameters
+is the *call* expansion over a forwarding pack inside the body
+(`return result_type(std::forward<Ts>(values)...)`, reduced case
+`return result_type(static_cast<Ts &&>(values)...)`): it fails with `fold
+expression requires an unexpanded parameter pack`, and the variadic constructor
+template that would receive the arguments reports `constructor target is not
+declared as function`. `include/runtime/tuple` keeps its 1..6 overloads, and
+seven-argument `make_tuple` still fails (`test_cpp17_tuple_high_arity.cpp`).
+Collapsing them is the payoff for that fix, not a separate gap.
 
 ## Libraries
 
@@ -191,4 +199,5 @@ work left in this list:
 - Put one-off reproducers in `build/` and delete them once the durable case
   exists.
 - Run the exact selected case, then the affected suite, then the fast tier at a
-  boundary, and the pedantic tier before publication.
+  boundary. Publication does not need the pedantic tier: `scripts\build.exe`
+  runs `-Regression`, which is the gate.

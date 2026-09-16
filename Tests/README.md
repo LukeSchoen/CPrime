@@ -5,11 +5,10 @@ each suite's compile jobs through one serial CPC batch, and runs the resulting
 programs.
 
 ```
-Tests\test.exe -All -Tier fast                    the routine loop (~1s)
-Tests\test.exe -All -Tier pedantic                every retained case (~20s)
+Tests\test.exe -All -Tier fast                    the routine loop (~0.2s)
 Tests\test.exe -Suite features/Templates          every case in one suite
 Tests\test.exe -Suite features/Templates -Select test_name.cpp
-Tests\test.exe -Regression                        publication gate
+Tests\test.exe -Regression                        publication gate (~2s)
 Tests\test.exe -RunnerChecks                      harness self-checks
 ```
 
@@ -21,12 +20,14 @@ unit, default 6, `1` disables), `-Verbose` (print PASS lines).
 
 `Tests/tiers.json` holds the `fast` list and an `excluded` list.
 
-- **fast** is the development loop: one representative case per area. It is
-  deliberately tiny, so a passing case leaves the loop simply by not being
-  listed.
-- **pedantic** is every retained internal case that is not excluded. It is the
-  release gate and it covers the whole corpus.
-- **all** is the same as pedantic.
+- **fast** is the open-work list: one case per gap that is still red, so a
+  green fast run means the queue is empty. It is deliberately tiny, so a fixed
+  case leaves the loop simply by not being listed.
+- **pedantic** is every retained internal case that is not excluded, so it
+  covers the whole corpus. Do not run it: it is close to banned, allowed only
+  as the last and only step of an important confirmation. `-Regression` is the
+  publication gate instead.
+- **all** is the same as pedantic, and carries the same restriction.
 
 Incremental runs:
 
@@ -34,7 +35,7 @@ Incremental runs:
 Tests\test.exe -Suite features/Templates -Select test_x.cpp
 Tests\test.exe -Suite features/Templates
 Tests\test.exe -All -Tier fast
-Tests\test.exe -All -Tier pedantic
+Tests\test.exe -Regression
 ```
 
 ## Combined execution

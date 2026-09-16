@@ -31,10 +31,12 @@
   executables. Rebuild them serially with `scripts/tool-build.exe`. Keep shared
   workflow implementation in `scripts/`, test-specific sources in `Tests/tools/`,
   and transient output in `build/`.
-- Avoid pedantic sweeps except at the end of very large changes that warrant deep
-  testing. Exact retained reproducers and focused runner unit tests are allowed
-  during repairs. Keep the fast gate near a second and the pedantic gate within
-  a few tens of seconds.
+- Do not run the pedantic tier. It is close to banned: run it only as the last
+  and only step of an important confirmation, and avoid it if at all possible.
+  Verify with the exact retained case, the affected suite, the fast tier and
+  `-Regression` instead; none of those needs pedantic. Exact retained
+  reproducers and focused runner unit tests are allowed during repairs. Keep
+  the fast gate near a second.
 - Keep Markdown limited to remaining work and decisions; completed work is code.
   Do not add reference tests or benchmarks without explicit user authorization.
   Clang builds are available only through explicitly Clang-named entry points.
@@ -66,21 +68,22 @@ Metrics include elapsed and CPU seconds for each tool process.
 ```
 Tests/test.exe -All -Tier fast
 Tests/test.exe -Suite features/Templates
-Tests/test.exe -All -Tier pedantic
+Tests/test.exe -Regression
 ```
 
-`tiers.json` lists the small `fast` subset; the pedantic tier runs every
-retained internal case, combining short pass cases into unity units and
-running test programs `-Jobs` at a time while compilation stays one serial
-batch per suite.
+`tiers.json` lists the `fast` subset, which is the open-work list; every other
+retained internal case belongs to the pedantic tier, which combines short pass
+cases into unity units and runs test programs `-Jobs` at a time while
+compilation stays one serial batch per suite. Coverage there is real, but
+running it is not part of the workflow: see the pedantic rule above.
 
 See [test commands and layout](Tests/README.md) and the
 [development loop](Tests/DEVELOPMENT.md). Bug reports should include a standalone
 reproducer, the command, and expected versus actual behavior.
 
-`Tests/test.exe -All -Tier fast` is the routine loop; `-Tier pedantic` runs
-every retained internal case and is the gate before publication. Tests are
-CPC-only; a change that would need a second compiler belongs in an
+`Tests/test.exe -All -Tier fast` is the routine loop and `Tests/test.exe
+-Regression` is the publication gate, which `scripts/build.exe` runs on its own.
+Tests are CPC-only; a change that would need a second compiler belongs in an
 explicitly named tool and needs separate authorization.
 
 Implementation lives in `src/`, headers in `include/`, test and benchmark inputs
