@@ -27,6 +27,12 @@
 - Use only C, C++, and assembly for first-party code. Native workflow sources
   live in `scripts/` and `Tests/tools/`; do not add batch, cmd, PowerShell, or Python.
   Leave third-party sources/tooling unchanged; documentation and data are exempt.
+- `Speed\worker.cmd`, `Compatibility\worker.cmd` and `Strength\worker.cmd` are the
+  user's agent-loop control surface, are tracked in the repository and are exempt
+  from the rule above. They start their own area's TASK_PROMPT file (`task.md`) and
+  commit each cycle, so an agent must never delete, move, rename or rewrite any
+  `worker.cmd`, and must keep every `task.md` current with that area's remaining
+  work. Edit only the `task.md` of the area being worked on.
 - Prefer C sources compiled with root `cpc.exe` into tracked native workflow
   executables. Rebuild them serially with `scripts/tool-build.exe`. Keep shared
   workflow implementation in `scripts/`, test-specific sources in `Tests/tools/`,

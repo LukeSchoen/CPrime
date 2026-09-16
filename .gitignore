@@ -39,6 +39,11 @@
 *.err
 *.out
 
+# Worker stop markers: created by hand to stop a worker, never committed
+/Speed/done.x
+/Compatibility/done.x
+/Strength/done.x
+
 # Vendored TCC build output
 /third-party/tcc/config.h
 /third-party/tcc/config.texi
