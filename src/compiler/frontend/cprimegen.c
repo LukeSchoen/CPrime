@@ -157,6 +157,28 @@ static int is_active_constexpr_temporary(Sym *object)
   return 0;
 }
 
+/* The evaluation-owned object an address belongs to, if any.  A constructor
+   call reaches its destination as an address, so the object's identity has to
+   come back from that address. */
+static Sym *constexpr_temporary_object_at(int storage, int addr)
+{
+  ConstexprTemporaryObject *entry;
+  if ((storage & VT_VALMASK) != VT_LOCAL) return NULL;
+  for (entry = constexpr_temporary_objects; entry; entry = entry->next)
+    if (!entry->expired && (entry->object.r & VT_VALMASK) == VT_LOCAL
+        && (int)entry->object.c == addr)
+      return &entry->object;
+  return NULL;
+}
+
+static ConstexprTemporaryObject *constexpr_temporary_for(Sym *object)
+{
+  ConstexprTemporaryObject *entry;
+  for (entry = constexpr_temporary_objects; entry; entry = entry->next)
+    if (&entry->object == object) return entry;
+  return NULL;
+}
+
 static void release_constexpr_temporary_objects(ConstexprTemporaryObject *mark,
                                                int invalidate_values)
 {
@@ -8941,6 +8963,7 @@ static int template_unsigned_scalar_type_tok(CType *type)
 #define DIF_CLEAR     8
 
 static int constexpr_aggregate_temporary_type(CType *type);
+static int constexpr_evaluated_object_type(CType *type);
 
 static void materialize_braced_temporary_mode(CType *type, int copy_list, Sym *local_binding)
 {
@@ -9006,8 +9029,11 @@ static void materialize_braced_temporary_mode(CType *type, int copy_list, Sym *l
       && (!NOEVAL_WANTED || (cpp_unused_body_validation && NOEVAL_WANTED == 1)
           || NOEVAL_WANTED == constexpr_initializer_probe_noeval)
       && ((type->t & VT_ARRAY) || (type->t & VT_BTYPE) == VT_STRUCT)
-      && constexpr_aggregate_temporary_type(type)
-      && !type_requires_class_destruction(type)) {
+      && constexpr_evaluated_object_type(type)
+      /* An evaluation-owned object needs no destructor call: its subobject
+         values are already recorded, and destroying it has no value. */
+      && (!type_requires_class_destruction(type)
+          || type_requires_class_construction(type))) {
     ConstexprTemporaryObject *entry = cprime_mallocz(sizeof(*entry));
     entry->object.type = *type;
     entry->object.r = storage;
@@ -9041,6 +9067,25 @@ static void materialize_braced_temporary_mode(CType *type, int copy_list, Sym *l
 static void materialize_braced_temporary(CType *type)
 {
   materialize_braced_temporary_mode(type, 0, NULL);
+}
+
+/* The destination object of a construction that a constant expression is
+   performing.  Its constructor body then records subobject values here
+   instead of the construction running at translation time. */
+static Sym *constexpr_evaluation_object(CType *type, int storage, int addr)
+{
+  ConstexprTemporaryObject *entry;
+  if (!constexpr_temporary_expression_depth
+      || !constexpr_pointer_evaluation_active()
+      || !constexpr_evaluated_object_type(type)
+      || type_requires_class_destruction(type)) return NULL;
+  entry = cprime_mallocz(sizeof(*entry));
+  entry->object.type = *type;
+  entry->object.r = storage;
+  entry->object.c = addr;
+  entry->next = constexpr_temporary_objects;
+  constexpr_temporary_objects = entry;
+  return &entry->object;
 }
 
 #include "cprimegen_cpp_names_overload.inc"
@@ -10891,7 +10936,7 @@ lifecycle_class_found:
     tok_str_add(default_body, TOK_EOF);
     saved_nb_pending_member_funcs = nb_pending_member_funcs;
     add_pending_lifecycle_func(&struct_type, method_tok, params, default_body,
-        0, 1, noexcept_spec ? noexcept_spec : (method_tok == TOK_DESTRUCTOR1 ? 0 : 2), 0, 0);
+        0, 1, noexcept_spec ? noexcept_spec : (method_tok == TOK_DESTRUCTOR1 ? 0 : 2), 0, 0, 0);
     tok_str_free(default_body);
     if (saved_nb_pending_member_funcs != nb_pending_member_funcs && !defer_pending_member_funcs)
       compile_pending_member_funcs(saved_nb_pending_member_funcs);
@@ -10948,7 +10993,7 @@ lifecycle_class_found:
   }
   add_pending_lifecycle_func(&struct_type, method_tok, params, body, 0, 0,
                              noexcept_spec, 0,
-                             function_try && method_tok == TOK_DESTRUCTOR1);
+                             function_try && method_tok == TOK_DESTRUCTOR1, 0);
   if (saved_nb_pending_member_funcs != nb_pending_member_funcs
       && !defer_pending_member_funcs)
   {
@@ -14947,7 +14992,8 @@ cpp_conversion_operator:
               }
               add_pending_lifecycle_func(type, lifecycle_tok, lifecycle_params,
                                          body, 1, 1, lifecycle_noexcept_spec,
-                                         lifecycle_explicit, 0);
+                                         lifecycle_explicit, 0,
+                                         lifecycle_constexpr || ad1.is_constexpr);
               lifecycle_body = 1;
             }
             else if (lifecycle_default_suffix == 2)
@@ -14994,7 +15040,8 @@ cpp_conversion_operator:
                                          body, 1, 0, lifecycle_noexcept_spec,
                                          lifecycle_explicit,
                                          lifecycle_function_try
-                                           && lifecycle_tok == TOK_DESTRUCTOR1);
+                                           && lifecycle_tok == TOK_DESTRUCTOR1,
+                                         lifecycle_constexpr || ad1.is_constexpr);
               lifecycle_body = 1;
             }
           }
@@ -17793,13 +17840,22 @@ ST_FUNC void indir(void)
 static int constexpr_local_subobject(CType *root, int offset, CType *target, int allow_mutable)
 {
   Sym *field;
-  if (!offset && is_compatible_unqualified_types(root, target)) return 1;
+  if (!offset) {
+    /* A reference subobject holds the referent's address, so the plain
+       pointer type that backs it names the same stored bytes. */
+    CType root_type = *root, target_type = *target;
+    if (is_reference_type(&root_type)) decay_reference_type(&root_type);
+    if (is_reference_type(&target_type)) decay_reference_type(&target_type);
+    if (is_compatible_unqualified_types(&root_type, &target_type)) return 1;
+  }
   if ((root->t & VT_ARRAY) && !(root->t & VT_VLA) && root->ref) {
     int align, size = type_size(&root->ref->type, &align);
     return size > 0 && offset >= 0 && offset / size < root->ref->c
         && constexpr_local_subobject(&root->ref->type, offset % size, target, allow_mutable);
   }
-  if ((root->t & VT_BTYPE) != VT_STRUCT || !root->ref || IS_UNION(root->t)) return 0;
+  /* A union member occupies its own offset, so the record of a value stored
+     through one alternative names the same storage as any other. */
+  if ((root->t & VT_BTYPE) != VT_STRUCT || !root->ref) return 0;
   for (field = root->ref->next; field; field = field->next)
     if ((field->v & SYM_FIELD) && !(field->type.t & (VT_STATIC | VT_VOLATILE))
         && (!field->a.cpp_mutable_field || allow_mutable) && offset >= field->c
@@ -17827,9 +17883,15 @@ static int constexpr_aggregate_field_value(SValue *object, Sym *field,
   unsigned long location;
   long long relative_location;
   int size, align, bt;
+  CType lookup_type = field->type;
 
   *relocation = NULL;
   memset(pointer_bounds, 0, sizeof(*pointer_bounds));
+  /* The bytes stored for a reference subobject are the referent's address, so
+     a recorded value for it carries the plain pointer type that backs the
+     reference.  Looking it up with the declared reference type would never
+     match the recorded entry. */
+  if (is_reference_type(&lookup_type)) decay_reference_type(&lookup_type);
   if (object->sym && ((object->sym->type.t & VT_CONSTANT)
                      || is_active_constexpr_temporary(object->sym))
       && !(object->type.t & VT_VOLATILE)
@@ -17840,7 +17902,7 @@ static int constexpr_aggregate_field_value(SValue *object, Sym *field,
     ConstexprLocalField *entry;
     int relative = (int)object->c.i - (int)object->sym->c + offset;
     if (object->sym == constant_initialization_object) {
-      int field_align, field_size = type_size(&field->type, &field_align);
+      int field_align, field_size = type_size(&lookup_type, &field_align);
       long long position = (int)object->c.i + offset;
       if (field_size <= 0 || position > constant_initialization_frontier
           || field_size > constant_initialization_frontier - position) return 0;
@@ -17848,12 +17910,12 @@ static int constexpr_aggregate_field_value(SValue *object, Sym *field,
     for (entry = constexpr_local_fields[constexpr_local_bucket(object->sym)];
          entry; entry = entry->next)
       if (entry->object == object->sym && entry->zero_size < 0) {
-        int field_align, field_size = type_size(&field->type, &field_align);
+        int field_align, field_size = type_size(&lookup_type, &field_align);
         if (relative < entry->offset - entry->zero_size
             && relative + field_size > entry->offset) return 0;
       } else if (entry->object == object->sym && entry->zero_size) {
-        int field_align, field_size = type_size(&field->type, &field_align);
-        int field_base = field->type.t & VT_BTYPE;
+        int field_align, field_size = type_size(&lookup_type, &field_align);
+        int field_base = lookup_type.t & VT_BTYPE;
         if (field_size > 0 && relative >= entry->offset
             && field_size <= entry->zero_size
             && relative - entry->offset <= entry->zero_size - field_size
@@ -17866,7 +17928,7 @@ static int constexpr_aggregate_field_value(SValue *object, Sym *field,
                                        ? BIT_POS(field->type.t) : 0)
           && (!entry->member_token || !field->v
               || entry->member_token == (field->v & ~SYM_FIELD))
-          && is_compatible_unqualified_types(&entry->type, &field->type)) {
+          && is_compatible_unqualified_types(&entry->type, &lookup_type)) {
         *value = entry->value;
         *relocation = entry->relocation;
         *pointer_bounds = entry->pointer_bounds;
@@ -18150,6 +18212,7 @@ static void gfunc_param_typed(Sym *func, Sym *arg)
     {
       CType storage_type = *pointed_type(&arg->type);
       SValue value;
+      Sym *evaluation_temporary;
       int align, size, r2, addr;
 
       storage_type.t &= ~VT_CONSTANT;
@@ -18157,15 +18220,22 @@ static void gfunc_param_typed(Sym *func, Sym *arg)
       size = type_size(&storage_type, &align);
       addr = get_temp_local_var(size, align, &r2);
       cpp_temp_reserve_storage(addr, size, r2);
+      /* A temporary bound to a reference parameter is part of a constant
+         evaluation: the evaluator owns it so the callee can read it. */
+      evaluation_temporary = constexpr_evaluation_object(&storage_type,
+                                                         VT_LOCAL | VT_LVAL,
+                                                         addr);
       value = *vtop;
       vtop--;
       vset(&storage_type, VT_LOCAL | VT_LVAL, addr);
       vtop->r2 = r2;
+      vtop->sym = evaluation_temporary;
       vpushv(&value);
       vstore();
       vpop();
       vset(&storage_type, VT_LOCAL | VT_LVAL, addr);
       vtop->r2 = r2;
+      vtop->sym = evaluation_temporary;
     }
     else if (!(vtop->type.t & VT_ARRAY)
              && (vtop->type.t & VT_BTYPE) != VT_FUNC)
@@ -24987,6 +25057,10 @@ cpp_object_member_destructor:
               continue;
             }
             if (tok != '=' && !TOK_ASSIGN(tok) && tok != TOK_INC && tok != TOK_DEC && tok != ')'
+                /* A reference member is not a stored value: the ordinary
+                   member path below loads its address and binds the referent,
+                   which keeps reads and writes on the referred-to object. */
+                && !is_reference_type(&s->type)
                 && constexpr_aggregate_field_value(vtop, s, cumofs, &constant,
                                                 &relocation, &pointer_bounds))
             {
@@ -26321,6 +26395,53 @@ static void expr_eq(void)
     assignment_guard.prev = active_assignment_lvalues;
     active_assignment_lvalues = &assignment_guard;
     next();
+    if (t == TOK_INIT_MEMBER && tok == ';'
+        && (vtop->type.t & VT_BTYPE) != VT_STRUCT
+        && !(vtop->type.t & VT_ARRAY)) {
+      /* `member()` value-initializes the member: a scalar subobject takes its
+         zero value.  The generated constructor sequence spells this as an
+         initializer with an empty right-hand side. */
+      CType zero_type = vtop->type;
+      SValue zero;
+      zero_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+      memset(&zero, 0, sizeof(zero));
+      zero.type = zero_type;
+      zero.r = VT_CONST;
+      zero.c.i = 0;
+      vpushv(&zero);
+      vtop[-1].type.t &= ~VT_CONSTANT;
+      vstore();
+      active_assignment_lvalues = assignment_guard.prev;
+      return;
+    }
+    if (t == TOK_INIT_MEMBER && tok == ';'
+        && (vtop->type.t & VT_BTYPE) == VT_STRUCT && vtop->type.ref
+        && constexpr_pointer_evaluation_active()) {
+      /* `member()` initializes a class subobject in place: the evaluation runs
+         the member's default construction against the same object. */
+      CType member_type = vtop->type;
+      Sym *object = constexpr_temporary_object_at(vtop->r, (int)vtop->c.i);
+      Sym *constructor = NULL;
+      member_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+      if (object)
+        constructor = resolve_member_func_by_arg_count(&member_type,
+                                                       TOK_CONSTRUCTOR1, 0);
+      if (!constructor && object) constructor = resolve_autoctor_func(&member_type);
+      if (constructor) {
+        SValue argument, result;
+        memset(&argument, 0, sizeof(argument));
+        argument.type = member_type;
+        mk_pointer(&argument.type);
+        argument.r = VT_LOCAL;
+        argument.c.i = vtop->c.i;
+        argument.sym = object;
+        if (evaluate_constexpr_function(constructor, &argument, 1, &result)) {
+          active_assignment_lvalues = assignment_guard.prev;
+          return;
+        }
+        cprime_error("constexpr member initialization requires an evaluated constructor");
+      }
+    }
     if (t == TOK_INIT_MEMBER
         && (tok == '{' || ((vtop->type.t & VT_ARRAY)
                            && (tok == TOK_STR || tok == TOK_LSTR)))) {
@@ -29012,11 +29133,15 @@ static int decl_context(int l, int condition)
   CType type, btype;
   Sym *sym, *sa;
   TokenString *init_str, *copy_ctor_init;
+  ConstexprLocalField *constant_object_fields;
+  int constant_object_pending;
   AttributeDef ad, adbase;
   ObjSym *esym;
 
   while (1)
   {
+    constant_object_fields = NULL;
+    constant_object_pending = 0;
 
     oldint = 0;
     friend_declaration = 0;
@@ -30048,7 +30173,16 @@ found:
               tok_str_add(init_str, TOK_EOF);
               tok_str_free(arguments);
               has_ctor_init = 0;
-              if ((type.t & VT_CONSTANT) && !ad.section) ad.section = bss_section;
+              if (!ad.section && (type.t & VT_CONSTANT))
+              {
+                /* A constexpr object is constant-initialized: its bytes are
+                   written now instead of at startup. */
+                if (ad.is_constexpr)
+                  ad.section = type_has_mutable_subobject(&type)
+                                 ? data_section : rodata_section;
+                else
+                  ad.section = bss_section;
+              }
             }
             else if (can_lower_local_static_dynamic_init(&type, l,
                                                      has_init || has_ctor_init))
@@ -30145,12 +30279,29 @@ found:
                                  get_tok_str(probe_static_initializer_redefinition_tok,
                                              NULL));
                   complete_global_class_array_bound(&type, init_str);
-                  if (ad.is_constexpr)
+                  if (ad.is_constexpr
+                      && constant_class_object_evaluate(&type, init_str,
+                                                        &constant_object_fields))
+                  {
+                    /* The construction is a constant; its bytes are written
+                       once the object's storage exists. */
+                    if (!ad.section)
+                      ad.section = type_has_mutable_subobject(&type)
+                                     ? data_section : rodata_section;
+                    has_init = 0;
+                    constant_object_pending = 1;
+                    tok_str_free(init_str);
+                    init_str = NULL;
+                  }
+                  else if (ad.is_constexpr)
                     cprime_error("constexpr variable initializer is not a constant expression");
+                  else
+                  {
                   has_init = 0;
                   /* Dynamic initialization writes through the original const
                      declaration before the completed object becomes immutable. */
                   if (!ad.section) ad.section = bss_section;
+                  }
                 }
               }
             }
@@ -30185,10 +30336,27 @@ after_decl_initializer_alloc:
             {
               if (local_static_dynamic_init)
                 emit_local_static_dynamic_init(v, &type, init_str);
+              else if (ad.is_constexpr
+                       && constant_class_object_initializer(v, &type, init_str))
+                ; /* the constructor ran inside the evaluation */
               else
+              {
+                if (ad.is_constexpr)
+                  cprime_error("constexpr variable initializer is not a constant expression");
                 add_pending_global_dynamic_init(v, &type, init_str);
+              }
               tok_str_free(init_str);
               init_str = NULL;
+            }
+            if (constant_object_pending)
+            {
+              /* A constant construction collected before the object's storage
+                 existed now supplies the object's bytes. */
+              if (!emit_constant_object_fields(sym_find(v), constant_object_fields))
+                cprime_error("constexpr variable initializer is not a constant expression");
+              free_constexpr_object_fields(constant_object_fields);
+              constant_object_fields = NULL;
+              constant_object_pending = 0;
             }
           }
 

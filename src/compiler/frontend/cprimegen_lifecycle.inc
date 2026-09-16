@@ -8,7 +8,8 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
                                        TokenString *params, TokenString *body,
                                        int internal, int is_defaulted,
                                        int exception_spec, int is_explicit,
-                                       int destructor_function_try);
+                                       int destructor_function_try,
+                                       int is_constexpr);
 
 static int cpp_class_tag_keyword_tok(CType *type)
 {
@@ -212,7 +213,7 @@ static Sym *resolve_autodtor_func(CType *type)
         tok_str_add(body, '{');
         tok_str_add(body, '}');
         tok_str_add(body, TOK_EOF);
-        add_pending_lifecycle_func(type, TOK_DESTRUCTOR1, NULL, body, 1, 1, 0, 0, 0);
+        add_pending_lifecycle_func(type, TOK_DESTRUCTOR1, NULL, body, 1, 1, 0, 0, 0, 0);
         tok_str_free(body);
         break;
       }
@@ -265,7 +266,7 @@ static Sym *resolve_autoctor_func(CType *type)
         }
         tok_str_add(body, '}');
         tok_str_add(body, TOK_EOF);
-        add_pending_lifecycle_func(type, TOK_CONSTRUCTOR1, NULL, body, 1, 1, 0, 0, 0);
+        add_pending_lifecycle_func(type, TOK_CONSTRUCTOR1, NULL, body, 1, 1, 0, 0, 0, 0);
         tok_str_free(body);
         break;
       }
@@ -540,6 +541,16 @@ static void call_lifecycle_constructor_raw(CType *type, int r, int addr, Sym *sy
     sa = sa->next;
   }
   next();
+  if (constexpr_pointer_evaluation_active()
+      && (ctor_func->type.t & VT_BTYPE) == VT_FUNC && ctor_func->type.ref) {
+    SValue constant;
+    if (evaluate_constexpr_function(ctor_func, vtop + 1 - nb_args, nb_args,
+                                    &constant)) {
+      vtop -= nb_args + 1;
+      return;
+    }
+    invalidate_constexpr_runtime_call();
+  }
   vcheck_cmp();
   cpp_note_constructor_call(type, ctor_func);
   gfunc_call(nb_args);
@@ -1482,6 +1493,7 @@ static void emit_lifecycle_constructor_selected(CType *type, int r, int addr,
   vpushsym(&ctor_func->type, ctor_func);
   vset(type, r, addr);
   vtop->r2 = addr_r2;
+  if (!sym) sym = constexpr_temporary_object_at(r, addr);
   if (sym)
     vtop->sym = sym;
   mk_pointer(&vtop->type);
@@ -1512,6 +1524,19 @@ static void emit_lifecycle_constructor_selected(CType *type, int r, int addr,
   {
     next();
     unget_tok(saved_delim);
+  }
+  /* A constructor call inside a constant evaluation is part of the evaluation
+     itself: the body writes its subobjects into the evaluation-owned object
+     instead of running at translation time. */
+  if (constexpr_pointer_evaluation_active()
+      && (ctor_func->type.t & VT_BTYPE) == VT_FUNC && ctor_func->type.ref) {
+    SValue constant;
+    if (evaluate_constexpr_function(ctor_func, vtop + 1 - nb_args, nb_args,
+                                    &constant)) {
+      vtop -= nb_args + 1;
+      return;
+    }
+    invalidate_constexpr_runtime_call();
   }
   vcheck_cmp();
   cpp_note_constructor_call(type, ctor_func);
@@ -1714,9 +1739,11 @@ static int try_parse_cpp_functional_constructor(int type_tok)
   TokenString *call_args[CPC_MAX_CALL_ARGUMENTS];
   CType call_arg_types[CPC_MAX_CALL_ARGUMENTS];
   CType type;
+  Sym *object;
   int size, align, addr, r2, call_arg_count;
   int direct_destination = 0, direct_address = 0;
   int storage = VT_LOCAL | VT_LVAL;
+
 
   struct_sym = sym_find(type_tok);
   if (struct_sym && !(struct_sym->type.t & VT_TYPEDEF))
@@ -1903,8 +1930,11 @@ static int try_parse_cpp_functional_constructor(int type_tok)
   else addr = get_temp_local_var(size, align, &r2);
   vset(&type, storage, addr);
   vtop->r2 = r2;
+  object = direct_destination ? NULL
+                              : constexpr_evaluation_object(&type, storage, addr);
+  if (object) vtop->sym = object;
   call_lifecycle_constructor_saved_args(&type, storage, addr,
-                                        r2, NULL, ctor_func, call_args,
+                                        r2, object, ctor_func, call_args,
                                         call_arg_count);
   for (int ai = 0; ai < call_arg_count; ++ai) tok_str_free(call_args[ai]);
   if (tok == TOK_EOF)
@@ -2329,6 +2359,20 @@ static void call_placement_constructor(CType *type, TokenString *placement,
     sa = sa->next;
   }
 
+  /* A placement construction inside a constant evaluation is part of the
+     evaluation: the constructor writes the evaluation-owned target and the
+     result is the placement address already on the stack. */
+  if (constexpr_pointer_evaluation_active()
+      && (ctor_func->type.t & VT_BTYPE) == VT_FUNC && ctor_func->type.ref) {
+    SValue constant;
+    if (evaluate_constexpr_function(ctor_func, vtop + 1 - nb_args, nb_args,
+                                    &constant)) {
+      vtop -= nb_args + 1;
+      free_saved_placement_args(placement, call_args, call_arg_count);
+      return;
+    }
+    invalidate_constexpr_runtime_call();
+  }
   vcheck_cmp();
   cpp_note_constructor_call(type, ctor_func);
   gfunc_call(nb_args);
@@ -2503,7 +2547,8 @@ static int try_parse_cpp_placement_new_after_name(int global_scope,
   /* The static-initializer probe has no function scope. Allocation is a
      runtime expression in our C++14 mode: defer it to the generated startup
      function instead of attempting array cleanup/code generation here. */
-  if (CONST_WANTED && !cpp_unevaluated_expression_depth)
+  if (CONST_WANTED && !cpp_unevaluated_expression_depth
+      && !(tok == '(' && constexpr_pointer_evaluation_active()))
     cprime_error("allocation is not a constant expression");
 
   if (tok != '(')
@@ -5002,7 +5047,8 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
                                        TokenString *params,
                                        TokenString *body, int internal,
                                        int is_defaulted, int exception_spec,
-                                       int is_explicit, int destructor_function_try)
+                                       int is_explicit, int destructor_function_try,
+                                       int is_constexpr)
 {
   int struct_tok, mangled_tok;
   int is_local_class_member = local_stack || local_scope;
@@ -5057,6 +5103,10 @@ static void add_pending_lifecycle_func(CType *struct_type, int method_tok,
       function->a.weak = 1;
       update_storage(function);
     }
+    /* A constexpr constructor is part of the constant evaluator's function
+       set, exactly like a constexpr member function. */
+    if (is_constexpr && method_tok == TOK_CONSTRUCTOR1)
+      note_constexpr_function(function, body);
   }
   if (is_defaulted)
     note_defaulted_member_func(struct_tok, method_tok, &func_type);
@@ -5215,6 +5265,27 @@ static int constexpr_aggregate_temporary_type(CType *type)
   for (field = type->ref->next; field; field = field->next)
     if ((field->v & SYM_FIELD) && !(field->type.t & VT_STATIC)
         && !constexpr_aggregate_temporary_type(&field->type)) return 0;
+  return 1;
+}
+
+/* A class object whose construction the constant evaluator can own: no
+   virtual tables and no subobject it cannot follow.  A user-provided
+   constructor does not by itself disqualify the object; the constructor call
+   itself decides whether the object is really a constant. */
+static int constexpr_evaluated_object_type(CType *type)
+{
+  Sym *field;
+  VirtualTableInfo *table;
+  if (type->t & VT_VOLATILE) return 0;
+  if ((type->t & VT_ARRAY) && type->ref)
+    return constexpr_evaluated_object_type(&type->ref->type);
+  if ((type->t & VT_BTYPE) != VT_STRUCT) return 1;
+  if (!type->ref) return 0;
+  for (table = virtual_table_infos; table; table = table->next)
+    if (table->class_tok == get_struct_type_name_tok(type)) return 0;
+  for (field = type->ref->next; field; field = field->next)
+    if ((field->v & SYM_FIELD) && !(field->type.t & VT_STATIC)
+        && !constexpr_evaluated_object_type(&field->type)) return 0;
   return 1;
 }
 

@@ -25,10 +25,18 @@ namespace std
   public:
     typedef T value_type;
 
-    optional() noexcept : m_storage(), m_engaged(false) {}
-    optional(nullopt_t) noexcept : m_storage(), m_engaged(false) {}
-    optional(const T &value) : m_storage(), m_engaged(false) { emplace(value); }
-    optional(T &&value) : m_storage(), m_engaged(false) { emplace(static_cast<T &&>(value)); }
+    constexpr optional() noexcept : m_storage(), m_engaged(false) {}
+    constexpr optional(nullopt_t) noexcept : m_storage(), m_engaged(false) {}
+    constexpr optional(const T &value) : m_storage(), m_engaged(false)
+    {
+      ::new (static_cast<void *>(&m_storage.value)) T(value);
+      m_engaged = true;
+    }
+    constexpr optional(T &&value) : m_storage(), m_engaged(false)
+    {
+      ::new (static_cast<void *>(&m_storage.value)) T(static_cast<T &&>(value));
+      m_engaged = true;
+    }
     optional(const optional &other) : m_storage(), m_engaged(false)
     {
       if (other.m_engaged) emplace(other.m_storage.value);
@@ -76,20 +84,20 @@ namespace std
     constexpr bool has_value() const { return m_engaged; }
     constexpr explicit operator bool() const { return m_engaged; }
 
-    T &value() { if (!m_engaged) throw bad_optional_access(); return m_storage.value; }
-    const T &value() const { if (!m_engaged) throw bad_optional_access(); return m_storage.value; }
+    constexpr T &value() { if (!m_engaged) throw bad_optional_access(); return m_storage.value; }
+    constexpr const T &value() const { if (!m_engaged) throw bad_optional_access(); return m_storage.value; }
     template<class U>
     T value_or(U &&fallback) const
     {
       return m_engaged ? m_storage.value
                        : static_cast<T>(std::forward<U>(fallback));
     }
-    T &operator*() { return m_storage.value; }
-    const T &operator*() const { return m_storage.value; }
+    constexpr T &operator*() { return m_storage.value; }
+    constexpr const T &operator*() const { return m_storage.value; }
     T *operator->() { return &m_storage.value; }
     const T *operator->() const { return &m_storage.value; }
 
-    void reset() noexcept
+    constexpr void reset() noexcept
     {
       if (m_engaged) {
         m_storage.value.~T();
@@ -98,7 +106,7 @@ namespace std
     }
 
     template<class... Args>
-    T &emplace(Args &&...args)
+    constexpr T &emplace(Args &&...args)
     {
       reset();
       ::new (static_cast<void *>(&m_storage.value)) T(static_cast<Args &&>(args)...);
@@ -110,7 +118,7 @@ namespace std
     union Storage {
       char empty;
       T value;
-      Storage() noexcept : empty() {}
+      constexpr Storage() noexcept : empty() {}
       ~Storage() {}
     } m_storage;
     bool m_engaged;

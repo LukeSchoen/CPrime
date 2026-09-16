@@ -1498,7 +1498,7 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
                                    get_tok_str(class_tok, NULL), count);
     cprime_error("copy-list-initialization selects an explicit constructor");
   }
-  if (!nocode_wanted && implicit_copy) {
+  if ((!nocode_wanted || constexpr_pointer_evaluation_active()) && implicit_copy) {
     TokenString replay = *arguments[0], *parent = macro_stack;
     const int *parent_ptr = macro_ptr;
     int saved_tok = tok;
@@ -1509,8 +1509,9 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
     init_putv(p, &target, address);
     while (macro_stack && macro_stack != parent) end_macro();
     macro_ptr = parent_ptr; tok = saved_tok; tokc = saved_tokc;
-  } else if (!nocode_wanted) {
+  } else if (!nocode_wanted || constexpr_pointer_evaluation_active()) {
     int storage = VT_LOCAL | VT_LVAL, location = address;
+    Sym *destination_object = NULL;
     if (p->indirect_base) {
       init_push_lvalue(p, &target, address);
       mk_pointer(&vtop->type); gaddrof();
@@ -1520,8 +1521,14 @@ static int initialize_class_constructor_list(init_params *p, CType *type,
       vset(&char_pointer_type, VT_LOCAL | VT_LVAL, location);
       vswap(); vstore(); vpop();
       storage = VT_LLOCAL | VT_LVAL;
+    } else if (p->constant_object_target
+               && p->constant_object_offset == (int)address) {
+      /* The evaluation owns this object: its constructor writes the
+         subobjects into the evaluation record. */
+      destination_object = p->constant_object_target;
     }
-    emit_lifecycle_constructor_selected(&target, storage, location, VT_CONST, NULL,
+    emit_lifecycle_constructor_selected(&target, storage, location, VT_CONST,
+        destination_object,
         constructor, is_list ? &initializer : arguments, is_list ? 1 : count);
   }
   free_saved_array_elements(arguments, count);
@@ -1663,6 +1670,11 @@ static void decl_initializer_impl(init_params *p, CType *type, unsigned long c, 
   {
     int ncw_prev = nocode_wanted;
     CType *saved_member_target = cpp_member_address_target;
+    int reference_fold_prev = suppress_integral_constexpr_fold;
+    /* Binding a reference keeps the referent's identity: the initializer has
+       to stay an lvalue even when a constant evaluator could read a value
+       out of it, exactly as for a reference declaration. */
+    if (is_reference_type(type)) ++suppress_integral_constexpr_fold;
     cpp_member_address_target = find_cpp_member_pointer_type(type) ? type : NULL;
     if ((flags & DIF_SIZE_ONLY) && !p->sec)
       ++nocode_wanted;
@@ -1670,6 +1682,7 @@ static void decl_initializer_impl(init_params *p, CType *type, unsigned long c, 
           && is_cpp_translation_unit() && (type->t & VT_BTYPE) == VT_STRUCT
           && parse_direct_class_initializer(p, type, c)))
       parse_init_elem(!p->sec || is_reference_type(type) || static_initializer_constant_fold ? EXPR_ANY : EXPR_CONST);
+    suppress_integral_constexpr_fold = reference_fold_prev;
     cpp_member_address_target = saved_member_target;
     nocode_wanted = ncw_prev;
     flags |= DIF_HAVE_ELEM;
@@ -1817,8 +1830,18 @@ do_init_list:
       /* Evaluate at the normal element position, after destination setup.
          The lexical scan above neither evaluates nor declares anything. */
       if (single_expression_list) {
+        int reference_first_member = 0;
         single_expression_list = 0;
+        /* The element of a one-item list that initializes a reference member
+           binds that reference, so it must keep the referent's identity. */
+        if ((type->t & VT_BTYPE) == VT_STRUCT && type->ref) {
+          Sym *first_field = type->ref->next;
+          skip_empty_array_fields(&first_field);
+          reference_first_member = first_field && is_reference_type(&first_field->type);
+        }
+        if (reference_first_member) ++suppress_integral_constexpr_fold;
         parse_init_elem(!p->sec || static_initializer_constant_fold ? EXPR_ANY : EXPR_CONST);
+        if (reference_first_member) --suppress_integral_constexpr_fold;
         if (is_compatible_unqualified_types(type, &vtop->type)) {
           if (flags & DIF_SIZE_ONLY) vpop();
           else init_putv(p, type, c);
@@ -2428,6 +2451,224 @@ static int type_has_mutable_subobject(CType *type)
     if (!(field->type.t & (VT_TYPEDEF | VT_STATIC))
         && (field->a.cpp_mutable_field || type_has_mutable_subobject(&field->type))) return 1;
   return 0;
+}
+
+/* Every scalar subobject of an evaluation-owned object must carry a recorded
+   value before its bytes can describe a constant object.  Collect those values
+   into a detached list that survives the evaluation that produced them. */
+static int constexpr_collect_object_fields(CType *object_type, CType *type,
+                                           Sym *object, int offset,
+                                           ConstexprLocalField ***tail)
+{
+  Sym *field;
+  Sym scalar;
+  CValue value;
+  Sym *relocation;
+  ConstexprPointerBounds bounds;
+  SValue view;
+  ConstexprLocalField *entry;
+  int index, align, size;
+  if (type->t & VT_ARRAY) {
+    if (!type->ref) return 0;
+    size = type_size(&type->ref->type, &align);
+    if (size <= 0) return 0;
+    for (index = 0; index < type->ref->c; ++index)
+      if (!constexpr_collect_object_fields(object_type, &type->ref->type,
+                                           object, offset + index * size, tail))
+        return 0;
+    return 1;
+  }
+  if ((type->t & VT_BTYPE) == VT_STRUCT && type->ref) {
+    if (IS_UNION(type->t)) {
+      /* A union holds one active member; any recorded alternative is enough. */
+      for (field = type->ref->next; field; field = field->next)
+        if ((field->v & SYM_FIELD)
+            && constexpr_collect_object_fields(object_type, &field->type,
+                                               object, offset + field->c, tail))
+          return 1;
+      return 0;
+    }
+    for (field = type->ref->next; field; field = field->next)
+      if ((field->v & SYM_FIELD) && !(field->type.t & (VT_STATIC | VT_TYPEDEF))
+          && !constexpr_collect_object_fields(object_type, &field->type,
+                                              object, offset + field->c, tail))
+        return 0;
+    return 1;
+  }
+  if ((type->t & VT_VOLATILE)
+      || (type->t & VT_BTYPE) == VT_VOID || (type->t & VT_BTYPE) == VT_FUNC)
+    return 0;
+  memset(&view, 0, sizeof(view));
+  view.type = *object_type;
+  view.r = VT_LOCAL | VT_LVAL;
+  view.c.i = object->c;
+  view.sym = object;
+  memset(&scalar, 0, sizeof(scalar));
+  scalar.type = *type;
+  if (!constexpr_aggregate_field_value(&view, &scalar, offset, &value,
+                                       &relocation, &bounds))
+    return 0;
+  /* A value that still names an evaluation-owned object does not outlive the
+     evaluation as a constant. */
+  if (relocation && is_active_constexpr_temporary(relocation)) return 0;
+  entry = cprime_mallocz(sizeof(*entry));
+  entry->object = object;
+  entry->offset = offset;
+  entry->type = *type;
+  entry->value = value;
+  entry->relocation = relocation;
+  entry->pointer_bounds = bounds;
+  entry->bit_position = (type->t & VT_BITFIELD) ? BIT_POS(type->t) : 0;
+  **tail = entry;
+  *tail = &entry->next;
+  return 1;
+}
+
+static void free_constexpr_object_fields(ConstexprLocalField *fields)
+{
+  while (fields) {
+    ConstexprLocalField *next = fields->next;
+    cprime_free(fields);
+    fields = next;
+  }
+}
+
+/* Evaluate a class object's construction and collect the values of its
+   subobjects.  1 with *fields set when the construction is a constant. */
+static int constant_class_object_evaluate(CType *type, TokenString *initializer,
+                                          ConstexprLocalField **fields)
+{
+  ConstexprTemporaryObject *object, *object_mark = constexpr_temporary_objects;
+  TokenString *parent;
+  const int *parent_ptr;
+  ConstexprLocalField *collected = NULL, **tail = &collected;
+  CType object_type = *type;
+  int saved_tok, braced, first, done;
+  CValue saved_tokc;
+  int saved_nocode = nocode_wanted;
+  if (!is_cpp_translation_unit()
+      || (type->t & VT_BTYPE) != VT_STRUCT || !type->ref) return 0;
+  if (!constexpr_evaluated_object_type(type)
+      || type_requires_class_destruction(type)) return 0;
+  if (!type_requires_class_construction(type)) return 0;
+  /* The object's lifetime has not started yet: qualifying the type would make
+     the constructor's own stores look like writes to a const object. */
+  object_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  /* A braced list initializes the object in place; a functional form is an
+     ordinary expression that produces the object. */
+  first = tok_str_next_non_linenum_index(initializer->str, initializer->len, 0);
+  braced = first < initializer->len && initializer->str[first] == '{';
+  saved_tok = tok;
+  saved_tokc = tokc;
+  parent = macro_stack;
+  parent_ptr = macro_ptr;
+  ++constexpr_temporary_expression_depth;
+  nocode_wanted |= CONST_WANTED_BIT;
+  begin_macro(initializer, 0);
+  next();
+  if (braced)
+    materialize_braced_temporary_mode(&object_type, 0, NULL);
+  else if (tok != TOK_EOF)
+    gexpr();
+  nocode_wanted = saved_nocode;
+  --constexpr_temporary_expression_depth;
+  object = NULL;
+  if (vtop >= vstack && vtop->sym)
+    object = constexpr_temporary_for(vtop->sym);
+  vtop = vstack - 1;
+  while (macro_stack && macro_stack != parent) end_macro();
+  macro_ptr = parent_ptr;
+  tok = saved_tok;
+  tokc = saved_tokc;
+  done = object
+         && constexpr_collect_object_fields(&object_type, type,
+                                            &object->object, 0, &tail);
+  release_constexpr_temporary_objects(object_mark, 1);
+  if (!done) {
+    free_constexpr_object_fields(collected);
+    collected = NULL;
+  }
+  *fields = collected;
+  return done;
+}
+
+/* Write collected constant subobject values into a static object's storage. */
+static int emit_constant_object_fields(Sym *symbol, ConstexprLocalField *fields)
+{
+  ObjSym *object_sym;
+  Section *section;
+  ConstexprLocalField *entry;
+  unsigned long base;
+  if (!symbol) return 0;
+  /* An object with no scalar subobjects needs no bytes of its own. */
+  if (!fields) return 1;
+  object_sym = elfsym(symbol);
+  if (!object_sym || object_sym->st_shndx == 0
+      || object_sym->st_shndx >= cprime_state->nb_sections) {
+    return 0;
+  }
+  section = cprime_state->sections[object_sym->st_shndx];
+  if (!section || !section->data) return 0;
+  base = object_sym->st_value;
+  for (entry = fields; entry; entry = entry->next) {
+    unsigned char *destination;
+    int align, size = type_size(&entry->type, &align);
+    if (size <= 0 || (unsigned long)entry->offset + size > section->data_offset)
+      return 0;
+    destination = (unsigned char *)section->data + base + entry->offset;
+    if (entry->relocation) {
+      greloca(section, entry->relocation, base + entry->offset, R_DATA_PTR,
+              entry->value.i);
+      continue;
+    }
+    if (entry->type.t & VT_BITFIELD) {
+      int bits = BIT_SIZE(entry->type.t);
+      int position = entry->bit_position;
+      unsigned long long mask, current = 0;
+      if (bits <= 0 || bits > 64 || position < 0 || size > 8) return 0;
+      mask = ((1ULL << bits) - 1) << position;
+      switch (size) {
+      case 1: current = *(unsigned char *)destination; break;
+      case 2: current = read16le(destination); break;
+      case 4: current = read32le(destination); break;
+      case 8: current = read64le(destination); break;
+      default: return 0;
+      }
+      current = (current & ~mask)
+                | (((unsigned long long)entry->value.i << position) & mask);
+      switch (size) {
+      case 1: *(unsigned char *)destination = (unsigned char)current; break;
+      case 2: write16le(destination, current); break;
+      case 4: write32le(destination, current); break;
+      case 8: write64le(destination, current); break;
+      default: return 0;
+      }
+      continue;
+    }
+    switch (size) {
+    case 1: *(unsigned char *)destination = (unsigned char)entry->value.i; break;
+    case 2: write16le(destination, entry->value.i); break;
+    case 4: write32le(destination, entry->value.i); break;
+    case 8: write64le(destination, entry->value.i); break;
+    default: return 0;
+    }
+  }
+  return 1;
+}
+
+/* Constant initialization of a class object: run the construction the
+   initializer names inside the constant evaluator, then emit the resulting
+   subobject values as the object's data. */
+static int constant_class_object_initializer(int var_tok, CType *type,
+                                             TokenString *initializer)
+{
+  ConstexprLocalField *fields = NULL;
+  Sym *symbol = sym_find(var_tok);
+  int valid;
+  if (!constant_class_object_evaluate(type, initializer, &fields)) return 0;
+  valid = emit_constant_object_fields(symbol, fields);
+  free_constexpr_object_fields(fields);
+  return valid;
 }
 
 static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
