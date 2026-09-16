@@ -31,10 +31,8 @@ scale; a combined unit that fails is recompiled and rerun case by case, and
 ## The gate is red on purpose
 
 `features/Cpp17Gaps` carries one case per open gap, so the fast tier is red by
-exactly the number of open cases. Four live in `features/Cpp17Gaps/pass` - the
-two constexpr object-model cases and the two `std::optional` cases, the latter
-being two cases for one gap - and the fifth is the `features/Templates` case
-below. That count is the work list, and it falls as gaps close.
+exactly the number of open cases. That count is the work list, and it falls as
+gaps close.
 
 The open-gap cases are the whole of `Tests/tiers.json`'s fast list, so the
 routine loop reports the work list instead of hiding it until the pedantic run,
@@ -45,62 +43,8 @@ returns only if the routine loop needs that behavior covered on every pass.
 Each case names its facility, so a fix starts by running it:
 
 ```
-Tests\test.exe -Suite features/Cpp17Gaps -Select test_constexpr_reference_member.cpp
 Tests\test.exe -Suite features/Cpp17Gaps
 ```
-
-## constexpr object model
-
-Two symptoms of the one evaluator remain. A local constexpr object of a class
-type whose constructor is user-provided is not constant-evaluated at all, and
-a reference member cannot be read through.
-
-| Gap | Reproducer shape | Observed |
-| --- | --- | --- |
-| user-provided constructor is not constant-evaluated | `constexpr S(int v) : a(v) {}` then `static_assert(S(1).a == 1)` | `constant expression expected` |
-| reference member read | `R v{x}; return v.r;` | `lvalue expected` for `R v{x}`, `cannot convert 'int &' to 'int'` past it |
-
-The reference member needs the evaluator's own member read: binding is
-expression-shaped, so a one-element braced list whose first member is a
-reference folds the referent away before the binding sees it, and a reference
-member read has to keep referring to the referent object rather than its
-stored address.
-
-Cases: `test_constexpr_user_provided_constructor.cpp`,
-`test_constexpr_reference_member.cpp`.
-
-`constexpr Bad() : b(2), a(b + 1) {}` is rejected today, but only because the
-constructor is not evaluated at all. It does not yet prove declaration-order
-diagnosis. Re-check once the constructor gap closes: it must still be rejected,
-for the right reason. `fail/test_constexpr_constructor_member_order.cpp` holds
-that requirement; it passes today and must keep passing after the repair.
-
-## Libraries
-
-`std::optional` is unusable in constant expressions (`constexpr
-std::optional<int> o{5}` gives `constant expression expected`), and
-`std::is_copy_constructible<std::optional<NC> >` is wrongly true. The second
-answer needs the trait to see a copy constructor that is *deleted* for a
-non-copyable element, which this `optional` (a plain user-provided copy
-constructor) cannot give: the storage has to be a union whose copy operation
-is defaulted behind a conditionally deleted base. The first then follows the
-constructor rule above, since `optional<int> o{5}` constructs through
-`emplace`.
-
-Cases: `test_optional_constexpr.cpp`,
-`test_optional_copy_constructible_trait.cpp`.
-
-## Unlisted but red
-
-A function template address as a template argument (`run_char<record>()` for
-`template<void (*F)(char)> void run_char()`) fails with `no matching function
-template 'run_char'`. Reproducer:
-
-```
-Tests\test.exe -Suite features/Templates -Select test_function_template_address_argument.cpp
-```
-
-The queue never listed it, so it is not in `fast`. It is listed there now.
 
 ## Where the cases live
 

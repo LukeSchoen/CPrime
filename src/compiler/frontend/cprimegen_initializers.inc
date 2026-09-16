@@ -2548,8 +2548,9 @@ static int constant_class_object_evaluate(CType *type, TokenString *initializer,
   int saved_nocode = nocode_wanted;
   if (!is_cpp_translation_unit()
       || (type->t & VT_BTYPE) != VT_STRUCT || !type->ref) return 0;
-  if (!constexpr_evaluated_object_type(type)
-      || type_requires_class_destruction(type)) return 0;
+  /* A constant object needs no destructor call: its values are emitted as the
+     object's data and destruction has no value of its own. */
+  if (!constexpr_evaluated_object_type(type)) return 0;
   if (!type_requires_class_construction(type)) return 0;
   /* The object's lifetime has not started yet: qualifying the type would make
      the constructor's own stores look like writes to a const object. */

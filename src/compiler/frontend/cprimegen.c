@@ -9077,8 +9077,7 @@ static Sym *constexpr_evaluation_object(CType *type, int storage, int addr)
   ConstexprTemporaryObject *entry;
   if (!constexpr_temporary_expression_depth
       || !constexpr_pointer_evaluation_active()
-      || !constexpr_evaluated_object_type(type)
-      || type_requires_class_destruction(type)) return NULL;
+      || !constexpr_evaluated_object_type(type)) return NULL;
   entry = cprime_mallocz(sizeof(*entry));
   entry->object.type = *type;
   entry->object.r = storage;
@@ -17639,7 +17638,7 @@ static int constexpr_static_object_readable(Sym *object)
 
 static int constexpr_aggregate_field_value(SValue *object, Sym *field,
     int offset, CValue *value, Sym **relocation, ConstexprPointerBounds *pointer_bounds);
-static int constexpr_local_subobject(CType *root, int offset, CType *target, int allow_mutable);
+static int constexpr_local_subobject(CType *root, int offset, CType *target, int allow_mutable, int allow_union);
 
 /* Truncate a bit-field's stored value to its declared width, sign-extending
    a signed field again so the constant matches the emitted load. */
@@ -17792,7 +17791,7 @@ ST_FUNC void indir(void)
         && size > 0 && extent >= size && offset >= 0
         && offset <= extent - size
         && (vtop->sym->string_literal
-            || constexpr_local_subobject(&vtop->sym->type, (int)offset, &element.type, 0))
+            || constexpr_local_subobject(&vtop->sym->type, (int)offset, &element.type, 0, 0))
         && constexpr_aggregate_field_value(vtop, &element, 0, &value, &relocation, &pointer_bounds)) {
       element.type.t &= ~VT_STORAGE;
       vpop();
@@ -17837,7 +17836,8 @@ ST_FUNC void indir(void)
    its emitted storage.  C++ permits a constexpr aggregate's scalar members
    in later constant expressions; treating the aggregate only as an address
    loses that property as soon as member access forms an lvalue. */
-static int constexpr_local_subobject(CType *root, int offset, CType *target, int allow_mutable)
+static int constexpr_local_subobject(CType *root, int offset, CType *target,
+                                     int allow_mutable, int allow_union)
 {
   Sym *field;
   if (!offset) {
@@ -17851,15 +17851,20 @@ static int constexpr_local_subobject(CType *root, int offset, CType *target, int
   if ((root->t & VT_ARRAY) && !(root->t & VT_VLA) && root->ref) {
     int align, size = type_size(&root->ref->type, &align);
     return size > 0 && offset >= 0 && offset / size < root->ref->c
-        && constexpr_local_subobject(&root->ref->type, offset % size, target, allow_mutable);
+        && constexpr_local_subobject(&root->ref->type, offset % size, target,
+                                     allow_mutable, allow_union);
   }
   /* A union member occupies its own offset, so the record of a value stored
      through one alternative names the same storage as any other. */
   if ((root->t & VT_BTYPE) != VT_STRUCT || !root->ref) return 0;
+  /* Only an evaluation-owned object resolves a union member through the
+     alternative that stored it; static storage keeps its own reading paths. */
+  if (!allow_union && IS_UNION(root->t)) return 0;
   for (field = root->ref->next; field; field = field->next)
     if ((field->v & SYM_FIELD) && !(field->type.t & (VT_STATIC | VT_VOLATILE))
         && (!field->a.cpp_mutable_field || allow_mutable) && offset >= field->c
-        && constexpr_local_subobject(&field->type, offset - field->c, target, allow_mutable))
+        && constexpr_local_subobject(&field->type, offset - field->c, target,
+                                       allow_mutable, allow_union))
       return 1;
   return 0;
 }
@@ -17871,7 +17876,27 @@ static int constexpr_local_object_view(SValue *object)
       && (object->r & VT_VALMASK) == VT_LOCAL
       && constexpr_local_subobject(&object->sym->type,
            (int)object->c.i - (int)object->sym->c, &object->type,
-           is_active_constexpr_temporary(object->sym));
+           is_active_constexpr_temporary(object->sym), 1);
+}
+
+/* Whether reaching OFFSET passes through a union alternative.  Zero-filled
+   bytes of a union cannot answer a read through another alternative: the
+   stored bytes were written through the original member's type. */
+static int constexpr_subobject_in_union(CType *root, int offset)
+{
+  Sym *field;
+  if ((root->t & VT_ARRAY) && root->ref) {
+    int align, size = type_size(&root->ref->type, &align);
+    return size > 0 && offset >= 0 && offset / size < root->ref->c
+        && constexpr_subobject_in_union(&root->ref->type, offset % size);
+  }
+  if ((root->t & VT_BTYPE) != VT_STRUCT || !root->ref) return 0;
+  for (field = root->ref->next; field; field = field->next)
+    if ((field->v & SYM_FIELD) && offset >= field->c) {
+      if (IS_UNION(root->t)) return 1;
+      if (constexpr_subobject_in_union(&field->type, offset - field->c)) return 1;
+    }
+  return 0;
 }
 
 static int constexpr_aggregate_field_value(SValue *object, Sym *field,
@@ -17919,7 +17944,8 @@ static int constexpr_aggregate_field_value(SValue *object, Sym *field,
         if (field_size > 0 && relative >= entry->offset
             && field_size <= entry->zero_size
             && relative - entry->offset <= entry->zero_size - field_size
-            && field_base != VT_STRUCT && field_base != VT_FUNC && field_base != VT_VOID) {
+            && field_base != VT_STRUCT && field_base != VT_FUNC && field_base != VT_VOID
+            && !constexpr_subobject_in_union(&object->sym->type, relative)) {
           memset(value, 0, sizeof(*value));
           return 1;
         }

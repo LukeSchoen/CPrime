@@ -17,10 +17,6 @@ static unsigned constexpr_evaluation_steps;
 static int constexpr_evaluation_invalid;
 static void invalidate_constexpr_runtime_call(void)
 {
-  if (getenv("CPC_TRACE"))
-    fprintf(stderr, "CPCDBG invalidate tok=%s depth=%d\n",
-            TOK_HAS_VALUE(tok) ? "(value)" : get_tok_str(tok, NULL),
-            constexpr_evaluation_depth);
   if (constexpr_evaluation_depth && constexpr_pointer_evaluation_active())
     constexpr_evaluation_invalid = 1;
 }
@@ -146,20 +142,6 @@ static void note_constexpr_function(Sym *function, TokenString *body)
   tok_str_free(expression);
   entry->next = constexpr_functions;
   constexpr_functions = entry;
-  if (getenv("CPC_TRACE")) {
-    int di;
-    fprintf(stderr, "CPCDBG note_body %s params=%d owner=%d:", get_tok_str(function->v, NULL),
-            entry->parameter_count, entry->owner_tok);
-    for (di = 0; di < entry->expression.len && di < 48; ++di) {
-      int token = entry->expression.str[di];
-      if (TOK_HAS_VALUE(token)) {
-        fprintf(stderr, " %lld", (long long)entry->expression.str[di + 1]);
-        di += tok_str_value_extra_words(entry->expression.str, entry->expression.len, di);
-      } else
-        fprintf(stderr, " %s", get_tok_str(token, NULL));
-    }
-    fprintf(stderr, "\n");
-  }
 }
 
 static void deduce_cpp_auto_initializer_type(CType *type, TokenString *initializer)
@@ -269,8 +251,7 @@ static int evaluate_constexpr_local_statement(int condition)
            evaluation runs against an evaluation-owned object. */
         if (tok != '{' && tok != '(') return -1;
         if (!constexpr_evaluated_object_type(&local_type)) {
-          if (getenv("CPC_TRACE")) fprintf(stderr, "CPCDBG local bail object_type\n");
-          return -1;
+            return -1;
         }
       } else if (tok != '{' || resolve_autodtor_func(&local_type)) return -1;
       TokenString *initializer = NULL;
@@ -291,11 +272,7 @@ static int evaluate_constexpr_local_statement(int condition)
       ++constexpr_temporary_expression_depth;
       materialize_braced_temporary_mode(&local_type, 0, binding);
       --constexpr_temporary_expression_depth;
-      if (!is_active_constexpr_temporary(vtop->sym)) {
-        if (getenv("CPC_TRACE")) fprintf(stderr, "CPCDBG local bail active r=%x sym=%p\n",
-                                          (unsigned)vtop->r, (void *)vtop->sym);
-        return -1;
-      }
+      if (!is_active_constexpr_temporary(vtop->sym)) return -1;
       /* A local binding refers to the evaluation-owned object. It must not
          acquire static storage or outlive this function evaluation. */
       {
@@ -723,10 +700,6 @@ if_finished:
     gen_cast(&function->type.ref->type);
     *result = *vtop;
   }
-    if (getenv("CPC_TRACE"))
-      fprintf(stderr, "CPCDBG ret %s valid=%d r=%x type=%x sym=%p\n",
-              get_tok_str(function->v, NULL), valid,
-              (unsigned)vtop->r, (unsigned)vtop->type.t, (void *)vtop->sym);
     if (!valid) return -1;
     vpop();
     skip(';');
@@ -791,7 +764,6 @@ static int evaluate_constexpr_function(Sym *function, SValue *arguments, int cou
       if (entry->token == function->v) break;
   }
   if (!entry || entry->parameter_count != count) {
-    if (getenv("CPC_TRACE")) fprintf(stderr, "CPCDBG eval_nofunc %s count=%d\n", get_tok_str(function->v, NULL), count);
     return 0;
   }
   if (!constexpr_evaluation_depth) constexpr_evaluation_steps = 0;
@@ -915,9 +887,6 @@ static int evaluate_constexpr_function(Sym *function, SValue *arguments, int cou
   begin_macro(&replay, 3);
   next();
   valid = evaluate_constexpr_statement(function, result);
-  if (getenv("CPC_TRACE")) fprintf(stderr, "CPCDBG eval_done %s valid=%d invalid=%d\n",
-                                   get_tok_str(function->v, NULL), valid,
-                                   constexpr_evaluation_invalid);
   if (valid == 0 && (function->type.ref->type.t & VT_BTYPE) == VT_VOID) {
     memset(result, 0, sizeof(*result));
     result->type = function->type.ref->type;

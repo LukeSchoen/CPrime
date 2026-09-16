@@ -5331,6 +5331,9 @@ static int template_member_non_type_argument(int arg_tok)
   int64_t ignored;
 
   if (template_arg_const_int64(arg_tok, &ignored)) return 1;
+  /* A function template name is a non-type argument candidate; the
+     parameter's function-pointer type selects its specialization. */
+  if (find_function_template_def(arg_tok)) return 1;
   symbol = sym_find(arg_tok);
   if (!symbol) symbol = global_symbol_find(arg_tok);
   return symbol && !(symbol->type.t & VT_TYPEDEF)

@@ -3,6 +3,7 @@
 
 #include <utility>
 #include <new>
+#include <type_traits>
 
 namespace std
 {
@@ -20,43 +21,101 @@ namespace std
   };
 
   template<class T>
+  struct __optional_storage_union
+  {
+    union Value
+    {
+      char empty;
+      T value;
+      constexpr Value() noexcept : empty() {}
+      ~Value() {}
+    } data;
+
+    constexpr __optional_storage_union() noexcept : data() {}
+    ~__optional_storage_union() {}
+  };
+
+  template<class T, bool>
+  struct __optional_storage;
+
+  template<class T>
+  struct __optional_storage<T, true>
+  {
+    __optional_storage_union<T> data;
+    bool engaged;
+
+    constexpr __optional_storage() noexcept : data(), engaged(false) {}
+    ~__optional_storage() {}
+    __optional_storage(const __optional_storage &other) : data(), engaged(false)
+    {
+      if (other.engaged) {
+        ::new (static_cast<void *>(&data.data.value)) T(other.data.data.value);
+        engaged = true;
+      }
+    }
+    __optional_storage(__optional_storage &&other) : data(), engaged(false)
+    {
+      if (other.engaged) {
+        ::new (static_cast<void *>(&data.data.value))
+            T(static_cast<T &&>(other.data.data.value));
+        engaged = true;
+      }
+    }
+  };
+
+  template<class T>
+  struct __optional_storage<T, false>
+  {
+    __optional_storage_union<T> data;
+    bool engaged;
+
+    constexpr __optional_storage() noexcept : data(), engaged(false) {}
+    ~__optional_storage() {}
+    __optional_storage(const __optional_storage &) = delete;
+    __optional_storage(__optional_storage &&other) : data(), engaged(false)
+    {
+      if (other.engaged) {
+        ::new (static_cast<void *>(&data.data.value))
+            T(static_cast<T &&>(other.data.data.value));
+        engaged = true;
+      }
+    }
+  };
+
+  template<class T>
   class optional
   {
   public:
     typedef T value_type;
 
-    constexpr optional() noexcept : m_storage(), m_engaged(false) {}
-    constexpr optional(nullopt_t) noexcept : m_storage(), m_engaged(false) {}
-    constexpr optional(const T &value) : m_storage(), m_engaged(false)
+    constexpr optional() noexcept : m_storage() {}
+    constexpr optional(nullopt_t) noexcept : m_storage() {}
+    constexpr optional(const T &value) : m_storage()
     {
-      ::new (static_cast<void *>(&m_storage.value)) T(value);
-      m_engaged = true;
+      ::new (static_cast<void *>(&m_storage.data.data.value)) T(value);
+      m_storage.engaged = true;
     }
-    constexpr optional(T &&value) : m_storage(), m_engaged(false)
+    constexpr optional(T &&value) : m_storage()
     {
-      ::new (static_cast<void *>(&m_storage.value)) T(static_cast<T &&>(value));
-      m_engaged = true;
+      ::new (static_cast<void *>(&m_storage.data.data.value))
+          T(static_cast<T &&>(value));
+      m_storage.engaged = true;
     }
-    optional(const optional &other) : m_storage(), m_engaged(false)
-    {
-      if (other.m_engaged) emplace(other.m_storage.value);
-    }
-    optional(optional &&other) : m_storage(), m_engaged(false)
-    {
-      if (other.m_engaged) emplace(static_cast<T &&>(other.m_storage.value));
-    }
+    optional(const optional &) = default;
+    optional(optional &&) = default;
     ~optional() { reset(); }
 
     optional &operator=(const optional &other)
     {
-      if (other.m_engaged) *this = other.m_storage.value;
+      if (other.m_storage.engaged) *this = other.m_storage.data.data.value;
       else reset();
       return *this;
     }
 
     optional &operator=(optional &&other)
     {
-      if (other.m_engaged) *this = static_cast<T &&>(other.m_storage.value);
+      if (other.m_storage.engaged)
+        *this = static_cast<T &&>(other.m_storage.data.data.value);
       else reset();
       return *this;
     }
@@ -69,59 +128,55 @@ namespace std
 
     optional &operator=(const T &value)
     {
-      if (m_engaged) m_storage.value = value;
+      if (m_storage.engaged) m_storage.data.data.value = value;
       else emplace(value);
       return *this;
     }
 
     optional &operator=(T &&value)
     {
-      if (m_engaged) m_storage.value = static_cast<T &&>(value);
+      if (m_storage.engaged)
+        m_storage.data.data.value = static_cast<T &&>(value);
       else emplace(static_cast<T &&>(value));
       return *this;
     }
 
-    constexpr bool has_value() const { return m_engaged; }
-    constexpr explicit operator bool() const { return m_engaged; }
+    constexpr bool has_value() const { return m_storage.engaged; }
+    constexpr explicit operator bool() const { return m_storage.engaged; }
 
-    constexpr T &value() { if (!m_engaged) throw bad_optional_access(); return m_storage.value; }
-    constexpr const T &value() const { if (!m_engaged) throw bad_optional_access(); return m_storage.value; }
+    constexpr T &value() { if (!m_storage.engaged) throw bad_optional_access(); return m_storage.data.data.value; }
+    constexpr const T &value() const { if (!m_storage.engaged) throw bad_optional_access(); return m_storage.data.data.value; }
     template<class U>
     T value_or(U &&fallback) const
     {
-      return m_engaged ? m_storage.value
+      return m_storage.engaged ? m_storage.data.data.value
                        : static_cast<T>(std::forward<U>(fallback));
     }
-    constexpr T &operator*() { return m_storage.value; }
-    constexpr const T &operator*() const { return m_storage.value; }
-    T *operator->() { return &m_storage.value; }
-    const T *operator->() const { return &m_storage.value; }
+    constexpr T &operator*() { return m_storage.data.data.value; }
+    constexpr const T &operator*() const { return m_storage.data.data.value; }
+    T *operator->() { return &m_storage.data.data.value; }
+    const T *operator->() const { return &m_storage.data.data.value; }
 
     constexpr void reset() noexcept
     {
-      if (m_engaged) {
-        m_storage.value.~T();
-        m_engaged = false;
+      if (m_storage.engaged) {
+        m_storage.data.data.value.~T();
+        m_storage.engaged = false;
       }
     }
 
     template<class... Args>
-    constexpr T &emplace(Args &&...args)
+    T &emplace(Args &&...args)
     {
       reset();
-      ::new (static_cast<void *>(&m_storage.value)) T(static_cast<Args &&>(args)...);
-      m_engaged = true;
-      return m_storage.value;
+      ::new (static_cast<void *>(&m_storage.data.data.value))
+          T(static_cast<Args &&>(args)...);
+      m_storage.engaged = true;
+      return m_storage.data.data.value;
     }
 
   private:
-    union Storage {
-      char empty;
-      T value;
-      constexpr Storage() noexcept : empty() {}
-      ~Storage() {}
-    } m_storage;
-    bool m_engaged;
+    __optional_storage<T, __is_copy_constructible<T>::value> m_storage;
   };
 }
 
