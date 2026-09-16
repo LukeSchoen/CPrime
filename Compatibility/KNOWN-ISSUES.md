@@ -5,28 +5,37 @@ is code and retained cases; nothing here is a progress log.
 
 ## boost/math/special_functions/sign.hpp: parenthesized template declarators
 
-Open.  With the `vector0<>` floor closed, the Explorer++ probe stops in
-`boost/math/special_functions/sign.hpp:126`
-(`Compatibility\build\explorer-probe12.log`) with
-`redefinition of template 'T'` for
-`template<class T> inline T changesign_impl(T x, ieee_copy_all_bits_tag const&)`.
-Two earlier overloads spell the same function name with a parenthesized
-declarator, `inline T (changesign_impl)(...)`.
+Closed.  The declaration scan now recognizes `T (f)(args)` before registration
+and rewrites it to the ordinary `T f(args)` token shape, so the declared name
+and the signature helpers no longer key the template on its return type.
+Retained as
+`features/Templates/pass/test_parenthesized_template_definition_then_plain.cpp`;
+the failing and passing evidence is in
+`Compatibility\build\parenthesized-template-*.log`, and the consumer probe
+advanced to the next floor recorded below (`explorer-probe13.log`).
+
+## boost/date_time/period_formatter: `std::ostreambuf_iterator`
+
+Open.  Explorer++ now stops at
+`boost/date_time/gregorian/gregorian_io.hpp:28`
+(`Compatibility\build\explorer-probe13.log`) while declaring
+`period_formatter<char>`; `boost/date_time/period_formatter.hpp:36` defaults its
+second parameter to
+`std::ostreambuf_iterator<CharT, std::char_traits<CharT> >`, but the runtime
+`<iterator>` header does not declare that iterator.
 
 Reduced to
-`Compatibility\build\sign-template-probes\p4_parenthesized_definitions_then_plain_declaration.cpp`,
-where two parenthesized definition overloads are followed by a plain
-same-signature declaration and the compiler reports `redefinition of template
-'T'` (probe log `p4.log`).  The one-parenthesized-definition variant
-`p6_one_parenthesized_definition_then_plain_declaration.cpp` passes, as do the
-declaration-only variants, so the second parenthesized definition is part of
-the failing shape.
+`Compatibility\build\period-formatter-probes\p1_ostreambuf_default.cpp`, a
+12-line program whose class template uses the same default and initializes
+`period_formatter<char>`.  It reports `template 'period_formatter' has no usable
+default for argument 2` (`p1.log`).
 
 Work required:
 
-- Retain the reduced case under `features/Templates/pass`.
-- Register the declared function name from a parenthesized function-template
-  declarator instead of keying the template on its return-type parameter.
+- Retain the reduced case under `features/Includes/pass`.
+- Implement `std::ostreambuf_iterator` in the runtime headers with the
+  standard output-iterator surface the default argument and its consumers need.
+- Compile and run the retained case.
 
 ## clCRC.cpp: a leading `::` in a replayed member function template
 

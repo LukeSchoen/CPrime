@@ -1098,6 +1098,73 @@ static int find_template_name_in_str(TokenString *str, int *literal_operator)
   return 0;
 }
 
+/* Normalize a direct parenthesized function declarator (`T (f)(args)`) to
+   the ordinary spelling (`T f(args)`) before template registration.  The
+   parser and every signature helper already agree on the ordinary token
+   shape; leaving the parentheses in place keys the template on its return
+   type instead of on the declared name.  Only the top-level declarator is
+   rewritten, before any body, initializer, or nested parameter declarator. */
+static int normalize_parenthesized_template_declarator(TokenString *str)
+{
+  int i, n = str->len, paren = 0, bracket = 0, angle = 0;
+
+  for (i = 0; i < n;)
+  {
+    int t = str->str[i];
+
+    if (t == TOK_EOF)
+      break;
+    if (TOK_HAS_VALUE(t))
+    {
+      i += 1 + tok_str_value_extra_words(str->str, n, i);
+      continue;
+    }
+    if ((t == '{' || t == ';'
+         || (t == '=' && paren == 0 && bracket == 0 && angle == 0)))
+      break;
+    if (t == '(' && paren == 0 && bracket == 0 && angle == 0)
+    {
+      int name_index = tok_str_next_non_linenum_index(str->str, n, i + 1);
+      int close_index = name_index < n
+                          ? tok_str_next_non_linenum_index(str->str, n,
+                                                           name_index + 1)
+                          : n;
+      int params_index = close_index < n
+                           ? tok_str_next_non_linenum_index(str->str, n,
+                                                            close_index + 1)
+                           : n;
+
+      if (name_index < n && str->str[name_index] >= TOK_UIDENT
+          && close_index < n && str->str[close_index] == ')'
+          && params_index < n && str->str[params_index] == '(')
+      {
+        int name = str->str[name_index];
+
+        memmove(str->str + close_index, str->str + close_index + 1,
+                (str->len - close_index - 1) * sizeof(str->str[0]));
+        --str->len;
+        memmove(str->str + i, str->str + i + 1,
+                (str->len - i - 1) * sizeof(str->str[0]));
+        --str->len;
+        return name;
+      }
+    }
+    if (t == '(') ++paren;
+    else if (t == ')' && paren > 0) --paren;
+    else if (t == '[') ++bracket;
+    else if (t == ']' && bracket > 0) --bracket;
+    else if (t == TOK_LT || t == '<') ++angle;
+    else if ((t == TOK_GT || t == '>') && angle > 0) --angle;
+    else if (t == TOK_SAR && angle > 0)
+    {
+      --angle;
+      if (angle > 0) --angle;
+    }
+    ++i;
+  }
+  return 0;
+}
+
 static int is_class_template_partial_specialization(TokenString *str,
                                                     int name_tok)
 {
@@ -10775,6 +10842,13 @@ static void parse_template_decl(void)
       if (value_type_strs[parameter]) tok_str_free(value_type_strs[parameter]);
     }
     return;
+  }
+
+  if (!is_class && !is_alias)
+  {
+    int parenthesized_name = normalize_parenthesized_template_declarator(str);
+    if (parenthesized_name)
+      name_tok = parenthesized_name;
   }
 
   if (!is_class && !is_alias) {

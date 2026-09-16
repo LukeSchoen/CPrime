@@ -34,15 +34,16 @@ constructor body that a static initializer fold misread, and the missing
 `features/Cpp17Gaps/pass/test_const_class_functional_initializer.cpp`,
 `features/Cpp17Gaps/pass/test_static_initializer_template_constructor_replay.cpp`
 and `features/Includes/pass/test_include_cfloat.cpp`. The next known consumer
-floor is the `boost::mpl` `vector0<>` argument list reduced in
-`Compatibility\build\mpl-vector-probes\m1_self_empty_argument.cpp`; it is
-recorded in `Compatibility\KNOWN-ISSUES.md` and still needs a retained fast
-case and repair.
+floor is the `boost/date_time/period_formatter` default argument reduced in
+`Compatibility\build\period-formatter-probes\p1_ostreambuf_default.cpp`; it
+needs `std::ostreambuf_iterator` in the runtime headers and is recorded in
+`Compatibility\KNOWN-ISSUES.md`.
 
-To add a gap: add one minimal case under `features/Cpp17Gaps/pass`, list it in
-the fast list, reproduce it with root `cpc.exe`, repair the shared mechanism,
-then retain the case and drop it from the fast list. A crash reproducer starts
-in a suite of its own so one crash cannot abort a shared compile batch.
+To add a gap: add one minimal case under the suite that owns the behavior, list
+it in the fast list, reproduce it with root `cpc.exe`, repair the shared
+mechanism, then retain the case and drop it from the fast list. A crash
+reproducer starts in a suite of its own so one crash cannot abort a shared
+compile batch.
 
 External CPC bug reports that are not part of the C++17 queue are recorded in
 `KNOWN-ISSUES.md`.

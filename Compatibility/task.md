@@ -74,11 +74,19 @@ src\scripts\build.exe                                                  publish t
   typedef set enlarged the stream.  The fast list is now empty.  The known
   closed floors and retained cases are recorded in
   `Compatibility\KNOWN-ISSUES.md`.
+- The `boost/math` parenthesized-template-declarator floor is closed: the
+  template declaration scan now normalizes `T (f)(args)` to `T f(args)` before
+  registration, so the declared function name and its signature helpers agree
+  with the rest of template processing.  Retained as
+  `features/Templates/pass/test_parenthesized_template_definition_then_plain.cpp`;
+  evidence is in `Compatibility\build\parenthesized-template-*.log` and
+  `Compatibility\build\explorer-probe13.log`.
 - Work the defects recorded in `Compatibility\KNOWN-ISSUES.md`: the `::`-spelled
   member function template replay, the `InterlockedIncrement` return value,
   inline SSE asm corrupting surrounding float code, the missing `psapi.h` in the
-  vendored Windows SDK, and the `__m256`/`immintrin.h` stub that blocks SSE/AVX
-  types.
+  vendored Windows SDK, the `__m256`/`immintrin.h` stub that blocks SSE/AVX
+  types, and the missing `std::ostreambuf_iterator` needed by
+  `boost/date_time/period_formatter`.
 - The Explorer++ consumer build (`C:\Luke\Src\Archive\explorerplusplus`) is the
   large C++17 probe. Its entry point is `build_cpc.cmd` (it exports the
   manifest, then drives root `cpc.exe` through `src\scripts\project.exe`); its
@@ -88,10 +96,12 @@ src\scripts\build.exe                                                  publish t
   published and the three floors since closed -- `ordered_range_t()` as a
   constant class initializer, the replayed `std::basic_string` constructor
   under a static initializer fold, and the missing `<cfloat>` runtime header --
-  and the `boost::mpl` `vector0<>` parse floor now closed, the build stops in
-  `boost/math/special_functions/sign.hpp:126` with
-  `redefinition of template 'T'`.  The reduced case and the work it needs are
-  in `Compatibility\KNOWN-ISSUES.md`.
+  and the `boost::mpl` `vector0<>` and parenthesized template-declarator floors
+  now closed, the build stops in
+  `boost/date_time/gregorian/gregorian_io.hpp:28` with
+  `template 'period_formatter' has no usable default for argument 2`
+  (`Compatibility\build\explorer-probe13.log`).  The reduced case and the work
+  it needs are in `Compatibility\KNOWN-ISSUES.md`.
 - `Compatibility\tests\test.exe -Checks` (the CPC-only publication/development gate) is
   red: the runner self-check `runner rejects false expectation:
   test_valid_without_main.cpp` reports exit 1 and `Summary: 0 passed, 1 failed`
@@ -111,37 +121,33 @@ src\scripts\build.exe                                                  publish t
 
 ## Next action
 
-Retain the reduced `boost/math` parenthesized-template-declarator floor as one
-minimal case under
-`features/Templates/pass/test_parenthesized_template_definition_then_plain.cpp`,
-add it to the fast list, reproduce it with root `cpc.exe`, repair registration
-of the declared function name for a parenthesized function-template
-declarator, then run the suite, fast tier, regression gate, and publish:
+Retain the reduced `boost/date_time/period_formatter` floor as one minimal case
+under `features/Includes/pass/test_ostreambuf_iterator_default.cpp`, add it to
+the fast list, reproduce it with root `cpc.exe`, implement the missing
+`std::ostreambuf_iterator` in the runtime headers, then run the affected suite,
+fast tier, regression gate, and publish:
 
 ```
-Compatibility\tests\test.exe -Suite features/Templates -Select test_parenthesized_template_definition_then_plain.cpp
-Compatibility\tests\test.exe -Suite features/Templates
+Compatibility\tests\test.exe -Suite features/Includes -Select test_ostreambuf_iterator_default.cpp
+Compatibility\tests\test.exe -Suite features/Includes
 Compatibility\tests\test.exe -All -Tier fast
 Compatibility\tests\test.exe -Regression
 src\scripts\build.exe
 ```
 
 The reduced case is
-`Compatibility\build\sign-template-probes\p4_parenthesized_definitions_then_plain_declaration.cpp`:
-two parenthesized function-template definitions are followed by a plain
-same-signature declaration, and the compiler reports
-`redefinition of template 'T'` (`p4.log`).  The
-one-parenthesized-definition variant
-`p6_one_parenthesized_definition_then_plain_declaration.cpp` passes; the
-declaration-only variants also pass.  The consumer probe log is
-`Compatibility\build\explorer-probe12.log`.  After publishing, re-run
+`Compatibility\build\period-formatter-probes\p1_ostreambuf_default.cpp`: a
+class template's second parameter defaults to
+`std::ostreambuf_iterator<CharT, std::char_traits<CharT> >`, and the compiler
+reports `template 'period_formatter' has no usable default for argument 2`
+(`p1.log`).  The consumer probe log is
+`Compatibility\build\explorer-probe13.log`.  After publishing, re-run
 `C:\Luke\Src\Archive\explorerplusplus\build_cpc.cmd Release x64` (it copies
 root `cpc.exe` in first) and reduce the next floor it reports.
 
-Evidence for the `vector0<>` closure is in `Compatibility\build\`:
-`mpl-vector-probes\m1_before.log`, `injected-template-empty-before.log`,
-`injected-template-select.after.log`, `injected-template-suite.after.log`,
-`injected-template-fast.after.log`, `injected-template-fast-final.log`,
-`injected-template-regression.after.log`, `injected-template-publish.log`,
-and `explorer-probe12.log`.  The retained case is
-`features/Templates/pass/test_injected_class_template_empty_arguments.cpp`.
+Evidence for the parenthesized-declarator closure is in `Compatibility\build\`:
+`parenthesized-template-before.log`, `parenthesized-template-before-cpc.log`,
+`parenthesized-template-after-final.log`, `parenthesized-template-suite-final.log`,
+`parenthesized-template-fast-final.log`, `parenthesized-template-regression.log`,
+and `explorer-probe13.log`.  The retained case is
+`features/Templates/pass/test_parenthesized_template_definition_then_plain.cpp`.
