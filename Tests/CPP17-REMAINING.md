@@ -31,7 +31,7 @@ scale; a combined unit that fails is recompiled and rerun case by case, and
 ## The gate is red on purpose
 
 `features/Cpp17Gaps` carries one case per open gap, so the fast tier is red by
-exactly the number of open gaps: 13 cases, all in `pass/`. That count is the
+exactly the number of open gaps: 4 cases, all in `pass/`. That count is the
 work list, and it falls as gaps close.
 
 The open-gap cases are the whole of `Tests/tiers.json`'s fast list, so the
@@ -43,27 +43,28 @@ returns only if the routine loop needs that behavior covered on every pass.
 Each case names its facility, so a fix starts by running it:
 
 ```
-Tests\test.exe -Suite features/Cpp17Gaps -Select test_variant_get_if.cpp
+Tests\test.exe -Suite features/Cpp17Gaps -Select test_constexpr_reference_member.cpp
 Tests\test.exe -Suite features/Cpp17Gaps
 ```
 
 ## constexpr object model
 
-One evaluator, four symptoms. The union, bit-field and reference rows are
-independently broken, not merely masked by the constructor gap: each still
-fails with the user-provided constructor removed. The union and bit-field
-reproducers also cover writes to a local constexpr object, which is why that
-bullet no longer stands on its own.
+Two symptoms of the one evaluator remain. A local constexpr object of a class
+type whose constructor is user-provided is not constant-evaluated at all, and
+a reference member cannot be read through.
 
 | Gap | Reproducer shape | Observed |
 | --- | --- | --- |
 | user-provided constructor is not constant-evaluated | `constexpr S(int v) : a(v) {}` then `static_assert(S(1).a == 1)` | `constant expression expected` |
-| union member write-then-read | `U u{}; u.i = 5; return u.i;` | `constant expression expected` |
-| bit-field read | `B b{}; b.a = 5; return (int)b.a;` | `constant expression expected` |
-| reference member | `R v{x}; return v.r;` | `lvalue expected` - distinct symptom, check whether it shares the evaluator path |
+| reference member read | `R v{x}; return v.r;` | `lvalue expected` for `R v{x}`, `cannot convert 'int &' to 'int'` past it |
+
+The reference member needs the evaluator's own member read: binding is
+expression-shaped, so a one-element braced list whose first member is a
+reference folds the referent away before the binding sees it, and a reference
+member read has to keep referring to the referent object rather than its
+stored address.
 
 Cases: `test_constexpr_user_provided_constructor.cpp`,
-`test_constexpr_union_member_write_read.cpp`, `test_constexpr_bitfield_read.cpp`,
 `test_constexpr_reference_member.cpp`.
 
 `constexpr Bad() : b(2), a(b + 1) {}` is rejected today, but only because the
@@ -110,50 +111,59 @@ parameter pack the reduced shape needs.
 Deduction from a parameter type (`void f(box<Ts...>)`), a pack deduced from two
 positions, and plain `f(v...)` expansion have always worked.
 
+## Substitution of template-ids that spell a pack
+
+No open gap. A qualified template-id whose argument list spells a pack now
+expands in a function's parameter type, in its return type and in a replayed
+body, and a partial specialization whose argument list ends in `>>` now
+substitutes the alias argument. Retained cases are listed under closed work.
+
 ## Libraries
-
-`include/runtime/variant` is a hand-written four-parameter template
-(`class A, class B = __variant_empty, class C, class D`), which is the root of
-most of this list:
-
-- more than four alternatives: `template 'variant' expects 1 type argument,
-  got 5`
-- converting construction: `std::variant<int, double, char> v{2.5}` gives `no
-  matching constructor ... with 1 list-initializer elements`; only
-  default-construct-then-assign works
-- `get<Index>`: absent, only `get<T>` exists
-- `get_if`: absent
-- `emplace`: absent
-- non-copyable alternative assignment: unreachable until construction works
-
-Cases: `test_variant_more_than_four_alternatives.cpp`,
-`test_variant_converting_construction.cpp`, `test_variant_get_by_index.cpp`,
-`test_variant_get_if.cpp`, `test_variant_emplace.cpp`,
-`test_variant_noncopyable_assignment.cpp`.
-
-`std::get<double>(tuple)` (get by type) fails inside `include/runtime/tuple`.
-Case: `test_tuple_get_by_type.cpp`. The index of `double` has to come from a
-helper class, and a template-id that spells a pack inside a replayed template
-body resolves to a specialization that kept only the pack's first argument:
-`template<class T, class First, class... Rest> struct Idx { static const
-size_t value = 1 + Idx<T, Rest...>::value; };` used as
-`at<Idx<T, Types...>::value>()` in a function taking `Box<Types...>` fails with
-`'Idx__double_value' undeclared` at global and namespace scope alike, and a
-partial specialization whose pattern is `Box<Types...>` deduces only the first
-element (`cannot convert 'Box__int__double' to 'Box__int &'`). `get<T>` needs
-that substitution path fixed before it can be one recursive index helper plus
-one indirection.
 
 `std::optional` is unusable in constant expressions (`constexpr
 std::optional<int> o{5}` gives `constant expression expected`), and
-`std::is_copy_constructible<std::optional<NC> >` is wrongly true.
+`std::is_copy_constructible<std::optional<NC> >` is wrongly true. The second
+answer needs the trait to see a copy constructor that is *deleted* for a
+non-copyable element, which this `optional` (a plain user-provided copy
+constructor) cannot give: the storage has to be a union whose copy operation
+is defaulted behind a conditionally deleted base. The first then follows the
+constructor rule above, since `optional<int> o{5}` constructs through
+`emplace`.
+
 Cases: `test_optional_constexpr.cpp`,
 `test_optional_copy_constructible_trait.cpp`.
+
+Not from the queue but red in the retained set: a function template address as
+a template argument (`run_char<record>()` for
+`template<void (*F)(char)> void run_char()`) fails with `no matching function
+template 'run_char'`. Reproducer:
+`Tests/test.exe -Suite features/Templates -Select
+test_function_template_address_argument.cpp`. Red at the pre-queue commit as
+well, so it is a gap the queue never listed.
 
 ## Closed and covered
 
 Re-checked as working on 2026-09-16, now with retained coverage. No compiler
 work left in this list:
+
+- a pack expansion as a template argument of a qualified template-id in a
+  parameter type - `test_qualified_template_id_pack_argument.cpp`
+- a template-id that spells a pack inside a replayed function body, and a
+  partial specialization whose pattern deduces the pack -
+  `test_pack_template_id_in_replayed_body.cpp`,
+  `test_tuple_get_by_type.cpp`
+- a partial specialization whose argument list ends in `>>`
+  (`helper<T, void_t<T &>>`) - `test_partial_specialization_alias_argument.cpp`
+- union member write-then-read in a constant expression, while a read of an
+  *inactive* union member stays rejected
+  - `test_constexpr_union_member_write_read.cpp`,
+    `features/Templates/fail/test_local_constexpr_inactive_union_read.cpp`
+- bit-field write-then-read in a constant expression
+  - `test_constexpr_bitfield_read.cpp`
+- a variadic `std::variant` (more than four alternatives, converting
+  construction, `get<Index>`, `get_if`, `emplace`, non-copyable alternative
+  assignment) - `test_variant_*.cpp`
+- `std::get<T>(tuple)` - `test_tuple_get_by_type.cpp`
 
 - non-type pack element as an explicit template argument (`at<I>()...`,
   `std::get<I>(t)...`) - `test_explicit_template_argument_from_pack.cpp`

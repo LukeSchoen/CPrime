@@ -15560,6 +15560,12 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
   next();
   while (tok != TOK_EOF)
   {
+    /* The body may spell the pack in either form: a declared function
+       parameter pack (`void f(Ts... ts)` names `ts`) or the pack itself
+       (`const Box<Types...> &` leaves the parameter unnamed, so only the
+       template's own pack token appears).  Expand the body for both; a
+       value pack was already expanded into expanded_function_definition,
+       so the second expansion pass has nothing left to rewrite. */
     if (!td->is_class && function_params_done
         && !expanded_pack_body && pack_name_tok && pack_start >= 0)
       expanded_pack_body = capture_template_pack_body(pack_type_tok,
@@ -15694,6 +15700,16 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
         while (tok != TOK_EOF)
         {
           if (depth == 0 && (tok == ',' || tok == ')'))
+            break;
+          /* The ellipsis ends the element pattern.  Anything that closes an
+             enclosing template-id after it belongs to the surrounding
+             declarator, not to each expanded element: in
+             `f(Box<int, Ts...>)` the element is `Ts`, so the closing `>` must
+             stay outside the per-element text.  A closing `>` seen before the
+             ellipsis is part of the pattern itself, which is how
+             `f(Box<Ts>...)` expands to `Box<T0>, Box<T1>`. */
+          if (depth == 0 && has_pack
+              && (tok == TOK_GT || tok == '>' || tok == TOK_SAR))
             break;
           if (nb_param_toks < (int)(sizeof(param_toks) / sizeof(param_toks[0])))
             param_toks[nb_param_toks++] = tok;
@@ -15922,6 +15938,34 @@ static int instantiate_template_named_if_needed(TemplateDef *td,
       }
       tok_str_add(spec, TOK_OPERATOR);
       continue;
+    }
+    /* Outside the parameter list a pack is replayed token by token, and
+       binding only the pack's first argument would drop the remaining
+       elements.  The expansions that reach here are template arguments
+       (`Sequence<Ts...>` in a return type, for instance), where the element
+       pattern is the pack itself, so expand the whole pack in place. */
+    if (!td->is_class && td->variadic_param_index >= 0
+        && tok == td->type_param_toks[td->variadic_param_index]
+        && !(function_params_started && !function_params_done))
+    {
+      const int *peek = macro_ptr;
+      int pack = td->variadic_param_index, pi, peeked = 0;
+      CValue peek_value;
+      TOK_GET(&peeked, &peek, &peek_value);
+      while (peeked == TOK_LINENUM)
+        TOK_GET(&peeked, &peek, &peek_value);
+      if (peeked == TOK_DOTS)
+      {
+        next();
+        next();
+        for (pi = pack; pi < args->nb; ++pi)
+        {
+          if (pi > pack)
+            tok_str_add(spec, ',');
+          tok_str_add(spec, args->toks[pi]);
+        }
+        continue;
+      }
     }
     if (!td->is_class && template_arg_for_param(td, args, tok))
     {

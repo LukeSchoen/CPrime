@@ -105,6 +105,13 @@ typedef struct ConstexprLocalField {
   ConstexprPointerBounds pointer_bounds;
   int offset;
   int zero_size;
+  /* A bit-field shares its storage unit with its neighbours, so a captured
+     store is matched by bit position as well as by offset and type. */
+  int bit_position;
+  /* The member a store named, when the initializer knows it: a union's
+     members share an offset and often a type, so the name is what tells an
+     inactive member read from the member that was initialized. */
+  int member_token;
   CType type;
   CValue value;
   struct ConstexprLocalField *next;
@@ -197,6 +204,9 @@ typedef struct
   int constexpr_initializer;
   Sym *constant_object_target;
   int constant_object_offset;
+  /* Name of the member currently being initialized, so a captured store can
+     be matched against the member a later read names. */
+  int member_token;
   int capture_integral_constexpr;
   int integral_constexpr_valid;
   long long integral_constexpr_value;
@@ -367,6 +377,7 @@ static void skip_or_save_balanced_tokens(TokenString *dst);
 static void constexpr_read_local_value(SValue *value);
 static int constexpr_const_subobject(CType *type, int offset);
 static void reset_assignment_lvalues(void);
+static int64_t constexpr_bitfield_value(CType *type, int64_t raw);
 #include "../../../include/runtime/cprime_bit_query.h"
 #include "../../../include/runtime/cprime_overflow_query.h"
 
@@ -7625,7 +7636,7 @@ ST_FUNC void vstore(void)
   if (constexpr_pointer_evaluation_active()
       && (vtop[-1].r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == (VT_LOCAL | VT_LVAL)
       && is_active_constexpr_temporary(vtop[-1].sym)
-      && dbt != VT_STRUCT && !(ft & (VT_ARRAY | VT_BITFIELD))) {
+      && dbt != VT_STRUCT && !(ft & VT_ARRAY)) {
     SValue destination = vtop[-1];
     ConstexprLocalField *entry;
     unsigned bucket = constexpr_local_bucket(destination.sym);
@@ -7643,6 +7654,11 @@ ST_FUNC void vstore(void)
     entry->offset = (int)destination.c.i - (int)destination.sym->c;
     entry->type = destination.type;
     entry->value = vtop->c;
+    if (ft & VT_BITFIELD) {
+      entry->bit_position = BIT_POS(ft);
+      entry->value.i = constexpr_bitfield_value(&destination.type,
+                                                entry->value.i);
+    }
     entry->relocation = ((vtop->r & VT_SYM) || is_active_constexpr_temporary(vtop->sym)) ? vtop->sym : NULL;
     entry->pointer_bounds = vtop->constexpr_bounds;
     entry->next = constexpr_local_fields[bucket];
@@ -17472,6 +17488,11 @@ redo:
     }
     else
     {
+      /* A reference to void is ill formed.  Template substitution has to see
+         that as a failure rather than bind `void&` (`add_lvalue_reference`
+         answers `T` for `void` through a void_t partial specialization). */
+      if (is_cpp_translation_unit() && (type->t & VT_BTYPE) == VT_VOID)
+        cprime_error("cannot form a reference to 'void'");
       mk_reference(type);
       if (is_rvalue_ref)
         type->t |= VT_RVALUE_REFERENCE;
@@ -17573,6 +17594,21 @@ static int constexpr_aggregate_field_value(SValue *object, Sym *field,
     int offset, CValue *value, Sym **relocation, ConstexprPointerBounds *pointer_bounds);
 static int constexpr_local_subobject(CType *root, int offset, CType *target, int allow_mutable);
 
+/* Truncate a bit-field's stored value to its declared width, sign-extending
+   a signed field again so the constant matches the emitted load. */
+static int64_t constexpr_bitfield_value(CType *type, int64_t raw)
+{
+  int bits = BIT_SIZE(type->t);
+  uint64_t mask, value = (uint64_t)raw;
+  if (bits <= 0 || bits >= 64)
+    return raw;
+  mask = ((uint64_t)1 << bits) - 1;
+  value &= mask;
+  if (!(type->t & VT_UNSIGNED) && (value & ((uint64_t)1 << (bits - 1))))
+    value |= ~mask;
+  return (int64_t)value;
+}
+
 /* Value-consuming operations read the latest store, leaving any separate
    assignment destination on the value stack intact. */
 static void constexpr_read_local_value(SValue *operand)
@@ -17593,14 +17629,32 @@ static void constexpr_read_local_value(SValue *operand)
     operand->sym = NULL;
     return;
   }
+  /* A value that already carries its constant but still names a bit-field
+     keeps the field's marker; consuming it has to truncate it the way the
+     emitted load would, so that no later load of the constant is emitted. */
+  if ((operand->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_CONST
+      && (operand->type.t & VT_BITFIELD))
+  {
+    operand->c.i = constexpr_bitfield_value(&operand->type, operand->c.i);
+    operand->type.t &= ~VT_STRUCT_MASK;
+    return;
+  }
   if (!constexpr_pointer_evaluation_active()
       || (operand->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) != (VT_LOCAL | VT_LVAL)
       || !is_active_constexpr_temporary(operand->sym)
-      || (operand->type.t & (VT_ARRAY | VT_VOLATILE | VT_BITFIELD))
+      || (operand->type.t & (VT_ARRAY | VT_VOLATILE))
       || (operand->type.t & VT_BTYPE) == VT_STRUCT) return;
   memset(&field, 0, sizeof(field));
   field.type = operand->type;
-  if (!constexpr_aggregate_field_value(operand, &field, 0, &value, &relocation, &bounds)) return;
+  if (!constexpr_aggregate_field_value(operand, &field, 0, &value, &relocation, &bounds))
+    return;
+  if (operand->type.t & VT_BITFIELD)
+  {
+    /* The stored value is the whole storage unit's contribution to this
+       field; a bit-field read carries only its own bits. */
+    value.i = constexpr_bitfield_value(&operand->type, value.i);
+    operand->type.t &= ~VT_STRUCT_MASK;
+  }
   operand->r = is_active_constexpr_temporary(relocation) ? VT_LOCAL : VT_CONST | (relocation ? VT_SYM : 0);
   operand->c = value;
   operand->sym = relocation;
@@ -17778,11 +17832,10 @@ static int constexpr_aggregate_field_value(SValue *object, Sym *field,
   memset(pointer_bounds, 0, sizeof(*pointer_bounds));
   if (object->sym && ((object->sym->type.t & VT_CONSTANT)
                      || is_active_constexpr_temporary(object->sym))
-      && !IS_UNION(object->type.t)
       && !(object->type.t & VT_VOLATILE)
       && constexpr_local_object_view(object)
       && (!field->a.cpp_mutable_field || is_active_constexpr_temporary(object->sym))
-      && !(field->type.t & (VT_ARRAY | VT_VLA | VT_BITFIELD | VT_VOLATILE))
+      && !(field->type.t & (VT_ARRAY | VT_VLA | VT_VOLATILE))
       && (object->r & VT_VALMASK) == VT_LOCAL) {
     ConstexprLocalField *entry;
     int relative = (int)object->c.i - (int)object->sym->c + offset;
@@ -17809,6 +17862,10 @@ static int constexpr_aggregate_field_value(SValue *object, Sym *field,
           return 1;
         }
       } else if (entry->object == object->sym && entry->offset == relative
+          && entry->bit_position == ((field->type.t & VT_BITFIELD)
+                                       ? BIT_POS(field->type.t) : 0)
+          && (!entry->member_token || !field->v
+              || entry->member_token == (field->v & ~SYM_FIELD))
           && is_compatible_unqualified_types(&entry->type, &field->type)) {
         *value = entry->value;
         *relocation = entry->relocation;
@@ -17825,7 +17882,7 @@ static int constexpr_aggregate_field_value(SValue *object, Sym *field,
           && !static_initializer_constant_fold
           && ((object->sym->type.t & (VT_CONSTANT | VT_ARRAY))
               != (VT_CONSTANT | VT_ARRAY)))
-      || (field->type.t & (VT_ARRAY | VT_VLA | VT_BITFIELD)))
+      || (field->type.t & (VT_ARRAY | VT_VLA)))
     return 0;
   bt = field->type.t & VT_BTYPE;
   if (bt == VT_STRUCT || bt == VT_FUNC || bt == VT_VOID)
@@ -17894,7 +17951,14 @@ static int constexpr_aggregate_field_value(SValue *object, Sym *field,
   case 8: value->i = read64le(section->data + location); break;
   default: return 0;
   }
-  if (is_integer_btype(bt) && !(field->type.t & VT_UNSIGNED)) {
+  if (field->type.t & VT_BITFIELD)
+  {
+    /* The load above read the containing storage unit; a bit-field carries
+       only the bits at its own position. */
+    value->i >>= BIT_POS(field->type.t);
+    value->i = constexpr_bitfield_value(&field->type, value->i);
+  }
+  else if (is_integer_btype(bt) && !(field->type.t & VT_UNSIGNED)) {
     if (size == 1) value->i = (int8_t)value->i;
     else if (size == 2) value->i = (int16_t)value->i;
     else if (size == 4) value->i = (int32_t)value->i;

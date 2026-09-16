@@ -5198,6 +5198,22 @@ static int try_call_cpp_call_operator(void)
   return 1;
 }
 
+/* A live operand keeps its value category in the stack descriptor.  The
+   saved call-argument probe records that category in the type instead, and
+   template deduction reads it there, so operator resolution has to present
+   an rvalue operand the same way: a forwarding reference deduces `T&` from
+   an lvalue and `T` from an rvalue. */
+static CType rvalue_marked_operand_type(CType *type, int value)
+{
+  CType marked = *type;
+  if (!is_reference_type(&marked)
+      && ((!(value & VT_LVAL) && !(marked.t & VT_ARRAY)
+           && (marked.t & VT_BTYPE) != VT_FUNC)
+          || (value & VT_CXX_PRVALUE)))
+    marked.t |= VT_RVALUE_REFERENCE;
+  return marked;
+}
+
 static int try_call_cpp_assignment_operator(void)
 {
   int method_tok = CPP_TOK_ASSIGN;
@@ -5205,11 +5221,18 @@ static int try_call_cpp_assignment_operator(void)
   Sym *func_type;
   Sym *sa, *this_arg, *value_arg;
   CType receiver_type;
+  CType value_operand_type;
   int null_pointer_rhs;
 
   if ((vtop[-1].type.t & VT_BTYPE) != VT_STRUCT)
     return 0;
   receiver_type = vtop[-1].type;
+  /* A live operand carries its value category in the stack descriptor, not
+     in its type.  A member template whose parameter is a forwarding
+     reference deduces `T&` from an lvalue and `T` from an rvalue, so mark an
+     rvalue operand the way the saved call-argument probe does before the
+     candidates for it are resolved. */
+  value_operand_type = rvalue_marked_operand_type(&vtop->type, vtop->r);
   null_pointer_rhs = is_null_pointer(vtop)
     && (vtop->type.t & VT_BTYPE) != VT_PTR
     && (vtop->type.t & VT_BTYPE) != VT_NULLPTR;
@@ -5217,7 +5240,7 @@ static int try_call_cpp_assignment_operator(void)
       || ((vtop[-1].r & VT_VALMASK) < VT_CONST))
     receiver_type.t &= ~VT_CONSTANT;
   func_sym = resolve_member_func_by_arg_types(&receiver_type, method_tok,
-                                              &vtop->type, 1);
+                                              &value_operand_type, 1);
   /* Assigning the receiver's own class type is the implicit copy or move
      assignment, which is an exact match and is therefore never beaten by an
      operator= that would need a user-defined conversion of the source.  The
@@ -5234,7 +5257,7 @@ static int try_call_cpp_assignment_operator(void)
   {
     func_sym = resolve_member_field_func_by_arg_types(&vtop[-1].type,
                                                       method_tok,
-                                                      &vtop->type, 1);
+                                                      &value_operand_type, 1);
   }
   /* An implicit assignment still accepts a converting-constructor temporary.
      Materialize it before retrying so its class value category also selects
@@ -5311,16 +5334,18 @@ static int try_call_cpp_compound_assign_operator(int op)
   Sym *func_sym;
   Sym *func_type;
   Sym *sa;
+  CType value_operand_type;
 
   if (!method_tok)
     return 0;
   if ((vtop[-1].type.t & VT_BTYPE) != VT_STRUCT)
     return try_call_cpp_free_binary_operator(op);
+  value_operand_type = rvalue_marked_operand_type(&vtop->type, vtop->r);
   func_sym = resolve_member_func_by_arg_types(&vtop[-1].type, method_tok,
-                                              &vtop->type, 1);
+                                              &value_operand_type, 1);
   if (!func_sym)
     func_sym = resolve_member_field_func_by_arg_types(&vtop[-1].type, method_tok,
-                                                      &vtop->type, 1);
+                                                      &value_operand_type, 1);
   if (!func_sym)
     return try_call_cpp_free_binary_operator(op);
   if ((func_sym->type.t & VT_BTYPE) != VT_FUNC || !func_sym->type.ref)

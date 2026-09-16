@@ -350,6 +350,18 @@ static int template_substituted_pattern_argument(TemplateDef *definition,
   {
     if (!parentheses && !brackets && !angles
         && (tok == ',' || tok == TOK_GT || tok == TOK_SAR)) break;
+    /* `>>` at one open angle closes this argument's template-id and the
+       enclosing template-id together (`Helper<T, void_t<T &>>`).  Keep the
+       first '>' for the argument being read and leave the second for the
+       enclosing list, which otherwise sees a single shift token and never
+       finishes the argument. */
+    if (!parentheses && !brackets && tok == TOK_SAR && angles == 1)
+    {
+      tok_str_add(tokens, TOK_GT);
+      tok = TOK_GT;
+      unget_tok(TOK_GT);
+      break;
+    }
     if (tok == '(') ++parentheses;
     else if (tok == ')') --parentheses;
     else if (tok == '[') ++brackets;

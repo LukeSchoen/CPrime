@@ -3,16 +3,7 @@
     "comment":  "fast is the open C++17 work list: one case per gap that is still red, so a green fast run means the queue is empty. Every other retained case, including all the representative cases, belongs to the pedantic tier, which is every retained internal case that is not excluded. The pedantic tier is close to banned for agents: verify with the affected suite and -Regression instead. A case leaves fast by not being listed once it passes, and returns only when the routine loop needs that behavior covered on every pass.",
     "fast":  [
                  "features/Cpp17Gaps/pass/test_constexpr_user_provided_constructor.cpp",
-                 "features/Cpp17Gaps/pass/test_constexpr_union_member_write_read.cpp",
-                 "features/Cpp17Gaps/pass/test_constexpr_bitfield_read.cpp",
                  "features/Cpp17Gaps/pass/test_constexpr_reference_member.cpp",
-                 "features/Cpp17Gaps/pass/test_variant_more_than_four_alternatives.cpp",
-                 "features/Cpp17Gaps/pass/test_variant_converting_construction.cpp",
-                 "features/Cpp17Gaps/pass/test_variant_get_by_index.cpp",
-                 "features/Cpp17Gaps/pass/test_variant_get_if.cpp",
-                 "features/Cpp17Gaps/pass/test_variant_emplace.cpp",
-                 "features/Cpp17Gaps/pass/test_variant_noncopyable_assignment.cpp",
-                 "features/Cpp17Gaps/pass/test_tuple_get_by_type.cpp",
                  "features/Cpp17Gaps/pass/test_optional_constexpr.cpp",
                  "features/Cpp17Gaps/pass/test_optional_copy_constructible_trait.cpp"
              ],

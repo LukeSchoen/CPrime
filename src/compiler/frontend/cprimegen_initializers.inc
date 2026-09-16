@@ -240,8 +240,12 @@ no_designator:
 
   {
     int saved_list = p->list_initialization;
+    int saved_member = p->member_token;
     p->list_initialization = 1;
+    if (!(type->t & VT_ARRAY) && cur_field && *cur_field)
+      p->member_token = (*cur_field)->v & ~SYM_FIELD;
     decl_initializer(p, type, c, flags & ~DIF_FIRST);
+    p->member_token = saved_member;
     p->list_initialization = saved_list;
   }
 
@@ -624,7 +628,7 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
              && (vtop->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == VT_LOCAL
              && is_active_constexpr_temporary(vtop->sym)))
       cprime_error("constexpr variable initializer is not a constant expression");
-    if (p->constant_object_target && !(type->t & VT_BITFIELD)) {
+    if (p->constant_object_target) {
       unsigned bucket = constexpr_local_bucket(p->constant_object_target);
       ConstexprLocalField *entry = cprime_malloc(sizeof(*entry));
       entry->object = p->constant_object_target;
@@ -632,6 +636,11 @@ static void init_putv(init_params *p, CType *type, unsigned long c)
       entry->offset = (int)c - p->constant_object_offset;
       entry->type = dtype;
       entry->value = vtop->c;
+      entry->member_token = p->member_token;
+      entry->bit_position = (dtype.t & VT_BITFIELD) ? BIT_POS(dtype.t) : 0;
+      if (dtype.t & VT_BITFIELD) {
+        entry->value.i = constexpr_bitfield_value(&dtype, entry->value.i);
+      }
       entry->relocation = ((vtop->r & VT_SYM) || is_active_constexpr_temporary(vtop->sym)) ? vtop->sym : NULL;
       entry->pointer_bounds = vtop->constexpr_bounds;
       entry->next = constexpr_local_fields[bucket];

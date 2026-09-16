@@ -150,6 +150,37 @@ namespace std
     return static_cast<const __tuple_leaf<Index, type> &>(value).__value;
   }
 
+  /* Element access by type.  The receiver is again deduced as a whole, and a
+     partial specialization opens its pack, so the index comes from one
+     recursive helper rather than from a pack expansion in the parameter
+     type. */
+  template<class T, class... Types>
+  struct __tuple_type_index;
+
+  template<class T, class... Rest>
+  struct __tuple_type_index<T, T, Rest...>
+  {
+    static const size_t value = 0;
+  };
+
+  template<class T, class First, class... Rest>
+  struct __tuple_type_index<T, First, Rest...>
+  {
+    static const size_t value = 1 + __tuple_type_index<T, Rest...>::value;
+  };
+
+  template<class T, class... Types>
+  T &get(tuple<Types...> &value)
+  {
+    return get<__tuple_type_index<T, Types...>::value>(value);
+  }
+
+  template<class T, class... Types>
+  const T &get(const tuple<Types...> &value)
+  {
+    return get<__tuple_type_index<T, Types...>::value>(value);
+  }
+
   /* One pack expansion each: the answer type is built from `decay<Types>...`
      and the values are forwarded one per parameter. */
   template<class... Types>

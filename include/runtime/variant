@@ -16,54 +16,265 @@ namespace std
 
   namespace __cpc_variant_detail
   {
+    /* Position of T among the alternatives, or -1 when absent. */
     template<class T, class... Types>
     struct index_of;
-    template<class T, class First, class... Rest>
-    struct index_of<T, First, Rest...>
-    {
-      enum { next = index_of<T, Rest...>::value };
-      enum { value = is_same<T, First>::value ? 0
-        : next == -1 ? -1 : next + 1 };
-    };
+
     template<class T>
     struct index_of<T>
     {
       enum { value = -1 };
     };
+
+    template<class T, class First, class... Rest>
+    struct index_of<T, First, Rest...>
+    {
+      enum { next = index_of<T, Rest...>::value };
+      enum { value = is_same<T, First>::value ? 0
+                    : next == -1 ? -1 : next + 1 };
+    };
+
+    /* The alternative at a position, so `get<Index>` can name its type. */
+    template<size_t Index, class... Types>
+    struct type_at;
+
+    template<class First, class... Rest>
+    struct type_at<0, First, Rest...>
+    {
+      typedef First type;
+    };
+
+    template<size_t Index, class First, class... Rest>
+    struct type_at<Index, First, Rest...>
+    {
+      typedef typename type_at<Index - 1, Rest...>::type type;
+    };
+
+    template<size_t First, size_t Second>
+    struct greater
+    {
+      static const size_t value = First > Second ? First : Second;
+    };
+
+    /* The largest alternative, walked by index.  A recursion that peels one
+       type at a time would end in an empty specialization whose name the
+       enclosing specialization shares, so the walk counts down instead. */
+    template<size_t Index, size_t Count, class... Types>
+    struct max_size
+    {
+      static const size_t value =
+        greater<sizeof(typename type_at<Index, Types...>::type),
+                max_size<Index + 1, Count, Types...>::value>::value;
+    };
+
+    template<size_t Count, class... Types>
+    struct max_size<Count, Count, Types...>
+    {
+      static const size_t value = 1;
+    };
+
+    template<size_t Index, size_t Count, class... Types>
+    struct max_align
+    {
+      static const size_t value =
+        greater<alignof(typename type_at<Index, Types...>::type),
+                max_align<Index + 1, Count, Types...>::value>::value;
+    };
+
+    template<size_t Count, class... Types>
+    struct max_align<Count, Count, Types...>
+    {
+      static const size_t value = 1;
+    };
+
+    /* One recursive step per alternative, so a call by runtime index reaches
+       the right one without an index sequence.  The terminal step accepts
+       any index: the stored index always names a live alternative. */
+    template<size_t Index, class... Types>
+    struct alternatives;
+
+    template<size_t Index>
+    struct alternatives<Index>
+    {
+      static void destroy(void *storage, size_t index) {}
+      static void copy_construct(void *storage, const void *source, size_t index) {}
+      static void move_construct(void *storage, void *source, size_t index) {}
+      static void copy_assign(void *storage, const void *source, size_t index) {}
+      static void move_assign(void *storage, void *source, size_t index) {}
+      static void *address(void *storage, size_t index) { return 0; }
+    };
+
+    template<size_t Index, class First, class... Rest>
+    struct alternatives<Index, First, Rest...>
+    {
+      static void destroy(void *storage, size_t index)
+      {
+        if (index == Index)
+          static_cast<First *>(storage)->~First();
+        else
+          alternatives<Index + 1, Rest...>::destroy(storage, index);
+      }
+
+      static void copy_construct(void *storage, const void *source, size_t index)
+      {
+        if (index == Index)
+          new (storage) First(*static_cast<const First *>(source));
+        else
+          alternatives<Index + 1, Rest...>::copy_construct(storage, source, index);
+      }
+
+      static void move_construct(void *storage, void *source, size_t index)
+      {
+        if (index == Index)
+          new (storage) First(static_cast<First &&>(*static_cast<First *>(source)));
+        else
+          alternatives<Index + 1, Rest...>::move_construct(storage, source, index);
+      }
+
+      static void copy_assign(void *storage, const void *source, size_t index)
+      {
+        if (index == Index)
+          *static_cast<First *>(storage) = *static_cast<const First *>(source);
+        else
+          alternatives<Index + 1, Rest...>::copy_assign(storage, source, index);
+      }
+
+      static void move_assign(void *storage, void *source, size_t index)
+      {
+        if (index == Index)
+          *static_cast<First *>(storage)
+            = static_cast<First &&>(*static_cast<First *>(source));
+        else
+          alternatives<Index + 1, Rest...>::move_assign(storage, source, index);
+      }
+
+      static void *address(void *storage, size_t index)
+      {
+        return index == Index
+                 ? storage
+                 : alternatives<Index + 1, Rest...>::address(storage, index);
+      }
+    };
+
+    /* A value converts when its decayed type names one alternative and is
+       not the variant itself, which keeps copy and move construction from
+       being hijacked by the forwarding constructor. */
+    template<class T, class Variant, class... Types>
+    struct converts_to_alternative
+    {
+      static const bool value =
+        !is_same<typename decay<T>::type, Variant>::value
+        && index_of<typename decay<T>::type, Types...>::value >= 0;
+    };
   }
 
-  template<class A, class B = __variant_empty, class C = __variant_empty,
-           class D = __variant_empty>
+  template<class... Types>
   class variant
   {
   public:
-    variant() : m_index(0)
+    variant()
     {
-      new (static_cast<void *>(&m_storage)) A();
+      typedef typename __cpc_variant_detail::type_at<0, Types...>::type first_type;
+      new (static_cast<void *>(&m_storage)) first_type();
+      m_index = 0;
+    }
+
+    variant(const variant &other)
+    {
+      __cpc_variant_detail::alternatives<0, Types...>::copy_construct(
+          static_cast<void *>(&m_storage),
+          static_cast<const void *>(&other.m_storage), other.m_index);
+      m_index = other.m_index;
+    }
+
+    variant(variant &&other)
+    {
+      __cpc_variant_detail::alternatives<0, Types...>::move_construct(
+          static_cast<void *>(&m_storage),
+          static_cast<void *>(&other.m_storage), other.m_index);
+      m_index = other.m_index;
+    }
+
+    template<class T,
+             typename enable_if<__cpc_variant_detail::converts_to_alternative<
+                                  T, variant, Types...>::value, int>::type = 0>
+    variant(T &&value)
+    {
+      typedef typename decay<T>::type type;
+      new (static_cast<void *>(&m_storage)) type(static_cast<T &&>(value));
+      m_index = static_cast<size_t>(
+          __cpc_variant_detail::index_of<type, Types...>::value);
     }
 
     ~variant()
     {
-      destroy();
+      __cpc_variant_detail::alternatives<0, Types...>::destroy(
+          static_cast<void *>(&m_storage), m_index);
     }
 
-    template<class T>
-    variant &operator=(const T &value)
+    variant &operator=(const variant &other)
     {
-      int index = __cpc_variant_detail::index_of<T, A, B, C, D>::value;
-      if (index < 0)
-        return *this;
-      destroy();
-      if (index == 0)
-        new (static_cast<void *>(&m_storage)) A(value);
-      else if (index == 1)
-        new (static_cast<void *>(&m_storage)) B(value);
-      else if (index == 2)
-        new (static_cast<void *>(&m_storage)) C(value);
+      if (m_index == other.m_index)
+        __cpc_variant_detail::alternatives<0, Types...>::copy_assign(
+            static_cast<void *>(&m_storage),
+            static_cast<const void *>(&other.m_storage), m_index);
       else
-        new (static_cast<void *>(&m_storage)) D(value);
-      m_index = static_cast<size_t>(index);
+      {
+        destroy();
+        __cpc_variant_detail::alternatives<0, Types...>::copy_construct(
+            static_cast<void *>(&m_storage),
+            static_cast<const void *>(&other.m_storage), other.m_index);
+        m_index = other.m_index;
+      }
       return *this;
+    }
+
+    variant &operator=(variant &&other)
+    {
+      if (m_index == other.m_index)
+        __cpc_variant_detail::alternatives<0, Types...>::move_assign(
+            static_cast<void *>(&m_storage),
+            static_cast<void *>(&other.m_storage), m_index);
+      else
+      {
+        destroy();
+        __cpc_variant_detail::alternatives<0, Types...>::move_construct(
+            static_cast<void *>(&m_storage),
+            static_cast<void *>(&other.m_storage), other.m_index);
+        m_index = other.m_index;
+      }
+      return *this;
+    }
+
+    template<class T,
+             typename enable_if<__cpc_variant_detail::converts_to_alternative<
+                                  T, variant, Types...>::value, int>::type = 0>
+    variant &operator=(T &&value)
+    {
+      typedef typename decay<T>::type type;
+      size_t index = static_cast<size_t>(
+          __cpc_variant_detail::index_of<type, Types...>::value);
+      if (m_index == index)
+        *static_cast<type *>(static_cast<void *>(&m_storage))
+          = static_cast<T &&>(value);
+      else
+      {
+        destroy();
+        new (static_cast<void *>(&m_storage)) type(static_cast<T &&>(value));
+        m_index = index;
+      }
+      return *this;
+    }
+
+    template<class T, class... Args>
+    T &emplace(Args &&...args)
+    {
+      destroy();
+      new (static_cast<void *>(&m_storage)) T(
+          static_cast<Args &&>(args)...);
+      m_index = static_cast<size_t>(
+          __cpc_variant_detail::index_of<T, Types...>::value);
+      return *static_cast<T *>(static_cast<void *>(&m_storage));
     }
 
     size_t index() const noexcept { return m_index; }
@@ -73,45 +284,105 @@ namespace std
     {
       return *static_cast<T *>(static_cast<void *>(&m_storage));
     }
+
     template<class T>
     const T &get() const
     {
       return *static_cast<const T *>(static_cast<const void *>(&m_storage));
     }
 
+    template<size_t Index>
+    typename __cpc_variant_detail::type_at<Index, Types...>::type &get()
+    {
+      typedef typename __cpc_variant_detail::type_at<Index, Types...>::type type;
+      return *static_cast<type *>(static_cast<void *>(&m_storage));
+    }
+
+    template<size_t Index>
+    const typename __cpc_variant_detail::type_at<Index, Types...>::type &
+    get() const
+    {
+      typedef typename __cpc_variant_detail::type_at<Index, Types...>::type type;
+      return *static_cast<const type *>(static_cast<const void *>(&m_storage));
+    }
+
   private:
     void destroy()
     {
-      if (m_index == 0)
-        static_cast<A *>(static_cast<void *>(&m_storage))->~A();
-      else if (m_index == 1 && !is_same<B, __variant_empty>::value)
-        static_cast<B *>(static_cast<void *>(&m_storage))->~B();
-      else if (m_index == 2 && !is_same<C, __variant_empty>::value)
-        static_cast<C *>(static_cast<void *>(&m_storage))->~C();
-      else if (m_index == 3 && !is_same<D, __variant_empty>::value)
-        static_cast<D *>(static_cast<void *>(&m_storage))->~D();
+      __cpc_variant_detail::alternatives<0, Types...>::destroy(
+          static_cast<void *>(&m_storage), m_index);
     }
 
-    typename aligned_storage<64, 16>::type m_storage;
+    typename aligned_storage<
+        __cpc_variant_detail::max_size<0, sizeof...(Types), Types...>::value,
+        __cpc_variant_detail::max_align<0, sizeof...(Types), Types...>::value>::type
+      m_storage;
     size_t m_index;
   };
 
-  template<class T, class A, class B, class C, class D>
-  bool holds_alternative(const variant<A, B, C, D> &value)
+  template<class T, class... Types>
+  bool holds_alternative(const variant<Types...> &value)
   {
-    return value.index() == (size_t)__cpc_variant_detail::index_of<
-      T, A, B, C, D>::value;
+    return value.index() == static_cast<size_t>(
+        __cpc_variant_detail::index_of<T, Types...>::value);
   }
 
-  template<class T, class A, class B, class C, class D>
-  T &get(variant<A, B, C, D> &value)
+  template<class T, class... Types>
+  T &get(variant<Types...> &value)
   {
     return value.template get<T>();
   }
-  template<class T, class A, class B, class C, class D>
-  const T &get(const variant<A, B, C, D> &value)
+
+  template<class T, class... Types>
+  const T &get(const variant<Types...> &value)
   {
     return value.template get<T>();
+  }
+
+  template<size_t Index, class... Types>
+  typename __cpc_variant_detail::type_at<Index, Types...>::type &
+  get(variant<Types...> &value)
+  {
+    return value.template get<Index>();
+  }
+
+  template<size_t Index, class... Types>
+  const typename __cpc_variant_detail::type_at<Index, Types...>::type &
+  get(const variant<Types...> &value)
+  {
+    return value.template get<Index>();
+  }
+
+  template<class T, class... Types>
+  T *get_if(variant<Types...> *value) noexcept
+  {
+    return value && value->index() == static_cast<size_t>(
+        __cpc_variant_detail::index_of<T, Types...>::value)
+             ? &value->template get<T>() : 0;
+  }
+
+  template<class T, class... Types>
+  const T *get_if(const variant<Types...> *value) noexcept
+  {
+    return value && value->index() == static_cast<size_t>(
+        __cpc_variant_detail::index_of<T, Types...>::value)
+             ? &value->template get<T>() : 0;
+  }
+
+  template<size_t Index, class... Types>
+  typename __cpc_variant_detail::type_at<Index, Types...>::type *
+  get_if(variant<Types...> *value) noexcept
+  {
+    return value && value->index() == Index
+             ? &value->template get<Index>() : 0;
+  }
+
+  template<size_t Index, class... Types>
+  const typename __cpc_variant_detail::type_at<Index, Types...>::type *
+  get_if(const variant<Types...> *value) noexcept
+  {
+    return value && value->index() == Index
+             ? &value->template get<Index>() : 0;
   }
 }
 
