@@ -21,8 +21,6 @@ Gate placement:
 - The open-gap cases drive the fast tier, so the routine loop is the work list
   and its red count is visible on every pass. Fast is red by exactly the cases
   listed in Compatibility\tests\tiers.json.
-- As of 2026-09-16 the suite is 74 passed, 20 failed; those 20 are the current
-  C++17 fast queue for this suite.
 - Every other retained case belongs to the pedantic tier. Do not run that tier:
   it is close to banned, and `-Regression` is the publication gate.
 - Keep every case in the suite once it passes: it is the regression cover for

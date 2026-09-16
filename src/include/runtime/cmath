@@ -9,6 +9,13 @@ inline float abs(float value) { return ::fabsf(value); }
 inline double abs(double value) { return ::fabs(value); }
 inline long double abs(long double value) { return ::fabsl(value); }
 
+/* The C++ <math.h> contract adds the float and long double overloads of the
+   absolute value functions.  Declaring them next to the C declarations lets
+   the `using ::fabs;` below import one set for every floating type, exactly
+   as the `abs` overloads above are imported. */
+inline float fabs(float value) { return ::fabsf(value); }
+inline long double fabs(long double value) { return ::fabsl(value); }
+
 #undef isinf
 #undef isnan
 #undef isnormal

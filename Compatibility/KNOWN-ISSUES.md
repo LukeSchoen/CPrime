@@ -1,96 +1,140 @@
 # Known CPC issues
 
-━━━━━━━━━━━━━━━━━━  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-   clCRC.cpp            Compiler bug, reproduced in ~20 lines: an out-of-class member function template whose
-                        declaration and definition spell a parameter type with a leading :: (::G) is replayed
-                        without its declarator → incompatible types for redefinition … versus 'inline unsigned long
-                        long'. Last compiler bug before the build proceeds.
-  ───────────────────  ──────────────────────────────────────────────────────────────────────────────────────────────
-   faceDetectCNN.cpp    __m256 undeclared — CPrime's immintrin.h is a stub; AVX vector types are unimplemented. (we want sse / avx implemented)
-  ───────────────────  ──────────────────────────────────────────────────────────────────────────────────────────────
-   clProcessList.cpp    psapi.h is absent from third-party/win32-sdk/include. The installed Windows SDK has um/
-                        Psapi.h; vendoring one is a packaging call I left to you.
+Open defects, each with its reduced shape and the work it needs. Completed work
+is code and retained cases; nothing here is a progress log.
 
+## clCRC.cpp: a leading `::` in a replayed member function template
 
-## RTMPose / Kpose findings (2026-09-16)
+An out-of-class member function template whose declaration and definition spell
+a parameter type with a leading `::` (`::G`) is replayed without its declarator,
+so the redefinition reports incompatible types (`... versus 'inline unsigned
+long long'`). The reproducer is about 20 lines in the clCRC checkout.
 
-Measured on the development machine (Intel i5-8250U, 4 cores/8 threads):
+Work required:
 
-| Model | Inference per frame |
-| --- | --- |
-| rtmpose-t (default) | ~0.53 s |
-| rtmpose-m | ~2.9 s |
+- Reduce it to a standalone CPrime-local case.
+- Keep the declarator when the replay re-spells the parameter type.
+- Retain the case in the suite that owns the behavior.
 
-Convolutions dominate at roughly 85% of inference time. Threading the
-convolutions over output pixels gives only about 1.35x here; `KPOSE_THREADS=1`
-forces single-threaded execution for A/B measurements. A hand-written SSE GEMM
-measured about 5x faster than the C loop in isolation, but cpc miscompiles it
-as recorded below, so the shipped Kpose kernels remain portable C.
+## faceDetectCNN.cpp: SSE and AVX vector types
 
-The external reproducer and notes are in `C:\Luke\Src\Kinect\README.md`;
-fixtures and models are regenerated with
-`python tools\vendor_rtmpose.py --all`.
+`__m256` is undeclared: CPrime's `immintrin.h` is a stub, so AVX vector types
+are unimplemented. The project also needs the SSE types and intrinsics.
+
+Work required:
+
+- Implement the SSE vector types and intrinsics the project uses, then the AVX
+  ones.
+- Retain a compile-and-run case for the types and for the intrinsics added.
+
+## clProcessList.cpp: psapi.h
+
+`psapi.h` is absent from `third-party/win32-sdk/include`; the installed Windows
+SDK ships `um/Psapi.h`.
+
+Work required:
+
+- Choose the packaging shape for the missing SDK header and add it.
+- Compile and run the uses the project makes of the process API.
+
+## RTMPose / Kpose kernels (`C:\Luke\Src\Kinect`, read only)
+
+Convolutions dominate inference at roughly 85% of the time, and a hand-written
+SSE GEMM measured about 5x faster than the C loop in isolation, but it cannot
+ship while the two defects below are open, so the Kpose kernels stay portable C.
+`KPOSE_THREADS=1` forces single-threaded execution for A/B measurements. The
+external reproducer and notes are in `C:\Luke\Src\Kinect\README.md`; fixtures
+and models are regenerated with `python tools\vendor_rtmpose.py --all`.
 
 ### InterlockedIncrement ignores its result
 
-`InterlockedIncrement` always returns 0 instead of the new value. An atomic
-work counter therefore never advances.
+`InterlockedIncrement` returns 0 instead of the new value, so an atomic work
+counter never advances.
 
-Minimal reproducer shape:
+Reduced shape:
 
 ```c
 long next = InterlockedIncrement(&job->next) - 1;
 /* The loop never observes 1. */
 ```
 
-The Kpose kernels use static slice partitioning because of this bug.
-
 Work required:
 
 - Reduce the reproducer to a standalone CPrime-local test.
-- Fix the intrinsic lowering so the returned value is the post-increment value.
-- Verify the fixed intrinsic and the retained test in the affected suite.
+- Lower the intrinsic to return the post-increment value.
+- Run the fixed intrinsic and the retained test in the affected suite.
 
 ### Inline SSE asm corrupts surrounding float code
 
-Inline SSE asm using `movups`/`mulps`/`addps` and `xmm0`-`xmm2` corrupts
-surrounding cpc-generated float code. A function that runs the asm and then
-does scalar float maths crashes with `0xC0000005`.
-
-The reduced shape is a GEMM where `N=25` crashes while `N=24` and `N=28` do
-not. `cpc -b` and separate-function layouts do not avoid the failure.
-`__attribute__((vector_size(16)))` works but compiles about 3x slower than the
-plain C loop.
+Inline SSE asm using `movups`/`mulps`/`addps` and `xmm0`-`xmm2` corrupts the
+surrounding generated float code: a function that runs the asm and then does
+scalar float maths crashes with `0xC0000005`. The reduced shape is a GEMM whose
+`N=25` crashes while `N=24` and `N=28` do not; `cpc -b` and separate-function
+layouts do not avoid it. `__attribute__((vector_size(16)))` works but compiles
+about 3x slower than the plain C loop.
 
 Work required:
 
 - Reduce the `N=25` GEMM to a standalone CPrime-local reproducer.
-- Correct register allocation/liveness across inline asm and generated float
+- Fix register allocation and liveness across inline asm and generated float
   code.
 - Retain the reproducer as a regression case.
 - Re-check the isolated SSE GEMM performance after the fix.
 
-## Explorer++ consumer findings (2026-09-16)
+## Explorer++ probe: `[[noreturn]]` between declaration specifiers
 
-`C:\Luke\Src\Archive\explorerplusplus` is the current large C++17 probe: a
-manifest build of 232 translation units driven by `src\scripts\project.exe`.
-With root `cpc.exe` the build stops inside the compiler's own headers before
-any project code, so no translation unit reaches the front end. Reduced cases
-and the re-run command are retained in that checkout at `Scripts\cpc\gaps` and
-`Scripts\cpc\Test-CpcGaps.ps1`; its build entry point is `build_cpc.cmd`.
+Probe: `C:\Luke\Src\Archive\explorerplusplus`, a manifest build of 232
+translation units driven by `src\scripts\project.exe`; entry point
+`build_cpc.cmd`, reduced cases and the re-run command in `Scripts\cpc\gaps` and
+`Scripts\cpc\Test-CpcGaps.ps1`. Compile it with root `cpc.exe`, reduce each
+failure to a minimal local case, and never edit the consumer.
 
-### Explorer++ consumer findings (2026-09-16)
+The build stops in `boost/throw_exception.hpp` as reached from
+`boost/type_index/stl_type_index.hpp`: a function template declared
+`[[noreturn]]`. Its replay emits `__attribute((weak)) inline` in front of the
+copied declaration, so the standard attribute lands between declaration
+specifiers, which `parse_btype` rejects with `identifier expected`.
 
-The original four floor gaps are closed: `extern "C" static` is accepted,
-self-casts in an enumeration definition are constant expressions, `sal.h`
-covers the SDK annotation vocabulary, and GDI+ ships with the packaged SDK as
-unmodified headers plus a generated `gdiplus.def`. Local regression cases live
-in `Compatibility\tests\features\Declarations` and
-`Compatibility\tests\features\Includes`.
+Reduced shape:
 
-The template-parameter capacity is now 32, which gets the consumer build
-through Boost's generated `result_of` specializations. The next floor is
-`boost/container_hash/detail/float_functions.hpp`, where CPC reports
-`base class type expected` while parsing a generated floating-point function
-specialization. Work required: reproduce that shape locally and continue from
-the next reduced failure.
+```cpp
+inline [[noreturn]] void gap_f(int const &e);
+```
+
+Work required:
+
+- Accept a standard attribute-specifier sequence between declaration
+  specifiers; the fast-tier case
+  `features/Cpp17Gaps/pass/test_attribute_before_function_template.cpp` covers
+  the instantiation shape.
+- Continue from the next floor the consumer build reports.
+
+## `std::abs` overload set is ambiguous after a using-declaration import
+
+`std::abs(-1L)` reports `ambiguous overloaded function '__cpc_ns_std_abs'`. The
+shipped `<cstdlib>` imports the C declarations into `namespace std` and then
+declares the same signatures again, as the reference implementation does.
+Fast-tier case:
+`features/All/pass/test_runtime_absolute_value_overloads.cpp`.
+
+Reduced shape:
+
+```cpp
+inline int abs(int v) { return v; }
+inline long abs(long v) { return v; }
+inline double abs(double v) { return v; }
+
+namespace std {
+  using ::abs;
+  inline int abs(int v) { return v; }
+  inline long abs(long v) { return v; }
+}
+
+int main() { return (int)std::abs(-1L) == -1 ? 0 : 1; }
+```
+
+Work required:
+
+- Make an overload set imported by a using-declaration and a same-signature
+  declaration in the importing namespace form one set, so the exact `long` match
+  wins.

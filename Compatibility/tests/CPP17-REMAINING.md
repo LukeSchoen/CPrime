@@ -24,18 +24,25 @@ Short self-contained pass cases compile and run in combined units at suite
 scale; a combined unit that fails is recompiled and rerun case by case, and
 `-GroupSize 1` disables combining.
 
-## The queue is empty
+## Open gaps
 
-`features/Cpp17Gaps` carries one case per gap that is still red, and the fast
-list in `Compatibility/tests/tiers.json` is exactly those cases, so a green fast run means
-the queue is empty. It is empty: every case in the gap suite passes, and the
-fast list holds no case.
+`Compatibility/tests/tiers.json` holds one fast-tier case per gap that is still
+red, so a green fast run means the queue is empty. The open gaps:
 
-A new gap enters the queue the same way the closed ones did: add one minimal
-case under `features/Cpp17Gaps/pass`, list it in the fast list, reproduce it
-with root `cpc.exe`, repair the shared mechanism, then retain the case and
-drop it from the fast list. A crash reproducer starts in a suite of its own so
-one crash cannot abort a shared compile batch.
+- `features/Cpp17Gaps/pass/test_attribute_before_function_template.cpp` - a
+  standard attribute between declaration specifiers (`inline [[noreturn]] void
+  f(int const &);`) is rejected. The Explorer++ probe reaches this shape through
+  `boost/throw_exception.hpp`; the shape and the work required are in
+  `Compatibility\KNOWN-ISSUES.md`.
+- `features/All/pass/test_runtime_absolute_value_overloads.cpp` -
+  `std::abs(-1L)` is ambiguous where `<cstdlib>` imports the C overload set into
+  `namespace std` and also declares those signatures there; the shape and the
+  work required are in `Compatibility\KNOWN-ISSUES.md`.
+
+To add a gap: add one minimal case under `features/Cpp17Gaps/pass`, list it in
+the fast list, reproduce it with root `cpc.exe`, repair the shared mechanism,
+then retain the case and drop it from the fast list. A crash reproducer starts
+in a suite of its own so one crash cannot abort a shared compile batch.
 
 External CPC bug reports that are not part of the C++17 queue are recorded in
 `KNOWN-ISSUES.md`.
@@ -43,9 +50,8 @@ External CPC bug reports that are not part of the C++17 queue are recorded in
 ## Where the cases live
 
 - `features/Abi/pass` - Microsoft x64 layout, nullptr and record-return facts
-- `features/Cpp17Gaps/pass` - minimal standalone reproducers, one per gap the
-  queue has closed; every case is a valid program that must compile, link and
-  exit 0
+- `features/Cpp17Gaps/pass` - minimal standalone reproducers, one per gap;
+  every case is a valid program that must compile, link and exit 0
 - `features/Declarations/pass`, `features/Statements/pass`,
   `features/Templates/pass`, `features/Includes/pass` - structured bindings,
   selection initializers, variadic class and pack semantics, runtime header and

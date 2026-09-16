@@ -18,9 +18,14 @@ namespace std
   using ::getenv;
   using ::system;
   using ::bsearch;
-  inline int abs(int value) { return ::abs(value); }
-  inline long abs(long value) { return ::labs(value); }
-  inline long long abs(long long value) { return ::llabs(value); }
+  /* Import the whole global overload set -- the C `abs(int)` plus the `long`
+     and `long long` overloads above -- instead of declaring those signatures
+     again here.  A declaration whose parameter types match a function the
+     using-declaration introduced names a different function, which the
+     standard makes ill-formed, and the two candidates make every exact match
+     ambiguous.  <cmath> extends the same imported set with the floating
+     overloads. */
+  using ::abs;
   inline long labs(long value) { return ::labs(value); }
   inline long long llabs(long long value) { return ::llabs(value); }
 }

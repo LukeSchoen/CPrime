@@ -28,6 +28,6 @@ one serial batch per suite, so it is a real gate rather than a fast one.
 Publication does not need it: `src\scripts\build.exe` runs `-Regression`.
 
 Keep reproducers and logs in the area `build/` directory and delete them once the durable case
-exists. `Compatibility/tests/CPP17-REMAINING.md` is the only open-work list; there are no
-retained status or verification logs, since git and the retained cases are the
-record.
+exists. `Compatibility/tests/CPP17-REMAINING.md` and
+`Compatibility/KNOWN-ISSUES.md` own the open work; there are no retained status
+or verification logs, since git and the retained cases are the record.

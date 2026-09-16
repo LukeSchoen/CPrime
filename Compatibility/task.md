@@ -53,24 +53,29 @@ src\scripts\build.exe                                                  publish t
 
 ## Leads
 
-- `Compatibility\KNOWN-ISSUES.md` records reported defects with reduced shapes: the
-  `InterlockedIncrement` return value, inline SSE asm corrupting surrounding
-  float code, the missing `psapi.h` in the vendored Windows SDK, and the
-  `__m256`/`immintrin.h` stub that blocks SSE/AVX types.
+- Close the two fast-tier gaps, then take the next failure each probe reports.
+  Both shapes and the work they need are in `Compatibility\KNOWN-ISSUES.md`:
+  - `features/Cpp17Gaps/pass/test_attribute_before_function_template.cpp` - a
+    standard attribute between declaration specifiers (`inline [[noreturn]]
+    void f(int const &);`) is rejected; the Explorer++ build reaches this shape
+    through `boost/throw_exception.hpp`.
+  - `features/All/pass/test_runtime_absolute_value_overloads.cpp` -
+    `std::abs(-1L)` is ambiguous where `<cstdlib>` imports the C overload set
+    into `namespace std` and also declares those signatures there.
+- Work the defects recorded in `Compatibility\KNOWN-ISSUES.md`: the `::`-spelled
+  member function template replay, the `InterlockedIncrement` return value,
+  inline SSE asm corrupting surrounding float code, the missing `psapi.h` in the
+  vendored Windows SDK, and the `__m256`/`immintrin.h` stub that blocks SSE/AVX
+  types.
 - The Explorer++ consumer build (`C:\Luke\Src\Archive\explorerplusplus`,
   reduced cases and a re-run command in `Scripts\cpc\gaps` and
-  `Scripts\cpc\Test-CpcGaps.ps1`) now compiles every reduced floor case. The
-  packaged SDK includes gdiplus, and the first translation units get through
-  the Windows headers, the locale/classification headers, and Boost's
-  generated `result_of` specializations. Template parameter storage now
-  supports 32 parameters. The current floor is
-  `boost/container_hash/detail/float_functions.hpp`, where CPC reports
-  `base class type expected`. Shapes and the remaining work are in
-  `Compatibility\KNOWN-ISSUES.md`.
+  `Scripts\cpc\Test-CpcGaps.ps1`) is the large C++17 probe: compile it with root
+  `cpc.exe`, reduce each failure to a minimal local case, close the shared
+  mechanism, and continue from the next floor.
 - `Compatibility\tests\test.exe -Checks` (the CPC-only publication/development gate) is
-  currently red: the runner self-check `runner rejects false expectation:
+  red: the runner self-check `runner rejects false expectation:
   test_valid_without_main.cpp` reports exit 1 and `Summary: 0 passed, 1 failed`
-  but the retained diagnostic string no longer matches. Find out whether the
+  but the retained diagnostic string does not match. Find out whether the
   runner or the retained expectation is wrong; the check must stay strict
   either way.
 - Grow coverage where nothing is retained yet, one area per cycle: class

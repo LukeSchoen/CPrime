@@ -227,22 +227,31 @@ static void prepare_saved_cpp_lambdas(TokenString *expression)
                     || previous == ',' || previous == TOK_RETURN
                     || previous == '{' || previous == '?' || previous == ':'))
     {
-      int j = i + 1, captures_depth = 1;
-      for (; j < expression->len; ++j)
+      int next = tok_str_next_non_linenum_index(expression->str,
+                                                expression->len, i + 1);
+      /* A capture list cannot start with `[`, so `[[` opens a standard
+         attribute-specifier.  Rewriting it would destroy the attribute and
+         leave the replayed declaration with a marker where its specifiers
+         were (`[[noreturn]] void f(...)`). */
+      if (next >= expression->len || expression->str[next] != '[')
       {
-        int capture = expression->str[j];
-        if (capture == TOK_LINENUM) { ++j; continue; }
-        if (capture == ']' && !--captures_depth) break;
-        if (capture == '[' || is_cpp_lambda_marker(capture)) ++captures_depth;
-        if (TOK_HAS_VALUE(capture))
+        int j = i + 1, captures_depth = 1;
+        for (; j < expression->len; ++j)
         {
-          j += tok_str_value_extra_words(expression->str, expression->len, j);
-          continue;
+          int capture = expression->str[j];
+          if (capture == TOK_LINENUM) { ++j; continue; }
+          if (capture == ']' && !--captures_depth) break;
+          if (capture == '[' || is_cpp_lambda_marker(capture)) ++captures_depth;
+          if (TOK_HAS_VALUE(capture))
+          {
+            j += tok_str_value_extra_words(expression->str, expression->len, j);
+            continue;
+          }
         }
+        if (j < expression->len && expression->str[j] == ']'
+            && !saved_cpp_bracket_opens_designator(expression, j))
+          expression->str[i] = new_lambda_marker();
       }
-      if (j < expression->len && expression->str[j] == ']'
-          && !saved_cpp_bracket_opens_designator(expression, j))
-        expression->str[i] = new_lambda_marker();
     }
     previous = t;
   }

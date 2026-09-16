@@ -2,6 +2,7 @@
     "schema":  2,
     "comment":  "fast is the open C++17 work list: one case per gap that is still red, so a green fast run means the queue is empty. Every other retained case, including all the representative cases, belongs to the pedantic tier, which is every retained internal case that is not excluded. The pedantic tier is close to banned for agents: verify with the affected suite and -Regression instead. A case leaves fast by not being listed once it passes, and returns only when the routine loop needs that behavior covered on every pass.",
     "fast":  [
+
              ],
     "excluded":  [
 

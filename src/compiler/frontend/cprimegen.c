@@ -16304,9 +16304,14 @@ storage:
         t = (t & ~(VT_BTYPE | VT_LONG)) | u;
       }
       continue;
-    /* C++11 attribute-specifier-seq before a declaration. */
+    /* C++11 attribute-specifier-seq.  It may appear at the head of a
+       declaration and between any two declaration specifiers
+       (`inline [[noreturn]] void f();`), because the grammar allows one
+       attribute-specifier-seq between adjacent decl-specifiers.  A lone '['
+       is not an attribute: it starts an array suffix, a structured binding,
+       or a lambda capture list, so leave it for the declarator. */
     case '[':
-      if (!is_cpp_translation_unit() || type_found)
+      if (!is_cpp_translation_unit())
         goto the_end;
       next();
       if (tok != '[')
@@ -17301,12 +17306,26 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
       type->t &= ~VT_CONSTANT;
     /* some ancient pre-K&R C allows a function to return an array
        and the array brackets to be put after the arguments, such
-       that "int c()[]" means something like "int[] c()" */
+       that "int c()[]" means something like "int[] c()".  A C++
+       attribute-specifier-seq starts with the same token but is parsed
+       below, once the cv-qualifiers and the trailing return type are
+       known. */
     if (tok == '[')
     {
-      next();
-      skip(']'); // Only Handle Simple "[]"
-      mk_pointer(type);
+      int attribute_sequence = 0;
+      if (is_cpp_translation_unit())
+      {
+        next();
+        attribute_sequence = tok == '[';
+        unget_tok(tok);
+        tok = '[';
+      }
+      if (!attribute_sequence)
+      {
+        next();
+        skip(']'); // Only Handle Simple "[]"
+        mk_pointer(type);
+      }
     }
     ad->f.func_args = arg_size;
     ad->f.func_type = l;
@@ -17335,6 +17354,10 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
         last_decl_was_auto = 0;
         last_decl_had_trailing_return = 1;
       }
+      /* `parameters-and-qualifiers` may end with an attribute-specifier-seq,
+         so `int f(int) [[noreturn]];` is one declarator.  The attributes are
+         parsed and ignored, as everywhere else. */
+      parse_attribute(ad);
     }
     sr->type = *type, s = sr;
     s->a = ad->a;
