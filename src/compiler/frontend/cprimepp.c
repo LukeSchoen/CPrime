@@ -96,6 +96,17 @@ ST_DATA int cpp_spelling_reinterpret_cast_tok = CPC_SPELLING_UNSEEN;
 ST_DATA int cpp_spelling_const_cast_tok = CPC_SPELLING_UNSEEN;
 ST_DATA int cpp_spelling_dynamic_cast_tok = CPC_SPELLING_UNSEEN;
 ST_DATA int cpp_spelling_delete_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_and_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_and_eq_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_bitand_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_bitor_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_compl_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_not_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_not_eq_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_or_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_or_eq_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_xor_tok = CPC_SPELLING_UNSEEN;
+ST_DATA int cpp_spelling_alt_xor_eq_tok = CPC_SPELLING_UNSEEN;
 
 /* Called for each identifier the lexer interns, so the table above is filled
    at the same point the spelling first appears in the source. */
@@ -103,12 +114,27 @@ static void note_cpp_probed_spelling(int v, const char *str, int len)
 {
   switch (len)
   {
+  case 2:
+    if (!memcmp(str, "or", 2)) cpp_spelling_alt_or_tok = v;
+    break;
+  case 3:
+    if (!memcmp(str, "and", 3)) cpp_spelling_alt_and_tok = v;
+    else if (!memcmp(str, "not", 3)) cpp_spelling_alt_not_tok = v;
+    else if (!memcmp(str, "xor", 3)) cpp_spelling_alt_xor_tok = v;
+    break;
   case 5:
     if (!memcmp(str, "using", 5)) cpp_spelling_using_tok = v;
+    else if (!memcmp(str, "bitor", 5)) cpp_spelling_alt_bitor_tok = v;
+    else if (!memcmp(str, "compl", 5)) cpp_spelling_alt_compl_tok = v;
+    else if (!memcmp(str, "or_eq", 5)) cpp_spelling_alt_or_eq_tok = v;
     break;
   case 6:
     if (!memcmp(str, "friend", 6)) cpp_spelling_friend_tok = v;
     else if (!memcmp(str, "delete", 6)) cpp_spelling_delete_tok = v;
+    else if (!memcmp(str, "and_eq", 6)) cpp_spelling_alt_and_eq_tok = v;
+    else if (!memcmp(str, "bitand", 6)) cpp_spelling_alt_bitand_tok = v;
+    else if (!memcmp(str, "not_eq", 6)) cpp_spelling_alt_not_eq_tok = v;
+    else if (!memcmp(str, "xor_eq", 6)) cpp_spelling_alt_xor_eq_tok = v;
     break;
   case 7:
     if (!memcmp(str, "wchar_t", 7)) cpp_spelling_wchar_t_tok = v;
@@ -135,6 +161,27 @@ static void note_cpp_probed_spelling(int v, const char *str, int len)
     if (!memcmp(str, "static_assert", 13)) cpp_spelling_static_assert_tok = v;
     break;
   }
+}
+
+/* C++ alternative operator tokens are keywords, not macros.  Keeping their
+   source spelling through preprocessing lets stringization produce `or`
+   rather than `||`, while the parser still receives the operator token. */
+static int cpp_alternative_operator_token(int t)
+{
+  if (!cprime_cpp_mode)
+    return t;
+  if (t == cpp_spelling_alt_and_tok) return TOK_LAND;
+  if (t == cpp_spelling_alt_and_eq_tok) return TOK_A_AND;
+  if (t == cpp_spelling_alt_bitand_tok) return '&';
+  if (t == cpp_spelling_alt_bitor_tok) return '|';
+  if (t == cpp_spelling_alt_compl_tok) return '~';
+  if (t == cpp_spelling_alt_not_tok) return '!';
+  if (t == cpp_spelling_alt_not_eq_tok) return TOK_NE;
+  if (t == cpp_spelling_alt_or_tok) return TOK_LOR;
+  if (t == cpp_spelling_alt_or_eq_tok) return TOK_A_OR;
+  if (t == cpp_spelling_alt_xor_tok) return '^';
+  if (t == cpp_spelling_alt_xor_eq_tok) return TOK_A_XOR;
+  return t;
 }
 
 /* The TokenSym the last next_nomacro() call interned for its identifier
@@ -5057,7 +5104,7 @@ redo:
           cprime_error("stray '\\' in program");
       }
     }
-    tok = t;
+    tok = t = cpp_alternative_operator_token(t);
     return;
   }
 
@@ -5078,6 +5125,7 @@ redo:
       begin_macro(&tokstr_buf, 0);
       goto redo;
     }
+    tok = t = cpp_alternative_operator_token(t);
     return;
   }
 
@@ -5217,20 +5265,6 @@ static void cprime_predefs(CPRIMEState *s1, CString *cs, int is_asm)
     {
       cstr_cat(cs, "#define __CPRIME_CPP__ 1\n", -1);
       cstr_cat(cs, "#define __cplusplus 201703L\n", -1);
-      /* The alternative operator spellings are keywords in C++.  Expanding
-         them here leaves the parser's ordinary punctuator path unchanged. */
-      cstr_cat(cs,
-        "#define and &&\n"
-        "#define and_eq &=\n"
-        "#define bitand &\n"
-        "#define bitor |\n"
-        "#define compl ~\n"
-        "#define not !\n"
-        "#define not_eq !=\n"
-        "#define or ||\n"
-        "#define or_eq |=\n"
-        "#define xor ^\n"
-        "#define xor_eq ^=\n", -1);
       cstr_cat(cs, "#define __GXX_RTTI 1\n", -1);
       cstr_cat(cs, "#define __GXX_EXPERIMENTAL_CXX0X__ 1\n", -1);
       cstr_cat(cs, "#define __STDC_LIMIT_MACROS 1\n", -1);
@@ -5443,6 +5477,17 @@ ST_FUNC void cprimepp_delete(CPRIMEState *s)
   cpp_spelling_const_cast_tok = CPC_SPELLING_UNSEEN;
   cpp_spelling_dynamic_cast_tok = CPC_SPELLING_UNSEEN;
   cpp_spelling_delete_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_and_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_and_eq_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_bitand_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_bitor_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_compl_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_not_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_not_eq_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_or_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_or_eq_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_xor_tok = CPC_SPELLING_UNSEEN;
+  cpp_spelling_alt_xor_eq_tok = CPC_SPELLING_UNSEEN;
   pp_expr = 0;
   pp_debug_tok = 0;
   pp_debug_symv = 0;

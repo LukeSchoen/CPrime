@@ -1,0 +1,91 @@
+#ifndef _CPC_LOCALE
+#define _CPC_LOCALE
+
+#include <cctype>
+#include <cwchar>
+
+namespace std
+{
+  class ctype_base
+  {
+  public:
+    enum mask
+    {
+      space = 0x0001,
+      print = 0x0002,
+      cntrl = 0x0004,
+      upper = 0x0008,
+      lower = 0x0010,
+      alpha = 0x0020,
+      digit = 0x0040,
+      punct = 0x0080,
+      xdigit = 0x0100,
+      blank = 0x0200,
+      alnum = alpha | digit,
+      graph = print | punct
+    };
+  };
+
+  template<class CharT>
+  class ctype : public ctype_base
+  {
+  public:
+    bool is(mask m, CharT c) const
+    {
+      unsigned char value = (unsigned char)c;
+      return ((m & space) && isspace(value))
+          || ((m & print) && isprint(value))
+          || ((m & cntrl) && iscntrl(value))
+          || ((m & upper) && isupper(value))
+          || ((m & lower) && islower(value))
+          || ((m & alpha) && isalpha(value))
+          || ((m & digit) && isdigit(value))
+          || ((m & punct) && ispunct(value))
+          || ((m & xdigit) && isxdigit(value))
+          || ((m & blank) && (value == ' ' || value == '\t'));
+    }
+
+    CharT toupper(CharT c) const
+    {
+      return (CharT)::toupper((unsigned char)c);
+    }
+
+    CharT tolower(CharT c) const
+    {
+      return (CharT)::tolower((unsigned char)c);
+    }
+  };
+
+  class locale
+  {
+  public:
+    locale() {}
+  };
+
+  template<class Facet>
+  const Facet& use_facet(const locale&)
+  {
+    static const Facet facet;
+    return facet;
+  }
+
+  template<class Facet>
+  bool has_facet(const locale&)
+  {
+    return true;
+  }
+
+  template<class CharT>
+  CharT toupper(CharT c, const locale& loc)
+  {
+    return use_facet<ctype<CharT> >(loc).toupper(c);
+  }
+
+  template<class CharT>
+  CharT tolower(CharT c, const locale& loc)
+  {
+    return use_facet<ctype<CharT> >(loc).tolower(c);
+  }
+}
+
+#endif

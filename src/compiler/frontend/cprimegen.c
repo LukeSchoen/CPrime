@@ -822,7 +822,7 @@ static void compile_pending_template_specs_without_member_flush(void);
 enum TemplateMemberSyntax {
   TMS_SCOPED, TMS_PARAM_COUNT, TMS_MIN_PARAM_COUNT, TMS_ARRAY_REF,
   TMS_PARAM_TYPE, TMS_CONST, TMS_TYPE_PARAM, TMS_CALL_SPECIALIZED, TMS_STATIC,
-  TMS_VARIADIC, TMS_BODY, TMS_DEDUCTION_END, TMS_COUNT
+  TMS_VARIADIC, TMS_BODY, TMS_DEDUCTION_END, TMS_STATIC_DATA, TMS_COUNT
 };
 
 typedef struct TemplateMemberDef
@@ -6415,7 +6415,9 @@ static void constexpr_capture_array_bounds(SValue *value)
 
 static int constexpr_pointer_evaluation_active(void)
 {
-  return (CONST_WANTED || integral_constant_expression_wanted || static_initializer_constant_fold)
+  return (CONST_WANTED || integral_constant_expression_wanted
+          || static_initializer_constant_fold
+          || constexpr_temporary_expression_depth)
       && (!NOEVAL_WANTED || (cpp_unused_body_validation && NOEVAL_WANTED == 1)
           || NOEVAL_WANTED == constexpr_initializer_probe_noeval);
 }
@@ -6891,7 +6893,11 @@ static void gen_cast(CType *type)
   if (vtop->type.t & VT_BITFIELD)
     gv(RC_INT);
 
-  if (IS_ENUM(type->t) && type->ref->c < 0)
+  /* An enum being defined may be named in the initializer of one of its own
+     enumerators, e.g. `enum E { A = (E)(1 | 2) };`.  The enum's underlying
+     type is already known while its body is parsed, so the cast is an
+     integral conversion rather than a reference to an incomplete class. */
+  if (IS_ENUM(type->t) && type->ref->c < 0 && type->ref->c != -2)
     cprime_error("cast to incomplete type");
 
   dbt = type->t & (VT_BTYPE | VT_UNSIGNED);
@@ -11652,8 +11658,21 @@ static int parse_cpp_scoped_member_def_body(CType *ret_type, int class_tok,
           && (next_i >= body->len || body->str[next_i] != ':')
           && class_tok_matches_unqualified_name(class_tok, body->str[i]))
       {
-        tok_str_add(str, class_tok);
-        continue;
+        Sym *body_param;
+        int parameter_shadows_class = 0;
+        for (body_param = has_params && static_func_type.ref
+                           ? static_func_type.ref->next : NULL;
+             body_param; body_param = body_param->next)
+          if ((body_param->v & ~SYM_FIELD) == body->str[i])
+          {
+            parameter_shadows_class = 1;
+            break;
+          }
+        if (!parameter_shadows_class)
+        {
+          tok_str_add(str, class_tok);
+          continue;
+        }
       }
       if (!is_static_member_def && body->str[i] >= TOK_UIDENT
           && next_i < body->len
@@ -16242,8 +16261,11 @@ basic_type2:
       g = VT_TYPEDEF;
       goto storage;
 storage:
-      if (linkage_extern_only && g == VT_TYPEDEF && (t & VT_EXTERN))
+      if (linkage_extern_only && g != VT_EXTERN && (t & VT_EXTERN))
       {
+        /* `extern "C" static ...` and `extern "C" typedef ...` start with a
+           linkage-specification, not the extern storage class.  The storage
+           class that follows belongs to the declaration itself. */
         t &= ~VT_EXTERN;
         linkage_extern_only = 0;
       }
@@ -16512,37 +16534,6 @@ storage:
               st = bt = -2;
               break;
             }
-            s = sym_find(qtok);
-            if (!s)
-              s = global_symbol_find(qtok);
-            if (s && (s->type.t & VT_TYPEDEF))
-            {
-              if (IS_ENUM(s->type.t) && tok == ':')
-              {
-                restore_cpp_lifecycle_probe(replay);
-                goto the_end;
-              }
-              tok_str_free(replay);
-              t &= ~(VT_BTYPE | VT_LONG);
-              u = t & ~(VT_CONSTANT | VT_VOLATILE), t ^= u;
-              type->t = (s->type.t & ~VT_TYPEDEF) | u;
-              type->ref = s->type.ref;
-              while (tok == ':' && (type->t & VT_BTYPE) == VT_STRUCT) {
-                Sym *nested = parse_template_nested_typedef(type->ref);
-                if (!nested || !(nested->type.t & VT_TYPEDEF)) {
-                  if (nested && !(nested->v & SYM_FIELD)) unget_tok(nested->v);
-                  return 0;
-                }
-                type->t = (nested->type.t & ~VT_TYPEDEF) | u;
-                type->ref = nested->type.ref;
-              }
-              if (t)
-                parse_btype_qualify(type, t);
-              t = type->t;
-              typespec_found = 1;
-              st = bt = -2;
-              break;
-            }
             {
               TemplateDef *td = find_class_template_def(qtok);
               if (td && td->is_class && (tok == TOK_LT || tok == '<'))
@@ -16601,6 +16592,37 @@ storage:
                 st = bt = -2;
                 break;
               }
+            }
+            s = sym_find(qtok);
+            if (!s)
+              s = global_symbol_find(qtok);
+            if (s && (s->type.t & VT_TYPEDEF))
+            {
+              if (IS_ENUM(s->type.t) && tok == ':')
+              {
+                restore_cpp_lifecycle_probe(replay);
+                goto the_end;
+              }
+              tok_str_free(replay);
+              t &= ~(VT_BTYPE | VT_LONG);
+              u = t & ~(VT_CONSTANT | VT_VOLATILE), t ^= u;
+              type->t = (s->type.t & ~VT_TYPEDEF) | u;
+              type->ref = s->type.ref;
+              while (tok == ':' && (type->t & VT_BTYPE) == VT_STRUCT) {
+                Sym *nested = parse_template_nested_typedef(type->ref);
+                if (!nested || !(nested->type.t & VT_TYPEDEF)) {
+                  if (nested && !(nested->v & SYM_FIELD)) unget_tok(nested->v);
+                  return 0;
+                }
+                type->t = (nested->type.t & ~VT_TYPEDEF) | u;
+                type->ref = nested->type.ref;
+              }
+              if (t)
+                parse_btype_qualify(type, t);
+              t = type->t;
+              typespec_found = 1;
+              st = bt = -2;
+              break;
             }
             restore_cpp_lifecycle_probe(replay);
             goto the_end;
@@ -22285,6 +22307,9 @@ str_init:
     expr_type(&type, unary);
     active_type_query_alignment = saved_query;
     materialize_incomplete_template_type(&type);
+    /* sizeof/alignof applied to a reference inspects the referenced type. */
+    if (is_reference_type(&type))
+      type = *pointed_type(&type);
     if (is_cpp_translation_unit() && cpp_substitution_jump
         && ((type.t & VT_BTYPE) == VT_VOID
             || (type.t & VT_BTYPE) == VT_FUNC))
@@ -28996,8 +29021,15 @@ static int try_parse_using_alias_declaration(int decl_scope)
       CType marker = { VT_VOID | VT_TYPEDEF, NULL };
       int binding_tok = decl_scope == VT_CONST
                           ? make_current_namespace_tok(alias_tok) : alias_tok;
-      Sym *binding = sym_push(binding_tok, &marker, 0, 0);
-      note_cpp_using_binding(binding, qualified_tok);
+      Sym *binding = sym_find(binding_tok);
+      /* Repeating the same namespace-scope using-declaration is valid; it
+         adds no new entity.  A different target is a genuine conflict. */
+      if (!(binding && sym_scope_ex(binding) == local_scope
+            && binding->cpp_using_target == qualified_tok))
+      {
+        binding = sym_push(binding_tok, &marker, 0, 0);
+        note_cpp_using_binding(binding, qualified_tok);
+      }
       tok_str_free(replay);
       skip(';');
       return 1;

@@ -2440,6 +2440,72 @@ static int template_member_def_method_tok(TemplateMemberDef *md)
   return 0;
 }
 
+/* An out-of-class definition of a static data member has a scoped member
+   name followed by `;` or `=`, while a function declarator continues with a
+   parameter list (or `operator` for a conversion/operator function). */
+static int template_member_def_is_static_data_member(TemplateMemberDef *md)
+{
+  int i, paren = 0, angle = 0, saw_paren = 0, member = -1, result = 0;
+  if (!md || !md->def_str) return 0;
+  if (md->syntax_known & (1u << TMS_STATIC_DATA))
+    return md->syntax_cache[TMS_STATIC_DATA];
+  for (i = 0; i + 1 < md->def_str->len; ++i)
+  {
+    int t = md->def_str->str[i];
+    if (TOK_HAS_VALUE(t))
+    {
+      i += tok_str_value_extra_words(md->def_str->str, md->def_str->len, i);
+      continue;
+    }
+    if (!paren && !angle)
+    {
+      if (t == '(' || t == '{') { result = 0; goto done; }
+      if (t == ';') break;
+      if (t == '=' && member >= 0) { result = 1; goto done; }
+      if (t == ':' && md->def_str->str[i + 1] == ':')
+      {
+        if (saw_paren) { result = 0; goto done; }
+        member = i + 2;
+        while (member < md->def_str->len
+               && md->def_str->str[member] == TOK_LINENUM)
+          member += 2;
+        if (member < md->def_str->len
+            && (md->def_str->str[member] == TOK_OPERATOR
+                || md->def_str->str[member] == '~'))
+        {
+          result = 0;
+          goto done;
+        }
+        ++i;
+        continue;
+      }
+    }
+    if (t == '(') { saw_paren = 1; ++paren; }
+    else if (t == ')') { if (paren) --paren; }
+    else if (t == TOK_LT || t == '<') ++angle;
+    else if (t == TOK_GT || t == '>') { if (angle) --angle; }
+    else if (t == TOK_SAR && angle) angle = angle > 1 ? angle - 2 : 0;
+  }
+  if (member >= 0)
+  {
+    while (member < md->def_str->len
+           && md->def_str->str[member] == TOK_LINENUM)
+      member += 2;
+    if (member < md->def_str->len && md->def_str->str[member] != TOK_EOF
+        && md->def_str->str[member] != TOK_OPERATOR)
+    {
+      member = tok_str_next_non_linenum_index(md->def_str->str,
+                                              md->def_str->len, member + 1);
+      result = member < md->def_str->len
+          && (md->def_str->str[member] == ';' || md->def_str->str[member] == '=');
+    }
+  }
+done:
+  md->syntax_cache[TMS_STATIC_DATA] = result;
+  md->syntax_known |= 1u << TMS_STATIC_DATA;
+  return result;
+}
+
 static int template_member_def_is_scoped_uncached(TemplateMemberDef *md);
 static int template_member_def_is_scoped(TemplateMemberDef *md)
 {
@@ -5423,6 +5489,13 @@ static void instantiate_template_member_if_needed(TemplateMemberDef *md,
   int materialize_body = requested_template_member_body == md
                          && !materializing_template_interface;
   int saved_namespace_tok;
+
+  /* An out-of-class definition of a class-template static data member has
+     no function declarator to instantiate.  The in-class initializer already
+     supplies the member's value, so the definition is complete here. */
+  if (md && md->def_str && !md->nested_class_template_tok
+      && template_member_def_is_static_data_member(md))
+    return;
 
   get_explicit_member_arguments(orig_pack_tok, &explicit_arguments);
   if (explicit_arguments.nb)

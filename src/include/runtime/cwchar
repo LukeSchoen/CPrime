@@ -1,0 +1,51 @@
+#ifndef _CPC_CWCHAR
+#define _CPC_CWCHAR
+
+#include <cstddef>
+#include <wchar.h>
+
+namespace std
+{
+  using ::size_t;
+  using ::wint_t;
+  using ::mbstate_t;
+  using ::wcslen;
+  using ::wcscmp;
+  using ::wcsncmp;
+  using ::wcscpy;
+  using ::wcsncpy;
+  using ::wcscat;
+  using ::wcsncat;
+  using ::wcsstr;
+  using ::wcschr;
+  using ::wcsrchr;
+  using ::wmemchr;
+  using ::wmemcmp;
+  using ::wmemcpy;
+  using ::wmemmove;
+  using ::wmemset;
+  using ::btowc;
+  using ::wctob;
+  using ::mbrtowc;
+  using ::wcrtomb;
+  using ::mbsinit;
+  using ::fwide;
+  using ::fgetwc;
+  using ::getwc;
+  using ::fgetws;
+  using ::fputwc;
+  using ::putwc;
+  using ::fputws;
+  using ::getwchar;
+  using ::putwchar;
+  using ::ungetwc;
+  using ::wcstol;
+  using ::wcstoll;
+  using ::wcstoul;
+  using ::wcstoull;
+  using ::wcstod;
+  using ::wcstof;
+  using ::wcstold;
+}
+
+#endif

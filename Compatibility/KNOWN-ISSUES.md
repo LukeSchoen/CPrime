@@ -69,3 +69,27 @@ Work required:
   code.
 - Retain the reproducer as a regression case.
 - Re-check the isolated SSE GEMM performance after the fix.
+
+## Explorer++ consumer findings (2026-09-16)
+
+`C:\Luke\Src\Archive\explorerplusplus` is the current large C++17 probe: a
+manifest build of 232 translation units driven by `src\scripts\project.exe`.
+With root `cpc.exe` the build stops inside the compiler's own headers before
+any project code, so no translation unit reaches the front end. Reduced cases
+and the re-run command are retained in that checkout at `Scripts\cpc\gaps` and
+`Scripts\cpc\Test-CpcGaps.ps1`; its build entry point is `build_cpc.cmd`.
+
+### Explorer++ consumer findings (2026-09-16)
+
+The original four floor gaps are closed: `extern "C" static` is accepted,
+self-casts in an enumeration definition are constant expressions, `sal.h`
+covers the SDK annotation vocabulary, and GDI+ ships with the packaged SDK as
+unmodified headers plus a generated `gdiplus.def`. Local regression cases live
+in `Compatibility\tests\features\Declarations` and
+`Compatibility\tests\features\Includes`.
+
+The consumer build now gets through the Boost locale/classification chain and
+stops in `boost/utility/detail/result_of_iterate.hpp`: a generated
+`result_of` specialization exceeds the compiler's 16-parameter template limit.
+Work required: make the template parameter storage grow beyond 16, then
+continue the consumer build from the next reduced failure.
