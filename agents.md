@@ -23,8 +23,8 @@
 - Keep all tests in this CPrime repository. Reduce external bug reports to standalone local tests.
   Keep tests minimal, deterministic, and fast; reuse helpers and remove redundant
   fixtures without losing distinct behavior coverage.
-- The top level is only `readme.md`, `agents.md`, `.gitignore`,
-  `.gitattributes`, `cpc.exe`, `src/`, `Cost/`, `Capability/` and
+- The top level is only `readme.md`, `agents.md`, `LICENSE`, `SECURITY.md`,
+  `.gitignore`, `.gitattributes`, `cpc.exe`, `src/`, `Cost/`, `Capability/` and
   `Compatibility/`. Everything else belongs under `src/` or inside the area it
   serves.
 - `src/` is the toolchain: `src/compiler/`, `src/runtime/`, `src/tools/`

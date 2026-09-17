@@ -107,3 +107,27 @@ Generated functions can then become directly callable functions within the host 
 They can also call back into the rest of the application.
 
 This makes CPC useful for applications that may need to generate and execute native-code dynamically.
+
+#License
+
+CPrime is free software released under the GNU General Public License,
+version 3. The full text is in [LICENSE](LICENSE); the license is
+GPL-3.0-only, with no option for later versions.
+
+Copyright (C) 2026 Luke Schoen
+
+Vendored components under src/third-party/ keep their own licenses and are not
+relicensed by CPrime: TCC is LGPL-2.1, the QuickJS regular-expression code is
+MIT, Yasm is BSD/GPL-2.0/LGPL-2.1/Artistic-Perl, and the retained MinGW-w64
+headers are public domain. Each directory carries its notice. A build or binary
+that redistributes those components must carry their notices too.
+
+Contributions are accepted under the same license, and contributors keep their
+own copyright.
+
+#Security
+
+CPC compiles untrusted input and can run generated code in-process, so memory
+errors and silent miscompiles are treated as security issues. Report them
+privately as described in [SECURITY.md](SECURITY.md) instead of opening a public
+issue.
