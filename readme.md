@@ -128,8 +128,9 @@ the base copy instead of GitHub, and the base copy is where the shared branch
 collects. The base copy is a normal checkout rather than a bare repository, so
 it is set to `receive.denyCurrentBranch=updateInstead`: a push updates its
 working tree as it lands, which means the base copy must stay clean or every
-worker's push is refused for the rest of the night. Publish to GitHub from the
-base copy, after the workers have stopped:
+worker's push is refused for the rest of the night. Publishing to GitHub is
+that copy's job, and it can happen at any point in a run, because the workers
+never reach GitHub by themselves:
 
 ```cmd
 git -C C:\Luke\Src\PRIME\CPrime push origin main
