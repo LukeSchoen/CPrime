@@ -89,13 +89,14 @@ src/
 - `Cost/`: compilation speed
 - `Capability/`: output-program performance
 
-## Three machines, one branch
+## Three workers, one branch
 
-Each area has a worker loop, and each loop can run on its own machine against
-the same origin branch: run `Capability\worker.cmd`, `Compatibility\worker.cmd`,
-or `Cost\worker.cmd` in a clone of its own. The loop owns git at every cycle
-boundary: it commits the cycle that just ended, fetches origin, rebases this
-clone's commits onto the new tip, and pushes them back.
+Each area has a worker loop: `Capability\worker.cmd`,
+`Compatibility\worker.cmd` or `Cost\worker.cmd`. Each loop can run on its own
+machine against the same origin branch, or the three can run as three copies on
+one machine. The loop owns git at every cycle boundary: it commits the cycle
+that just ended, fetches origin, rebases this clone's commits onto the new tip,
+and pushes them back.
 
 Only a cycle that passed its probe is published, so the branch keeps trees that
 passed their own gate. A cycle that failed keeps its commits local for the cycle
@@ -109,6 +110,64 @@ leaves the rebase in place and asks its agent to settle the merge before it
 touches the task, and the merge is finished on the following cycle. Work is
 never lost either way. Set `SKIP_SYNC=1` to keep a clone offline, or
 `SKIP_PUSH=1` to fetch and rebase without publishing.
+
+### Three copies on one machine
+
+The usual Windows layout is four copies under `C:\Luke\Src\PRIME`: the base copy
+plus one work copy per area.
+
+| Directory | Worker | Role |
+| --- | --- | --- |
+| `CPrime` | do not run one here | the base copy: the origin of the three work copies, and the only copy whose own origin is GitHub |
+| `CPrime_Capability` | `Capability\worker.cmd` | generated-code quality and runtime speed |
+| `CPrime_Compatibility` | `Compatibility\worker.cmd` | C++17 correctness |
+| `CPrime_Cost` | `Cost\worker.cmd` | compile speed |
+
+Each work copy has the base copy as its origin, so the three workers publish to
+the base copy instead of GitHub, and the base copy is where the shared branch
+collects. The base copy is a normal checkout rather than a bare repository, so
+it is set to `receive.denyCurrentBranch=updateInstead`: a push updates its
+working tree as it lands, which means the base copy must stay clean or every
+worker's push is refused for the rest of the night. Publish to GitHub from the
+base copy, after the workers have stopped:
+
+```cmd
+git -C C:\Luke\Src\PRIME\CPrime push origin main
+```
+
+Two launchers live outside the repository, one level above this copy:
+
+```cmd
+C:\Luke\Src\PRIME\work.cmd     open one worker console per work copy
+C:\Luke\Src\stop.cmd           ask every worker to wrap up and stop
+```
+
+`work.cmd` starts one console per work copy and returns, so an overnight run is
+one command. `stop.cmd` writes the stop marker each loop checks at its cycle
+boundary: the cycle that is running finishes, commits and syncs, and the loop
+exits instead of starting another one. Nothing is killed, nothing is discarded
+and no work is lost. A cycle can take a long time, so a stopped run appears
+gradually: each console closes as its loop exits.
+
+### The morning after
+
+Every cycle writes one row to `<copy>\<area>\build\cycles.csv` (cycle number,
+exit codes, sync state, head) and the full agent transcript to
+`cycle-NNNN.log` next to it, with the probe log, the measurement log and the
+per-case timing file. Read `cycles.csv` first, then the log of the last cycle
+that failed, then `git -C C:\Luke\Src\PRIME\CPrime log --oneline` for what the
+shared branch actually gained.
+
+A worker console still open in the morning is a cycle that is still running. A
+console that closed on its own is either the stop marker, a run of failures, or
+an account usage limit; the last lines say which, and the worker never exits
+because of a broken build, only because it cannot continue.
+
+The three copies share one machine, so they share one CPU: correctness work is
+unaffected, but compile-speed and runtime-speed measurements are noisier than
+the same work alone on its own machine. Read them as medians over repeated
+serial runs, and prefer to give `Cost` and `Capability` machines of their own
+when a number has to be trusted.
 
 ## License
 

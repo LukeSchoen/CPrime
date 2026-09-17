@@ -89,6 +89,41 @@ up to 24 compatible C++ sources per unit; the default batch size is 32.
 Keep file-local name conflicts in separate manifest `unityGroup` values.
 Metrics include elapsed and CPU seconds for each tool process.
 
+## Where this agent is running
+
+Work is normally split across four copies of this repository on one machine:
+
+- `C:\Luke\Src\PRIME\CPrime` is the base copy. Its own origin is GitHub, and it
+  is the origin of the three work copies. Do not work in it.
+- `C:\Luke\Src\PRIME\CPrime_Capability`,
+  `C:\Luke\Src\PRIME\CPrime_Compatibility` and
+  `C:\Luke\Src\PRIME\CPrime_Cost` are the work copies. Each runs exactly one
+  area worker, and each work copy's origin is the local base copy, not GitHub.
+
+The three workers are the three arms of one shared branch. The base copy holds
+the branch they meet on, so nothing reaches GitHub until the user publishes the
+base copy.
+
+The user starts the workers with `PRIME\work.cmd` and stops them with
+`Src\stop.cmd`, which writes the area's `done.x` stop marker. Both live outside
+the repository. They are the user's controls: never create `done.x`, and never
+start, stop or restart a worker yourself.
+
+What follows from that layout:
+
+- Work only inside the copy whose `worker.cmd` started you. A sibling copy is
+  another agent's tree: reading it is fine, editing it is not.
+- The copy is shared. Work you leave behind is published to the other two
+  copies, and their work arrives in yours, so leave the tree in a state that
+  survives a merge and never rewrite another agent's work to make a merge easy.
+- Never run git. The worker commits, fetches, rebases and pushes at every cycle
+  boundary, and it hands you the rebase when a conflict cannot be settled
+  mechanically.
+- The three copies share one CPU. Timing evidence taken while the other workers
+  are running is noisier than the same work alone on its own machine, so keep
+  timing claims to repeated serial runs and medians, and record which workers
+  were active.
+
 ## Test and develop
 
 ```
