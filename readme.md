@@ -1,122 +1,124 @@
-#CPrime
+# CPrime
 
 An ultra-fast ASM, C, and C++17 compiler.
 
-CPrime (CPC) can:
+CPC reads ASM, C, and C++17, and writes x64 executables, ASM, and C. It can
 
-Read ASM, C, and C++17
-Write x64 executables, ASM, and C
-Assemble ASM directly to machine code
-Compile C and C++ directly to x86-64 machine code
-Compile itself and bootstrap from a pure C compiler
-Prime Development Via Extreme Speed
+- assemble ASM directly to machine code,
+- compile C and C++ directly to x86-64 machine code,
+- and compile itself, bootstrapping from a pure C compiler.
+
+## Prime development via extreme speed
 
 CPC is designed around compilation speed rather than optimization depth.
 
-C: >30% faster than the fastest C compilers such as TCC and QBE
-ASM: >25% faster than the next-fastest assemblers such as FASM and MASM
-C++: 100% to 20,000% faster than GCC, Clang, MSVC, and other C++ compilers
+- **C** — over 30% faster than the fastest C compilers, such as TCC and QBE.
+- **ASM** — over 25% faster than the next-fastest assemblers, such as FASM and
+  MASM.
+- **C++** — 100% to 20,000% faster than GCC, Clang, MSVC, and other C++
+  compilers.
 
-Across several large and difficult C++ projects, CPC came out over 20x faster than MSVC or Clang.
+Across several large and difficult C++ projects, CPC came out over 20x faster
+than MSVC or Clang. The exact speedup depends on the project, the compiler
+options, and the workload, but you WILL be happy.
 
-The exact speedup depends on the project, compiler options, and workload, but, you WILL be happy.
+CPC is particularly useful where the low-level performance work is already
+done. SSE routines written in ASM execute at essentially their intended
+machine-code speed, and they don't need optimizing to run fast, which makes CPC
+a perfect fit for projects using AVX or SSE code.
 
-#Direct Compilation
-CPC is self-contained, single-pass and designed for ultra-high-speed source-code conversion.
-CPC does not build any kind of intermediate AST or conventional separate IR representation.
+## Direct compilation
 
-Expressions are instead parsed, checked, and emitted as machine code As-The-Parser-Proceeds.
+CPC is self-contained, single-pass, and designed for ultra-high-speed source-code
+conversion. It does not build any kind of intermediate AST or conventional
+separate IR representation.
 
-This directness makes CPC substantially faster than traditional compiler architectures such as GCC or Clang,
-which inevitably must pass through multiple rich intermediate representations before producing machine code.
+Expressions are instead parsed, checked, and emitted as machine code
+as-the-parser-proceeds.
 
-CPC also directly handles assembly and linking internally rather than driving separate libs or programs.
+This directness makes CPC substantially faster than traditional compiler
+architectures such as GCC or Clang, which inevitably must pass through multiple
+rich intermediate representations before producing machine code.
 
-CPC is forced to implement C++ semantics directly in the parser / code generator.
-Its optimizer is therefore minimal, only using cheap effective techniques such as:
-Register promotion, Small-scale inlining and Peephole optimization
+CPC also handles assembly and linking internally rather than driving separate
+libs or programs.
 
-CPC -O2 is NOT comparable to GCC or Clangs -O2.
+CPC is forced to implement C++ semantics directly in the parser and code
+generator. Its optimizer is therefore minimal, using only cheap, effective
+techniques such as register promotion, small-scale inlining, and peephole
+optimization.
 
-CPC Minimizes compilation cost while producing perfectly Fast-Enough native code.
+CPC `-O2` is NOT comparable to GCC or Clang's `-O2`.
 
-During dev iteration, reducing C++ compilation times for a small reduction in exe speed is a Godly trade.
+CPC minimizes compilation cost while producing perfectly fast-enough native
+code. During dev iteration, reducing C++ compilation times for a small reduction
+in exe speed is a godly trade.
 
-Self-Hosting
-CPC can compile itself.
-The compiler is also able to bootstrap itself using pure C, allowing you to reseed it from a simple C compiler.
+## Self-hosting
 
-Project Layout
+CPC can compile itself. The compiler is also able to bootstrap itself using pure
+C, allowing you to reseed it from a simple C compiler.
+
+## Runtime code generation
+
+CPC can also be used as a runtime code-generation system. It provides in-memory
+compilation through a DLL/library interface, allowing ASM, C, and C++ source to
+be compiled into native functions with extremely low latency.
+
+Generated functions can then become directly callable functions within the host
+program, and they can call back into the rest of the application. This makes CPC
+useful for applications that may need to generate and execute native code
+dynamically.
+
+## Project layout
+
+```
 src/
   The toolchain:
   compiler, runtime, native tools, workflow scripts,
   headers, bootstrap libraries, shipped libcprime SDK,
   and vendored third-party sources.
 
-  src/include/
-    Headers
+  src/include/      Headers
+  src/lib/          Bootstrap libraries
+  src/deploy/       Shipped libcprime SDK
+  src/third-party/  Vendored sources
+```
 
-  src/lib/
-    Bootstrap libraries
+- `Compatibility/` — C++17 correctness
+- `Cost/` — compilation speed
+- `Capability/` — output-program performance
 
-  src/deploy/
-    Shipped libcprime SDK
+## Three machines, one branch
 
-  src/third-party/
-    Vendored sources
-
-#Compatibility/
-  C++17 correctness
-
-#Cost/
-  Compilation-speed
-
-#Capability/
-  Output-programs performance
-
-#Three machines, one branch
 Each area has a worker loop, and each loop can run on its own machine against
-the same origin branch: run Capability\worker.cmd, Compatibility\worker.cmd or
-Cost\worker.cmd in a clone of its own. The loop owns git at every cycle
+the same origin branch: run `Capability\worker.cmd`, `Compatibility\worker.cmd`,
+or `Cost\worker.cmd` in a clone of its own. The loop owns git at every cycle
 boundary: it commits the cycle that just ended, fetches origin, rebases this
 clone's commits onto the new tip, and pushes them back.
 
 Only a cycle that passed its probe is published, so the branch keeps trees that
-passed their own gate; a cycle that failed keeps its commits local for the cycle
-that repairs them (set PUSH_FAILED=1 to publish anyway).
+passed their own gate. A cycle that failed keeps its commits local for the cycle
+that repairs them (set `PUSH_FAILED=1` to publish anyway).
 
-Rebase conflicts are handled by kind. The tracked build outputs - cpc.exe,
-src/lib/libcprime1.a, src/scripts/*.exe and the per-area tests\test.exe - are
-regenerated by the build, so a clone keeps its own copy of them and carries on.
-A conflict in a source file is real work that cannot be dropped: the worker
+Rebase conflicts are handled by kind. The tracked build outputs — `cpc.exe`,
+`src/lib/libcprime1.a`, `src/scripts/*.exe`, and the per-area `tests\test.exe` —
+are regenerated by the build, so a clone keeps its own copy of them and carries
+on. A conflict in a source file is real work that cannot be dropped: the worker
 leaves the rebase in place and asks its agent to settle the merge before it
 touches the task, and the merge is finished on the following cycle. Work is
-never lost either way. Set SKIP_SYNC=1 to keep a clone offline, or SKIP_PUSH=1
+never lost either way. Set `SKIP_SYNC=1` to keep a clone offline, or `SKIP_PUSH=1`
 to fetch and rebase without publishing.
 
-CPC is Particularly useful for code bases where you already have advanced performance from via explicit low-level implementatiosn.
-For example, SSE routines written in ASM already execute at essentially their intended machine-code speed.
-They don't need optimizing to run fast. This makes CPC a perfect fit for projects using AVX or SSE code.
+## License
 
-#CPC can also be used as a RUNTIME code-generation system.
-
-CPC provides in-memory compilation through a DLL/library interface:
-Allowing ASM, C, and C++ source to be compiled into native functions with Extremely-Low-Latency.
-
-Generated functions can then become directly callable functions within the host program,
-They can also call back into the rest of the application.
-
-This makes CPC useful for applications that may need to generate and execute native-code dynamically.
-
-#License
-
-CPrime is free software released under the GNU General Public License,
-version 3. The full text is in [LICENSE](LICENSE); the license is
-GPL-3.0-only, with no option for later versions.
+CPrime is free software released under the GNU General Public License, version
+3. The full text is in [LICENSE](LICENSE); the license is GPL-3.0-only, with no
+option for later versions.
 
 Copyright (C) 2026 Luke Schoen
 
-Vendored components under src/third-party/ keep their own licenses and are not
+Vendored components under `src/third-party/` keep their own licenses and are not
 relicensed by CPrime: TCC is LGPL-2.1, the QuickJS regular-expression code is
 MIT, Yasm is BSD/GPL-2.0/LGPL-2.1/Artistic-Perl, and the retained MinGW-w64
 headers are public domain. Each directory carries its notice. A build or binary
@@ -125,7 +127,7 @@ that redistributes those components must carry their notices too.
 Contributions are accepted under the same license, and contributors keep their
 own copyright.
 
-#Security
+## Security
 
 CPC compiles untrusted input and can run generated code in-process, so memory
 errors and silent miscompiles are treated as security issues. Report them
