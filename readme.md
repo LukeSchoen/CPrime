@@ -136,11 +136,11 @@ never reach GitHub by themselves:
 git -C C:\Luke\Src\PRIME\CPrime push origin main
 ```
 
-Two launchers live outside the repository, one level above this copy:
+Two launchers live outside the repository, next to the four copies:
 
 ```cmd
 C:\Luke\Src\PRIME\work.cmd     open one worker console per work copy
-C:\Luke\Src\stop.cmd           ask every worker to wrap up and stop
+C:\Luke\Src\PRIME\stop.cmd     ask every worker to wrap up and stop
 ```
 
 `work.cmd` starts one console per work copy and returns, so an overnight run is

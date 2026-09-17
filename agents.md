@@ -105,7 +105,7 @@ the branch they meet on, so nothing reaches GitHub until the user publishes the
 base copy.
 
 The user starts the workers with `PRIME\work.cmd` and stops them with
-`Src\stop.cmd`, which writes the area's `done.x` stop marker. Both live outside
+`PRIME\stop.cmd`, which writes the area's `done.x` stop marker. Both live outside
 the repository. They are the user's controls: never create `done.x`, and never
 start, stop or restart a worker yourself.
 
