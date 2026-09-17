@@ -709,6 +709,10 @@ struct CPRIMEState {
     unsigned char znodelete;
     unsigned char filetype;
     unsigned char optimize;
+    /* Requested optimization level: 0 none, 1 -O1, 2 -O2, 3 -Os, 255 -O
+       (treated as -O1).  optimize stays the "may transform" flag so the many
+       existing optimize != 0 checks keep their meaning. */
+    unsigned char opt_level;
     unsigned char no_builtin;
     unsigned char no_inline;
     unsigned char coroutines;

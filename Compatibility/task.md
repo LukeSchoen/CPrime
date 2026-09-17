@@ -114,26 +114,39 @@ src\scripts\build.exe                                                  publish t
 
 ## Next action
 
-The `std::ostreambuf_iterator` floor is closed and published: the retained case
-`features/Includes/pass/test_ostreambuf_iterator_default.cpp` passes against
-the packaged runtime and has left the fast list.  The consumer probe now stops
-on `std::locale::facet`.  Retain one minimal case for it under
-`features/Includes/pass`, reproduce it with root `cpc.exe`, implement the
-facet surface in the runtime `<locale>` and stream headers, then run the
-affected suite, fast tier, regression gate, and publish:
+`std::locale::facet` is closed and published together with the facet registry,
+`basic_ios::getloc`/`imbue`, and the depth-independent lookup that lets a
+registered facet be found from another translation unit.  The retained case is
+`features/Includes/pass/test_locale_facet.cpp`; the reduced probes
+`Compatibility\build\locale-probes\p1_facet_base.cpp` and
+`p2_facet_on_stream.cpp` compile and run, and the fast tier (28) and regression
+gate (58) passed before the compiler was republished.
+
+`InterlockedIncrement`/`InterlockedDecrement` are also closed: the runtime now
+owns the two intrinsics (`src/runtime/windows/winintrin.S`, declared through
+`cprimedefs.h`) because the vendored header's inline-asm version inferred the
+new value from flags the register allocator could clobber.  Retained as
+`features/Abi/pass/test_msvc_interlocked_counter.cpp`.  The underlying
+inline-asm register-allocation defect (an address operand and a later register
+output sharing a register) is still open for the SSE GEMM case below and is
+the real blocker there.
+
+The next action is to re-run the consumer probe and reduce its next floor:
 
 ```
-Compatibility\tests\test.exe -Suite features/Includes -Select test_locale_facet.cpp
-Compatibility\tests\test.exe -Suite features/Includes
-Compatibility\tests\test.exe -All -Tier fast
-Compatibility\tests\test.exe -Regression
-src\scripts\build.exe
+C:\Luke\Src\Archive\explorerplusplus\build_cpc.cmd Release x64
 ```
 
-The reduced shape is `Compatibility\build\locale-probes\p1_facet_base.cpp`
-(`p1.log`), a 12-line program that derives a class from `std::locale::facet`;
-`p2_facet_on_stream.cpp` (`p2.log`) adds `os.getloc()`, `imbue` and
-`has_facet`.  The consumer probe log is
-`Compatibility\build\explorer-probe14.log`.  After publishing, re-run
-`C:\Luke\Src\Archive\explorerplusplus\build_cpc.cmd Release x64` (it copies
-root `cpc.exe` in first) and reduce the next floor it reports.
+It copies root `cpc.exe` in first and exports its own manifest.  That has been
+done for this cycle: `Compatibility\build\explorer-probe15.log` shows the probe
+clearing `gregorian_io.hpp`/`std::locale::facet` and stopping in
+`boost/date_time/gregorian/greg_weekday.hpp:215`, on the dependent
+`typedef typename ...::type` chain through
+`boost::detail::is_base_and_derived_select`.  The reduction so far is
+`Compatibility\build\date-time-probes\svp2.cpp` with its `svp2.log`
+(`svp_first_order.cpp` is the same idea with the other include order, which
+lands on a different error first).
+
+The exact next action is to reduce that `is_base_and_derived_select` chain to a
+CPrime-local case, fix the replayed class-template member typedef lookup, retain
+the case under `features/Templates`, and re-run the probe again.

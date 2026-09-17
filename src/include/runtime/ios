@@ -1,6 +1,7 @@
 #ifndef _CPC_IOS
 #define _CPC_IOS
 #include <iosfwd>
+#include <locale>
 #include <stdio.h>
 namespace std {
 class ios_base {
@@ -47,12 +48,14 @@ public:
   void setstate(iostate state) { *m_state_ptr |= state; }
   C fill() const { return m_fill; }
   C fill(C value) { C old=m_fill; m_fill=value; return old; }
+  locale getloc() const { return m_locale; }
+  locale imbue(const locale& value) { locale old=m_locale; m_locale=value; return old; }
   basic_streambuf<C,Traits>* rdbuf() const { return m_buffer; }
   basic_streambuf<C,Traits>* rdbuf(basic_streambuf<C,Traits>* buffer) {
     basic_streambuf<C,Traits>* old=m_buffer; m_buffer=buffer; clear(buffer?goodbit:badbit); return old;
   }
 protected:
-  basic_ios(FILE* file = 0) : m_stream(file), m_state(file ? goodbit : badbit), m_state_ptr(&m_state),m_buffer(0),m_fill((C)' ') {}
+  basic_ios(FILE* file = 0) : m_stream(file), m_state(file ? goodbit : badbit), m_state_ptr(&m_state),m_buffer(0),m_fill((C)' '),m_locale() {}
   void share_state(basic_ios& other) { m_state_ptr=other.m_state_ptr; }
   void init(basic_streambuf<C,Traits>* buffer) { m_stream=0; m_buffer=buffer; m_state=buffer?goodbit:badbit; }
   FILE* m_stream;
@@ -60,6 +63,7 @@ protected:
   iostate* m_state_ptr;
   basic_streambuf<C,Traits>* m_buffer;
   C m_fill;
+  locale m_locale;
 };
 typedef basic_ios<char> ios;
 typedef basic_ios<wchar_t> wios;

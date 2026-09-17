@@ -2253,6 +2253,7 @@ static void free_template_state(void)
             profile_other_overload_scans[6], profile_other_overload_scans[7]);
   if (profile_scans_enabled)
     fprintf(stderr, "CPC_PROFILE linkage_scans=%llu\n", profile_linkage_scans);
+  profile_detail_report();
   if (profile_scans_enabled) {
     unsigned long long used = 0, allocated = 0, instances = 0;
     for (i = 0; i < nb_template_member_defs; ++i) {
@@ -2802,6 +2803,7 @@ ST_FUNC void cprimegen_init(CPRIMEState *s1)
   integral_constant_expression_wanted = 0;
 
   profile_scans_enabled = getenv("CPC_PROFILE_SCANS") != NULL;
+  profile_detail_init();
   cpp_trace_incomplete_state = cpp_dump_autoret_state = cpp_trace_return_state = 0;
   profile_linkage_scans = 0;
   vtop = vstack - 1;
@@ -28355,6 +28357,8 @@ static void begin_function_semantics(Sym *sym)
 static void gen_function(Sym *sym)
 {
   struct scope f = { 0 };
+  int profile_outermost;
+  unsigned long long profile_started = 0;
   int saved_local_type_owner = local_type_owner_tok;
   int saved_local_type_index = local_type_declaration_index;
   jmp_buf *saved_substitution_jump = cpp_substitution_jump;
@@ -28370,6 +28374,7 @@ static void gen_function(Sym *sym)
      immediate context, including bodies needed to deduce an auto return. */
   cpp_substitution_jump = NULL;
   cpp_unevaluated_expression_depth = 0;
+  profile_outermost = profile_function_begin(&profile_started);
   memcpy(saved_namespace_stack, namespace_stack, sizeof(namespace_stack));
   enter_symbol_namespace(sym->v);
   active_member_class_tok = member_function_class_tok(sym->v);
@@ -28500,6 +28505,7 @@ static void gen_function(Sym *sym)
   cpp_nrvo_candidate_scope = saved_nrvo_candidate_scope;
   cpp_nrvo_candidate_type = saved_nrvo_candidate_type;
   cpp_nrvo_result_object_declared = saved_nrvo_result_object_declared;
+  profile_function_end(profile_outermost, profile_started);
 }
 
 /* Parse a function definition body.  When the caller supplies the result

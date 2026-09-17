@@ -2696,7 +2696,18 @@ set_output_type:
       s->filetype = x | (s->filetype & ~AFF_TYPE_MASK);
       break;
     case CPRIME_OPTION_O:
-      s->optimize = isnum(optarg[0]) ? optarg[0] - '0' : 1 /* -O -Os */;
+      if (isnum(optarg[0])) {
+        s->opt_level = optarg[0] - '0';
+        s->optimize = s->opt_level != 0;
+      } else if (optarg[0] == 's') {
+        /* Size over speed: keep the cheap transforms, skip the fast inliner's
+           own budget expansion. */
+        s->opt_level = 3;
+        s->optimize = 1;
+      } else {
+        s->opt_level = 1; /* -O */
+        s->optimize = 1;
+      }
       break;
 #if defined CPRIME_TARGET_MACHO
     case CPRIME_OPTION_dynamiclib:

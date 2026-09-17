@@ -1,6 +1,7 @@
 
 #define USING_GLOBALS
 #include "cprime.h"
+#include "cprime_profile.h"
 
 // #Define To 1 To Enable (See Parse_Pp_String())
 #define ACCEPT_LF_IN_STRINGS 0
@@ -58,7 +59,7 @@ static int pp_counter;
 static int cprime_cpp_mode;
 static void tok_print(const int *str, const char *msg, ...);
 
-static void next_nomacro(void);
+static void next_nomacro_body(void);
 static void parse_number(const char *p);
 static void parse_string(const char *p, int len);
 static int tok_str_value_extra_words(const int *str, int len, int index);
@@ -3880,7 +3881,7 @@ float_frac_parse:
         break;
 
 // Return Next Token Without Macro Substitution
-static void next_nomacro(void)
+static void next_nomacro_body(void)
 {
   int t, c, is_long, len;
   TokenSym *ts;
@@ -4423,6 +4424,13 @@ keep_tok_flags:
 #if defined(PARSE_DEBUG)
   printf("token = %d %s\n", tok, get_tok_str(tok, &tokc));
 #endif
+}
+
+static void next_nomacro(void)
+{
+  profile_lexer_begin();
+  next_nomacro_body();
+  profile_lexer_end();
 }
 
 #ifdef PP_DEBUG

@@ -21,6 +21,8 @@ namespace std
     void clear(ios_base::iostate state=ios_base::goodbit){output_type::clear(state);}
     ios_base::iostate rdstate()const{return output_type::rdstate();}
     void setstate(ios_base::iostate state){output_type::setstate(state);}
+    locale getloc()const{return output_type::getloc();}
+    locale imbue(const locale& value){return output_type::imbue(value);}
     explicit operator bool()const{return !fail();}
     bool operator!()const{return fail();}
   };

@@ -1080,6 +1080,9 @@ typedef DWORD LCID;
 	: : "r"(Value),"m"(*Destination) : "memory");
       return *Destination;
     }
+    /* Cpc supplies the post-update value through the runtime library; see
+       _CPRIME_INTERLOCKED_RUNTIME in cprimedefs.h. */
+#ifndef _CPRIME_INTERLOCKED_RUNTIME
     __CRT_INLINE LONG InterlockedIncrement(LONG volatile *Addend) {
       unsigned char c;
       unsigned char s;
@@ -1098,6 +1101,7 @@ typedef DWORD LCID;
 	:"m" (*Addend) : "memory");
       return (c != 0 ? 0 : (s != 0 ? -1 : 1));
     }
+#endif
     __CRT_INLINE LONG InterlockedExchange(LONG volatile *Target,LONG Value) {
       __asm__ __volatile("lock ; xchgl %0,%1"
 	: "=r"(Value)

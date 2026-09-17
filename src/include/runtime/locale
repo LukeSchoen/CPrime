@@ -3,12 +3,205 @@
 
 #include <cctype>
 #include <cwchar>
+#include <stddef.h>
+#include <string.h>
 
 namespace std
 {
-  class ctype_base
+  /* A locale owns a small fixed registry of facets. The registration call
+     knows the facet's static type, so the entry stores the type name next to
+     the facet and lookup does not depend on a per-type static object being
+     merged across translation units. */
+  class locale
   {
   public:
+    class id;
+    class facet;
+
+    locale() : m_count(0)
+    {
+      add(new ctype<char>(), facet_name<ctype<char> >());
+      add(new ctype<wchar_t>(), facet_name<ctype<wchar_t> >());
+    }
+
+    locale(const locale& other) : m_count(0) { acquire(other); }
+
+    template<class Facet>
+    locale(const locale& other, Facet* value) : m_count(0)
+    {
+      acquire(other);
+      if (value)
+      {
+        value->_Incref();
+        insert(value, facet_name<Facet>());
+      }
+    }
+
+    ~locale() { release(); }
+
+    locale& operator=(const locale& other)
+    {
+      if (this != &other)
+      {
+        release();
+        acquire(other);
+      }
+      return *this;
+    }
+
+    template<class Facet>
+    bool has() const
+    {
+      return find(facet_name<Facet>()) != 0;
+    }
+
+    template<class Facet>
+    const Facet* lookup() const
+    {
+      facet* found = find(facet_name<Facet>());
+      return found ? static_cast<const Facet*>(found) : 0;
+    }
+
+  private:
+    static const int capacity = 16;
+
+    void add(facet* value, const char* name)
+    {
+      if (m_count < capacity)
+      {
+        m_facets[m_count] = value;
+        m_names[m_count] = name;
+        ++m_count;
+      }
+      else
+      {
+        value->_Decref();
+      }
+    }
+
+    void acquire(const locale& other)
+    {
+      for (int i = 0; i < other.m_count; ++i)
+      {
+        other.m_facets[i]->_Incref();
+        m_facets[m_count] = other.m_facets[i];
+        m_names[m_count] = other.m_names[i];
+        ++m_count;
+      }
+    }
+
+    void release()
+    {
+      for (int i = 0; i < m_count; ++i)
+        m_facets[i]->_Decref();
+      m_count = 0;
+    }
+
+    void insert(facet* value, const char* name)
+    {
+      facet* previous = find(name);
+      if (previous)
+      {
+        for (int i = 0; i < m_count; ++i)
+          if (m_facets[i] == previous)
+          {
+            m_facets[i] = value;
+            m_names[i] = name;
+          }
+        previous->_Decref();
+      }
+      else
+      {
+        add(value, name);
+      }
+    }
+
+    facet* find(const char* name) const
+    {
+      for (int i = 0; i < m_count; ++i)
+        if (strcmp(m_names[i], name) == 0)
+          return m_facets[i];
+      return 0;
+    }
+
+    template<class Facet>
+    static const char* facet_name()
+    {
+      const char* signature = __PRETTY_FUNCTION__;
+      const char* opening = strstr(signature, "[with F = ");
+      if (!opening)
+        return signature;
+      opening += 10;
+      const char* closing = strchr(opening, ']');
+      if (!closing)
+        return opening;
+      return intern(opening, (size_t)(closing - opening));
+    }
+
+    static const char* intern(const char* text, size_t length)
+    {
+      static char buffer[256];
+      if (length >= sizeof(buffer))
+        return text;
+      memcpy(buffer, text, length);
+      buffer[length] = 0;
+      return buffer;
+    }
+
+    int m_count;
+    facet* m_facets[capacity];
+    const char* m_names[capacity];
+  };
+
+  class locale::id
+  {
+  public:
+    id() : m_index(0) {}
+
+    size_t operator()() const
+    {
+      static size_t next = 0;
+      if (!m_index)
+        m_index = ++next;
+      return m_index;
+    }
+
+  private:
+    id(const id&);
+    void operator=(const id&);
+    mutable size_t m_index;
+  };
+
+  class locale::facet
+  {
+    friend class locale;
+  public:
+    static locale::id id;
+
+    explicit facet(size_t refs = 0) : m_refs(refs < 1 ? 1 : refs) {}
+    virtual ~facet() {}
+
+  protected:
+    virtual void _Incref() { ++m_refs; }
+
+    virtual void _Decref()
+    {
+      if (--m_refs <= 0)
+        delete this;
+    }
+
+  private:
+    facet(const facet&);
+    void operator=(const facet&);
+
+    size_t m_refs;
+  };
+
+  class ctype_base : public locale::facet
+  {
+  public:
+    ctype_base() : locale::facet(0) {}
+
     enum mask
     {
       space = 0x0001,
@@ -30,6 +223,8 @@ namespace std
   class ctype : public ctype_base
   {
   public:
+    ctype() : ctype_base() {}
+
     bool is(mask m, CharT c) const
     {
       unsigned char value = (unsigned char)c;
@@ -56,23 +251,20 @@ namespace std
     }
   };
 
-  class locale
-  {
-  public:
-    locale() {}
-  };
-
   template<class Facet>
-  const Facet& use_facet(const locale&)
+  const Facet& use_facet(const locale& location)
   {
-    static const Facet facet;
-    return facet;
+    const Facet* found = location.lookup<Facet>();
+    if (found)
+      return *found;
+    static const Facet fallback;
+    return fallback;
   }
 
   template<class Facet>
-  bool has_facet(const locale&)
+  bool has_facet(const locale& location)
   {
-    return true;
+    return location.has<Facet>();
   }
 
   template<class CharT>

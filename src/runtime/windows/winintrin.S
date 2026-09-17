@@ -21,6 +21,23 @@ _InterlockedExchangeAdd:
     lock xaddl %eax, (%rcx)
     ret
 
+/* InterlockedIncrement/Decrement return the post-update value.  RMW through
+   XADD leaves the previous value in EAX, so adding the delta recovers the new
+   value (and wraps at the same 32-bit boundaries as the instruction). */
+    .globl _InterlockedIncrement
+_InterlockedIncrement:
+    movl $1, %eax
+    lock xaddl %eax, (%rcx)
+    addl $1, %eax
+    ret
+
+    .globl _InterlockedDecrement
+_InterlockedDecrement:
+    movl $-1, %eax
+    lock xaddl %eax, (%rcx)
+    subl $1, %eax
+    ret
+
     .globl __debugbreak
 __debugbreak:
     int3

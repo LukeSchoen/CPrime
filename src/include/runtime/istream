@@ -10,6 +10,8 @@ public:
   typedef typename Traits::int_type int_type;
   explicit basic_istream(FILE* file = stdin) : basic_ios<C,Traits>(file), m_count(0) {}
   explicit basic_istream(basic_streambuf<C,Traits>* buffer) : basic_ios<C,Traits>(), m_count(0) {this->init(buffer);}
+  locale getloc() const { return this->m_locale; }
+  locale imbue(const locale& value) { locale old=this->m_locale; this->m_locale=value; return old; }
   basic_istream& read(C* data, streamsize count) {
     m_count=0;
     if((!this->m_stream&&!this->m_buffer) || this->fail() || count<0) { this->setstate(ios_base::failbit); return *this; }

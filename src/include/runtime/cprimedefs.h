@@ -161,6 +161,16 @@ unsigned char _BitScanForward64(unsigned long *index,
                                 unsigned long long mask);
 long _InterlockedExchangeAdd(volatile long *target, long value);
 void __debugbreak(void);
+/* The standard headers spell InterlockedIncrement/Decrement with inline asm
+   that infers the new value from the flags.  This compiler's inline-asm
+   register allocator can place the operation's address operand and a
+   condition-code result in the same register, so the flag byte is read back
+   from a clobbered register and the callers observe a wrong value.  The
+   intrinsics live in the runtime library instead, exactly like
+   _InterlockedExchangeAdd, and the headers forward to them. */
+#define _CPRIME_INTERLOCKED_RUNTIME 1
+long _InterlockedIncrement(volatile long *target);
+long _InterlockedDecrement(volatile long *target);
 #endif
 #ifdef __cplusplus
 }

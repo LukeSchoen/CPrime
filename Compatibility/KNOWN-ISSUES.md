@@ -29,28 +29,68 @@ republished, and `Compatibility\build\ostreambuf-publish2.log`,
 
 ## boost/date_time: `std::locale::facet`
 
-Open.  With the iterator published, the Explorer++ probe
-(`Compatibility\build\explorer-probe14.log`) advances past
-`period_formatter` and stops at
-`boost/date_time/gregorian/gregorian_io.hpp:49` with
-`nested template type member '__cpc_ns_std_locale::facet' must be a typedef`
-while the date facets derive from `std::locale::facet`.
+Closed.  `<locale>` now has `locale::facet` with the reference-counted
+`_Incref`/`_Decref` pair and `locale::id`, and `locale(const locale&, Facet*)`
+registers the new facet next to the inherited ones.  Each locale owns a small
+fixed registry that stores the facet's type name beside the pointer, so
+`has_facet`/`use_facet` find the registered object while the name (not a
+per-type static address, which this compiler does not merge across translation
+units) is the key.  `basic_ios` holds a `locale`, and `basic_istream`,
+`basic_ostream` and `basic_iostream` expose `getloc`/`imbue`.
 
-Reduced to `Compatibility\build\locale-probes\p1_facet_base.cpp`: a 12-line
-program that derives a class from `std::locale::facet` (`p1.log`); the fuller
-`p2_facet_on_stream.cpp` adds `os.getloc()`, `imbue` and `has_facet`
-(`p2.log`).  The runtime `<locale>` header has no `locale::facet` or
-`locale::id`, `locale` has no facet-owning constructor, and the runtime streams
-have no `getloc`/`imbue`, so the `date_facet::put` path cannot compile.
+Retained as `features/Includes/pass/test_locale_facet.cpp`; it derives a facet,
+checks that an unrelated facet is absent, registers one with
+`std::locale(base, new facet)`, round-trips `imbue`/`getloc`, copies the locale
+and replaces a same-type facet.  The reduced probes
+`Compatibility\build\locale-probes\p1_facet_base.cpp` and
+`p2_facet_on_stream.cpp` both compile and run.  The fast tier and the
+regression gate were re-run and the compiler republished.
+
+### Constructing a facet with arguments
+
+Open, and separate from the facet surface above.  `new T(args...)` requires a
+viable default constructor even when `T` declares only a converting
+constructor:
+
+```cpp
+struct F : std::locale::facet {
+  F() : std::locale::facet(0) {}
+  explicit F(int v) : std::locale::facet(0), m(v) {}
+  int m;
+};
+void f() { new F(7); }   /* error: new requires a viable default constructor */
+```
+
+This is what forced the retained case to set its marker through an accessor.
+It is a compiler defect, not a library one, and it belongs with the other
+allocation work.
+
+## boost::type_traits: `is_base_and_derived_impl::type`
+
+Open, and the current consumer floor.  With the facet surface published the
+Explorer++ probe (`Compatibility\build\explorer-probe15.log`) advances past
+`gregorian_io.hpp` and stops inside
+`boost/date_time/gregorian/greg_weekday.hpp:215` with a very long
+`nested template type member '...is_base_and_derived_select...::type' must be a
+typedef` (`boost/type_traits/is_base_and_derived.hpp:205` and following).  The
+mangled name repeats `is_base_of_imp<std::exception, ...>` and
+`is_base_and_derived_impl<...>` several times, so it is the dependent
+`typedef typename ...::type` lookup through
+`boost::detail::is_base_and_derived_select`, not the earlier derived-to-`void*`
+ranking fix.
+
+Reduced so far: `Compatibility\build\date-time-probes\svp2.cpp` includes
+`boost/date_time/gregorian/gregorian.hpp` and names
+`special_values_parser<date, char>` and `<date, wchar_t>`; the streaming
+headers are not needed to reach the floor, but the surrounding include order
+is, which is why a smaller first reduction landed elsewhere.
 
 Work required:
 
-- Retain one minimal case under `features/Includes/pass`.
-- Add `std::locale::facet`, `std::locale::id` and the facet-registering
-  `locale(const locale&, Facet*)` constructor.
-- Give `has_facet`/`use_facet` real per-type storage instead of the current
-  always-default answer, and add `basic_ios::getloc`/`imbue`.
-- Compile and run the retained case, then republish and re-run the probe.
+- Reduce the `is_base_and_derived_select` chain to a local case.
+- Make the replayed class-template member typedef resolve through the
+  `typename ...::type` chain.
+- Retain the case in `features/Templates` and re-run the consumer probe.
 
 ## clCRC.cpp: a leading `::` in a replayed member function template
 
@@ -89,29 +129,29 @@ Work required:
 ## RTMPose / Kpose kernels (`C:\Luke\Src\Kinect`, read only)
 
 Convolutions dominate inference at roughly 85% of the time, and a hand-written
-SSE GEMM measured about 5x faster than the C loop in isolation, but it cannot
-ship while the two defects below are open, so the Kpose kernels stay portable C.
+SSE GEMM measured about 5x faster than the C loop in isolation.  The atomic
+work counter is fixed, but the inline-SSE register corruption below still
+blocks the SSE kernel, so the Kpose kernels stay portable C.
 `KPOSE_THREADS=1` forces single-threaded execution for A/B measurements. The
 external reproducer and notes are in `C:\Luke\Src\Kinect\README.md`; fixtures
 and models are regenerated with `python tools\vendor_rtmpose.py --all`.
 
 ### InterlockedIncrement ignores its result
 
-`InterlockedIncrement` returns 0 instead of the new value, so an atomic work
-counter never advances.
+Closed.  The vendored `winnt.h` spelled both interlocked increments as an
+inline-asm template that inferred the new value from the condition flags of
+the `lock addl`/`subl`.  The template also names the operation's address
+operand directly, and the inline-asm register allocator can give a following
+flag output the same register, so the caller read a clobbered value: the
+counter advanced while the result never did.
 
-Reduced shape:
-
-```c
-long next = InterlockedIncrement(&job->next) - 1;
-/* The loop never observes 1. */
-```
-
-Work required:
-
-- Reduce the reproducer to a standalone CPrime-local test.
-- Lower the intrinsic to return the post-increment value.
-- Run the fixed intrinsic and the retained test in the affected suite.
+`_InterlockedIncrement` and `_InterlockedDecrement` are now runtime-library
+helpers (`src/runtime/windows/winintrin.S`) built on `lock xaddl`, exactly
+like the existing `_InterlockedExchangeAdd`, and `cprimedefs.h` marks the
+runtime as owning them so `winnt.h` does not emit its own inline bodies.
+Retained as `features/Abi/pass/test_msvc_interlocked_counter.cpp`, which
+compares the returned value with the value left in memory across increment,
+decrement and a mixed sequence.
 
 ### Inline SSE asm corrupts surrounding float code
 

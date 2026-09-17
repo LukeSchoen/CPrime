@@ -75,3 +75,45 @@ Making them mean something, and documenting them in `cpc -h`, is the work.
 - Track where the generated code loses to a reference at run time
   (function-call overhead, redundant loads and stores, spills, unaligned or
   unvectorized loops) and attack the top cost with measurements.
+
+## Current cycle
+
+`-On` is now a real level. `CPRIMEState.opt_level` records it, `-O0` clears the
+optimize flag entirely (so `__OPTIMIZE__` is not defined and no transform
+runs), `-O1` is the existing cheap set, `-Os` is the same set requested with
+size over speed, and `-O2` parses as the top level. `cpc -h` documents the
+four, and `__OPTIMIZE__` follows the level: it is defined for `-O1` and above
+only.
+
+Measured runtime (one 33-statement helper called in a 20M-iteration loop, three
+runs of each flag, wall clock):
+
+```
+-O0: 1.338 1.324 1.428 s
+-O1: 0.731 0.744 0.701 s
+-O2: 0.745 0.701 0.755 s
+-Os: 0.729 0.713 0.712 s
+```
+
+The level that pays is `-O0` versus `-O1`: 1.32-1.43 s against 0.70-0.74 s, so
+the existing cheap transforms are worth 1.8-2.0x and turning them off is a
+real level. `-O2` currently produces the same code as `-O1` (the numbers
+overlap), so its promised extra pass is still open work.
+
+An experiment that did not hold up: making `-O2` widen the fast inliner's
+192-byte leaf-candidate limit to 1024 produced a clear 0.59-0.60 s against
+`-O1`'s 0.70 s on the same loop, but the compiler it published could not
+recompile the driver (`-O2` failed with a heap-corruption exit where the
+previous compiler succeeded). The larger budget overflows a bound in the
+inliner on the toolchain's own translation unit, so the change was reverted
+and the root compiler rebuilt; self-host and the gate pass again. A safe way
+to spend the `-O2` budget is the next thing to find, not a bigger number to
+paste in.
+
+Invariants were re-checked with the retained suites and the regression gate
+before publishing, and the Capability probe passed at the default level. The
+compile-time budget moved only for `-O2` inputs, which is the intended trade.
+
+Next: split `function_ms` further and pick the strongest remaining gap between
+the generated code and a reference build, then make `-Os` mean something
+beyond "not `-O2`" (it currently shares the `-O1` budget).

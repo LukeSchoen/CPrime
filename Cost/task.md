@@ -93,38 +93,38 @@ gate.
 
 ## Current cycle
 
-The earliest open package is still item 1: self-build latency, using
-`c.self.driver`. This cycle added the requested opt-in
-`CPC_PROFILE_PHASES=1` driver measurement. It reports non-overlapping
-setup, translation-unit parse/emission, output-writing and cleanup times once
-at process exit. With the variable absent, the measurement is one environment
-check plus predictable disabled branches.
+The request that closed this cycle was the opt-in detail instrumentation: the
+phase measurement split the run but `compile_ms` still hid where the
+translation-unit time went. `CPC_PROFILE_DETAIL=1` now reports two accounts at
+the end of the translation unit:
 
-Evidence is under `Cost\build`:
+- `lexer_calls` and `lexer_ms` for `next_nomacro()`. One call in every 64 is
+  timed and the total is scaled by the call count, because timing every token
+  would cost more than the tokenizer.
+- `function_calls` and `function_ms` for `gen_function()`. Only the outermost
+  application accumulates, so a queued member body compiled from inside another
+  function is charged to the enclosing function once instead of twice.
 
-- The pre-change root compiler measured `c.self.driver` at 391.089 ms in
-  `perf-cycle-0002.tsv` and 425.807 ms in `raw-before-phases.tsv`.
-- The published compiler measured 433.291 ms in `perf-cycle-0004.tsv`. The
-  repeated final interleaved runs `perf-final-3.tsv` / `raw-final-3.tsv` and
-  `perf-final-4.tsv` / `raw-final-4.tsv` measured `1.00x` and `1.01x` against
-  the saved reference; the matching `dispersion-final-3.log` and
-  `dispersion-final-4.log` record the spread.
-- Five serial phase runs are in `phases-self-driver-5.log`. Quiet samples
-  showed setup 2.0-2.4 ms, compile 416-502 ms, write 6.8-7.2 ms, cleanup
-  0.5-0.8 ms; earlier samples were higher while the system was busy.
-  Parse/emission is over 99% of the measured work.
-- `profile-phases.txt` refreshes the stream sample: `decl`, `expr_eq`,
-  `gen_function`, and `next_nomacro` dominate. `next_nomacro` is the largest
-  leaf at about 13%; no single leaf exceeds about 15%.
-- `src\scripts\build.exe -Map` passed packaging and regression, and
-  `check-final-fast.log` / `gate-final.log` record 28 fast cases and 58
-  regression cases passing. `build-final-2.log` records the final self-host and
-  publish.
+Both hooks are one predictable branch on `profile_detail_enabled` when the
+variable is unset, and the time source is not read at all. The counters live in
+`src/compiler/frontend/cprime_profile.h`; only `next_nomacro()` gained a
+wrapper (`next_nomacro_body()` is the old body).
 
-The remaining blocker is that `compile_ms` still hides the split between token
-acquisition/preprocessing and semantic parsing/backend emission. The exact next
-action is to add opt-in, depth-aware call-count and timing accumulators for
-`next_nomacro` and the function-emission path, with nested template replay
-counted once, then rebuild with `src\scripts\build.exe -Map` and sample the
-same `Cost\build\self-driver-profile.rsp` with `src\scripts\profile.exe` before
-choosing a source change.
+Evidence, all from the compiler built with the new instrumentation:
+
+```
+CPC_PROFILE_DETAIL=1 CPC_PROFILE_PHASES=1 cpc -O2 -c src/compiler/driver/cprime.c
+  CPC_PROFILE_DETAIL lexer_calls=868823 lexer_ms=113.193 function_calls=2175 function_ms=393.324
+  CPC_PROFILE_PHASES setup_ms=0.203 compile_ms=529.659 write_ms=2.100 cleanup_ms=0.437 total_ms=532.399
+```
+
+So the tokenizer is about 21% of the translation unit and function emission is
+about 74%, against 0.6% for the lexer when it is measured without the
+per-call overhead it really pays. The disabled-path cost was measured on the
+same input: four interleaved runs of the plain and instrumented compilers gave
+0.490/0.491/0.475/0.556 s, so the hooks are inside the noise.
+
+The next action is now evidence-driven: `function_ms` is the target, and
+`-Map` plus the existing phase and scan accounts can split it further
+(`gfunc_prolog`/`block`/`gfunc_epilog`, the fast optimizer, template replay)
+before any source change. Keep using `c.self.driver` as the per-cycle proxy.
