@@ -1,6 +1,8 @@
 Vendored clang host compiler for reproducible CPrime build-speed experiments.
 
-Source path copied from: C:\Luke\Src\Archive\surfer\clang.exe
+Source: an existing clang.exe of the same version on the machine that vendored
+it, originally at C:\Luke\Src\Archive\surfer\clang.exe; recorded for provenance
+only, and not a path any tool here reads.
 Version: clang 12.0.0
 Target: x86_64-pc-windows-msvc
 

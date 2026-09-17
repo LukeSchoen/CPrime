@@ -61,8 +61,11 @@ int main(int argc, char **argv) {
         nt_join(output, sizeof output, root, tools[i].output);
         snprintf(staged, sizeof staged, "%s.new.exe", output);
         if (!nt_exists(source)) { fprintf(stderr, "missing tool source: %s\n", source); failures++; continue; }
+        /* The compiler is handed the tool source relative to the tree root,
+           which is also this process's working directory, so an executable
+           never records where the clone sits. */
         command[n++] = cpc; command[n++] = "-O2"; command[n++] = "-o";
-        command[n++] = staged; command[n++] = source;
+        command[n++] = staged; command[n++] = tools[i].source;
         if (tools[i].library) command[n++] = tools[i].library;
         command[n] = NULL;
         printf("[%d/%d] %s\n", i + 1, (int)(sizeof tools / sizeof tools[0]), tools[i].output);

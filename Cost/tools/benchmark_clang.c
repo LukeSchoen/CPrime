@@ -166,10 +166,17 @@ int main(int argc, char **argv) {
     char scripts[NT_PATH], path[NT_PATH]; DWORD_PTR available, system_mask, chosen;
     int authorized=0, runs=5, i, ci, phase, run, offset, failures=0, pch_ready[MODE_COUNT]={0};
     const char *only = NULL;
+    const char *env;
     nt_module_directory(scripts, sizeof scripts); strcpy(root, scripts); nt_parent(root);
     nt_join(out, sizeof out, root, "src/build/clang-competitive/bench");
     nt_join(cpc, sizeof cpc, root, "cpc.exe");
-    strcpy(fast_cpc, "C:/Luke/Src/CL/cpc.exe"); strcpy(clang, "C:/Luke/Src/Clang/clang.exe");
+    /* Reference compilers live wherever this machine keeps them: take them from
+       the command line, or from CPC_CLANG/CPC_FAST_CPC/CPC_MINIMAL_CLANG, or
+       from PATH under their own name. A reference that is not given is skipped
+       instead of being looked for in one checkout. */
+    env = getenv("CPC_CLANG"); snprintf(clang, sizeof clang, "%s", env && *env ? env : "clang.exe");
+    env = getenv("CPC_FAST_CPC"); snprintf(fast_cpc, sizeof fast_cpc, "%s", env && *env ? env : "");
+    env = getenv("CPC_MINIMAL_CLANG"); snprintf(minimal, sizeof minimal, "%s", env && *env ? env : "");
     for (i=1; i<argc; ++i) {
         if (!strcmp(argv[i], "-RunExternal")) authorized=1;
         else if (!strcmp(argv[i], "-Root") && i+1<argc) snprintf(root, sizeof root, "%s", argv[++i]);
@@ -180,7 +187,8 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-FastCpc") && i+1<argc) snprintf(fast_cpc, sizeof fast_cpc, "%s", argv[++i]);
         else if (!strcmp(argv[i], "-Out") && i+1<argc) snprintf(out, sizeof out, "%s", argv[++i]);
         else if (!strcmp(argv[i], "-Case") && i+1<argc) only=argv[++i];
-        else { fprintf(stderr, "benchmark-clang.exe -RunExternal [-Runs N] [-Root SOURCE_ROOT] [-Clang EXE] [-MinimalClang EXE] [-Cpc EXE] [-FastCpc EXE] [-Out DIR] [-Case NAME]\n"); return 2; }
+        else { fprintf(stderr, "benchmark-clang.exe -RunExternal [-Runs N] [-Root SOURCE_ROOT] [-Clang EXE] [-MinimalClang EXE] [-Cpc EXE] [-FastCpc EXE] [-Out DIR] [-Case NAME]\n"
+                               "Defaults: clang from CPC_CLANG or PATH; -FastCpc and -MinimalClang from CPC_FAST_CPC/CPC_MINIMAL_CLANG, skipped when unset.\n"); return 2; }
     }
     if (!authorized || runs<1 || runs>30) { fputs("Requires -RunExternal and 1..30 runs\n", stderr); return 2; }
     if (!GetProcessAffinityMask(GetCurrentProcess(), &available, &system_mask)) nt_die("read affinity", NULL);
@@ -200,6 +208,7 @@ int main(int argc, char **argv) {
             int failed[MODE_COUNT] = {0};
             for (run=0; run<=runs; ++run) for (offset=0; offset<MODE_COUNT; ++offset) {
                 int mode=(offset+run)%MODE_COUNT;
+                if(mode==1 && !*fast_cpc) continue;
                 if(is_minimal(mode) && !*minimal) continue;
                 if(mode>=5 && !cases[ci].stl) continue;
                 if(mode>=5 && !pch_ready[mode]) {

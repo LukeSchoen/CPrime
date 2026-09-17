@@ -1,6 +1,6 @@
 /* Inline SSE asm next to generated float code in the same function.
 
-   This is the reduced GEMM from the SSE kernels of C:\Luke\Src\Kinect: the
+   This is the reduced GEMM from the Kinect consumer's SSE kernels: the
    vector loop runs movups/mulps/addps on xmm0-xmm2 without a clobber list,
    and the leftover columns run scalar float arithmetic afterwards.  The
    shape crashed at N=25 (whose row stride is not a multiple of 16 bytes)

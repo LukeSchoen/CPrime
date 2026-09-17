@@ -29,10 +29,12 @@ sides' intent, run the fast tier and `-Regression`, then finish it with
    x64 ABI facts live in `Compatibility\tests\features\Abi`.
 2. Large C++ projects used as probes: the vendored competitive inputs under
    `Cost\tests\compile\competitive\` (xBRZ and the functions/pch cases),
-   and the user's own consumers (for example `C:\Luke\Src\Kinect`, which is read
-   only and whose findings are recorded in `Compatibility\KNOWN-ISSUES.md`). Compile a project
-   with root `cpc.exe`, reduce each failure to a minimal local case, and never
-   edit the consumer.
+   and the user's own consumers (for example the Kinect tree, which is read only
+   and whose findings are recorded in `Compatibility\KNOWN-ISSUES.md`).
+   Consumer checkouts live outside this repository, at whatever path the
+   machine keeps them, so a probe this clone cannot see is not this cycle's
+   work. Compile a project with root `cpc.exe`, reduce each failure to a minimal
+   local case, and never edit the consumer.
 3. Language unit tests and compiler test suites from clang, gcc and msvc used as
    a source of expectations. Running those toolchains needs the user's explicit
    authorization; without it, derive the required behaviour from the standard
@@ -101,8 +103,9 @@ src\scripts\build.exe                                                  publish t
   as a passing case.  Still open: the missing `psapi.h` in the vendored
   Windows SDK, and the `is_base_and_derived_select` dependent typedef floor
   that stops the Explorer++ probe.
-- The Explorer++ consumer build (`C:\Luke\Src\Archive\explorerplusplus`) is the
-  large C++17 probe. Its entry point is `build_cpc.cmd` (it exports the
+- The Explorer++ consumer build (a checkout outside this repository, at this
+  machine's path for it) is the large C++17 probe. Its entry point is
+  `build_cpc.cmd` (it exports the
   manifest, then drives root `cpc.exe` through `src\scripts\project.exe`); its
   reduced cases and their probe are the consumer's own
   `Scripts\cpc\gaps\*.cpp` and `Scripts\cpc\Test-CpcGaps.ps1`. All five reduced
@@ -160,10 +163,11 @@ consumer's own kernels verify with `--smoke` 9/9 and `--verify` at
 the regression gate, which is now 62 cases; the fast tier (29) and the gate
 (62) pass, and the compiler and runtime package were republished.
 
-The next action is to re-run the consumer probe and reduce its next floor:
+The next action is to re-run the consumer probe (from wherever this machine
+keeps the Explorer++ checkout) and reduce its next floor:
 
 ```
-C:\Luke\Src\Archive\explorerplusplus\build_cpc.cmd Release x64
+<explorer-plus-plus checkout>\build_cpc.cmd Release x64
 ```
 
 It copies root `cpc.exe` in first and exports its own manifest.  That has been

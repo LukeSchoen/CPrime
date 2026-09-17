@@ -3,6 +3,10 @@
 Open defects, each with its reduced shape and the work it needs. Completed work
 is code and retained cases; nothing here is a progress log.
 
+Consumers named here are the user's own checkouts outside this repository. Their
+paths are per machine and are deliberately not written down: run the described
+probe from wherever that machine keeps the checkout.
+
 ## boost/math/special_functions/sign.hpp: parenthesized template declarators
 
 Closed.  The declaration scan now recognizes `T (f)(args)` before registration
@@ -148,7 +152,7 @@ Work required:
 - Choose the packaging shape for the missing SDK header and add it.
 - Compile and run the uses the project makes of the process API.
 
-## RTMPose / Kpose kernels (`C:\Luke\Src\Kinect`, read only)
+## RTMPose / Kpose kernels (Kinect tree, read only)
 
 Convolutions dominate inference at roughly 85% of the time, and a hand-written
 SSE GEMM measured about 5x faster than the C loop in isolation.  Both blocking
@@ -156,8 +160,8 @@ defects are closed below: the atomic work counter returns its result, and the
 inline-SSE kernels build, verify and stay the fast path (`KPOSE_GEMM=sse` is
 175.8 ms against 326.3 ms for the scalar kernel on the verification model).
 `KPOSE_THREADS=1` forces single-threaded execution for A/B measurements. The
-external reproducer and notes are in `C:\Luke\Src\Kinect1\README.md`; fixtures
-and models are regenerated with `python tools\vendor_rtmpose.py --all`.
+external reproducer and notes are in the Kinect tree's `README.md`; fixtures and
+models are regenerated with `python tools\vendor_rtmpose.py --all`.
 
 ### InterlockedIncrement ignores its result
 
@@ -194,8 +198,8 @@ now:
   stride of 100 bytes against 96 and 112) is not an alignment fault.
 - Floats live across the asm: ten locals read after an asm block that loads
   `xmm0`-`xmm7` keep their values, at `-O0` and `-O2`.
-- The consumer's own kernels: `C:\Luke\Src\Kinect1\src\main.c` builds with
-  root `cpc.exe`, and `kpose.exe --smoke` (9 passed) and `--verify` report
+- The consumer's own kernels: `src\main.c` in the Kinect tree builds with root
+  `cpc.exe`, and `kpose.exe --smoke` (9 passed) and `--verify` report
   `max abs error 2.289e-05` with `KPOSE_GEMM=sse` in 175.8 ms against
   326.3 ms for the scalar kernel, i.e. the inline-asm path is both correct and
   still the fast one.
@@ -211,8 +215,8 @@ callers released it again.  The pool corruption became fatal once the
 
 ## Explorer++ probe: `std::string(begin, end)` from two pointers
 
-The probe is `C:\Luke\Src\Archive\explorerplusplus`, a manifest build of 232
-translation units driven by `src\scripts\project.exe`; entry point
+The probe is the Explorer++ checkout, a manifest build of 232 translation units
+driven by `src\scripts\project.exe`; entry point
 `build_cpc.cmd`, reduced cases and their probe in the consumer's
 `Scripts\cpc\gaps` and `Scripts\cpc\Test-CpcGaps.ps1`.  Compile it with root
 `cpc.exe`, reduce each failure to a minimal local case, and never edit the

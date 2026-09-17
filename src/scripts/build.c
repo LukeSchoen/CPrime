@@ -73,31 +73,42 @@ static void absolute_path(char *out, size_t capacity, const BuildPaths *paths, c
     nt_join(out, capacity, paths->root, relative);
 }
 
+/* Every batch runs with the tree root as its working directory, so the compiler
+   can be handed tree-relative sources and include directories. An absolute path
+   here is written into the compiler and the packaged runtime through __FILE__,
+   which would make the published binaries depend on where this clone lives and
+   would hand every machine a different compiler for identical sources. */
+static void rooted_path(char *out, size_t capacity, const char *relative) {
+    if (strlen(relative) + 1 > capacity) nt_die("path too long", relative);
+    strcpy(out, relative);
+}
+
 static void add_common_flags(NtBuffer *batch, const BuildPaths *paths, const char *runtime_root) {
     char value[NT_PATH + 4];
+    (void)paths;
     snprintf(value, sizeof value, "-B%s", runtime_root); batch_arg(batch, value);
-    absolute_path(value, sizeof value, paths, "src/include/runtime"); {
+    rooted_path(value, sizeof value, "src/include/runtime"); {
         char flag[NT_PATH + 4]; snprintf(flag, sizeof flag, "-I%s", value); batch_arg(batch, flag);
     }
-    absolute_path(value, sizeof value, paths, "src/include/cprime"); {
+    rooted_path(value, sizeof value, "src/include/cprime"); {
         char flag[NT_PATH + 4]; snprintf(flag, sizeof flag, "-I%s", value); batch_arg(batch, flag);
     }
-    absolute_path(value, sizeof value, paths, "src/third-party/win32-sdk/include"); {
+    rooted_path(value, sizeof value, "src/third-party/win32-sdk/include"); {
         char flag[NT_PATH + 4]; snprintf(flag, sizeof flag, "-I%s", value); batch_arg(batch, flag);
     }
-    absolute_path(value, sizeof value, paths, "src/third-party/win32-sdk/include/winapi"); {
+    rooted_path(value, sizeof value, "src/third-party/win32-sdk/include/winapi"); {
         char flag[NT_PATH + 4]; snprintf(flag, sizeof flag, "-I%s", value); batch_arg(batch, flag);
     }
-    absolute_path(value, sizeof value, paths, "src/compiler/frontend"); {
+    rooted_path(value, sizeof value, "src/compiler/frontend"); {
         char flag[NT_PATH + 4]; snprintf(flag, sizeof flag, "-I%s", value); batch_arg(batch, flag);
     }
-    absolute_path(value, sizeof value, paths, "src/compiler/middleend"); {
+    rooted_path(value, sizeof value, "src/compiler/middleend"); {
         char flag[NT_PATH + 4]; snprintf(flag, sizeof flag, "-I%s", value); batch_arg(batch, flag);
     }
-    absolute_path(value, sizeof value, paths, "src/compiler/backend/x64"); {
+    rooted_path(value, sizeof value, "src/compiler/backend/x64"); {
         char flag[NT_PATH + 4]; snprintf(flag, sizeof flag, "-I%s", value); batch_arg(batch, flag);
     }
-    snprintf(value, sizeof value, "-I%s", paths->root); batch_arg(batch, value);
+    batch_arg(batch, "-I.");
     batch_arg(batch, "-DCPRIME_TARGET_PE");
     batch_arg(batch, "-DCPRIME_TARGET_X86_64");
 }
@@ -136,17 +147,17 @@ static void add_runtime_jobs(NtBuffer *batch, const BuildPaths *paths,
         if (bootstrap && !strcmp(runtime_names[i], "chkstk"))
             batch_arg(batch, "-DCPRIME_BOOTSTRAP_CHKSTK");
         if (!strcmp(runtime_names[i], "regex")) {
-            absolute_path(source, sizeof source, paths, "src/third-party/quickjs-regexp");
+            rooted_path(source, sizeof source, "src/third-party/quickjs-regexp");
             snprintf(quickjs, sizeof quickjs, "-I%s", source);
             batch_arg(batch, quickjs);
         }
         if (!strcmp(runtime_names[i], "exception") || !strcmp(runtime_names[i], "rtti") ||
             !strcmp(runtime_names[i], "new_delete")) {
-            absolute_path(source, sizeof source, paths, "src/include/runtime");
+            rooted_path(source, sizeof source, "src/include/runtime");
             snprintf(runtime_inc, sizeof runtime_inc, "-I%s", source);
             batch_arg(batch, runtime_inc);
         }
-        absolute_path(source, sizeof source, paths, runtime_sources[i]);
+        rooted_path(source, sizeof source, runtime_sources[i]);
         nt_join(output, sizeof output, object_dir, runtime_names[i]);
         strcat(output, ".o");
         batch_arg(batch, source);
@@ -176,7 +187,7 @@ static void add_candidate_job(NtBuffer *batch, const BuildPaths *paths) {
         nt_join(map, sizeof map, paths->compiler, "cpc.map");
         char flag[NT_PATH + 16]; snprintf(flag, sizeof flag, "-Wl,-Map=%s", map); batch_arg(batch, flag);
     }
-    absolute_path(source, sizeof source, paths, "src/compiler/driver/cprime.c");
+    rooted_path(source, sizeof source, "src/compiler/driver/cprime.c");
     batch_arg(batch, source);
     nt_join(output, sizeof output, paths->compiler, "cpc.exe");
     batch_arg(batch, "-o"); batch_arg(batch, output);
@@ -192,11 +203,9 @@ static void add_extra_jobs(NtBuffer *batch, const BuildPaths *paths,
         batch_arg(batch, "-m64"); batch_arg(batch, "-c");
         if (!strcmp(extra_names[i], "bcheck")) {
             batch_arg(batch, "-bt");
-            {
-                char flag[NT_PATH + 4]; snprintf(flag, sizeof flag, "-I%s", paths->root); batch_arg(batch, flag);
-            }
+            batch_arg(batch, "-I.");
         }
-        absolute_path(source, sizeof source, paths, extra_sources[i]); batch_arg(batch, source);
+        rooted_path(source, sizeof source, extra_sources[i]); batch_arg(batch, source);
         nt_join(output, sizeof output, library_dir, extra_names[i]); strcat(output, ".o");
         batch_arg(batch, "-o"); batch_arg(batch, output); batch_end(batch);
     }

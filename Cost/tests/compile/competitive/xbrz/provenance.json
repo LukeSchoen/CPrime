@@ -1,13 +1,13 @@
 {
-    "source":  "C:/Luke/Src/CL/CommonLib/commonLib",
+    "source":  "CommonLib/commonLib from the MAME project",
     "license":  "GPL-3.0 with the MAME linking exception retained in both source files",
     "files":  [
                   {
-                      "Path":  "C:\\Luke\\Src\\CPrime\\Tests\\benchmarks\\compile\\competitive\\xbrz\\xBRZ.cpp",
+                      "Path":  "Cost/tests/compile/competitive/xbrz/xBRZ.cpp",
                       "Hash":  "0C34CCEF77DB25402030F235CFE9CF13E41447B97480EF0A5C544E12B0884ADF"
                   },
                   {
-                      "Path":  "C:\\Luke\\Src\\CPrime\\Tests\\benchmarks\\compile\\competitive\\xbrz\\xBRZ.h",
+                      "Path":  "Cost/tests/compile/competitive/xbrz/xBRZ.h",
                       "Hash":  "21C39E416000E806016E50490BE33412E62B7AC586F0D60750C7F34E1BEBA3E0"
                   }
               ]

@@ -1,17 +1,32 @@
 /* Build an unmodified, x86-only LLVM/Clang for the compile-speed experiment.
    LLVM source and every generated file stay below build/. The installed
-   compiler remains untouched. Invoke explicitly with -RunExternal. */
+   compiler remains untouched. Invoke explicitly with -RunExternal.
+   No path is pinned to one machine: every tool comes from the command line, or
+   from CPC_CLANG/CPC_NINJA/CPC_RC/CPC_MT, or from PATH under its own name. */
 #include "common/native_tool.h"
+
+/* A bare tool name is resolved through PATH by the child process, so the
+   presence check only applies when the caller gave an explicit path. */
+static int tool_present(const char *tool) {
+    if (strchr(tool, '\\') || strchr(tool, '/')) return nt_exists(tool);
+    return 1;
+}
+
 int main(int argc, char **argv) {
     char scripts[NT_PATH], root[NT_PATH], source[NT_PATH], output[NT_PATH];
-    char compiler[NT_PATH], ninja[NT_PATH], cflag[NT_PATH+64], cppflag[NT_PATH+64], nflag[NT_PATH+64];
+    char compiler[NT_PATH], ninja[NT_PATH], rc[NT_PATH], mt[NT_PATH];
+    char cflag[NT_PATH+64], cppflag[NT_PATH+64], nflag[NT_PATH+64], rcflag[NT_PATH+64], mtflag[NT_PATH+64];
+    const char *env;
     const char *args[64]; int i, n=0, authorized=0, configure_only=0;
     NtProcessResult r;
     nt_module_directory(scripts, sizeof scripts); nt_tree_root(root, sizeof root);
     nt_join(source, sizeof source, root, "src/build/clang-competitive/llvm-source/llvm");
     nt_join(output, sizeof output, root, "src/build/clang-competitive/llvm-minimal");
-    strcpy(compiler, "C:/Luke/Src/Clang/clang.exe");
-    strcpy(ninja, "C:/Program Files (x86)/Microsoft Visual Studio/2019/Community/Common7/IDE/CommonExtensions/Microsoft/CMake/Ninja/ninja.exe");
+    env = getenv("CPC_CLANG"); snprintf(compiler, sizeof compiler, "%s", env && *env ? env : "clang.exe");
+    env = getenv("CPC_NINJA"); snprintf(ninja, sizeof ninja, "%s", env && *env ? env : "ninja.exe");
+    rc[0] = mt[0] = 0;
+    env = getenv("CPC_RC"); if (env && *env) snprintf(rc, sizeof rc, "%s", env);
+    env = getenv("CPC_MT"); if (env && *env) snprintf(mt, sizeof mt, "%s", env);
     for (i=1; i<argc; ++i) {
         if (!strcmp(argv[i], "-RunExternal")) authorized=1;
         else if (!strcmp(argv[i], "-ConfigureOnly")) configure_only=1;
@@ -19,18 +34,21 @@ int main(int argc, char **argv) {
         else if (!strcmp(argv[i], "-Out") && i+1<argc) snprintf(output,sizeof output,"%s",argv[++i]);
         else if (!strcmp(argv[i], "-Clang") && i+1<argc) snprintf(compiler,sizeof compiler,"%s",argv[++i]);
         else if (!strcmp(argv[i], "-Ninja") && i+1<argc) snprintf(ninja,sizeof ninja,"%s",argv[++i]);
-        else { fputs("build-clang-minimal.exe -RunExternal [-ConfigureOnly] [-Source LLVM_DIR] [-Out DIR] [-Clang EXE] [-Ninja EXE]\n",stderr); return 2; }
+        else if (!strcmp(argv[i], "-Rc") && i+1<argc) snprintf(rc,sizeof rc,"%s",argv[++i]);
+        else if (!strcmp(argv[i], "-Mt") && i+1<argc) snprintf(mt,sizeof mt,"%s",argv[++i]);
+        else { fputs("build-clang-minimal.exe -RunExternal [-ConfigureOnly] [-Source LLVM_DIR] [-Out DIR] [-Clang EXE] [-Ninja EXE] [-Rc EXE] [-Mt EXE]\n"
+                     "Tools default to PATH names or CPC_CLANG/CPC_NINJA/CPC_RC/CPC_MT; -Rc/-Mt are optional and CMake finds them otherwise.\n",stderr); return 2; }
     }
     if (!authorized) { fputs("Clang source builds require -RunExternal\n",stderr); return 2; }
-    if (!nt_exists(source) || !nt_exists(compiler) || !nt_exists(ninja)) nt_die("missing source or build tool",NULL);
+    if (!nt_exists(source) || !tool_present(compiler) || !tool_present(ninja)) nt_die("missing source or build tool",NULL);
     snprintf(cflag,sizeof cflag,"-DCMAKE_C_COMPILER=%s",compiler);
     snprintf(cppflag,sizeof cppflag,"-DCMAKE_CXX_COMPILER=%s",compiler);
     snprintf(nflag,sizeof nflag,"-DCMAKE_MAKE_PROGRAM=%s",ninja);
 #define A(x) args[n++]=(x)
     A("cmake.exe"); A("-S"); A(source); A("-B"); A(output); A("-G"); A("Ninja");
     A(cflag); A(cppflag); A(nflag);
-    A("-DCMAKE_RC_COMPILER=C:/Program Files (x86)/Windows Kits/10/bin/10.0.19041.0/x64/rc.exe");
-    A("-DCMAKE_MT=C:/Program Files (x86)/Windows Kits/10/bin/10.0.19041.0/x64/mt.exe");
+    if (*rc) { snprintf(rcflag,sizeof rcflag,"-DCMAKE_RC_COMPILER=%s",rc); A(rcflag); }
+    if (*mt) { snprintf(mtflag,sizeof mtflag,"-DCMAKE_MT=%s",mt); A(mtflag); }
     A("-DCMAKE_BUILD_TYPE=MinSizeRel");
     A("-DLLVM_ENABLE_PROJECTS=clang"); A("-DLLVM_TARGETS_TO_BUILD=X86");
     A("-DLLVM_TARGET_ARCH=X86"); A("-DLLVM_DEFAULT_TARGET_TRIPLE=x86_64-pc-windows-msvc");
