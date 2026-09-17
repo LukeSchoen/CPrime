@@ -9,6 +9,17 @@ hardest case instead of declaring the job done, and never create `done.x`.
 Work in this tree only. Delete nothing: `Cost\worker.cmd` and this file are the
 user's control surface, and other worker folders may be in use on other days.
 
+This clone is one arm of a shared branch: up to three machines run the Cost,
+Capability and Compatibility workers against the same origin, and
+`Cost\worker.cmd` commits, fetches, rebases and pushes at every cycle boundary.
+Expect the tree to hold the other agents' work when a cycle starts, and expect
+the work left behind to be published to them. Leave git to the worker: do not
+add, commit, fetch, rebase or push yourself, and never drop or rewrite another
+agent's work to make a merge easier. When the worker opens a cycle by naming an
+unfinished rebase, that merge is the cycle's task: keep both sides' intent, run
+the area probe, the fast tier and `-Regression`, then finish it with
+`git -c core.editor=true rebase --continue`.
+
 ## What to make faster
 
 1. The compiler building itself: `src\scripts\build.exe` (serial C-only self-host,

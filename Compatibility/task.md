@@ -9,6 +9,17 @@ Work in this tree only. Delete nothing: `Compatibility\worker.cmd` and this file
 are the user's control surface, and other worker folders may be in use on other
 days.
 
+This clone is one arm of a shared branch: up to three machines run the
+Compatibility, Capability and Cost workers against the same origin, and
+`Compatibility\worker.cmd` commits, fetches, rebases and pushes at every cycle
+boundary. Expect the tree to hold the other agents' work when a cycle starts,
+and expect the work left behind to be published to them. Leave git to the
+worker: do not add, commit, fetch, rebase or push yourself, and never drop or
+rewrite another agent's work to make a merge easier. When the worker opens a
+cycle by naming an unfinished rebase, that merge is the cycle's task: keep both
+sides' intent, run the fast tier and `-Regression`, then finish it with
+`git -c core.editor=true rebase --continue`.
+
 ## Where compatibility evidence comes from
 
 1. Retained internal cases, which are the record of what works:

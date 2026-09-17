@@ -10,6 +10,17 @@ Work in this tree only. Delete nothing: `Capability\worker.cmd` and this file ar
 the user's control surface, and other worker folders may be in use on other
 days.
 
+This clone is one arm of a shared branch: up to three machines run the
+Capability, Compatibility and Cost workers against the same origin, and
+`Capability\worker.cmd` commits, fetches, rebases and pushes at every cycle
+boundary. Expect the tree to hold the other agents' work when a cycle starts,
+and expect the work left behind to be published to them. Leave git to the
+worker: do not add, commit, fetch, rebase or push yourself, and never drop or
+rewrite another agent's work to make a merge easier. When the worker opens a
+cycle by naming an unfinished rebase, that merge is the cycle's task: keep both
+sides' intent, run the area probe, the fast tier and `-Regression`, then finish
+it with `git -c core.editor=true rebase --continue`.
+
 ## The two modes
 
 - No optimization flags, the default: compile as fast as possible. Only cheap,
