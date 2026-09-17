@@ -683,12 +683,27 @@ static void execute_units(TestUnit *units, int count, const char *compiler,
             && elapsed >= 250)
             printf("SLOW compile %s: %.3fs\n", unit->grouped ? "combined group" : units[i].source,
                    elapsed / 1000.0);
-        if (!find_batch_exit(compile.output, i + 1, &code)
-            || (expect_fail ? code != 1 : code != 0)
-            || (!expect_fail && !nt_exists(unit->output))) {
+        if (!find_batch_exit(compile.output, i + 1, &code)) {
             unit->compile_bad = 1;
             snprintf(unit->message, sizeof unit->message,
-                     "compile failed (exit %lu)", (unsigned long)code);
+                     "compiler batch result missing");
+            continue;
+        }
+        if (expect_fail ? code != 1 : code != 0) {
+            unit->compile_bad = 1;
+            if (expect_fail)
+                snprintf(unit->message, sizeof unit->message,
+                         "expected compiler rejection (exit 1), got %lu",
+                         (unsigned long)code);
+            else
+                snprintf(unit->message, sizeof unit->message,
+                         "compile failed (exit %lu)", (unsigned long)code);
+            continue;
+        }
+        if (!expect_fail && !nt_exists(unit->output)) {
+            unit->compile_bad = 1;
+            snprintf(unit->message, sizeof unit->message,
+                     "compilation produced no output");
             continue;
         }
         if (!expect_fail && !(unit->grouped ? 0 : unit->meta.compile_only)) {
@@ -1089,7 +1104,7 @@ static int run_all_suites(const char *compiler, const char *runtime, const char 
 
 static int run_runner_checks(const char *compiler, const char *runtime, unsigned timeout_ms) {
     static const struct { const char *name; const char *diagnostic; } checks[] = {
-        {"test_valid_without_main.cpp", "compiler batch result mismatched"},
+        {"test_valid_without_main.cpp", "expected compiler rejection (exit 1), got 0"},
         {"test_invalid_before_link.cpp", "compile stage mismatched (exit 1)"},
         {"test_valid_link.cpp", "link stage mismatched (exit 0)"}
     };

@@ -1,6 +1,7 @@
 #ifndef _CPC_ITERATOR
 #define _CPC_ITERATOR
 #include <stddef.h>
+#include <iosfwd>
 namespace std {
 struct input_iterator_tag {};
 struct output_iterator_tag {};
@@ -82,5 +83,31 @@ constexpr T *data(T (&array)[N]) noexcept
 {
   return array;
 }
+template<class C, class Traits = char_traits<C> >
+class ostreambuf_iterator {
+public:
+  typedef C char_type;
+  typedef Traits traits_type;
+  typedef basic_streambuf<C,Traits> streambuf_type;
+  typedef basic_ostream<C,Traits> ostream_type;
+  typedef output_iterator_tag iterator_category;
+  typedef void value_type;
+  typedef void difference_type;
+  typedef void pointer;
+  typedef void reference;
+  ostreambuf_iterator(streambuf_type *buffer) : m_sbuf(buffer), m_failed(buffer == 0) {}
+  ostreambuf_iterator(ostream_type &stream) : m_sbuf(stream.rdbuf()), m_failed(m_sbuf == 0) {}
+  ostreambuf_iterator& operator=(C c) {
+    if(!m_failed && Traits::eq_int_type(m_sbuf->sputc(c),Traits::eof()))m_failed=true;
+    return *this;
+  }
+  ostreambuf_iterator& operator*() { return *this; }
+  ostreambuf_iterator& operator++() { return *this; }
+  ostreambuf_iterator& operator++(int) { return *this; }
+  bool failed() const { return m_failed; }
+private:
+  streambuf_type *m_sbuf;
+  bool m_failed;
+};
 }
 #endif

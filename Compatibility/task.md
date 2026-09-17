@@ -85,8 +85,7 @@ src\scripts\build.exe                                                  publish t
   member function template replay, the `InterlockedIncrement` return value,
   inline SSE asm corrupting surrounding float code, the missing `psapi.h` in the
   vendored Windows SDK, the `__m256`/`immintrin.h` stub that blocks SSE/AVX
-  types, and the missing `std::ostreambuf_iterator` needed by
-  `boost/date_time/period_formatter`.
+  types, and the missing `std::locale::facet` needed by `boost/date_time`.
 - The Explorer++ consumer build (`C:\Luke\Src\Archive\explorerplusplus`) is the
   large C++17 probe. Its entry point is `build_cpc.cmd` (it exports the
   manifest, then drives root `cpc.exe` through `src\scripts\project.exe`); its
@@ -96,18 +95,12 @@ src\scripts\build.exe                                                  publish t
   published and the three floors since closed -- `ordered_range_t()` as a
   constant class initializer, the replayed `std::basic_string` constructor
   under a static initializer fold, and the missing `<cfloat>` runtime header --
-  and the `boost::mpl` `vector0<>` and parenthesized template-declarator floors
-  now closed, the build stops in
-  `boost/date_time/gregorian/gregorian_io.hpp:28` with
-  `template 'period_formatter' has no usable default for argument 2`
-  (`Compatibility\build\explorer-probe13.log`).  The reduced case and the work
-  it needs are in `Compatibility\KNOWN-ISSUES.md`.
-- `Compatibility\tests\test.exe -Checks` (the CPC-only publication/development gate) is
-  red: the runner self-check `runner rejects false expectation:
-  test_valid_without_main.cpp` reports exit 1 and `Summary: 0 passed, 1 failed`
-  but the retained diagnostic string does not match. Find out whether the
-  runner or the retained expectation is wrong; the check must stay strict
-  either way.
+  and the `boost::mpl` `vector0<>`, parenthesized template-declarator and
+  `std::ostreambuf_iterator` floors now closed, the build stops in
+  `boost/date_time/gregorian/gregorian_io.hpp:49` with
+  `nested template type member '__cpc_ns_std_locale::facet' must be a typedef`
+  (`Compatibility\build\explorer-probe14.log`).  The reduced cases and the work
+  they need are in `Compatibility\KNOWN-ISSUES.md`.
 - Grow coverage where nothing is retained yet, one area per cycle: class
   template argument deduction and deduction guides, `constexpr` and lambdas,
   structured bindings, `if constexpr`, fold expressions, inline variables,
@@ -121,33 +114,26 @@ src\scripts\build.exe                                                  publish t
 
 ## Next action
 
-Retain the reduced `boost/date_time/period_formatter` floor as one minimal case
-under `features/Includes/pass/test_ostreambuf_iterator_default.cpp`, add it to
-the fast list, reproduce it with root `cpc.exe`, implement the missing
-`std::ostreambuf_iterator` in the runtime headers, then run the affected suite,
-fast tier, regression gate, and publish:
+The `std::ostreambuf_iterator` floor is closed and published: the retained case
+`features/Includes/pass/test_ostreambuf_iterator_default.cpp` passes against
+the packaged runtime and has left the fast list.  The consumer probe now stops
+on `std::locale::facet`.  Retain one minimal case for it under
+`features/Includes/pass`, reproduce it with root `cpc.exe`, implement the
+facet surface in the runtime `<locale>` and stream headers, then run the
+affected suite, fast tier, regression gate, and publish:
 
 ```
-Compatibility\tests\test.exe -Suite features/Includes -Select test_ostreambuf_iterator_default.cpp
+Compatibility\tests\test.exe -Suite features/Includes -Select test_locale_facet.cpp
 Compatibility\tests\test.exe -Suite features/Includes
 Compatibility\tests\test.exe -All -Tier fast
 Compatibility\tests\test.exe -Regression
 src\scripts\build.exe
 ```
 
-The reduced case is
-`Compatibility\build\period-formatter-probes\p1_ostreambuf_default.cpp`: a
-class template's second parameter defaults to
-`std::ostreambuf_iterator<CharT, std::char_traits<CharT> >`, and the compiler
-reports `template 'period_formatter' has no usable default for argument 2`
-(`p1.log`).  The consumer probe log is
-`Compatibility\build\explorer-probe13.log`.  After publishing, re-run
+The reduced shape is `Compatibility\build\locale-probes\p1_facet_base.cpp`
+(`p1.log`), a 12-line program that derives a class from `std::locale::facet`;
+`p2_facet_on_stream.cpp` (`p2.log`) adds `os.getloc()`, `imbue` and
+`has_facet`.  The consumer probe log is
+`Compatibility\build\explorer-probe14.log`.  After publishing, re-run
 `C:\Luke\Src\Archive\explorerplusplus\build_cpc.cmd Release x64` (it copies
 root `cpc.exe` in first) and reduce the next floor it reports.
-
-Evidence for the parenthesized-declarator closure is in `Compatibility\build\`:
-`parenthesized-template-before.log`, `parenthesized-template-before-cpc.log`,
-`parenthesized-template-after-final.log`, `parenthesized-template-suite-final.log`,
-`parenthesized-template-fast-final.log`, `parenthesized-template-regression.log`,
-and `explorer-probe13.log`.  The retained case is
-`features/Templates/pass/test_parenthesized_template_definition_then_plain.cpp`.

@@ -34,9 +34,9 @@ constructor body that a static initializer fold misread, and the missing
 `features/Cpp17Gaps/pass/test_const_class_functional_initializer.cpp`,
 `features/Cpp17Gaps/pass/test_static_initializer_template_constructor_replay.cpp`
 and `features/Includes/pass/test_include_cfloat.cpp`. The next known consumer
-floor is the `boost/date_time/period_formatter` default argument reduced in
-`Compatibility\build\period-formatter-probes\p1_ostreambuf_default.cpp`; it
-needs `std::ostreambuf_iterator` in the runtime headers and is recorded in
+floor is `std::locale::facet`, reduced in
+`Compatibility\build\locale-probes\p1_facet_base.cpp`; the runtime `<locale>`
+and stream headers need the facet surface, and it is recorded in
 `Compatibility\KNOWN-ISSUES.md`.
 
 To add a gap: add one minimal case under the suite that owns the behavior, list

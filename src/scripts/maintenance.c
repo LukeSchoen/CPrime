@@ -12,6 +12,14 @@ static int is_preserved_third_party(const char *path) {
            !_stricmp(path, "src/third-party/tcc/tests/test-win32.bat");
 }
 
+/* The user owns these three agent-loop control surfaces and AGENTS.md exempts
+   them from the no-first-party-script rule. */
+static int is_worker_control_surface(const char *path) {
+    return !_stricmp(path, "Capability/worker.cmd") ||
+           !_stricmp(path, "Compatibility/worker.cmd") ||
+           !_stricmp(path, "Cost/worker.cmd");
+}
+
 static int check_sources(const char *root) {
     char git[NT_PATH];
     const char *command[] = {git, "ls-files", "--cached", "--others", "--exclude-standard", NULL};
@@ -35,13 +43,16 @@ static int check_sources(const char *root) {
             char full[NT_PATH]; nt_join(full, sizeof full, root, line);
             if (!nt_exists(full)) continue;
         }
-        if (forbidden_extension(line) && !is_preserved_third_party(line)) {
+        if (forbidden_extension(line) && !is_preserved_third_party(line) &&
+            !is_worker_control_surface(line)) {
             fprintf(stderr, "forbidden first-party script: %s\n", line);
             failures++;
         }
     }
     nt_process_free(&result);
-    if (!failures) puts("PASS native source policy (only the two preserved TCC batch files remain)");
+    if (!failures)
+        puts("PASS native source policy (only the two preserved TCC batch files "
+             "and the three worker control surfaces remain)");
     return failures ? 1 : 0;
 }
 

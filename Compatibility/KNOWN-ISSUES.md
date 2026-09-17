@@ -16,26 +16,41 @@ advanced to the next floor recorded below (`explorer-probe13.log`).
 
 ## boost/date_time/period_formatter: `std::ostreambuf_iterator`
 
-Open.  Explorer++ now stops at
-`boost/date_time/gregorian/gregorian_io.hpp:28`
-(`Compatibility\build\explorer-probe13.log`) while declaring
-`period_formatter<char>`; `boost/date_time/period_formatter.hpp:36` defaults its
-second parameter to
-`std::ostreambuf_iterator<CharT, std::char_traits<CharT> >`, but the runtime
-`<iterator>` header does not declare that iterator.
+Closed.  The runtime `<iterator>` header now declares
+`std::ostreambuf_iterator<charT, traits>` with the standard member typedefs,
+the streambuf and stream constructors, `operator=`, `operator*`, `operator++`
+and `failed()`, so `period_formatter.hpp`'s dependent default argument
+resolves.  The definition only needs `<iosfwd>` forward declarations, so
+`<iterator>` does not drag in `<ostream>`.  Retained as
+`features/Includes/pass/test_ostreambuf_iterator_default.cpp`; the compiler was
+republished, and `Compatibility\build\ostreambuf-publish2.log`,
+`ostreambuf-includes-suite2.log`, `ostreambuf-fast2.log` and
+`ostreambuf-regression2.log` record the passing suite, fast tier and gate.
 
-Reduced to
-`Compatibility\build\period-formatter-probes\p1_ostreambuf_default.cpp`, a
-12-line program whose class template uses the same default and initializes
-`period_formatter<char>`.  It reports `template 'period_formatter' has no usable
-default for argument 2` (`p1.log`).
+## boost/date_time: `std::locale::facet`
+
+Open.  With the iterator published, the Explorer++ probe
+(`Compatibility\build\explorer-probe14.log`) advances past
+`period_formatter` and stops at
+`boost/date_time/gregorian/gregorian_io.hpp:49` with
+`nested template type member '__cpc_ns_std_locale::facet' must be a typedef`
+while the date facets derive from `std::locale::facet`.
+
+Reduced to `Compatibility\build\locale-probes\p1_facet_base.cpp`: a 12-line
+program that derives a class from `std::locale::facet` (`p1.log`); the fuller
+`p2_facet_on_stream.cpp` adds `os.getloc()`, `imbue` and `has_facet`
+(`p2.log`).  The runtime `<locale>` header has no `locale::facet` or
+`locale::id`, `locale` has no facet-owning constructor, and the runtime streams
+have no `getloc`/`imbue`, so the `date_facet::put` path cannot compile.
 
 Work required:
 
-- Retain the reduced case under `features/Includes/pass`.
-- Implement `std::ostreambuf_iterator` in the runtime headers with the
-  standard output-iterator surface the default argument and its consumers need.
-- Compile and run the retained case.
+- Retain one minimal case under `features/Includes/pass`.
+- Add `std::locale::facet`, `std::locale::id` and the facet-registering
+  `locale(const locale&, Facet*)` constructor.
+- Give `has_facet`/`use_facet` real per-type storage instead of the current
+  always-default answer, and add `basic_ios::getloc`/`imbue`.
+- Compile and run the retained case, then republish and re-run the probe.
 
 ## clCRC.cpp: a leading `::` in a replayed member function template
 
