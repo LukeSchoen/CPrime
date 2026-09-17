@@ -12317,6 +12317,32 @@ static int token_can_start_parameter_declaration(int t)
   }
 }
 
+/* A parameter declaration may begin with an explicit global scope operator
+   (`(::sz v)`).  That token also opens a direct initializer expression
+   (`(::object)`), so the declaration reading is kept only when the qualified
+   name that follows the scope operator can itself start a parameter
+   declaration.  The lookahead borrows the live token stream and puts it back
+   exactly as it was. */
+static int cpp_scope_operator_starts_parameter_declaration(void)
+{
+  TokenString *replay;
+  int result = 0;
+
+  if (tok != ':')
+    return 0;
+  replay = tok_str_alloc();
+  tok_str_add_tok(replay);
+  next();
+  if (tok == ':')
+  {
+    tok_str_add_tok(replay);
+    next();
+    result = token_can_start_parameter_declaration(tok);
+  }
+  restore_cpp_lifecycle_probe(replay);
+  return result;
+}
+
 static int local_paren_starts_direct_initializer(void)
 {
   TokenString *replay;
@@ -12328,7 +12354,8 @@ static int local_paren_starts_direct_initializer(void)
   replay = tok_str_alloc();
   tok_str_add_tok(replay);
   next();
-  is_initializer = tok != ')' && !token_can_start_parameter_declaration(tok);
+  is_initializer = tok != ')' && !token_can_start_parameter_declaration(tok)
+                   && !cpp_scope_operator_starts_parameter_declaration();
   /* Preserve the declaration interpretation when both parses are possible.
      A leading type alone is insufficient: T(x) + y and T{...} are expressions,
      whereas T(x) can be a parenthesized parameter declarator. Look through
@@ -12366,7 +12393,8 @@ static int local_paren_starts_direct_initializer(void)
     }
     if (need_type)
     {
-      if (!token_can_start_parameter_declaration(tok) && tok != TOK_DOTS)
+      if (!token_can_start_parameter_declaration(tok) && tok != TOK_DOTS
+          && !cpp_scope_operator_starts_parameter_declaration())
         is_initializer = 1;
       elaborated_type = tok == TOK_STRUCT || tok == TOK_CLASS
                      || tok == TOK_UNION || tok == TOK_ENUM;
@@ -23173,6 +23201,19 @@ tok_identifier:
           }
         }
       }
+      /* `new` introduces a new-expression even when the type is spelled with
+         an explicit global scope operator (`new ::T(args)`).  The identifier
+         path below would otherwise read the scope operator as a qualifier of
+         a namespace named `new`. */
+      if (is_cpp_translation_unit() && !strcmp(get_tok_str(t, NULL), "new"))
+      {
+        int base_subobject_construction =
+          cpp_pending_base_subobject_construction;
+        cpp_pending_base_subobject_construction = 0;
+        if (try_parse_cpp_placement_new_after_name(explicit_global_scope,
+                                                   base_subobject_construction))
+          break;
+      }
       while (tok == ':')
       {
         int preceding_scope_tok = t;
@@ -23693,15 +23734,6 @@ tok_identifier:
           template_direct_call = 1;
           n = 1;
         }
-      }
-      if (is_cpp_translation_unit() && !strcmp(get_tok_str(t, NULL), "new"))
-      {
-        int base_subobject_construction =
-          cpp_pending_base_subobject_construction;
-        cpp_pending_base_subobject_construction = 0;
-        if (try_parse_cpp_placement_new_after_name(explicit_global_scope,
-                                                   base_subobject_construction))
-          break;
       }
       if (tok == '(' && t == CPP_TOK_STATIC_ASSERT)
       {

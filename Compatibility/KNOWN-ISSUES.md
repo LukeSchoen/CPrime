@@ -48,9 +48,12 @@ regression gate were re-run and the compiler republished.
 
 ### Constructing a facet with arguments
 
-Open, and separate from the facet surface above.  `new T(args...)` requires a
-viable default constructor even when `T` declares only a converting
-constructor:
+Closed.  The reported shape was `new T(args...)` rejecting a class whose only
+constructor converts.  `new F(7)` on the facet-like class below, and every
+variant of it (a class with no default constructor, a deleted default
+constructor, a converting constructor reached through a conversion, an
+in-class or out-of-line definition, or a class-template specialization), now
+compiles and runs, so the default-constructor demand no longer reproduces.
 
 ```cpp
 struct F : std::locale::facet {
@@ -58,12 +61,15 @@ struct F : std::locale::facet {
   explicit F(int v) : std::locale::facet(0), m(v) {}
   int m;
 };
-void f() { new F(7); }   /* error: new requires a viable default constructor */
+void f() { new F(7); }
 ```
 
-This is what forced the retained case to set its marker through an accessor.
-It is a compiler defect, not a library one, and it belongs with the other
-allocation work.
+The defect that did reproduce in that area was the qualified spelling: the
+`::` after `new` was read as the qualifier of a namespace named `new`, so
+`new ::T(7)` became a call of an invented `new::T` function and the
+constructor arguments were never seen.  The `new` keyword is now recognised
+before the qualified-name path in the primary parser.  Retained as
+`features/Expressions/pass/test_new_global_scope_qualified_type.cpp`.
 
 ## boost::type_traits: `is_base_and_derived_impl::type`
 
@@ -94,27 +100,43 @@ Work required:
 
 ## clCRC.cpp: a leading `::` in a replayed member function template
 
-An out-of-class member function template whose declaration and definition spell
-a parameter type with a leading `::` (`::G`) is replayed without its declarator,
-so the redefinition reports incompatible types (`... versus 'inline unsigned
-long long'`). The reproducer is about 20 lines in the clCRC checkout.
+Closed.  An out-of-class member function template whose declaration and
+definition spell a parameter type with a leading `::` (`::G`) was replayed
+without its declarator, so the redefinition reported incompatible types
+(`... versus 'inline unsigned long long'`).
 
-Work required:
-
-- Reduce it to a standalone CPrime-local case.
-- Keep the declarator when the replay re-spells the parameter type.
-- Retain the case in the suite that owns the behavior.
+`token_can_start_parameter_declaration` classified `(::type name)` as a direct
+initializer expression, because `:` cannot begin a parameter declaration for
+it.  The classifier now looks past a leading `::`: when the qualified name
+that follows can itself start a parameter declaration the declaration reading
+is kept, and a plain object name still reads as an initializer.  That single
+misclassification was the whole family: a free function template, an in-class
+member template, a class-template member, and a plain function definition with
+a `::`-spelled parameter all failed before and compile and run now.  Retained
+as
+`features/Templates/pass/test_leading_global_scope_parameter_in_member_template.cpp`.
 
 ## faceDetectCNN.cpp: SSE and AVX vector types
 
-`__m256` is undeclared: CPrime's `immintrin.h` is a stub, so AVX vector types
-are unimplemented. The project also needs the SSE types and intrinsics.
+Closed.  CPrime's `immintrin.h` was a stub, so `__m256` was undeclared and
+`faceDetectCNN.cpp`, which defines `_ENABLE_AVX2` and includes the umbrella
+header, could not compile at all.
 
-Work required:
-
-- Implement the SSE vector types and intrinsics the project uses, then the AVX
-  ones.
-- Retain a compile-and-run case for the types and for the intrinsics added.
+The runtime `<immintrin.h>` now defines `__m64`, `__m128`/`__m128d`/`__m128i`,
+`__m256`/`__m256d`/`__m256i` and `__m512`/`__m512d`/`__m512i` as GNU vector
+extensions, plus the SSE/AVX/AVX-512 float kernels the CNN kernels use
+(load/store, setzero/set1/set/setr, add/sub/mul/div, max/min, bitwise forms,
+comparisons, movemask, horizontal add, unpack/shuffle, the scalar `ss` forms,
+`_mm512_reduce_add_ps`), the 128/256-bit integer core, and the reinterpreting
+casts.  Comparison intrinsics return the all-ones mask: the compiler's element
+comparison yields `-1.0f`, so the sign bit is broadcast over each lane.  Thin
+`xmmintrin.h`/`emmintrin.h`/`pmmintrin.h`/`tmmintrin.h`/`smmintrin.h`/
+`nmmintrin.h`/`avxintrin.h`/`avx2intrin.h` wrappers include the umbrella
+header.  With the published runtime, `faceDetectCNN.cpp` compiles (its only
+remaining diagnostic is an unrelated `std::stable_sort` declaration warning).
+Retained as
+`features/Intrinsics/pass/test_sse_avx_intrinsics.cpp`, which checks every
+intrinsic added against scalar arithmetic.
 
 ## clProcessList.cpp: psapi.h
 
@@ -129,11 +151,12 @@ Work required:
 ## RTMPose / Kpose kernels (`C:\Luke\Src\Kinect`, read only)
 
 Convolutions dominate inference at roughly 85% of the time, and a hand-written
-SSE GEMM measured about 5x faster than the C loop in isolation.  The atomic
-work counter is fixed, but the inline-SSE register corruption below still
-blocks the SSE kernel, so the Kpose kernels stay portable C.
+SSE GEMM measured about 5x faster than the C loop in isolation.  Both blocking
+defects are closed below: the atomic work counter returns its result, and the
+inline-SSE kernels build, verify and stay the fast path (`KPOSE_GEMM=sse` is
+175.8 ms against 326.3 ms for the scalar kernel on the verification model).
 `KPOSE_THREADS=1` forces single-threaded execution for A/B measurements. The
-external reproducer and notes are in `C:\Luke\Src\Kinect\README.md`; fixtures
+external reproducer and notes are in `C:\Luke\Src\Kinect1\README.md`; fixtures
 and models are regenerated with `python tools\vendor_rtmpose.py --all`.
 
 ### InterlockedIncrement ignores its result
@@ -155,20 +178,27 @@ decrement and a mixed sequence.
 
 ### Inline SSE asm corrupts surrounding float code
 
-Inline SSE asm using `movups`/`mulps`/`addps` and `xmm0`-`xmm2` corrupts the
-surrounding generated float code: a function that runs the asm and then does
-scalar float maths crashes with `0xC0000005`. The reduced shape is a GEMM whose
-`N=25` crashes while `N=24` and `N=28` do not; `cpc -b` and separate-function
-layouts do not avoid it. `__attribute__((vector_size(16)))` works but compiles
-about 3x slower than the plain C loop.
+Not reproducible with the published compiler; the reported shape is now
+retained as a passing case.  The reduction is
+`features/GnuExtensions/pass/test_inline_sse_asm_with_scalar_tail.cpp`: the
+vector loop runs `movups`/`mulps`/`addps` on `xmm0`-`xmm2` with a 4-float
+stride, and the leftover columns run scalar float arithmetic afterwards.  It
+produces the scalar reference for `N=24`, `N=25` and `N=28`, and the
+`N=25`-only failure does not appear.
 
-Work required:
+The three behaviours the report rested on were checked separately and all hold
+now:
 
-- Reduce the `N=25` GEMM to a standalone CPrime-local reproducer.
-- Fix register allocation and liveness across inline asm and generated float
-  code.
-- Retain the reproducer as a regression case.
-- Re-check the isolated SSE GEMM performance after the fix.
+- `movups` accepts an unaligned operand: a load/store through pointers at
+  offsets 1, 2 and 3 floats all complete, so the `N=25`/`N=24` split (a row
+  stride of 100 bytes against 96 and 112) is not an alignment fault.
+- Floats live across the asm: ten locals read after an asm block that loads
+  `xmm0`-`xmm7` keep their values, at `-O0` and `-O2`.
+- The consumer's own kernels: `C:\Luke\Src\Kinect1\src\main.c` builds with
+  root `cpc.exe`, and `kpose.exe --smoke` (9 passed) and `--verify` report
+  `max abs error 2.289e-05` with `KPOSE_GEMM=sse` in 175.8 ms against
+  326.3 ms for the scalar kernel, i.e. the inline-asm path is both correct and
+  still the fast one.
 
 ## The standard `std::atomic_*` typedefs crash the compiler
 

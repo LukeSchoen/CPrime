@@ -81,11 +81,15 @@ src\scripts\build.exe                                                  publish t
   `features/Templates/pass/test_parenthesized_template_definition_then_plain.cpp`;
   evidence is in `Compatibility\build\parenthesized-template-*.log` and
   `Compatibility\build\explorer-probe13.log`.
-- Work the defects recorded in `Compatibility\KNOWN-ISSUES.md`: the `::`-spelled
-  member function template replay, the `InterlockedIncrement` return value,
-  inline SSE asm corrupting surrounding float code, the missing `psapi.h` in the
-  vendored Windows SDK, the `__m256`/`immintrin.h` stub that blocks SSE/AVX
-  types, and the missing `std::locale::facet` needed by `boost/date_time`.
+- Work the defects recorded in `Compatibility\KNOWN-ISSUES.md`.  Closed this
+  cycle: the `::`-spelled parameter list (a free or member function template
+  definition, and `new ::T(args)`), the `__m256`/`immintrin.h` stub (the
+  runtime header now carries the SSE/AVX/AVX-512 types and kernels the CNN
+  kernels use, and `faceDetectCNN.cpp` compiles), and the inline-SSE GEMM
+  report, which does not reproduce with the published compiler and is retained
+  as a passing case.  Still open: the missing `psapi.h` in the vendored
+  Windows SDK, and the `is_base_and_derived_select` dependent typedef floor
+  that stops the Explorer++ probe.
 - The Explorer++ consumer build (`C:\Luke\Src\Archive\explorerplusplus`) is the
   large C++17 probe. Its entry point is `build_cpc.cmd` (it exports the
   manifest, then drives root `cpc.exe` through `src\scripts\project.exe`); its
@@ -126,10 +130,24 @@ gate (58) passed before the compiler was republished.
 owns the two intrinsics (`src/runtime/windows/winintrin.S`, declared through
 `cprimedefs.h`) because the vendored header's inline-asm version inferred the
 new value from flags the register allocator could clobber.  Retained as
-`features/Abi/pass/test_msvc_interlocked_counter.cpp`.  The underlying
-inline-asm register-allocation defect (an address operand and a later register
-output sharing a register) is still open for the SSE GEMM case below and is
-the real blocker there.
+`features/Abi/pass/test_msvc_interlocked_counter.cpp`.
+
+This cycle closed the remaining fronts of `Compatibility\KNOWN-ISSUES.md` that
+had a reproducer.  The `::`-spelled parameter list is one classifier defect:
+`(::type name)` was read as a direct initializer, so an out-of-class member
+template lost its declarator and `new ::T(args)` lost its constructor
+arguments.  Both are retained
+(`features/Templates/pass/test_leading_global_scope_parameter_in_member_template.cpp`,
+`features/Expressions/pass/test_new_global_scope_qualified_type.cpp`).  The
+`immintrin.h` stub is replaced by the real SSE/AVX/AVX-512 types and kernels
+(`features/Intrinsics/pass/test_sse_avx_intrinsics.cpp`) and the consumer's
+`faceDetectCNN.cpp` now compiles.  The inline-SSE GEMM report does not
+reproduce: the reduced shape is retained as
+`features/GnuExtensions/pass/test_inline_sse_asm_with_scalar_tail.cpp`, and the
+consumer's own kernels verify with `--smoke` 9/9 and `--verify` at
+`max abs error 2.289e-05` under `KPOSE_GEMM=sse`.  The four new cases joined
+the regression gate, which is now 62 cases; the fast tier (29) and the gate
+(62) pass, and the compiler and runtime package were republished.
 
 The next action is to re-run the consumer probe and reduce its next floor:
 

@@ -998,6 +998,10 @@ static int run_regressions(const char *compiler, const char *runtime, unsigned t
         {"features/Constructors", {"test_deleted_constructor_elision_and_selection.cpp", NULL}},
         {"features/Functions", {"test_deleted_function_overload_selection.cpp", "test_deleted_function_selected.cpp", NULL}},
         {"features/Templates", {"test_deleted_member_template_selected.cpp", NULL}},
+        {"features/Templates", {"test_leading_global_scope_parameter_in_member_template.cpp", NULL}},
+        {"features/Expressions", {"test_new_global_scope_qualified_type.cpp", NULL}},
+        {"features/GnuExtensions", {"test_inline_sse_asm_with_scalar_tail.cpp", NULL}},
+        {"features/Intrinsics", {"test_sse_avx_intrinsics.cpp", NULL}},
         {"features/Destructors", {"test_deleted_destructor_unused.cpp", "test_deleted_destructor_object.cpp", NULL}}
     };
     RegressionCase *cases;
