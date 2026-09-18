@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: using_declaration_pack. A pack expansion in a
+// C++17 gap probe: using_declaration_pack. A pack expansion in a
 // using-declaration (`using T::f...;`) is a parse error.
 
 struct First {

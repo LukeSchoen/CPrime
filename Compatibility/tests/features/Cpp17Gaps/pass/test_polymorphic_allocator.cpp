@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: polymorphic_allocator. <memory_resource> offers
+// C++17 gap probe: polymorphic_allocator. <memory_resource> offers
 // memory_resource and a buffer resource but no std::pmr::polymorphic_allocator,
 // so the pmr containers cannot be built.
 

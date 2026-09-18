@@ -1,4 +1,4 @@
-// CL gap probe: alt_operators and cxx17_and_or_keywords. The alternative
+// C++17 gap probe: alt_operators and cxx17_and_or_keywords. The alternative
 // operator tokens are keywords, so they must work without <iso646.h>.
 int main() {
   int x = 1;

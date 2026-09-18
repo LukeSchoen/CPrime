@@ -1,4 +1,4 @@
-// CL gap probe: std_functional_bind. std::function with a lambda works; the
+// C++17 gap probe: std_functional_bind. std::function with a lambda works; the
 // result of std::bind must be callable too.
 #include <functional>
 

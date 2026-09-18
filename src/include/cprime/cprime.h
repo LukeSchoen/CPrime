@@ -1408,6 +1408,7 @@ ST_FUNC void cprimegen_init(CPRIMEState *s1);
 ST_FUNC int cprimegen_compile(CPRIMEState *s1);
 ST_FUNC void x64_fast_reset(void);
 ST_FUNC void x64_fast_disable(void);
+ST_FUNC int cpp_eh_has_code_offsets(void);
 ST_FUNC void cprimegen_finish(CPRIMEState *s1);
 ST_FUNC void check_vstack(void);
 

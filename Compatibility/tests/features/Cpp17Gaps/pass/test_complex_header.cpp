@@ -1,4 +1,4 @@
-// CL gap probe: lib_complex. <complex> is missing from the runtime.
+// C++17 gap probe: lib_complex. <complex> is missing from the runtime.
 #include <complex>
 
 int main() {

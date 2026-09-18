@@ -1,37 +1,37 @@
 template<typename T>
-class clBitRef
+class BitRef
 {
 public:
-  clBitRef &operator=(const clBitRef &rhs);
-  clBitRef &operator=(bool const &rhs);
+  BitRef &operator=(const BitRef &rhs);
+  BitRef &operator=(bool const &rhs);
   operator bool() const;
 
   T value;
 };
 
 template<typename T>
-clBitRef<T> &clBitRef<T>::operator=(bool const &rhs)
+BitRef<T> &BitRef<T>::operator=(bool const &rhs)
 {
   value = rhs ? 1 : 0;
   return *this;
 }
 
 template<typename T>
-clBitRef<T> &clBitRef<T>::operator=(const clBitRef &rhs)
+BitRef<T> &BitRef<T>::operator=(const BitRef &rhs)
 {
   return *this = bool(rhs);
 }
 
 template<typename T>
-clBitRef<T>::operator bool() const
+BitRef<T>::operator bool() const
 {
   return value != 0;
 }
 
 int main()
 {
-  clBitRef<unsigned int> low;
-  clBitRef<unsigned int> high;
+  BitRef<unsigned int> low;
+  BitRef<unsigned int> high;
 
   high = true;
   if (high.value != 1)

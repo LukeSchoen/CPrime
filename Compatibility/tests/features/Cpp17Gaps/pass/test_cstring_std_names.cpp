@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: cstring_names. <cstring> puts only memcmp and strlen into
+// C++17 gap probe: cstring_names. <cstring> puts only memcmp and strlen into
 // namespace std; strcmp and the rest of the string functions are missing.
 
 #include <cstring>

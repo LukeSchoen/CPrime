@@ -6,18 +6,18 @@ namespace std
 
 class DeclvalString;
 
-DeclvalString clToString(int value);
+DeclvalString toStringValue(int value);
 
 class DeclvalString
 {
 public:
-  template<typename T, typename = decltype(clToString(std::declval<T>()))>
+  template<typename T, typename = decltype(toStringValue(std::declval<T>()))>
   explicit DeclvalString(const T &value)
   {
   }
 };
 
-template<typename T, typename = decltype(clToString(std::declval<T>()))>
+template<typename T, typename = decltype(toStringValue(std::declval<T>()))>
 DeclvalString operator+(const T &lhs, const DeclvalString &rhs)
 {
   return DeclvalString(lhs);

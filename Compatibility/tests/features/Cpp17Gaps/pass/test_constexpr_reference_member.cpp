@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: constexpr_reference_member. Reading and writing through a
+// C++17 gap probe: constexpr_reference_member. Reading and writing through a
 // reference member, with the referenced object staying inside the evaluation.
 struct Ref {
   int &target;

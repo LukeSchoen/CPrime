@@ -1,8 +1,7 @@
 // EXPECT_EXIT: 0
 // A constructor argument written as a braced-init-list for a parameter whose
 // class constructor has defaulted parameters has to select that constructor.
-// clQuad.cpp:116 writes `clQuad({ a, b, c, d })` against
-// `clQuad(const clVector4<clVec3> &)`.
+// `Quad({ a, b, c, d })` against `Quad(const Vec4 &)` is the shape.
 struct Vec3
 {
   float x, y, z;

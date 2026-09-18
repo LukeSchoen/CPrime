@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: replayed_constructor_body.  A template constructor whose body
+// C++17 gap probe: replayed_constructor_body.  A template constructor whose body
 // uses `++` on its iterator parameter is queued when the template is
 // instantiated.  Compiling that body for real code while a later
 // namespace-scope static initializer is folded must not read the body's

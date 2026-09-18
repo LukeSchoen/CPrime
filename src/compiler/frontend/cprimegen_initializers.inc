@@ -67,6 +67,19 @@ static Sym *flexible_array_member(CType *type)
   return NULL;
 }
 
+static int type_has_incomplete_array_component(CType *type)
+{
+  Sym *field;
+
+  if (type->t & VT_ARRAY)
+    return !type->ref || type->ref->c < 0;
+  if ((type->t & VT_BTYPE) == VT_STRUCT && type->ref)
+    for (field = type->ref->next; field; field = field->next)
+      if (type_has_incomplete_array_component(&field->type))
+        return 1;
+  return 0;
+}
+
 /* Element count the saved braced initializer 'initializer' gives the trailing
    flexible array member of 'type', measured by replaying it in a size-only
    pass.  The member keeps its unknown size afterwards so that every
@@ -251,7 +264,10 @@ no_designator:
     p->list_initialization = 1;
     if (!(type->t & VT_ARRAY) && cur_field && *cur_field)
       p->member_token = (*cur_field)->v & ~SYM_FIELD;
+    PROFILE_INIT_IMPL_ARRAY_SEG(PROFILE_INIT_IMPL_ARRAY_ELEM_DECL);
+    PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_ARRAY_ELEM_DECL);
     decl_initializer(p, type, c, flags & ~DIF_FIRST);
+    PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_ARRAY_ELEM_POST);
     p->member_token = saved_member;
     p->list_initialization = saved_list;
   }
@@ -1645,6 +1661,77 @@ static TokenString *bind_aggregate_default_initializer(TokenString *source,
    size only evaluation is wanted (only for arrays). */
 static void decl_initializer_impl(init_params *p, CType *type, unsigned long c, int flags);
 
+/* A single integer literal is a complete constant initializer element.  Look
+   one token past the literal; when that token ends the element, push the
+   literal's typed value without running the expression parser.  Otherwise put
+   the lookahead token back and let the parser handle the full expression. */
+static int parse_simple_static_scalar_initializer(void)
+{
+  int saved_tok = tok;
+  CValue saved_tokc = tokc;
+  CType type;
+
+  if (saved_tok >= TOK_UIDENT && saved_tok < SYM_FIRST_ANOM)
+  {
+    Sym *sym = sym_find(saved_tok);
+    if (!sym)
+      sym = global_symbol_find(saved_tok);
+    if (sym && (sym->r & (VT_VALMASK | VT_LVAL | VT_SYM)) == VT_CONST
+        && IS_ENUM_VAL(sym->type.t))
+    {
+      CValue value = {0};
+      next();
+      if (tok != ',' && tok != '}' && tok != ';' && tok != ')'
+          && tok != ']' && tok != TOK_EOF)
+      {
+        unget_tok(saved_tok);
+        tokc = saved_tokc;
+        return 0;
+      }
+      value.i = sym->enum_val;
+      vsetc(&sym->type, VT_CONST, &value);
+      return 1;
+    }
+  }
+
+  switch (saved_tok)
+  {
+  case TOK_CINT:
+    type.t = VT_INT;
+    break;
+  case TOK_CUINT:
+    type.t = VT_INT | VT_UNSIGNED;
+    break;
+  case TOK_CLLONG:
+    type.t = VT_LLONG;
+    break;
+  case TOK_CULLONG:
+    type.t = VT_LLONG | VT_UNSIGNED;
+    break;
+  case TOK_CLONG:
+    type.t = (LONG_SIZE == 8 ? VT_LLONG : VT_INT) | VT_LONG;
+    break;
+  case TOK_CULONG:
+    type.t = (LONG_SIZE == 8 ? VT_LLONG : VT_INT) | VT_LONG | VT_UNSIGNED;
+    break;
+  default:
+    return 0;
+  }
+
+  next();
+  if (tok != ',' && tok != '}' && tok != ';' && tok != ')'
+      && tok != ']' && tok != TOK_EOF)
+  {
+    unget_tok(saved_tok);
+    tokc = saved_tokc;
+    return 0;
+  }
+
+  type.ref = NULL;
+  vsetc(&type, VT_CONST, &saved_tokc);
+  return 1;
+}
+
 static void decl_initializer(init_params *p, CType *type, unsigned long c, int flags)
 {
   long long saved_frontier = constant_initialization_frontier;
@@ -1652,7 +1739,9 @@ static void decl_initializer(init_params *p, CType *type, unsigned long c, int f
      Pre-cleared output bytes beyond this subobject are not initialized values. */
   if ((p->sec || p->constant_object_target) && constant_initialization_object)
     constant_initialization_frontier = p->sec ? (long long)c : (int)c;
+  PROFILE_TOP_DECL_TAIL_INIT_BEGIN();
   decl_initializer_impl(p, type, c, flags);
+  PROFILE_TOP_DECL_TAIL_INIT_END();
   constant_initialization_frontier = saved_frontier;
 }
 
@@ -1666,6 +1755,45 @@ static void decl_initializer_impl(init_params *p, CType *type, unsigned long c, 
   CType *t1;
   Sym *old_cleanup = cur_scope ? cur_scope->cl.s : NULL;
   int old_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
+
+  /* A size-only pass normally walks every subobject so an incomplete array
+     can infer its extent.  When the braced aggregate contains no incomplete
+     array at any depth, that walk has no observable effect; skip the whole
+     balanced group in one pass. */
+  if (!is_cpp_translation_unit() && (flags & DIF_SIZE_ONLY) && tok == '{'
+      && !type_has_incomplete_array_component(type))
+  {
+    PROFILE_INIT_IMPL_ARRAY_SEG(PROFILE_INIT_IMPL_ARRAY_SKIP);
+    skip_balanced_block_c();
+    PROFILE_INIT_IMPL_ARRAY_SEG(PROFILE_INIT_IMPL_ARRAY_ELEM_DECL);
+    return;
+  }
+
+  /* Static C scalar initializers are the common leaf of aggregate tables.
+     Their value still goes through the constant expression parser, but the
+     general path's C++/local bookkeeping and branch dispatch are not needed. */
+  if (!is_cpp_translation_unit() && p->sec
+      && !(flags & (DIF_FIRST | DIF_HAVE_ELEM | DIF_SIZE_ONLY))
+      && !p->indirect_base && !p->constant_object_target
+      && !p->aggregate_target_sym && !p->object_size_target
+      && !p->range_alias_target && !p->require_constant_values
+      && !p->capture_integral_constexpr
+      && (type->t & (VT_ARRAY | VT_VLA | VT_BITFIELD)) == 0
+      && (type->t & VT_BTYPE) != VT_STRUCT
+      && (type->t & VT_BTYPE) != VT_FUNC
+      && !is_reference_type(type) && !is_complex_type(type))
+  {
+    PROFILE_TOP_DECL_TAIL_NESTED_SEG(PROFILE_DECL_TAIL_SCALAR_FAST_LITERAL);
+    if (!parse_simple_static_scalar_initializer())
+    {
+      PROFILE_SCALAR_FAST_EXPR_COUNT(tok);
+      PROFILE_TOP_DECL_TAIL_NESTED_SEG(profile_decl_scalar_fast_expr_region(tok));
+      parse_init_elem(EXPR_CONST);
+    }
+    PROFILE_TOP_DECL_TAIL_NESTED_SEG(PROFILE_DECL_TAIL_SCALAR_FAST_PUT);
+    init_putv(p, type, c);
+    return;
+  }
 
   // Generate Line Number Info
   if (debug_modes && !(flags & DIF_SIZE_ONLY) && !p->sec)
@@ -1727,6 +1855,7 @@ static void decl_initializer_impl(init_params *p, CType *type, unsigned long c, 
 
   if (find_cpp_member_pointer_type(type))
   {
+    PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_MEMBER_POINTER);
     if (!(flags & DIF_HAVE_ELEM))
     {
       skip('{');
@@ -1749,6 +1878,7 @@ static void decl_initializer_impl(init_params *p, CType *type, unsigned long c, 
 
   if (type->t & VT_ARRAY)
   {
+    PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_ARRAY);
     no_oblock = 1;
     if (((flags & DIF_FIRST) && !TOK_IS_STRING(tok)) ||
         tok == '{')
@@ -1777,6 +1907,7 @@ static void decl_initializer_impl(init_params *p, CType *type, unsigned long c, 
       len = 0;
       cstr_reset(&initstr);
       int string_token = tok;
+      PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_ARRAY_STRING);
       if (size1 != TOK_STRING_UNIT_SIZE(tok))
         cprime_error("unhandled string literal merging");
       while (TOK_IS_STRING(tok))
@@ -1853,6 +1984,9 @@ static void decl_initializer_impl(init_params *p, CType *type, unsigned long c, 
     {
 
 do_init_array:
+      if (flags & DIF_SIZE_ONLY)
+        PROFILE_INIT_IMPL_ARRAY_BEGIN();
+      PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_ARRAY_LOOP);
       indexsym.c = 0;
       f = &indexsym;
 
@@ -1884,6 +2018,7 @@ do_init_list:
           else init_putv(p, type, c);
           if (tok == ',') next();
           skip('}');
+          PROFILE_INIT_IMPL_ARRAY_END();
           return;
         }
         flags |= DIF_HAVE_ELEM;
@@ -1895,7 +2030,12 @@ do_init_list:
       decl_design_flex(p, s, len - 1);
       while (tok != '}' || (flags & DIF_HAVE_ELEM))
       {
+        PROFILE_INIT_IMPL_ARRAY_SEG(PROFILE_INIT_IMPL_ARRAY_DESIGNATOR);
+        PROFILE_TOP_DECL_TAIL_INIT_SEG(
+            PROFILE_DECL_TAIL_INIT_IMPL_ARRAY_DESIGNATOR);
         len = decl_designator(p, type, c, &f, flags, len);
+        PROFILE_INIT_IMPL_ARRAY_SEG(PROFILE_INIT_IMPL_ARRAY_BODY);
+        PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_ARRAY_BODY);
         flags &= ~DIF_HAVE_ELEM;
         if (type->t & VT_ARRAY)
         {
@@ -1923,6 +2063,7 @@ do_init_list:
           break;
         skip(',');
       }
+      PROFILE_INIT_IMPL_ARRAY_END();
     }
     if ((type->t & VT_BTYPE) == VT_STRUCT && !IS_UNION(type->t)
         && !(flags & DIF_SIZE_ONLY) && is_cpp_translation_unit()) {
@@ -2006,6 +2147,7 @@ do_init_list:
                    && (type->t & VT_BTYPE) == VT_STRUCT && type->ref
                    && type->ref->a.cpp_user_constructor)))
   {
+    PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_SCALAR_ELEM);
     /* Fall through to the scalar initializer path. */
     if ((flags & DIF_SIZE_ONLY))
     {
@@ -2058,6 +2200,7 @@ do_init_list:
     int element_storage_kind = static_backing ? VT_LLOCAL | VT_LVAL : VT_LOCAL | VT_LVAL;
     int element_size, element_align, element_addr = 0, element_r2 = 0;
     int i;
+    PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_LIST);
 
     /* List elements are not function arguments: their number is unbounded,
        and a final comma does not introduce an empty element. */
@@ -2225,6 +2368,7 @@ do_init_list:
   else if ((type->t & VT_BTYPE) == VT_STRUCT
            && !(is_complex_type(type) && (flags & DIF_HAVE_ELEM)))
   {
+    PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_STRUCT);
     if (initialize_class_constructor_list(p, type, c, flags)) goto initialized_object;
     no_oblock = 1;
     if ((flags & DIF_FIRST) || tok == '{')
@@ -2243,6 +2387,7 @@ do_init_list:
   else if (tok == '{')
   {
     int saved_list_initialization = p->list_initialization;
+    PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_BRACE);
     p->list_initialization = 1;
     if (flags & DIF_HAVE_ELEM)
       skip(';');
@@ -2266,6 +2411,7 @@ do_init_list:
   }
   else
   {
+    PROFILE_TOP_DECL_TAIL_INIT_SEG(PROFILE_DECL_TAIL_INIT_IMPL_SCALAR);
     /* If we supported only ISO C we wouldn't have to accept calling
        this on anything than an array if DIF_SIZE_ONLY (and even then
        only on the outermost level, so no recursion would be needed),
@@ -2583,7 +2729,7 @@ static int constant_class_object_evaluate(CType *type, TokenString *initializer,
   const int *parent_ptr;
   ConstexprLocalField *collected = NULL, **tail = &collected;
   CType object_type = *type;
-  int saved_tok, braced, first, done;
+  int saved_tok, braced, first, default_initialization, done;
   CValue saved_tokc;
   int saved_nocode = nocode_wanted;
   if (!is_cpp_translation_unit()
@@ -2599,26 +2745,41 @@ static int constant_class_object_evaluate(CType *type, TokenString *initializer,
      ordinary expression that produces the object. */
   first = tok_str_next_non_linenum_index(initializer->str, initializer->len, 0);
   braced = first < initializer->len && initializer->str[first] == '{';
+  default_initialization = first >= initializer->len
+                           || initializer->str[first] == TOK_EOF;
   saved_tok = tok;
   saved_tokc = tokc;
   parent = macro_stack;
   parent_ptr = macro_ptr;
   ++constexpr_temporary_expression_depth;
   nocode_wanted |= CONST_WANTED_BIT;
-  begin_macro(initializer, 0);
-  next();
-  if (braced)
-    materialize_braced_temporary_mode(&object_type, 0, NULL);
-  else if (tok != TOK_EOF)
-    gexpr();
+  if (default_initialization) {
+    if (!materialize_default_temporary_mode(&object_type)) {
+      nocode_wanted = saved_nocode;
+      --constexpr_temporary_expression_depth;
+      tok = saved_tok;
+      tokc = saved_tokc;
+      *fields = NULL;
+      return 0;
+    }
+  } else {
+    begin_macro(initializer, 0);
+    next();
+    if (braced)
+      materialize_braced_temporary_mode(&object_type, 0, NULL);
+    else if (tok != TOK_EOF)
+      gexpr();
+  }
   nocode_wanted = saved_nocode;
   --constexpr_temporary_expression_depth;
   object = NULL;
   if (vtop >= vstack && vtop->sym)
     object = constexpr_temporary_for(vtop->sym);
   vtop = vstack - 1;
-  while (macro_stack && macro_stack != parent) end_macro();
-  macro_ptr = parent_ptr;
+  if (!default_initialization) {
+    while (macro_stack && macro_stack != parent) end_macro();
+    macro_ptr = parent_ptr;
+  }
   tok = saved_tok;
   tokc = saved_tokc;
   done = object
@@ -2707,21 +2868,6 @@ static int emit_constant_object_fields(Sym *symbol, ConstexprLocalField *fields)
   return emit_constant_fields_at(section, object_sym->st_value, fields);
 }
 
-/* Constant initialization of a class object: run the construction the
-   initializer names inside the constant evaluator, then emit the resulting
-   subobject values as the object's data. */
-static int constant_class_object_initializer(int var_tok, CType *type,
-                                             TokenString *initializer)
-{
-  ConstexprLocalField *fields = NULL;
-  Sym *symbol = sym_find(var_tok);
-  int valid;
-  if (!constant_class_object_evaluate(type, initializer, &fields)) return 0;
-  valid = emit_constant_object_fields(symbol, fields);
-  free_constexpr_object_fields(fields);
-  return valid;
-}
-
 static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
                                    int has_init, int has_ctor_init,
                                    TokenString *copy_ctor_init, int v, int decl_scope,
@@ -2744,6 +2890,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
   int bcheck = cprime_state->do_bounds_check && !NODATA_WANTED;
 #endif
   init_params p = {0};
+  PROFILE_TOP_DECL_TAIL_ALLOC_BEGIN();
   p.extend_backing_array_lifetime = v && (r & VT_VALMASK) == VT_LOCAL;
   p.scalar_direct_initialization = direct_init
       && (type->t & VT_BTYPE) == VT_BOOL;
@@ -2761,6 +2908,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
   has_expr_struct_init = has_init
                          && (type->t & VT_BTYPE) == VT_STRUCT;
 
+  PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_LOOKUP);
   if (decl_scope == VT_CONST)
   {
     // see if a global symbol was already defined
@@ -2778,6 +2926,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
     }
   }
 
+  PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_SIZE);
   // Always allocate static or global variables
   if (v && (r & VT_VALMASK) == VT_CONST)
     nocode_wanted |= DATA_ONLY_WANTED;
@@ -2794,6 +2943,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
   if (size < 0 && (type->t & VT_BTYPE) == VT_STRUCT
       && materialize_incomplete_template_type(type))
     size = type_size(type, &align);
+  PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_SIZE_KNOWN);
 
   /* One flexible array can be initialized: the top-level array, the last
      struct member, or the selected member of a top-level union. */
@@ -2811,6 +2961,7 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
   }
   if (size < 0)
   {
+    PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_SIZE_UNKNOWN);
     // Error Out Except For Top-Level Incomplete Arrays
     // (Arrays Of Incomplete Types Are Handled In Array Parsing)
     if (!(type->t & VT_ARRAY))
@@ -2860,9 +3011,12 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
 
   if (size < 0)
   {
+    PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_SIZE_UNKNOWN);
     // If unknown size, do a dry-run 1st pass
     if (!has_init)
       goto err_size;
+    PROFILE_TOP_DECL_TAIL_ALLOC_UNKNOWN_SEG(
+        PROFILE_DECL_TAIL_ALLOC_SIZE_UNKNOWN_SAVE);
     if (has_init == 2)
     {
       // Only Get Strings
@@ -2879,18 +3033,31 @@ static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r,
     unget_tok(0);
 
     // Compute Size
+    PROFILE_TOP_DECL_TAIL_ALLOC_UNKNOWN_SEG(
+        PROFILE_DECL_TAIL_ALLOC_SIZE_UNKNOWN_REPLAY);
+    PROFILE_TOP_DECL_TAIL_ALLOC_UNKNOWN_REPLAY_SEG(
+        PROFILE_DECL_TAIL_ALLOC_SIZE_UNKNOWN_REPLAY_SETUP);
     begin_macro(init_str, 1);
     next();
+    PROFILE_TOP_DECL_TAIL_ALLOC_UNKNOWN_REPLAY_SEG(
+        PROFILE_DECL_TAIL_ALLOC_SIZE_UNKNOWN_REPLAY_INIT);
     decl_initializer(&p, type, 0, DIF_FIRST | DIF_SIZE_ONLY);
     // Prepare Second Initializer Parsing
+    PROFILE_TOP_DECL_TAIL_ALLOC_UNKNOWN_REPLAY_SEG(
+        PROFILE_DECL_TAIL_ALLOC_SIZE_UNKNOWN_REPLAY_RESET);
     macro_ptr = init_str->str;
     next();
+    PROFILE_TOP_DECL_TAIL_ALLOC_UNKNOWN_REPLAY_END();
 
     // if still unknown size, error
+    PROFILE_TOP_DECL_TAIL_ALLOC_UNKNOWN_SEG(
+        PROFILE_DECL_TAIL_ALLOC_SIZE_UNKNOWN_EXTENT);
     size = type_size(type, &align);
-    if (size < 0)
+    if (size < 0) {
+      PROFILE_TOP_DECL_TAIL_ALLOC_UNKNOWN_END();
 err_size:
       cprime_error("unknown type size");
+    }
 
     /* If there's a flex member and it was used in the initializer
        adjust size.  */
@@ -2911,8 +3078,10 @@ err_size:
       flexible_array->type.ref->c = -1;
     else if (p.flex_union_fields && p.flex_array_ref)
       p.flex_array_ref->c = -1;
+    PROFILE_TOP_DECL_TAIL_ALLOC_UNKNOWN_END();
   }
 
+  PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_STORAGE);
   // take into account specified alignment if bigger
   if (ad->a.aligned)
   {
@@ -3026,7 +3195,10 @@ err_size:
       while ((tp->t & (VT_BTYPE | VT_ARRAY)) == (VT_PTR | VT_ARRAY))
         tp = &tp->ref->type;
       if (!has_init && type_requires_class_construction(type))
-        sec = bss_section;
+        sec = ad->is_constexpr && (type->t & VT_CONSTANT)
+                ? (type_has_mutable_subobject(type)
+                     ? data_section : rodata_section)
+                : bss_section;
       else if ((tp->t & VT_CONSTANT) && !type_has_mutable_subobject(type))
         sec = rodata_section;
       else if (has_init)
@@ -3090,6 +3262,7 @@ err_size:
 
   if (sym && ad->is_constexpr) sym->cpp_constexpr_object = 1;
 
+  PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_INIT);
   if (type->t & VT_VLA)
   {
     int a;
@@ -3177,6 +3350,7 @@ err_size:
     int evaluate_temporaries = ad->is_constexpr || (sec && !is_reference_type(type));
     Sym *initial_cleanup = cur_scope ? cur_scope->cl.s : NULL;
     int initial_cleanup_depth = cur_scope ? cur_scope->cl.n : 0;
+    PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_INIT_SETUP);
     p.sec = sec;
     p.constexpr_initializer = ad->is_constexpr;
     if (ad->is_constexpr && !sec && sym
@@ -3214,7 +3388,9 @@ err_size:
     if (p.require_constant_values) ++integral_constant_expression_wanted;
     if (sec || p.constant_object_target) constant_initialization_object = sym;
     if (evaluate_temporaries) ++constexpr_temporary_expression_depth;
+    PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_INIT_EXPR);
     decl_initializer(&p, type, addr, DIF_FIRST);
+    PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_INIT_POST);
     if (evaluate_temporaries) {
       --constexpr_temporary_expression_depth;
       release_constexpr_temporary_objects(evaluation_mark, 1);
@@ -3278,6 +3454,7 @@ err_size:
       p.flex_array_ref->c = -1;
   }
 
+  PROFILE_TOP_DECL_TAIL_ALLOC_SEG(PROFILE_DECL_TAIL_ALLOC_TAIL);
   if (initialize_declared_constant) {
     /* The initializer belongs to the in-class declaration; the definition
        supplies its addressable storage without repeating that initializer. */

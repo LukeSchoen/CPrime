@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: variant_visit. std::visit, std::monostate, variant_size,
+// C++17 gap probe: variant_visit. std::visit, std::monostate, variant_size,
 // variant_alternative and the comparison operators are missing, though
 // construction and get<> by index and type work.
 

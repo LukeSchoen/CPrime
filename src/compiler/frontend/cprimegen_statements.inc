@@ -717,6 +717,20 @@ static int try_parse_range_for(void)
 // c2y if/switch declaration
 static void gexpr_decl(int for_condition)
 {
+  if (!is_cpp_translation_unit() && tok >= TOK_UIDENT)
+  {
+    Sym *binding = sym_find(tok);
+    if (!binding)
+      binding = global_symbol_find(tok);
+    if ((!binding || !(binding->type.t & VT_TYPEDEF)) && !struct_find(tok))
+    {
+      /* An ordinary C name cannot begin a declaration, so the replay and
+         declaration probe below would only restore this token and fail. */
+      PROFILE_EXTRA_CALL(PROFILE_DETAIL_EXTRA_DECL_FASTPATH);
+      gexpr();
+      return;
+    }
+  }
   if (tok >= TOK_UIDENT)
   {
     int first_tok = tok;
@@ -824,6 +838,70 @@ static int selection_has_initializer(void)
   return found;
 }
 
+static int profile_body_statement_category(int t)
+{
+  if (t == CPP_TOK_USING)
+    return PROFILE_DETAIL_BODY_CONTROL_OTHER;
+  switch (t)
+  {
+  case TOK_INIT_CLAUSE:
+    return PROFILE_DETAIL_BODY_DECL;
+  case TOK_IF:
+    return PROFILE_DETAIL_BODY_CONTROL_IF;
+  case TOK_WHILE:
+  case TOK_FOR:
+  case TOK_DO:
+    return PROFILE_DETAIL_BODY_CONTROL_LOOP;
+  case TOK_SWITCH:
+    return PROFILE_DETAIL_BODY_CONTROL_SWITCH;
+  case TOK_RETURN:
+  case TOK_CO_RETURN:
+    return PROFILE_DETAIL_BODY_CONTROL_RETURN;
+  case TOK_BREAK:
+  case TOK_CONTINUE:
+  case TOK_GOTO:
+    return PROFILE_DETAIL_BODY_CONTROL_JUMP;
+  case TOK_CASE:
+  case TOK_DEFAULT:
+  case TOK_ASM1:
+  case TOK_ASM2:
+  case TOK_ASM3:
+  case TOK_TRY:
+  case TOK_CXX_EH_CONSTRUCTED:
+  case TOK_CXX_BASE_SUBOBJECT:
+  case TOK_CXX_CTOR_BODY:
+  case TOK_NAMESPACE:
+    return PROFILE_DETAIL_BODY_CONTROL_OTHER;
+  default:
+    return PROFILE_DETAIL_BODY_EXPR;
+  }
+}
+
+/* A compound statement's iteration starts with a tentative declaration
+   parse.  These tokens begin a statement, not a declaration, so the probe
+   can only fail after setting up parse_btype's local state. */
+static int statement_can_start_declaration(int t)
+{
+  switch (t)
+  {
+  case '{':
+  case TOK_IF:
+  case TOK_WHILE:
+  case TOK_FOR:
+  case TOK_DO:
+  case TOK_SWITCH:
+  case TOK_CASE:
+  case TOK_DEFAULT:
+  case TOK_RETURN:
+  case TOK_BREAK:
+  case TOK_CONTINUE:
+  case TOK_GOTO:
+    return 0;
+  default:
+    return 1;
+  }
+}
+
 static void block(int flags)
 {
   int a, b, c, d, e, t;
@@ -832,20 +910,27 @@ static void block(int flags)
   Sym *s;
   CType ref_ret_type;
 
+  PROFILE_BODY_BLOCK_BEGIN();
+
 again:
   if (is_cpp_translation_unit() && !(flags & STMT_COMPOUND) && tok != '{')
   {
     struct scope declaration_scope;
+    PROFILE_BODY_STMT_BEGIN(PROFILE_DETAIL_BODY_DECL);
     new_scope(&declaration_scope);
     if (decl(VT_JMP))
     {
       skip(';');
       prev_scope(&declaration_scope, 0);
-      return;
+      PROFILE_BODY_STMT_END();
+      goto block_done;
     }
     prev_scope(&declaration_scope, 0);
+    PROFILE_BODY_STMT_END();
   }
   t = tok;
+  if (t != '{')
+    PROFILE_BODY_STMT_BEGIN(profile_body_statement_category(t));
   /* If the token carries a value, next() might destroy it. Only with
      invalid code such as f(){"123"4;} */
   if (TOK_HAS_VALUE(t))
@@ -1011,7 +1096,11 @@ again:
   {
     int end_chain = 0;
 if_chain:
-    new_scope(&o);
+    {
+      PROFILE_EXTRA_TIME_BEGIN(if_new_scope);
+      new_scope(&o);
+      PROFILE_EXTRA_TIME_END(if_new_scope, PROFILE_DETAIL_EXTRA_IF_NEW_SCOPE);
+    }
     if (is_cpp_translation_unit() && tok == tok_constexpr) {
       int condition, discarded, arm;
       ConstexprTemporaryObject *evaluation_mark;
@@ -1068,10 +1157,16 @@ if_chain:
         if (arm || tok != TOK_ELSE) break;
         next();
       }
-      prev_scope(&o, 0);
+      {
+        PROFILE_EXTRA_TIME_BEGIN(if_prev_scope);
+        prev_scope(&o, 0);
+        PROFILE_EXTRA_TIME_END(if_prev_scope, PROFILE_DETAIL_EXTRA_IF_PREV_SCOPE);
+      }
       gsym(end_chain);
-      return;
+      PROFILE_BODY_STMT_END();
+      goto block_done;
     }
+    PROFILE_EXTRA_TIME_BEGIN(if_cond);
     skip('(');
     cpp_range_condition_begin();
     gexpr_selection();
@@ -1079,6 +1174,7 @@ if_chain:
     cpp_range_condition_push();
     a = gvtst(1, 0);
     skip(')');
+    PROFILE_EXTRA_TIME_END(if_cond, PROFILE_DETAIL_EXTRA_IF_COND);
     block(0);
     cpp_range_condition_pop();
     if (tok == TOK_ELSE)
@@ -1103,7 +1199,12 @@ if_chain:
     else
       gsym(a);
     gsym(end_chain);
-    prev_scope(&o, 0);
+    {
+      PROFILE_EXTRA_TIME_BEGIN(if_prev_scope_tail);
+      prev_scope(&o, 0);
+      PROFILE_EXTRA_TIME_END(if_prev_scope_tail,
+                             PROFILE_DETAIL_EXTRA_IF_PREV_SCOPE);
+    }
 
   }
   else if (t == TOK_WHILE)
@@ -1150,7 +1251,12 @@ if_chain:
     while (tok != '}')
     {
       if (flags & STMT_EXPR) { vpop(); push_void_value(); }
-      decl(VT_LOCAL);
+      if (statement_can_start_declaration(tok))
+      {
+        PROFILE_BODY_STMT_BEGIN(PROFILE_DETAIL_BODY_DECL);
+        decl(VT_LOCAL);
+        PROFILE_BODY_STMT_END();
+      }
       if (tok != '}')
         block(flags | STMT_COMPOUND);
     }
@@ -1174,7 +1280,8 @@ if_chain:
     if (lambda_probe)
     {
       lambda_note_return();
-      return;
+      PROFILE_BODY_STMT_END();
+      goto block_done;
     }
     if (cpp_discarded_return_owner && funcname
         && cpp_discarded_return_owner == tok_alloc_const(funcname)) {
@@ -1185,7 +1292,8 @@ if_chain:
         if (tok != ';') { gexpr(); vpop(); }
         skip(';');
         cpp_temp_end(temporary_mark);
-        return;
+        PROFILE_BODY_STMT_END();
+        goto block_done;
       }
     }
     b = (func_vt.t &VT_BTYPE) != VT_VOID;
@@ -1522,7 +1630,8 @@ if_chain:
     if (try_parse_range_for())
     {
       prev_scope(&o, 0);
-      return;
+      PROFILE_BODY_STMT_END();
+      goto block_done;
     }
     if (tok != ';')
     {
@@ -1777,7 +1886,10 @@ block_after_label:
       if (tok != '}')
       {
         if (0 == (flags & STMT_COMPOUND))
+        {
+          PROFILE_BODY_STMT_END();
           goto again;
+        }
         // C23: insert implicit null-statement whithin compound statement
       }
       else
@@ -1796,31 +1908,46 @@ expr:
         if (flags & STMT_EXPR)
         {
           vpop();
-          gexpr();
+          {
+            PROFILE_EXTRA_TIME_BEGIN(expr_parse);
+            gexpr();
+            PROFILE_EXTRA_TIME_END(expr_parse, PROFILE_DETAIL_EXTRA_EXPR_PARSE);
+          }
         }
         else
         {
-          gexpr();
+          {
+            PROFILE_EXTRA_TIME_BEGIN(expr_parse);
+            gexpr();
+            PROFILE_EXTRA_TIME_END(expr_parse, PROFILE_DETAIL_EXTRA_EXPR_PARSE);
+          }
           vpop();
         }
-        skip(';');
-        if ((flags & STMT_EXPR) && tok == '}' && is_cpp_translation_unit()
-            && (vtop->type.t & VT_BTYPE) == VT_STRUCT) {
-          if (!(vtop->r & VT_CXX_PRVALUE)) {
-            CType result = vtop->type;
-            result.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE);
-            if (!try_materialize_constructor_conversion_mode(&result, 1))
-              cprime_error("statement expression result cannot be copied");
+        {
+          PROFILE_EXTRA_TIME_BEGIN(expr_tail);
+          skip(';');
+          if ((flags & STMT_EXPR) && tok == '}' && is_cpp_translation_unit()
+              && (vtop->type.t & VT_BTYPE) == VT_STRUCT) {
+            if (!(vtop->r & VT_CXX_PRVALUE)) {
+              CType result = vtop->type;
+              result.t &= ~(VT_CONSTANT | VT_VOLATILE | VT_RVALUE_REFERENCE);
+              if (!try_materialize_constructor_conversion_mode(&result, 1))
+                cprime_error("statement expression result cannot be copied");
+            }
+            cpp_adopt_class_temporary(vtop);
           }
-          cpp_adopt_class_temporary(vtop);
+          cpp_temp_end(temporary_mark);
+          PROFILE_EXTRA_TIME_END(expr_tail, PROFILE_DETAIL_EXTRA_EXPR_TAIL);
         }
-        cpp_temp_end(temporary_mark);
       }
     }
   }
 
   if (debug_modes)
     cprime_tcov_check_line (cprime_state, 0), cprime_tcov_block_end (cprime_state, 0);
+  PROFILE_BODY_STMT_END();
+block_done:
+  PROFILE_BODY_BLOCK_END();
 }
 
 /* This skips over a stream of tokens containing balanced {} and ()
@@ -1837,6 +1964,37 @@ static int saved_member_template_name(int name)
   return 0;
 }
 
+/* C initializers have no templates or qualified names to interpret, so a
+   balanced token skip needs only delimiters and nesting. */
+static void skip_balanced_block_c(void)
+{
+  int braces = tok == '{';
+  int level = 0;
+
+  while (1)
+  {
+    int t = tok;
+    if (level == 0
+        && (t == ',' || t == ';' || t == '}' || t == ')' || t == ']'))
+      break;
+    if (t == TOK_EOF)
+    {
+      if (level > 0)
+        cprime_error("unexpected end of file");
+      break;
+    }
+    next();
+    if (t == '{' || t == '(' || t == '[')
+      ++level;
+    else if (t == '}' || t == ')' || t == ']')
+    {
+      --level;
+      if (level == 0 && braces && t == '}')
+        break;
+    }
+  }
+}
+
 static void skip_or_save_block_mode(TokenString **str, int allow_eof, int logical_operator)
 {
   int braces = tok == '{';
@@ -1848,6 +2006,8 @@ static void skip_or_save_block_mode(TokenString **str, int allow_eof, int logica
   int entity_name = 0;
   int colon_owner = 0;
   int qualified_member_owner = 0;
+  int profile_save_sample = 0;
+  unsigned long long profile_save_started = 0;
   if (str)
     *str = tok_str_alloc();
 
@@ -1871,9 +2031,47 @@ static void skip_or_save_block_mode(TokenString **str, int allow_eof, int logica
       else
         break;
     }
+    if (profile_detail_enabled
+        && profile_alloc_unknown_active
+               == PROFILE_DECL_TAIL_ALLOC_SIZE_UNKNOWN_SAVE)
+    {
+      ++profile_alloc_unknown_save_tokens;
+      profile_save_sample =
+          (profile_alloc_unknown_save_tokens
+           & (PROFILE_ALLOC_UNKNOWN_SAVE_WINDOW - 1)) == 0;
+      if (profile_save_sample)
+      {
+        ++profile_alloc_unknown_save_samples;
+        profile_save_started = profile_detail_now_ns();
+      }
+    }
+    else
+    {
+      profile_save_sample = 0;
+    }
     if (str)
+    {
+      if (profile_save_sample)
+        profile_alloc_unknown_save_append_active = 1;
       tok_str_add_tok(*str);
+      if (profile_save_sample)
+        profile_alloc_unknown_save_append_active = 0;
+    }
+    if (profile_save_sample)
+    {
+      unsigned long long now = profile_detail_now_ns();
+      profile_alloc_unknown_save_append_ns += now - profile_save_started;
+      profile_save_started = now;
+    }
+    if (profile_save_sample)
+      profile_alloc_unknown_save_next_sample_begin();
     next();
+    if (profile_save_sample)
+    {
+      profile_alloc_unknown_save_next_ns +=
+          profile_detail_now_ns() - profile_save_started;
+      profile_alloc_unknown_save_next_sample_end();
+    }
     if ((t == TOK_LT || t == '<')
         && (angle > 0
             || (prev_sig >= TOK_UIDENT

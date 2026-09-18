@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: std_optional_copy_constructible. An optional is copy
+// C++17 gap probe: std_optional_copy_constructible. An optional is copy
 // constructible only when its element type is.
 #include <optional>
 #include <type_traits>

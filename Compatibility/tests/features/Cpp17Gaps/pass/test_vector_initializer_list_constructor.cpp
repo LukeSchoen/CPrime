@@ -1,4 +1,4 @@
-// CL gap probe: lib_vector. push_back/emplace_back/range-for work; the
+// C++17 gap probe: lib_vector. push_back/emplace_back/range-for work; the
 // initializer_list constructor does not.
 #include <vector>
 

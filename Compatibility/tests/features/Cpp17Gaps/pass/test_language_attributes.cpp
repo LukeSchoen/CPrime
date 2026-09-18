@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: language_attributes. [[nodiscard]], [[maybe_unused]] and
+// C++17 gap probe: language_attributes. [[nodiscard]], [[maybe_unused]] and
 // [[fallthrough]] parse, apply and keep the fallthrough case reachable; no
 // retained case covered any of the three.
 

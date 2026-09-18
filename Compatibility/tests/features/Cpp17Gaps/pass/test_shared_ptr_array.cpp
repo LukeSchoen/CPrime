@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: shared_ptr_array. std::shared_ptr<T[]> does not accept the
+// C++17 gap probe: shared_ptr_array. std::shared_ptr<T[]> does not accept the
 // array form introduced with C++17.
 
 #include <memory>

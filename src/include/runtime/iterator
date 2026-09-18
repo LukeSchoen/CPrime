@@ -48,6 +48,65 @@ template<class I, class D> void advance(I& it, D n) {
 }
 template<class I> I next(I it, typename iterator_traits<I>::difference_type n = 1) { advance(it, n); return it; }
 template<class I> I prev(I it, typename iterator_traits<I>::difference_type n = 1) { advance(it, -n); return it; }
+template<class Iterator>
+class reverse_iterator {
+protected:
+  Iterator current;
+public:
+  typedef Iterator iterator_type;
+  typedef typename iterator_traits<Iterator>::iterator_category iterator_category;
+  typedef typename iterator_traits<Iterator>::value_type value_type;
+  typedef typename iterator_traits<Iterator>::difference_type difference_type;
+  typedef typename iterator_traits<Iterator>::pointer pointer;
+  typedef typename iterator_traits<Iterator>::reference reference;
+
+  reverse_iterator() : current() {}
+  explicit reverse_iterator(Iterator value) : current(value) {}
+  template<class U>
+  reverse_iterator(const reverse_iterator<U> &other) : current(other.base()) {}
+
+  Iterator base() const { return current; }
+  reference operator*() const { Iterator tmp = current; return *--tmp; }
+  pointer operator->() const { return &(operator*()); }
+  reference operator[](difference_type n) const { return *(*this + n); }
+
+  reverse_iterator &operator++() { --current; return *this; }
+  reverse_iterator &operator--() { ++current; return *this; }
+  reverse_iterator operator++(int) { reverse_iterator tmp(*this); --current; return tmp; }
+  reverse_iterator operator--(int) { reverse_iterator tmp(*this); ++current; return tmp; }
+
+  reverse_iterator operator+(difference_type n) const { return reverse_iterator(current - n); }
+  reverse_iterator operator-(difference_type n) const { return reverse_iterator(current + n); }
+  reverse_iterator &operator+=(difference_type n) { current -= n; return *this; }
+  reverse_iterator &operator-=(difference_type n) { current += n; return *this; }
+
+  template<class U>
+  bool operator==(const reverse_iterator<U> &other) const { return current == other.base(); }
+  template<class U>
+  bool operator!=(const reverse_iterator<U> &other) const { return current != other.base(); }
+  template<class U>
+  bool operator<(const reverse_iterator<U> &other) const { return current > other.base(); }
+  template<class U>
+  bool operator<=(const reverse_iterator<U> &other) const { return current >= other.base(); }
+  template<class U>
+  bool operator>(const reverse_iterator<U> &other) const { return current < other.base(); }
+  template<class U>
+  bool operator>=(const reverse_iterator<U> &other) const { return current <= other.base(); }
+  template<class U>
+  difference_type operator-(const reverse_iterator<U> &other) const { return other.base() - current; }
+};
+template<class Iterator>
+reverse_iterator<Iterator> operator+(
+  typename reverse_iterator<Iterator>::difference_type n,
+  const reverse_iterator<Iterator> &it)
+{
+  return it + n;
+}
+template<class Iterator>
+reverse_iterator<Iterator> make_reverse_iterator(Iterator it)
+{
+  return reverse_iterator<Iterator>(it);
+}
 template<class Container>
 auto size(const Container &container) -> decltype(container.size())
 {
@@ -108,6 +167,47 @@ public:
 private:
   streambuf_type *m_sbuf;
   bool m_failed;
+};
+template<class C, class Traits = char_traits<C> >
+class istreambuf_iterator {
+public:
+  typedef C char_type;
+  typedef Traits traits_type;
+  typedef typename Traits::int_type int_type;
+  typedef basic_streambuf<C,Traits> streambuf_type;
+  typedef basic_istream<C,Traits> istream_type;
+  typedef input_iterator_tag iterator_category;
+  typedef C value_type;
+  typedef ptrdiff_t difference_type;
+  typedef const C *pointer;
+  typedef C reference;
+  istreambuf_iterator() : m_sbuf(0), m_curr(Traits::eof()) {}
+  istreambuf_iterator(istream_type &stream) : m_sbuf(stream.rdbuf()), m_curr(sgetc()) {}
+  istreambuf_iterator(streambuf_type *buffer) : m_sbuf(buffer), m_curr(sgetc()) {}
+  C operator*() const { return Traits::to_char_type(m_curr); }
+  istreambuf_iterator& operator++() {
+    if(m_sbuf) {
+      if(Traits::eq_int_type(m_sbuf->sbumpc(),Traits::eof())) m_sbuf = 0;
+      else m_curr = sgetc();
+    }
+    return *this;
+  }
+  istreambuf_iterator operator++(int) {
+    istreambuf_iterator tmp = *this;
+    ++*this;
+    return tmp;
+  }
+  bool equal(const istreambuf_iterator &other) const {
+    return m_sbuf == other.m_sbuf ||
+           (m_sbuf == 0 && Traits::eq_int_type(other.m_curr,Traits::eof())) ||
+           (other.m_sbuf == 0 && Traits::eq_int_type(m_curr,Traits::eof()));
+  }
+  bool operator==(const istreambuf_iterator &other) const { return equal(other); }
+  bool operator!=(const istreambuf_iterator &other) const { return !equal(other); }
+private:
+  int_type sgetc() { return m_sbuf ? m_sbuf->sgetc() : Traits::eof(); }
+  streambuf_type *m_sbuf;
+  int_type m_curr;
 };
 }
 #endif

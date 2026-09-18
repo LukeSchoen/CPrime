@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: aligned_new. std::align_val_t and the aligned operator new and
+// C++17 gap probe: aligned_new. std::align_val_t and the aligned operator new and
 // delete overloads are missing from <new>.
 
 #include <new>

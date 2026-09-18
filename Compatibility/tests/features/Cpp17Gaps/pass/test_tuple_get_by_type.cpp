@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_tuple_get_type. Element access by type, which requires the
+// C++17 gap probe: lib_tuple_get_type. Element access by type, which requires the
 // type to appear exactly once.
 #include <tuple>
 

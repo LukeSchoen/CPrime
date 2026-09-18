@@ -114,7 +114,7 @@ T scalar_zero()
 }
 
 template<typename T>
-struct clVector2
+struct Vec2
 {
   T x;
   T y;
@@ -125,16 +125,16 @@ struct clVector2
 };
 
 template<typename T>
-clVector2<T> clCreateVector(const T &x, const T &y)
+Vec2<T> makeVector(const T &x, const T &y)
 {
-  clVector2<T> result;
+  Vec2<T> result;
   result.x = x;
   result.y = y;
   return result;
 }
 
 template<typename T>
-const T &clVector2<T>::At(int index) const
+const T &Vec2<T>::At(int index) const
 {
   if (index)
     return y;
@@ -142,22 +142,22 @@ const T &clVector2<T>::At(int index) const
 }
 
 template<typename T>
-auto clVector2<T>::Normalized() const
+auto Vec2<T>::Normalized() const
 {
   auto length = LengthSquared();
   if (length == scalar_zero<decltype(length)>())
     length = (decltype(length))1;
-  return clCreateVector(x + length - length, y + length - length);
+  return makeVector(x + length - length, y + length - length);
 }
 
 template<typename T>
-auto clVector2<T>::LengthSquared() const
+auto Vec2<T>::LengthSquared() const
 {
   return scalar_root(At(0) * At(0) + At(1) * At(1));
 }
 
 template<typename T>
-auto normalize_vec2(const clVector2<T> &value)
+auto normalize_vec2(const Vec2<T> &value)
 {
   return value.Normalized();
 }
@@ -210,8 +210,8 @@ int main()
 {
   WorkList<DeferredValue> first = make_deferred_list();
   WorkList<DeferredValue> second;
-  clVector2<float> input;
-  clVector2<float> output;
+  Vec2<float> input;
+  Vec2<float> output;
   ScalarReader reader;
   ReaderOwner owner;
   long long wide_value = 0;

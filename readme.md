@@ -96,11 +96,24 @@ Each area has a worker loop: `Capability\worker.cmd`,
 machine against the same origin branch, or the three can run as three copies on
 one machine. The loop owns git at every cycle boundary: it commits the cycle
 that just ended, fetches origin, rebases this clone's commits onto the new tip,
-and pushes them back.
+and pushes them back. A worker's remote is the local base copy and nothing else:
+GitHub is never a worker's or an agent's remote.
 
 Only a cycle that passed its probe is published, so the branch keeps trees that
 passed their own gate. A cycle that failed keeps its commits local for the cycle
 that repairs them (set `PUSH_FAILED=1` to publish anyway).
+
+What is published is the toolchain, the area's retained cases and the area's
+records, and nothing else. A file the cycle left loose in the tree - a probe, a
+one-off reproducer, a build artefact outside `build\` - is held back from the
+commit: it stays where it is, the cycle row counts it under `junk=`, and the
+worker names it in its log and its state file, so a leak is visible instead of
+published. `PUBLISH_SCRATCH=1` turns that guard off for a run that means to
+publish its probes.
+
+The loop reads `worker.cmd` while it runs, so change `worker.cmd` and the two
+launchers while the workers are stopped, then start them again: a file that
+changes underneath a running `cmd.exe` is a file it may misread.
 
 Rebase conflicts are handled by kind. The tracked build outputs (`cpc.exe`,
 `src/lib/libcprime1.a`, `src/scripts/*.exe`, and the per-area `tests\test.exe`)
@@ -125,16 +138,30 @@ plus one work copy per area.
 
 Each work copy has the base copy as its origin, so the three workers publish to
 the base copy instead of GitHub, and the base copy is where the shared branch
-collects. The base copy is a normal checkout rather than a bare repository, so
-it is set to `receive.denyCurrentBranch=updateInstead`: a push updates its
-working tree as it lands, which means the base copy must stay clean or every
-worker's push is refused for the rest of the night. Publishing to GitHub is
-that copy's job, and it can happen at any point in a run, because the workers
-never reach GitHub by themselves:
+collects. The base copy is a normal checkout, but `work.cmd` parks it before it
+starts the workers: it detaches the checkout at the tip of the branch, so the
+branch is not checked out while the workers run.
 
-```cmd
-git -C C:\Luke\Src\PRIME\CPrime push origin main
-```
+That parking is what makes three clones publishing at once safe. A push into a
+copy that has the branch checked out makes git update that copy's index,
+working tree and branch in turn, and two pushes that overlap can leave the copy
+looking dirty and refusing every push that follows, for every worker, until a
+human cleans it. With the copy parked, a push is a plain branch update, which
+git serialises with a ref lock: the loser of a race is told no and retries, and
+nothing outside the clones is touched. It also means the base copy's edits are
+never a reason for a worker's push to be refused.
+
+So the base copy is a snapshot while a run is going: read the branch with
+`git -C CPrime log main` and `git -C CPrime show main:<path>`, or check it out
+again while the workers are stopped (`git -C CPrime checkout main`) if you want
+the files in the working tree.
+
+GitHub is off limits to the agent loop and to every agent. Nothing in this
+repository fetches from, pulls from or pushes to GitHub, and no agent may run
+such a command or ask for one. Publishing the base copy to GitHub is a banned
+action that belongs to the user alone, done by hand outside the repository,
+outside the agent loop and while the workers are stopped. The workers never
+reach GitHub, with or without a running agent.
 
 Two launchers live outside the repository, next to the four copies:
 
@@ -150,19 +177,44 @@ exits instead of starting another one. Nothing is killed, nothing is discarded
 and no work is lost. A cycle can take a long time, so a stopped run appears
 gradually: each console closes as its loop exits.
 
+Before it starts anything, `work.cmd` parks the base copy as described above,
+and it reports what it found: whether the copy was already parked, and whether
+it holds edits of its own. It also warns when a work copy has an uncommitted
+`worker.cmd`.
+
+If the workers ever report a refused push, read the reason in
+`<copy>\<area>\build\sync-push.log`: another clone publishing first is
+ordinary and the next attempt settles it, and a base copy that still has the
+branch checked out is parked in one command (`git -C CPrime checkout
+--detach`).
+
+One stop case is worth knowing about. A worker that reaches the boundary in the
+middle of a merge - the rebase has a source conflict, so the agent has been
+asked to settle it - does not exit: it settles that merge, publishes it at the
+boundary after it, and exits there. A half-rebased tree is the one state the
+loop must never leave behind, and a stop request is no reason to break that.
+
 ### The morning after
 
 Every cycle writes one row to `<copy>\<area>\build\cycles.csv` (cycle number,
-exit codes, sync state, head) and the full agent transcript to
+exit codes, sync state, head, and the count of loose files held back from the
+commit) and the full agent transcript to
 `cycle-NNNN.log` next to it, with the probe log, the measurement log and the
 per-case timing file. Read `cycles.csv` first, then the log of the last cycle
 that failed, then `git -C C:\Luke\Src\PRIME\CPrime log --oneline` for what the
 shared branch actually gained.
 
-A worker console still open in the morning is a cycle that is still running. A
-console that closed on its own is either the stop marker, a run of failures, or
-an account usage limit; the last lines say which, and the worker never exits
-because of a broken build, only because it cannot continue.
+`<copy>\<area>\build\worker-state.txt` is the loop's one-line state: the cycle
+that is running and when it started, or the cycle it exited after and why.
+`stop.cmd` prints it, and it survives a restart, so it still says why the last
+run stopped after every console has gone. Read the state line, not the open
+window: the console is a `cmd /k` window, so it stays open after its loop has
+exited, and its title says which it is (`... worker - running` or
+`... worker - EXITED`).
+
+A worker that stopped without being asked is either a run of failures or an
+account usage limit; the state file says which. The worker never exits because
+of a broken build, only because it cannot continue.
 
 The three copies share one machine, so they share one CPU: correctness work is
 unaffected, but compile-speed and runtime-speed measurements are noisier than

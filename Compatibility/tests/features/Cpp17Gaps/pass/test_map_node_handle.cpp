@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: map_node_handle. try_emplace, insert_or_assign, extract, merge
+// C++17 gap probe: map_node_handle. try_emplace, insert_or_assign, extract, merge
 // and node_type are missing from <map> and <unordered_map>.
 
 #include <map>

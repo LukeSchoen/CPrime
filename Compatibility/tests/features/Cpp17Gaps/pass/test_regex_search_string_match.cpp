@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: std_regex_match_groups. std::cmatch works; std::smatch must
+// C++17 gap probe: std_regex_match_groups. std::cmatch works; std::smatch must
 // overload std::regex_search as well.
 #include <regex>
 #include <string>

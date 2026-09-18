@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_memory_resource. <memory_resource> is missing from the
+// C++17 gap probe: lib_memory_resource. <memory_resource> is missing from the
 // runtime.
 #include <memory_resource>
 

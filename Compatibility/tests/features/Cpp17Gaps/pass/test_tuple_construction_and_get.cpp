@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_tuple_get and std_tuple_structured. std::pair works;
+// C++17 gap probe: lib_tuple_get and std_tuple_structured. std::pair works;
 // std::tuple construction does not.
 #include <tuple>
 

@@ -1,9 +1,9 @@
 // EXPECT_EXIT: 0
 // EXPECT_STDOUT:
-#include "clString.h"
-#include "clString.c"
+#include "text_block.h"
+#include "text_block.c"
 
-static int check_copy(clString value)
+static int check_copy(TextBlock value)
 {
   if (value.m_data[0] != 'a')
     return 1;
@@ -20,8 +20,8 @@ static int check_copy(clString value)
 
 int main(void)
 {
-  clString original("abc");
-  clString copy = original;
+  TextBlock original("abc");
+  TextBlock copy = original;
   int by_value = check_copy(original);
 
   if (original.Length() != 3)

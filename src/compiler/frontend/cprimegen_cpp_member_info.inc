@@ -229,7 +229,7 @@ static void note_cpp_record_template(int type_tok, TemplateDef *definition,
 }
 
 static void note_cpp_member_template_arguments(int function_tok,
-    TemplateArgList *arguments, unsigned value_mask)
+    TemplateArgList *arguments, ParameterMask value_mask)
 {
   CppMemberDeclInfo *member = (CppMemberDeclInfo *)lookup_cpp_member_decl(function_tok);
   if (!member) cprime_error("member template has no semantic declaration");
@@ -240,7 +240,7 @@ static void note_cpp_member_template_arguments(int function_tok,
 
 static int canonical_cpp_member_template_tok(int candidate_tok, int owner_tok,
     int source_tok, CType *function_type, TemplateArgList *arguments,
-    unsigned value_mask)
+    ParameterMask value_mask)
 {
   CppMemberDeclInfo *member;
   for (member = cpp_member_owner_declarations[(unsigned)owner_tok & 1023];
@@ -248,12 +248,13 @@ static int canonical_cpp_member_template_tok(int candidate_tok, int owner_tok,
     int i;
     if (member->owner_tok != owner_tok || member->source_name_tok != source_tok
         || !member->is_template || member->template_arguments.nb != arguments->nb
-        || member->template_value_mask != value_mask
+        || memcmp(&member->template_value_mask, &value_mask,
+                  sizeof(value_mask)) != 0
         || member->cv_qualifiers != (function_type->t & (VT_CONSTANT | VT_VOLATILE))
         || !same_func_param_signature(&member->function_type, function_type))
       continue;
     for (i = 0; i < arguments->nb; ++i) {
-      if (i < 32 && (value_mask & (1u << i))) {
+      if (i < CPC_MAX_TEMPLATE_PARAMETERS && mask_test(&value_mask, i)) {
         int64_t first, second;
         if (member->template_arguments.toks[i] == arguments->toks[i]) continue;
         if (!template_arg_const_int64(member->template_arguments.toks[i], &first)

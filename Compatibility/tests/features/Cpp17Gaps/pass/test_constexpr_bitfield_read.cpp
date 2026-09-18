@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: constexpr_bitfield. Bit-field members written and read back
+// C++17 gap probe: constexpr_bitfield. Bit-field members written and read back
 // inside one constant evaluation.
 struct Flags {
   unsigned low : 3;

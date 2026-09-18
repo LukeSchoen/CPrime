@@ -21,7 +21,7 @@ typedef struct Entry {
 Entry;
 static Entry *files[8192];
 static char *compiler, *outdir, *exepath, *manifestpath, *self, *repo, *context;
-static int rebuild, unity, skiplink, allowwarnings, timeout_seconds=60, schema;
+static int rebuild, unity, skiplink, allowwarnings, checkonly, timeout_seconds=60, schema;
 static int unity_batch_size=32;
 static double compiler_seconds, resource_seconds;
 static J *measurements;
@@ -1247,6 +1247,60 @@ static void record_inputs(void) {
     json(&b,a);
     write_utf8(absolute(outdir,"compile_inputs.json"),b.s);
 }
+/* Report whether the record of the last successful build still matches: every
+   recorded input unchanged, the environment unchanged, the output present.
+   -CheckOnly runs this before reading the manifest, so asking "is this build
+   current?" costs a file scan instead of a full build plan. */
+static int certificate_current(const char *snapshotpath) {
+    FILE *f=file_open(snapshotpath,L"rb");
+    char magic[8],*output;
+    unsigned i,n,timeout,outputs=0;
+    int ok=1;
+    if(!f)return 0;
+    if(fread(magic,1,8,f)!=8||memcmp(magic,"CPCCHK02",8)){
+        fclose(f);
+        return 0;
+    }
+    output=string_read(f,&ok);
+    free(string_read(f,&ok)); /* compiler */
+    free(string_read(f,&ok)); /* link command */
+    free(string_read(f,&ok)); /* working directory */
+    timeout=read32(f,&ok);
+    if(!timeout||timeout>3600)ok=0;
+    read32(f,&ok); /* compile units */
+    n=read32(f,&ok);
+    if(n>1024)ok=0;
+    for(i=0;ok&&i<n;i++){
+        char *name=string_read(f,&ok),*expected=string_read(f,&ok);
+        if(ok&&strcmp(env_value(name),expected))ok=0;
+        free(name);
+        free(expected);
+    }
+    n=read32(f,&ok);
+    if(!n||n>1000000)ok=0;
+    for(i=0;ok&&i<n;i++){
+        char *path=string_read(f,&ok);
+        unsigned kind=read32(f,&ok);
+        U64 time=read64(f,&ok),size=read64(f,&ok);
+        if(!ok)break;
+        if(kind>3)ok=0;
+        else if(kind==3){
+            outputs++;
+            if(strcmp(path,output))ok=0;
+        }
+        if(ok){
+            Stamp now=stat_path(path);
+            if(now.kind==2)ok=kind==2;
+            else ok=now.kind==(kind==3?0:kind)&&now.time==time&&(kind==1||now.size==size);
+        }
+        free(path);
+    }
+    if(ok&&fgetc(f)!=EOF)ok=0;
+    fclose(f);
+    if(outputs!=1)ok=0;
+    free(output);
+    return ok;
+}
 static int project_main(int argc,char **argv) {
     char *cwd,*projectroot=NULL,*snapshotpath,*metricspath;
     wchar_t module_w[CAP];
@@ -1275,8 +1329,9 @@ static int project_main(int argc,char **argv) {
         else if(!_stricmp(a,"-Unity"))unity=1;
         else if(!_stricmp(a,"-SkipLink"))skiplink=1;
         else if(!_stricmp(a,"-AllowWarnings"))allowwarnings=1;
+        else if(!_stricmp(a,"-CheckOnly"))checkonly=1;
         else if(!_stricmp(a,"--help")||!_stricmp(a,"-Help")){
-            puts("project.exe -ProjectRoot <path> [-ManifestPath <json>] [-OutDir <path>] [-ExePath <path>] [-CompilerPath <compiler.exe>] [-BuildInputs <path> ...] [-Unity] [-UnityBatchSize <1..256>] [-Rebuild] [-SkipLink] [-CompileTimeoutSeconds <seconds>] [-AllowWarnings]\nOne compiler process at a time.");
+            puts("build-project.exe -ProjectRoot <path> [-ManifestPath <json>] [-OutDir <path>] [-ExePath <path>] [-CompilerPath <compiler.exe>] [-BuildInputs <path> ...] [-Unity] [-UnityBatchSize <1..256>] [-Rebuild] [-SkipLink] [-CompileTimeoutSeconds <seconds>] [-AllowWarnings] [-CheckOnly]\nOne compiler process at a time.");
             return 0;
         }
         else {
@@ -1326,6 +1381,10 @@ static int project_main(int argc,char **argv) {
 #endif
     );
     if(!outdir)outdir=absolute(projectroot,"build/prime");
+    if(checkonly){
+        char *snapshot=absolute(outdir,unity?"check-unity.bin":"check-separate.bin");
+        return certificate_current(snapshot)?0:1;
+    }
     if(!manifestpath)manifestpath=absolute(projectroot,"build/manifest/Release-x64.json");
     if(!exists(compiler))die("CPC compiler not found");
     manifest=json_read(manifestpath);

@@ -1,13 +1,13 @@
 // EXPECT_EXIT: 0
 // EXPECT_STDOUT:
-#include "clString.h"
-#include "clString.c"
+#include "text_block.h"
+#include "text_block.c"
 
 int main(void)
 {
-  clString a("abc");
-  clString b("de");
-  clString c = a + b;
+  TextBlock a("abc");
+  TextBlock b("de");
+  TextBlock c = a + b;
 
   if (a.Length() != 3)
     return 1;

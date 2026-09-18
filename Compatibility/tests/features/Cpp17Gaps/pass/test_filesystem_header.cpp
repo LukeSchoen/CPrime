@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_filesystem. <filesystem> is missing from the runtime.
+// C++17 gap probe: lib_filesystem. <filesystem> is missing from the runtime.
 #include <filesystem>
 
 int main() {

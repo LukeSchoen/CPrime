@@ -14,7 +14,7 @@ namespace std
 }
 
 template<typename T>
-auto clAbs(const T &value)
+auto absValue(const T &value)
 {
   return AbsHelper<T, std::is_signed<T>::value>::Abs(value);
 }
@@ -30,6 +30,6 @@ int main()
 {
   Vec3 value = { 1.0f, 2.0f, 3.0f };
   Vec3 result;
-  result = clAbs(value);
+  result = absValue(value);
   return result.x == 1.0f && result.y == 2.0f && result.z == 3.0f ? 0 : 1;
 }

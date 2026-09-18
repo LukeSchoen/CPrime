@@ -13,8 +13,8 @@ namespace std
   template<> struct __cpc_thread_arguments<>
   {
     template<class Function, class... Bound>
-    void invoke(Function &function, Bound&&... bound)
-    { std::invoke(std::move(function), std::forward<Bound>(bound)...); }
+    void invoke(Function &function, Bound... bound)
+    { std::invoke(std::move(function), std::move(bound)...); }
   };
   template<class First, class... Rest>
   struct __cpc_thread_arguments<First, Rest...>

@@ -20,6 +20,7 @@ static const char *runtime_sources[] = {
     "src\\runtime\\windows\\ucrt_onexit.c",
     "src\\runtime\\windows\\exception.c",
     "src\\runtime\\windows\\rtti.cpp",
+    "src\\runtime\\windows\\system_error.cpp",
     "src\\runtime\\windows\\new_delete.cpp",
     "src\\runtime\\windows\\winintrin.S",
     "src\\runtime\\windows\\atomic.S",
@@ -31,7 +32,8 @@ static const char *runtime_names[] = {
     "libcprime1", "crt1", "crt1w", "wincrt1", "wincrt1w", "dllcrt1",
     "dllmain", "stdatomic", "builtin", "wincompat", "regex", "cutils",
     "libunicode", "libregexp", "ucrt_stdio", "ucrt_exit", "ucrt_onexit",
-    "exception", "rtti", "new_delete", "winintrin", "atomic", "setjmp", "chkstk"
+    "exception", "rtti", "system_error", "new_delete", "winintrin", "atomic",
+    "setjmp", "chkstk"
 };
 
 static const char *extra_sources[] = {
@@ -140,6 +142,7 @@ static void add_runtime_jobs(NtBuffer *batch, const BuildPaths *paths,
            after that compiler exists, so a C-only seed host (TCC) never has to
            parse rtti.cpp or new_delete.cpp. */
         if (bootstrap && (!strcmp(runtime_names[i], "rtti") ||
+                          !strcmp(runtime_names[i], "system_error") ||
                           !strcmp(runtime_names[i], "new_delete"))) continue;
         add_common_flags(batch, paths, host_runtime);
         batch_arg(batch, "-m64");
@@ -169,6 +172,7 @@ static void add_runtime_jobs(NtBuffer *batch, const BuildPaths *paths,
     batch_arg(batch, output);
     for (i = 0; i < (int)(sizeof runtime_names / sizeof runtime_names[0]); ++i) {
         if (bootstrap && (!strcmp(runtime_names[i], "rtti") ||
+                          !strcmp(runtime_names[i], "system_error") ||
                           !strcmp(runtime_names[i], "new_delete"))) continue;
         nt_join(output, sizeof output, object_dir, runtime_names[i]);
         strcat(output, ".o"); batch_arg(batch, output);

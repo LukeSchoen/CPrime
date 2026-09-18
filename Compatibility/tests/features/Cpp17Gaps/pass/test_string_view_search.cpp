@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: string_view_search. basic_string_view has construction, size
+// C++17 gap probe: string_view_search. basic_string_view has construction, size
 // and indexing but no find, rfind or compare.
 
 #include <string_view>

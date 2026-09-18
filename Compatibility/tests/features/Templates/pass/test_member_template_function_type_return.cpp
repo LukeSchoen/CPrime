@@ -1,8 +1,7 @@
 // EXPECT_EXIT: 0
 // A member function template returning `F *` instantiated with a function type
-// has to produce a function pointer.  cl3D.h:191 does
-// `drawFn = e.GetFunction<void()>("scene");` through clTCC's
-// `template <typename F> F *GetFunction(const char *name)`.
+// has to produce a function pointer: `drawFn = e.GetFunction<void()>("scene");`
+// against `template <typename F> F *GetFunction(const char *name)`.
 struct Loader
 {
   template <typename F> F *GetFunction() { return nullptr; }

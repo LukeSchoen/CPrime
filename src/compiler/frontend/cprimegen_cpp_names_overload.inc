@@ -179,7 +179,10 @@ static void note_current_namespace_scope(void)
   int i;
   NamespaceScope *scope;
   for (i = 0; i < nb_namespace_scopes; ++i)
-    if (namespace_scopes[i].name_tok == name)
+    if (namespace_scopes[i].name_tok == name
+        && namespace_scopes[i].depth == nb_namespace_stack
+        && !memcmp(namespace_scopes[i].parts, namespace_stack,
+                   nb_namespace_stack * sizeof(namespace_stack[0])))
       return;
   namespace_scopes = cprime_realloc(namespace_scopes,
                        (nb_namespace_scopes + 1) * sizeof(*namespace_scopes));
@@ -247,15 +250,32 @@ static int symbol_has_internal_namespace_linkage(int symbol_tok)
 
 static void enter_namespace_scope(int namespace_tok)
 {
-  int i;
+  int i, exact = -1, best = -1;
+  int saved_depth = nb_namespace_stack;
+  int saved_parts[16];
+  memcpy(saved_parts, namespace_stack, sizeof(saved_parts));
   nb_namespace_stack = 0;
   for (i = 0; i < nb_namespace_scopes; ++i)
     if (namespace_scopes[i].name_tok == namespace_tok)
     {
-      nb_namespace_stack = namespace_scopes[i].depth;
-      memcpy(namespace_stack, namespace_scopes[i].parts, sizeof(namespace_stack));
-      return;
+      if (namespace_scopes[i].depth == saved_depth
+          && !memcmp(namespace_scopes[i].parts, saved_parts,
+                     saved_depth * sizeof(saved_parts[0])))
+      {
+        exact = i;
+        break;
+      }
+      if (best < 0 || namespace_scopes[i].depth > namespace_scopes[best].depth)
+        best = i;
     }
+  if (exact < 0)
+    exact = best;
+  if (exact >= 0)
+  {
+    nb_namespace_stack = namespace_scopes[exact].depth;
+    memcpy(namespace_stack, namespace_scopes[exact].parts,
+           sizeof(namespace_stack));
+  }
 }
 
 static void enter_symbol_namespace(int symbol_tok)
@@ -279,13 +299,31 @@ static int namespace_member_exists(int t)
          || find_class_template_def(t) || find_function_template_def(t);
 }
 
+/* Resolve a written qualified name to the token its declaration registered.
+   The qualifier is resolved before the name it qualifies, so an inline
+   namespace anywhere on the path is expanded on the way down: with
+   `namespace A { inline namespace v1 { namespace inner { ... } } }`,
+   `A::inner` names the namespace `A::v1::inner` and `A::inner::S` the class
+   that namespace holds.  Resolving only the last component would leave the
+   qualifier spelled the way it was written, and no declaration carries that
+   name. */
 static int find_namespace_tok_from_parts(const int *parts, int nb_parts)
 {
-  int t = make_namespace_tok_from_parts(parts, nb_parts);
-  int expanded[18], i, candidate;
-  if (nb_parts == 1 && namespace_member_exists(parts[0])) t = parts[0];
+  int expanded[18], i, candidate, parent = 0;
+  int t;
+  if (nb_parts <= 0) return 0;
+  if (nb_parts > 1) {
+    parent = find_namespace_tok_from_parts(parts, nb_parts - 1);
+    t = make_static_member_tok(parent, parts[nb_parts - 1]);
+    if (is_namespace_tok(t)) {
+      Sym *alias = global_symbol_find(t);
+      if (alias && alias->cpp_using_target) t = alias->cpp_using_target;
+    }
+  } else {
+    t = make_namespace_tok_from_parts(parts, 1);
+    if (namespace_member_exists(parts[0])) t = parts[0];
+  }
   if (nb_inline_namespace_scopes && nb_parts) {
-    int parent = nb_parts > 1 ? make_namespace_tok_from_parts(parts, nb_parts - 1) : 0;
     int found = namespace_member_exists(t) ? t : 0;
     for (i = 0; i < nb_namespace_scopes; ++i) {
         NamespaceScope *scope = &namespace_scopes[i];
@@ -1843,7 +1881,9 @@ static void emit_default_arg(Sym *func_type, Sym *arg)
   macro_ptr = saved_macro_ptr;
   tok = entry_tok;
   tokc = entry_tokc;
+  cpp_default_argument_conversion++;
   gfunc_param_typed_with_conversions(func_type, arg);
+  cpp_default_argument_conversion--;
   active_member_class_tok = saved_default_owner;
 }
 
@@ -2290,7 +2330,12 @@ static void gfunc_param_typed_with_conversions(Sym *func_type, Sym *param)
          live argument type, so carry the marker across that call too. */
       if (null_pointer_argument)
         vtop->type.t |= VT_NULLPTR_TYPE;
-      try_materialize_constructor_conversion(&construct_type);
+      /* A default argument's conversion is direct-initialization, so an
+         explicit converting constructor is viable there. */
+      if (cpp_default_argument_conversion)
+        try_materialize_constructor_conversion_mode(&construct_type, 1);
+      else
+        try_materialize_constructor_conversion(&construct_type);
       vtop->type.t &= ~VT_NULLPTR_TYPE;
     }
     /* A conversion operator selected by overload resolution owns the
@@ -2507,6 +2552,14 @@ static int call_arg_matches_param_type_standard(CType *param_type,
       && (param_value_type.t & VT_BTYPE) == VT_PTR)
     return !is_reference_type(param_type) || (param_value_type.t & VT_CONSTANT)
            || (param_type->t & VT_RVALUE_REFERENCE);
+  /* A null pointer constant also initializes a pointer-to-member parameter
+     ([conv.ptr] and [conv.mem]); boost's member-pointer SFINAE probe passes
+     the literal 0, so the viability predicate must accept it. */
+  if ((arg_value_type.t & (VT_BTYPE | VT_NULLPTR_TYPE)) == VT_NULLPTR
+      || (arg_value_type.t & VT_NULLPTR_TYPE))
+    if (!is_reference_type(param_type)
+        && find_cpp_member_pointer_type(&param_value_type))
+      return 1;
   if (arg_type->t & VT_NULLPTR_TYPE)
   {
     if ((param_value_type.t & VT_BTYPE) == VT_PTR)
@@ -2803,6 +2856,13 @@ static int call_arg_match_rank_standard(CType *param_type, CType *arg_type)
       && (param_value_type.t & VT_BTYPE) == VT_PTR)
     return !is_reference_type(param_type) || (param_value_type.t & VT_CONSTANT)
            || (param_type->t & VT_RVALUE_REFERENCE) ? 2 : -1;
+  /* A null pointer constant is a pointer conversion for a pointer-to-member
+     parameter, matching the viability predicate above. */
+  if (((arg_value_type.t & VT_BTYPE) == VT_NULLPTR
+       || (arg_value_type.t & VT_NULLPTR_TYPE))
+      && !is_reference_type(param_type)
+      && find_cpp_member_pointer_type(&param_value_type))
+    return 2;
   if (arg_type->t & VT_NULLPTR_TYPE)
   {
     if ((param_value_type.t & VT_BTYPE) == VT_PTR)
@@ -4562,7 +4622,7 @@ static void cpp_operator_associated_type(CppOperatorLookup *lookup, CType *type,
           TemplateArgList *arguments = &definition->inst_arg_lists[inst];
           for (i = 0; i < arguments->nb; ++i) {
             CType argument_type;
-            if (!(definition->value_param_mask & (1u << i))
+            if (!mask_test(&definition->value_param_mask, i)
                 && make_type_from_type_arg_tok(&argument_type, arguments->toks[i]))
               cpp_operator_associated_type(lookup, &argument_type, 0);
             else {

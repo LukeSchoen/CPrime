@@ -386,6 +386,15 @@ static void cpp_eh_function_end(void)
   memset(&cpp_eh_function, 0, sizeof cpp_eh_function);
 }
 
+/* The compacting x64 pass can only rebuild code that has no separately
+   recorded instruction addresses. C++ EH states and catches are stored as
+   absolute RVAs before the epilog pass runs, so a function carrying either
+   table must keep its original layout. */
+ST_FUNC int cpp_eh_has_code_offsets(void)
+{
+  return cpp_eh_function.state_count != 0 || cpp_eh_function.catch_count != 0;
+}
+
 static void cpp_eh_mark_local_initializing(Sym *symbol)
 {
   CppEhFunction *eh = &cpp_eh_function;

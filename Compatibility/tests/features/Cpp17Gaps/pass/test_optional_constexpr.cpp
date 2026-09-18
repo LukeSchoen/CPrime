@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: std_optional_constexpr.
+// C++17 gap probe: std_optional_constexpr.
 #include <optional>
 
 constexpr int contained() {

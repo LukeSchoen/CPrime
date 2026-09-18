@@ -1,0 +1,36 @@
+#ifndef _CPC_CWCTYPE
+#define _CPC_CWCTYPE
+
+/* The wide-character classification surface of <cwctype>.  The vendored SDK
+   <wctype.h> leans on locale tables the runtime does not ship, so the kernels
+   are provided here over the ASCII range the runtime uses.  Each is an
+   ordinary function, not a macro, so boost's `using ::iswpunct;` works. */
+typedef unsigned short wint_t;
+
+namespace std
+{
+  typedef unsigned short wint_t;
+  static inline int iswalpha(wint_t c)
+  { return (c >= L'a' && c <= L'z') || (c >= L'A' && c <= L'Z'); }
+  static inline int iswupper(wint_t c) { return c >= L'A' && c <= L'Z'; }
+  static inline int iswlower(wint_t c) { return c >= L'a' && c <= L'z'; }
+  static inline int iswdigit(wint_t c) { return c >= L'0' && c <= L'9'; }
+  static inline int iswxdigit(wint_t c)
+  { return iswdigit(c) || (c >= L'a' && c <= L'f') || (c >= L'A' && c <= L'F'); }
+  static inline int iswspace(wint_t c)
+  { return c == L' ' || c == L'\t' || c == L'\n' || c == L'\r'
+           || c == L'\f' || c == L'\v'; }
+  static inline int iswpunct(wint_t c)
+  { return c < 0x80 && c > 0x20 && !iswalpha(c) && !iswdigit(c); }
+  static inline int iswalnum(wint_t c) { return iswalpha(c) || iswdigit(c); }
+  static inline int iswprint(wint_t c) { return c >= 0x20 && c < 0x7f; }
+  static inline int iswgraph(wint_t c) { return iswprint(c) && c != L' '; }
+  static inline int iswcntrl(wint_t c) { return c < 0x20 || c == 0x7f; }
+  static inline int iswascii(wint_t c) { return (unsigned)c < 0x80; }
+  static inline wint_t towupper(wint_t c)
+  { return iswlower(c) ? (wint_t)(c - L'a' + L'A') : c; }
+  static inline wint_t towlower(wint_t c)
+  { return iswupper(c) ? (wint_t)(c - L'A' + L'a') : c; }
+}
+
+#endif

@@ -97,7 +97,7 @@ int main()
   if (target.pointer != &payload) return 6;
 
   /* Two by-value class arguments materialized for a template constructor, the
-     shape that copied a safe-bool handle as a bool in a pugixml iterator. */
+     shape that copied a safe-bool handle as a bool in an iterator wrapper. */
   Producer producer;
   producer.payload = (int *)0x1234;
   Pair<Holder> pair = producer.Both();

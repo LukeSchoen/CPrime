@@ -432,7 +432,7 @@ static int infer_template_args_from_declared_return_type(TemplateDef *td,
   for (j = 0; j < td->nb_type_params; ++j) {
     /* A parameter the pattern cannot spell keeps its default; a required one
        leaves the declared result type unable to name this template. */
-    if ((td->value_param_mask >> j) & 1) {
+    if (mask_test(&td->value_param_mask, j)) {
       if (j < td->nb_required_type_params) return 0;
       break;
     }

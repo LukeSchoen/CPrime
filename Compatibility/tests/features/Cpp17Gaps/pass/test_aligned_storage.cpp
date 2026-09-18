@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: std_aligned_storage. std::aligned_storage is missing.
+// C++17 gap probe: std_aligned_storage. std::aligned_storage is missing.
 #include <type_traits>
 
 int main() {

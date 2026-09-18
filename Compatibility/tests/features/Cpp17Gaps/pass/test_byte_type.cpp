@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: std_byte. <cstddef> declares std::byte in C++17.
+// C++17 gap probe: std_byte. <cstddef> declares std::byte in C++17.
 #include <cstddef>
 
 int main() {

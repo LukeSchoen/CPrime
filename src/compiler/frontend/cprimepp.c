@@ -59,6 +59,7 @@ static int pp_counter;
 static int cprime_cpp_mode;
 static void tok_print(const int *str, const char *msg, ...);
 
+static void next_nomacro(void);
 static void next_nomacro_body(void);
 static void parse_number(const char *p);
 static void parse_string(const char *p, int len);
@@ -1433,7 +1434,13 @@ ST_FUNC void tok_str_free(TokenString *str)
 ST_FUNC int *tok_str_realloc(TokenString *s, int new_size)
 {
   int *str, size;
+  unsigned long long profile_started = 0;
 
+  if (profile_detail_enabled && profile_alloc_unknown_save_append_active)
+  {
+    ++profile_alloc_unknown_save_append_growth_calls;
+    profile_started = profile_detail_now_ns();
+  }
   size = s->allocated_len;
   if (size < 16)
     size = 16;
@@ -1445,6 +1452,9 @@ ST_FUNC int *tok_str_realloc(TokenString *s, int new_size)
     s->allocated_len = size;
     s->str = str;
   }
+  if (profile_started)
+    profile_alloc_unknown_save_append_growth_ns +=
+        profile_detail_now_ns() - profile_started;
   return s->str;
 }
 
@@ -4428,9 +4438,16 @@ keep_tok_flags:
 
 static void next_nomacro(void)
 {
-  profile_lexer_begin();
-  next_nomacro_body();
-  profile_lexer_end();
+  if (profile_detail_enabled)
+  {
+    profile_lexer_begin();
+    next_nomacro_body();
+    profile_lexer_end();
+  }
+  else
+  {
+    next_nomacro_body();
+  }
 }
 
 #ifdef PP_DEBUG
@@ -5074,17 +5091,33 @@ static void parse_string_sequence(void)
   cstr_free(&combined);
   tok_str_free(pieces);
 }
+/* Macro-stream token values are contiguous from TOK_CCHAR through TOK_U8CHAR
+   except for the two internal non-value tokens.  tok_get()'s default arm
+   consumes those two without a payload, and cpp_alternative_operator_token()
+   leaves them unchanged, so next() can classify the whole range with one
+   unsigned range test instead of the two comparisons used by
+   TOK_HAS_VALUE(). */
+#define TOK_HAS_MACRO_STREAM_VALUE(t) \
+  ((unsigned)((t) - TOK_CCHAR) <= (unsigned)(TOK_U8CHAR - TOK_CCHAR))
+
 // Return Next Token With Macro Substitution
 ST_FUNC void next(void)
 {
   int t;
+  PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_SWITCH(
+      macro_ptr ? PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_MACRO
+                : PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_LEXER);
+  PROFILE_MACRO_LOOP_SWITCH(PROFILE_MACRO_LOOP_TOP);
   while (macro_ptr)
   {
 redo:
+    PROFILE_MACRO_LOOP_SWITCH(PROFILE_MACRO_LOOP_VALUE);
     t = *macro_ptr;
-    if (TOK_HAS_VALUE(t))
+    if (TOK_HAS_MACRO_STREAM_VALUE(t))
     {
+      PROFILE_MACRO_LOOP_COUNT(PROFILE_MACRO_LOOP_VALUE);
       tok_get(&tok, &macro_ptr, &tokc);
+      PROFILE_MACRO_LOOP_SWITCH(PROFILE_MACRO_LOOP_GAP);
       if (t == TOK_LINENUM)
       {
         file->line_num = tokc.i;
@@ -5094,8 +5127,11 @@ redo:
     }
     else if (t == 0)
     {
+      PROFILE_MACRO_LOOP_SWITCH(PROFILE_MACRO_LOOP_END_MACRO);
+      PROFILE_MACRO_LOOP_COUNT(PROFILE_MACRO_LOOP_END_MACRO);
       // End Of Macro Or Unget Token String
       end_macro();
+      PROFILE_MACRO_LOOP_SWITCH(PROFILE_MACRO_LOOP_GAP);
       continue;
     }
     else if (t == TOK_EOF)
@@ -5104,6 +5140,23 @@ redo:
     }
     else
     {
+      int nonvalue_class;
+      PROFILE_MACRO_LOOP_SWITCH(PROFILE_MACRO_LOOP_NONVALUE);
+      PROFILE_MACRO_LOOP_COUNT(PROFILE_MACRO_LOOP_NONVALUE);
+      if (profile_detail_enabled)
+      {
+        if ((t & ~SYM_FIELD) == ' ')
+          nonvalue_class = PROFILE_MACRO_NONVALUE_SPACE;
+        else if ((t & ~SYM_FIELD) == TOK_LINEFEED)
+          nonvalue_class = PROFILE_MACRO_NONVALUE_LINEFEED;
+        else if ((t & SYM_FIELD) != 0)
+          nonvalue_class = PROFILE_MACRO_NONVALUE_MARKED;
+        else if (t > 0 && t < 256)
+          nonvalue_class = PROFILE_MACRO_NONVALUE_PUNCT;
+        else
+          nonvalue_class = PROFILE_MACRO_NONVALUE_OTHER;
+        ++profile_macro_nonvalue_calls[nonvalue_class];
+      }
       ++macro_ptr;
       t &= ~SYM_FIELD; // Remove 'Nosubst' Marker
       if (t == '\\')
@@ -5111,12 +5164,20 @@ redo:
         if (!(parse_flags & PARSE_FLAG_ACCEPT_STRAYS))
           cprime_error("stray '\\' in program");
       }
+      PROFILE_MACRO_LOOP_SWITCH(PROFILE_MACRO_LOOP_GAP);
     }
-    tok = t = cpp_alternative_operator_token(t);
+    if (cprime_cpp_mode)
+      t = cpp_alternative_operator_token(t);
+    tok = t;
     return;
   }
 
+  PROFILE_MACRO_LOOP_CLOSE();
+  PROFILE_MACRO_LOOP_SWITCH(PROFILE_MACRO_LOOP_POST);
+  PROFILE_MACRO_LOOP_COUNT(PROFILE_MACRO_LOOP_POST);
+  PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_SWITCH(PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_LEXER);
   next_nomacro();
+  PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_SWITCH(PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_MACRO);
   t = tok;
   if (t >= TOK_IDENT && (parse_flags & PARSE_FLAG_PREPROCESS))
   {
@@ -5128,17 +5189,25 @@ redo:
     if (s)
     {
       Sym *nested_list = NULL;
+      PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_SWITCH(
+          PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_SUBST);
       macro_subst_tok(&tokstr_buf, &nested_list, s);
+      PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_SWITCH(
+          PROFILE_ALLOC_UNKNOWN_SAVE_NEXT_MACRO);
       tok_str_add(&tokstr_buf, 0);
       begin_macro(&tokstr_buf, 0);
       goto redo;
     }
-    tok = t = cpp_alternative_operator_token(t);
+    if (cprime_cpp_mode)
+      t = cpp_alternative_operator_token(t);
+    tok = t;
     return;
   }
 
 convert:
   // convert preprocessor tokens into C tokens
+  PROFILE_MACRO_LOOP_SWITCH(PROFILE_MACRO_LOOP_CONVERT);
+  PROFILE_MACRO_LOOP_COUNT(PROFILE_MACRO_LOOP_CONVERT);
   if (t == TOK_PPNUM)
   {
     if  ((parse_flags & PARSE_FLAG_TOK_NUM)

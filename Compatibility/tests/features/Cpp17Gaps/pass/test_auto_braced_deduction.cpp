@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: auto_brace. C++17 deduces `auto x{1}` as int for a single
+// C++17 gap probe: auto_brace. C++17 deduces `auto x{1}` as int for a single
 // element; the declaration is rejected with "unsupported auto declaration".
 
 struct Widget

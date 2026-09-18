@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_variant_emplace.
+// C++17 gap probe: lib_variant_emplace.
 #include <variant>
 
 int main() {

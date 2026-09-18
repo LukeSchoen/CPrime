@@ -146,7 +146,7 @@ static int cpp_binding_member_get(int owner)
       int at;
       found = 1;
       if (member->nb_stripped_member_params) {
-        if (member->stripped_member_value_mask & 1) return 1;
+        if (mask_test(&member->stripped_member_value_mask, 0)) return 1;
         continue;
       }
       for (at = 0; at < member->def_str->len; ++at)
@@ -201,7 +201,8 @@ static int cpp_binding_adl_get(CType *type, int rvalue, int index)
           || !template_function_matches_namespace(definition, lookup.names[name])
           || definition->func_min_args > 1
           || (!definition->func_is_variadic && definition->func_max_args < 1)
-          || !definition->nb_type_params || !(definition->value_param_mask & 1)
+          || !definition->nb_type_params
+          || !mask_test(&definition->value_param_mask, 0)
           || template_definition_has_unbound_parameter(definition, &explicit_arguments)) continue;
       for (i = 0; i < count; ++i) if (candidates[i].definition == definition) break;
       if (i != count) continue;

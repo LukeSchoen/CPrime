@@ -86,6 +86,16 @@ namespace __cxxabiv1
                                    const __class_type_info *__src_type,
                                    const __class_type_info *__dst_type,
                                    ptrdiff_t __src2dst_offset);
+
+  /* The Itanium demangler.  Source that names it -- boost::core::demangle is
+     the common one -- has to compile and link, so the entry point exists; this
+     target mangles with the Microsoft x64 ABI, so the runtime reports the
+     documented invalid-name status and the caller keeps the name it was
+     handed. */
+  extern "C" char *__cxa_demangle (const char *__mangled_name,
+                                   char *__output_buffer,
+                                   size_t *__length,
+                                   int *__status);
 }
 
 namespace abi = __cxxabiv1;

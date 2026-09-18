@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: filesystem_path. std::filesystem::path exposes only c_str and
+// C++17 gap probe: filesystem_path. std::filesystem::path exposes only c_str and
 // empty; extension, filename, parent_path and operator/ are missing.
 
 #include <filesystem>

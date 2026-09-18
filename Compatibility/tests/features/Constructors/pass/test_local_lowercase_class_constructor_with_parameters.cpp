@@ -1,19 +1,19 @@
 // EXPECT_EXIT: 0
-class clString
+class textValue
 {
 public:
   int length;
 
-  clString(const char *text);
+  textValue(const char *text);
 };
 
-clString::clString(const char *text)
+textValue::textValue(const char *text)
 {
   this->length = text[0] ? 1 : 0;
 }
 
 int main(void)
 {
-  clString text("x");
+  textValue text("x");
   return text.length == 1 ? 0 : 1;
 }

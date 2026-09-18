@@ -1,6 +1,6 @@
 // EXPECT_EXIT: 0
 
-float clSqrt(float value)
+float sqrtValue(float value)
 {
   return value;
 }
@@ -20,7 +20,7 @@ struct Vec2
 template<typename T>
 auto Vec2<T>::Length() const
 {
-  return clSqrt(x * x + y * y);
+  return sqrtValue(x * x + y * y);
 }
 
 int main()

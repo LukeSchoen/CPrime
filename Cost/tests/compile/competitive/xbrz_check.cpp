@@ -1,5 +1,5 @@
-/* Unmodified xBRZ input copied from CL's raster scaler. Check identical output
-   across compilers as well as writing within the destination boundaries. */
+/* Unmodified xBRZ input. Check identical output across compilers as well as
+   writing within the destination boundaries. */
 #include "xbrz/xBRZ.cpp"
 #include <stdio.h>
 int main(int argc, char **) {

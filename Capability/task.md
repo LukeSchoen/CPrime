@@ -32,8 +32,8 @@ it with `git -c core.editor=true rebase --continue`.
   against compile time, and still compile quickly compared to clang, gcc and
   msvc.
 
-Today `-On` only defines `__OPTIMIZE__`; the levels are not real levels yet.
-Making them mean something, and documenting them in `cpc -h`, is the work.
+Today `-O1` is the cheap shared transform set and `-O2` adds the bounded C
+rewrite pass; `-Os` still uses the `-O1` set. `cpc -hh` documents that.
 
 ## Measure, every cycle
 
@@ -87,44 +87,78 @@ Making them mean something, and documenting them in `cpc -h`, is the work.
   (function-call overhead, redundant loads and stores, spills, unaligned or
   unvectorized loops) and attack the top cost with measurements.
 
-## Current cycle
+## Open work
 
-`-On` is now a real level. `CPRIMEState.opt_level` records it, `-O0` clears the
-optimize flag entirely (so `__OPTIMIZE__` is not defined and no transform
-runs), `-O1` is the existing cheap set, `-Os` is the same set requested with
-size over speed, and `-O2` parses as the top level. `cpc -h` documents the
-four, and `__OPTIMIZE__` follows the level: it is defined for `-O1` and above
-only.
+- Decide the `-Os` call-frame question. Promotion there costs text: +26 bytes on
+  `test_cpp_call_compact_hot` and +17..+36 on the other retained `-Os` cases, for
+  a 3x runtime win. Either find a size-neutral way to reach it (reclaiming the
+  push region's slack, sharing a record shape, or promoting only the call case)
+  or treat `-Os` promotion as a deliberate policy choice to be made with the
+  user; the leaf cases must not grow just because the frame is enabled.
+  `cpp_eh_has_code_offsets()` stays closed.
+- Make the loop-head pad phase-neutral before claiming `-O2` runtime parity.
+  `test_cpp_compact_leaf_134 -O2` moved +5.9 ms (8%) with its `hot` function
+  byte-identical modulo position. The loop-head pad anchors to
+  `align_base = start - FUNC_FAST_GAP` only when the gap is reclaimed, so check
+  which absolute address the pad lands on for a reclaimed frame and whether the
+  pre-change build was aligned at all.
+- `test_template_list_runtime.cpp` and `test_heap_list_push_clear_perf.cpp`
+  still hit the pre-existing private-member access failure.
+- Closed unless a new measurement reopens them: Candidate B's inline-increment
+  layout, the immediate-value fold (it stays out until a future layout removes
+  enough branches), and the C `-O2` phase sweep (closed at phase 0).
 
-Measured runtime (one 33-statement helper called in a 20M-iteration loop, three
-runs of each flag, wall clock):
+## What cycle 0022 retained
 
-```
--O0: 1.338 1.324 1.428 s
--O1: 0.731 0.744 0.701 s
--O2: 0.745 0.701 0.755 s
--Os: 0.729 0.713 0.712 s
-```
+Cycle 0022 replaced the fast frame's mov-to-slot nonvolatile saves with push/pop
+saves and the shorter `UWOP_PUSH_NONVOL` unwind record. The frame gap is now 8
+bytes (`FUNC_FAST_GAP`) instead of 16, the prolog pushes the promoted registers
+between `mov rsp,rbp` and `sub rsp` (the allocation shrinks by what they
+reserve, so the saved slots, the frame size and every local address are
+unchanged), and the epilog drops the locals with `lea`, pops the registers in
+reverse and pops `rbp`. The private unwind record is 12-16 bytes where the mov
+frame needed 16-32, and its codes are one slot per push plus an allocation code,
+listed in descending offset order.
 
-The level that pays is `-O0` versus `-O1`: 1.32-1.43 s against 0.70-0.74 s, so
-the existing cheap transforms are worth 1.8-2.0x and turning them off is a
-real level. `-O2` currently produces the same code as `-O1` (the numbers
-overlap), so its promised extra pass is still open work.
+Size, root `cpc.exe` -> diagnostic: `test_cpp_call_compact_hot -O2` 536 -> 492,
+`hot_125/128/134 -O2` 352/372/368 -> 344/348/344, `leaf_125/128/134 -O2`
+288/308/304 -> 280/284/280, `c.self.driver -O2` 1953500 -> 1932188 (-1.09%),
+`c_compat.fast_nonvolatile_unwind -O2` 2174 -> 2006. Every `-O1` and `-Os`
+retained binary and the C leaf cases are byte-identical, and no measured case
+grew.
 
-An experiment that did not hold up: making `-O2` widen the fast inliner's
-192-byte leaf-candidate limit to 1024 produced a clear 0.59-0.60 s against
-`-O1`'s 0.70 s on the same loop, but the compiler it published could not
-recompile the driver (`-O2` failed with a heap-corruption exit where the
-previous compiler succeeded). The larger budget overflows a bound in the
-inliner on the toolchain's own translation unit, so the change was reverted
-and the root compiler rebuilt; self-host and the gate pass again. A safe way
-to spend the `-O2` budget is the next thing to find, not a bigger number to
-paste in.
+Compile-time medians for the same pair: `c.self.driver` 418.264 -> 395.744 ms
+and `cpp.xbrz` 1556.382 -> 1557.848 ms. The paired runtime tables are in the
+cycle-0022 evidence below.
 
-Invariants were re-checked with the retained suites and the regression gate
-before publishing, and the Capability probe passed at the default level. The
-compile-time budget moved only for `-O2` inputs, which is the intended trade.
+Three defects were found by the retained cases and fixed before publishing:
+push/pop of r12-r15 needs the +4 register bias under REX.B (`0x50+bit` pushed
+and popped r8-r11); unwind codes must be listed in descending offset order (the
+allocation goes first); and the reclaimed gap shifted the loop-head pad phase by
+8 bytes, so the pad is anchored to the body's final address. The first two
+failed `c_compat/test_fast_nonvolatile_unwind` until fixed.
 
-Next: split `function_ms` further and pick the strongest remaining gap between
-the generated code and a reference build, then make `-Os` mean something
-beyond "not `-O2`" (it currently shares the `-O1` budget).
+Gates on the published compiler: `build.exe` packaging and regression 66/0;
+Capability optimizations 3/0; Capability fast 2/0; Compatibility fast 29/0;
+`-Regression` 66/0; Exceptions 63/0; the retained unwind case 1/0; all 21
+retained case/level combinations compile and exit 0, and every published binary
+is byte-identical to the diagnostic's. A second self-host build of the same
+sources repeated 66/0 and the same `call_hot -O2` text; the published binary
+hash changes per build only because the PE header carries a time stamp. Root
+`cpc.exe` is
+`0B66790B09B53CDED4662880BD2B47193598945557C66FEA7B7F81562DB2E5F1`.
+
+Evidence lives under `Capability\build\cycle-0022`: size, runtime and
+compile-time summaries, paired-run tables, bench logs and objects, unwind probes
+and dumps, diagnostic compilers, gate logs and the retained case tables.
+
+## Next action
+
+Build a cycle-0023 diagnostic under `Capability\build` that reports, for one
+promoted and one reclaimed function, the body's reserved and reclaimed
+addresses, the pad anchor and the final loop-head address at `-O2`, then make
+the pad land on the same absolute phase whether or not the epilog reclaims the
+gap.  Verify with the exact retained cases, the affected suite, the fast tier
+and `-Regression`, and re-measure the paired `test_cpp_compact_leaf_134 -O2` and
+`test_cpp_call_compact_hot -O2` cells before touching the `-Os` policy question
+again.

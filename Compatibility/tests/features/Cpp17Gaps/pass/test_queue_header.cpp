@@ -1,4 +1,4 @@
-// CL gap probe: std_queue. <queue> is present but does not declare std::queue.
+// C++17 gap probe: std_queue. <queue> is present but does not declare std::queue.
 #include <queue>
 
 int main() {

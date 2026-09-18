@@ -2,7 +2,7 @@
 
 typedef long long i64;
 
-float clSqrt(float value)
+float sqrtValue(float value)
 {
   return value;
 }
@@ -23,7 +23,7 @@ struct Vec2
 template<typename T>
 auto Vec2<T>::Length() const
 {
-  return clSqrt(LengthSquared());
+  return sqrtValue(LengthSquared());
 }
 
 template<typename T>

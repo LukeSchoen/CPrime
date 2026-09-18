@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: chrono_rounding. <chrono> lacks floor, ceil and round for
+// C++17 gap probe: chrono_rounding. <chrono> lacks floor, ceil and round for
 // durations, and a duration does not convert to a floating-point duration.
 
 #include <chrono>

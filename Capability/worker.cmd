@@ -66,6 +66,9 @@ rem   SKIP_COMMIT      set to 1 to leave the tree dirty instead of committing (d
 rem   SKIP_SYNC        set to 1 to keep this clone offline: no fetch, rebase or push
 rem   SKIP_PUSH        set to 1 to fetch and rebase but never push
 rem   PUSH_FAILED      set to 1 to publish even after a failed probe (default 0)
+rem   PUBLISH_SCRATCH  set to 1 to publish one-off probe files too (default 0:
+rem                    untracked files that are neither toolchain work nor area
+rem                    work stay on disk, uncommitted, and are reported)
 rem   REMOTE           git remote shared with the other machines (default origin)
 rem   BRANCH           branch shared with the other machines (default the current branch)
 rem   SYNC_TRIES       push attempts per cycle before deferring to the next (default 4)
@@ -79,6 +82,16 @@ rem sync-push.log the last push and gate-state.txt the probe result the next
 rem cycle publishes on, so a restart cannot publish a tree that failed.
 rem Runtime-speed evidence from the generated executables is kept by the cycle
 rem itself under build\.
+rem worker-state.txt is one line per state change, newest last: the cycle that
+rem is running, when the last one finished, and why the loop exited. stop.cmd prints it.
+rem
+rem A stop request never walks away from an unfinished merge. If the marker is
+rem up and the rebase has a source conflict, the loop settles that merge in one
+rem more cycle and exits at the boundary after it, because the one state this
+rem loop must never leave behind is a tree that is half-rebased.
+rem
+rem cmd.exe reads this file while it runs, so change worker.cmd and the two
+rem launchers while the workers are stopped, never during a run.
 
 set "AREA=capability"
 set "TITLE=Capability"
@@ -91,7 +104,7 @@ if not defined DONE set "DONE=%TITLE%\done.x"
 rem DeepSeek is the working account for this loop; set CODEX_EXE to run another one.
 if not defined CODEX_EXE set "CODEX_EXE=%USERPROFILE%\.local\bin\deepseek.exe"
 if not defined REASONING set "REASONING=high"
-if not defined TASK_PROMPT set "TASK_PROMPT=Read %TITLE%\task.md and continue its earliest unfinished work package, following AGENTS.md. Use only root cpc.exe, one compiler process at a time. Measure runtime speed and compile time before and after with the commands %TITLE%\task.md names, keep the evidence under Capability\build, and keep the retained cases green. Finish by updating %TITLE%\task.md with the remaining work and the exact next action. Never create %TITLE%\done.x, never make a case pass by weakening it, and never delete, move or rewrite %TITLE%\worker.cmd. The worker owns git at the cycle boundary: do not run git add, git commit, git fetch, git pull, git rebase or git push yourself."
+if not defined TASK_PROMPT set "TASK_PROMPT=Read %TITLE%\task.md and continue its earliest unfinished work package, following AGENTS.md. Use only root cpc.exe, one compiler process at a time. Measure runtime speed and compile time before and after with the commands %TITLE%\task.md names, keep the evidence under Capability\build, and keep the retained cases green. Finish by updating %TITLE%\task.md with the remaining work and the exact next action. Keep every scratch file, probe and one-off diagnostic under Capability\build, which is not published; only retained cases and fixtures belong under Capability\tests, and anything else left loose in the tree is held back from the commit and reported. Never create %TITLE%\done.x, never make a case pass by weakening it, and never delete, move or rewrite %TITLE%\worker.cmd. The worker owns git at the cycle boundary: do not run git add, git commit, git fetch, git pull, git rebase or git push yourself."
 if not defined MAX_CYCLES set "MAX_CYCLES=0"
 if not defined FAIL_EXIT_LIMIT set "FAIL_EXIT_LIMIT=5"
 if not defined FAIL_SLEEP set "FAIL_SLEEP=60"
@@ -103,12 +116,14 @@ if not defined SYNC_SLEEP set "SYNC_SLEEP=5"
 if not defined SKIP_SYNC set "SKIP_SYNC=0"
 if not defined SKIP_PUSH set "SKIP_PUSH=0"
 if not defined PUSH_FAILED set "PUSH_FAILED=0"
+if not defined PUBLISH_SCRATCH set "PUBLISH_SCRATCH=0"
 
 set "LOG_DIR=%ROOT%\%TITLE%\build"
 set "CYCLES=%LOG_DIR%\cycles.csv"
 set "PERF_PREFIX=%LOG_DIR%\perf-cycle-"
 set "SYNC_LOG=%LOG_DIR%\sync.log"
 set "PUSH_LOG=%LOG_DIR%\sync-push.log"
+set "STATE=%LOG_DIR%\worker-state.txt"
 set "CHECK_EXE=%ROOT%\%TITLE%\tests\test.exe"
 set "GATE_EXE=%ROOT%\Compatibility\tests\test.exe"
 if not defined GATE set "GATE=1"
@@ -125,6 +140,11 @@ set "SYNC_STATE=-"
 set "SYNC_RC=0"
 set "PUSH_RC=-"
 set "SYNC_TRIES_RUN=0"
+set "STOP_DEFERRED=0"
+set "JUNK_COUNT=0"
+set "JUNK_LIST="
+set "BASE_DIR="
+set "BASE_REF="
 set "CONFLICT_LIST="
 set "CONFLICT_COUNT=0"
 set "RESOLVED_COUNT=0"
@@ -148,16 +168,20 @@ if exist "%LOG_DIR%\gate-state.txt" set /p LAST_CHECK_OK=<"%LOG_DIR%\gate-state.
 git rev-parse --git-dir >nul 2>&1
 if errorlevel 1 (
     echo [%DATE% %TIME%] not a git repository: %ROOT%
+    call :state "exited before the first cycle: %ROOT% is not a git repository"
     exit /b 1
 )
 
 call :git_setup
 call :resolve_branch
+call :find_base
+call :check_base
 
 call "%CODEX_EXE%" --version >nul 2>&1
 if errorlevel 1 (
     echo [%DATE% %TIME%] cannot run codex "%CODEX_EXE%"; install it, or set CODEX_EXE to it.
     echo [%DATE% %TIME%] nothing was changed.
+    call :state "exited before the first cycle: cannot run the cli named by CODEX_EXE"
     exit /b 1
 )
 
@@ -182,20 +206,37 @@ echo [%DATE% %TIME%] one at once : one worker per clone; the three clones meet i
 if defined LASTROW echo [%DATE% %TIME%] last cycle  : !LASTROW!
 call :show_measure
 echo [%DATE% %TIME%] ==========================================================
+call :state "starting: resuming after cycle !CYCLE!, waiting for the first cycle to start"
 
 :cycle
 call :commit_work
 call :sync
-if exist "%DONE%" (
+if not exist "%DONE%" goto cycle_limit
+rem A stop request must not walk away from an unfinished merge: exiting here
+rem would leave the tree half-rebased, which is the one state this loop promises
+rem never to leave behind.  Settle that merge in this cycle, then stop at the
+rem boundary after it.  The deferral happens at most once per session.
+call :rebase_active
+if "!REBASE_ACTIVE!"=="1" if "!STOP_DEFERRED!"=="0" (
+    set "STOP_DEFERRED=1"
     echo.
-    echo [%DATE% %TIME%] "%DONE%" is present; stopping after cycle !CYCLE!.
-    exit /b 0
+    echo [%DATE% %TIME%] stop requested, but a rebase is unfinished: settling the merge this cycle, then stopping.
+    call :state "stop requested while a rebase was unfinished: settling the merge before exiting"
+    goto cycle_go
 )
+echo.
+echo [%DATE% %TIME%] "%DONE%" is present; stopping after cycle !CYCLE!.
+call :state "exited after cycle !CYCLE!: stop requested"
+exit /b 0
+
+:cycle_limit
 if %MAX_CYCLES% gtr 0 if !SESSION! geq %MAX_CYCLES% (
     echo.
     echo [%DATE% %TIME%] session limit %MAX_CYCLES% reached after cycle !CYCLE!.
+    call :state "exited after cycle !CYCLE!: session limit reached"
     exit /b 0
 )
+:cycle_go
 set /a SESSION+=1 >nul
 set /a CYCLE+=1 >nul
 set "TAG=0000!CYCLE!"
@@ -211,9 +252,11 @@ set "START_TIME=%TIME%"
 
 echo.
 echo [%DATE% %TIME%] ---------- cycle !CYCLE! starting ----------
+call :state "cycle !CYCLE! running: codex started %TIME%, transcript %CYCLE_LOG%"
 call :run_codex
 if errorlevel 3 (
     echo [%DATE% %TIME%] ---------- stopping after cycle !CYCLE! ----------
+    call :state "exited after cycle !CYCLE!: account usage limit reported by codex"
     exit /b 1
 )
 call :check
@@ -223,6 +266,7 @@ call :record
 if %FAIL_EXIT_LIMIT% gtr 0 if !FAILS! geq %FAIL_EXIT_LIMIT% (
     echo [%DATE% %TIME%] codex exited nonzero !FAILS! times in a row; inspect !CYCLE_LOG!.
     echo [%DATE% %TIME%] ---------- stopping after cycle !CYCLE! ----------
+    call :state "exited after cycle !CYCLE!: codex exited nonzero !FAILS! times in a row"
     exit /b 1
 )
 if not "!RC!"=="0" (
@@ -330,9 +374,13 @@ if exist "%MEASURE_OUT%" findstr /b /c:"c.self.driver" /c:"c.empty.main" "%MEASU
 exit /b 0
 
 :record
-set "ROW=!CYCLE!;%TITLE%;!START_DATE!;!START_TIME!;%DATE%;%TIME%;codex=!RC!;check=!CHECK_RC!;gate=!GATE_RC!;measure=!MEASURE_RC!;sync=!SYNC_STATE!;head=!HEAD!"
+rem Read the head here rather than carrying it: a rebase moves the head without
+rem a commit, and a row that names the pre-rebase commit is misleading.
+call :read_head
+set "ROW=!CYCLE!;%TITLE%;!START_DATE!;!START_TIME!;%DATE%;%TIME%;codex=!RC!;check=!CHECK_RC!;gate=!GATE_RC!;measure=!MEASURE_RC!;sync=!SYNC_STATE!;head=!HEAD!;junk=!JUNK_COUNT!"
 >>"%CYCLES%" echo !ROW!
-echo [%DATE% %TIME%] cycle !CYCLE! recorded: codex=!RC! check=!CHECK_RC! gate=!GATE_RC! measure=!MEASURE_RC! sync=!SYNC_STATE! head=!HEAD!
+echo [%DATE% %TIME%] cycle !CYCLE! recorded: codex=!RC! check=!CHECK_RC! gate=!GATE_RC! measure=!MEASURE_RC! sync=!SYNC_STATE! head=!HEAD! junk=!JUNK_COUNT!
+call :state "cycle !CYCLE! finished at %TIME%: codex=!RC! check=!CHECK_RC! gate=!GATE_RC! measure=!MEASURE_RC! sync=!SYNC_STATE! head=!HEAD! junk=!JUNK_COUNT!"
 exit /b 0
 
 :read_last
@@ -370,6 +418,7 @@ if "!REBASE_ACTIVE!"=="1" (
     exit /b 0
 )
 git add -A
+call :guard_junk
 git diff --cached --quiet >nul 2>&1
 if not errorlevel 1 (
     echo [%DATE% %TIME%] working tree already clean.
@@ -445,9 +494,16 @@ if "!SYNC_STATE!"=="error" exit /b 0
 call :push_work
 if "!PUSH_RC!"=="0" exit /b 0
 if "!PUSH_RC!"=="2" exit /b 0
+rem A push into a checked-out base copy applies the pushed tree to that copy's
+rem index and worktree and only then moves its branch, so two clones pushing at
+rem once can leave the base looking dirty and refusing everything after it.
+rem work.cmd parks that copy before it starts the workers, which turns every
+rem push into a plain branch update; :check_base reports a copy that is still
+rem on the branch.
 if !SYNC_TRIES_RUN! geq %SYNC_TRIES% (
     set "SYNC_STATE=deferred"
     echo [%DATE% %TIME%] !UPSTREAM! refused the push !SYNC_TRIES_RUN! times; the work stays local and the next cycle publishes it.
+    call :sync_advice
     exit /b 0
 )
 echo [%DATE% %TIME%] another machine published first; fetching, rebasing and pushing again in %SYNC_SLEEP%s.
@@ -498,7 +554,7 @@ if errorlevel 1 (
 )
 set "PUSH_RC=0"
 set "SYNC_STATE=pushed"
-for /f "delims=" %%H in ('git rev-parse --short HEAD 2^>nul') do set "HEAD=%%H"
+call :read_head
 if "!NEW_UPSTREAM!"=="1" (
     echo [%DATE% %TIME%] published the first !BRANCH! to %REMOTE% at !HEAD! ^(!AHEAD! commit^(s^)^).
 ) else (
@@ -542,6 +598,7 @@ if "!REBASE_ACTIVE!"=="1" if !HOP! lss 20 goto rebase_hop
 call :rebase_active
 if "!REBASE_ACTIVE!"=="1" exit /b 0
 if "!REBASE_RC!"=="0" (
+    call :read_head
     set "SYNC_STATE=pulled"
     set "PULLED=1"
     exit /b 0
@@ -620,4 +677,92 @@ rem rerere replays the way this clone settled a conflict last time, which is
 rem what keeps three machines rebasing onto each other cheap.
 git config rerere.enabled true >nul 2>&1
 git config rerere.autoupdate true >nul 2>&1
+exit /b 0
+
+:read_head
+rem %HEAD% is what cycles.csv records, and a rebase moves it without a commit,
+rem so every boundary reads it instead of remembering it.
+for /f "delims=" %%H in ('git rev-parse --short HEAD 2^>nul') do set "HEAD=%%H"
+exit /b 0
+
+:state
+rem %~1 = one line: the loop's state, for the morning review and for stop.cmd.
+>> "%STATE%" echo [%DATE% %TIME%] %TITLE%: %~1
+exit /b 0
+
+:guard_junk
+rem One-off probes and build output are what a cycle produces, not what the
+rem branch is for: this clone publishes its toolchain work, its area's retained
+rem cases and its records, and nothing else.  A file git is about to add that is
+rem none of those keeps its place in the tree but stays out of the commit, and
+rem is named in the log, in worker-state.txt and in the cycle row, so a leak is
+rem visible instead of published.  PUBLISH_SCRATCH=1 turns the guard off.
+set "JUNK_COUNT=0"
+set "JUNK_LIST="
+if "%PUBLISH_SCRATCH%"=="1" exit /b 0
+for /f "delims=" %%F in ('git diff --cached --name-only --diff-filter=A 2^>nul') do call :junk_one "%%F"
+if !JUNK_COUNT! gtr 0 (
+    echo [%DATE% %TIME%] held back !JUNK_COUNT! untracked file^(s^) that are not this area's work:!JUNK_LIST!
+    echo [%DATE% %TIME%] they stay in the tree, uncommitted; scratch belongs under %TITLE%\build.
+    call :state "held back !JUNK_COUNT! loose file^(s^) from the commit:!JUNK_LIST!"
+)
+exit /b 0
+
+:junk_one
+set "JF=%~1"
+rem Toolchain work, the area's cases, tools and baselines, its build inputs and
+rem its Markdown records are always published.
+echo(!JF!|findstr /i /r /v /c:"^src/" /c:"/tests/" /c:"/tools/" /c:"/baseline/" /c:"/build/" /c:"/deploy/" /c:"/benchmark" /c:"\.md$" >nul
+if errorlevel 1 exit /b 0
+rem Everything else is a probe, and a build artefact outside build\ is never
+rem published whatever it is called.
+git reset -q -- "!JF!" >nul 2>&1
+set /a JUNK_COUNT+=1 >nul
+set "JUNK_LIST=!JUNK_LIST! !JF!"
+exit /b 0
+
+:find_base
+rem The shared branch is collected in the base copy, whose path is the one thing
+rem outside this tree the loop reasons about when a push is refused.  A remote
+rem that is not a copy on this machine simply leaves BASE_DIR unset.
+set "BASE_DIR="
+set "BASE_URL="
+set "BASE_REF="
+if not defined REMOTE exit /b 0
+for /f "delims=" %%U in ('git remote get-url "%REMOTE%" 2^>nul') do set "BASE_URL=%%U"
+if not defined BASE_URL exit /b 0
+if not exist "!BASE_URL!\.git" exit /b 0
+set "BASE_DIR=!BASE_URL!"
+for /f "delims=" %%R in ('git -C "!BASE_DIR!" symbolic-ref -q HEAD 2^>nul') do set "BASE_REF=%%R"
+exit /b 0
+
+:check_base
+rem A push into a copy that has the shared branch checked out makes git update
+rem that checkout, and two clones pushing at the same instant can then leave the
+rem copy dirty and refusing every push that follows, for every clone, for the
+rem rest of the run.  work.cmd parks the base copy first: a detached copy makes
+rem every push a plain branch update, which git serialises with a ref lock, so
+rem the loser is told no and retries and nothing else is touched.  A copy that
+rem is still on the branch is worth one clear line.
+if not defined BASE_DIR exit /b 0
+if /i not "!BASE_REF!"=="refs/heads/!BRANCH!" exit /b 0
+echo [%DATE% %TIME%] note: the base copy !BASE_DIR! still has !BRANCH! checked out, so a push updates its checkout.
+echo [%DATE% %TIME%] note: park it with  git -C "!BASE_DIR!" checkout --detach  so pushes are plain branch updates.
+call :state "the base copy still has !BRANCH! checked out; park it with: git -C !BASE_DIR! checkout --detach"
+exit /b 0
+
+:sync_advice
+rem A refused push is either another clone publishing first, which the retry
+rem settles, or a base copy that needs a human.  Say which.
+if not defined BASE_DIR exit /b 0
+if /i "!BASE_REF!"=="refs/heads/!BRANCH!" (
+    echo [%DATE% %TIME%] the base copy !BASE_DIR! has !BRANCH! checked out; park it so its checkout cannot refuse pushes: git -C "!BASE_DIR!" checkout --detach
+    exit /b 0
+)
+set "DIRTY="
+for /f "delims=" %%F in ('git -C "!BASE_DIR!" status --porcelain 2^>nul') do if not defined DIRTY set "DIRTY=%%F"
+if not defined DIRTY exit /b 0
+echo [%DATE% %TIME%] the base copy !BASE_DIR! has uncommitted changes of its own, and no clone can publish into it until it is clean.
+echo [%DATE% %TIME%] first path: !DIRTY!
+call :state "the base copy !BASE_DIR! has uncommitted changes, so pushes are refused"
 exit /b 0

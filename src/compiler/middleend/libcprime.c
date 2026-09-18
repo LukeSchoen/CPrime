@@ -1210,6 +1210,7 @@ static int cprime_compile(CPRIMEState *s1, int filetype, const char *str, int fd
 
   cprime_enter_state(s1);
   s1->error_set_jmp_enabled = 1;
+  profile_tu_switch(PROFILE_TU_INPUT);
 
   if (setjmp(s1->error_jmp_buf) == 0)
   {
@@ -1236,25 +1237,38 @@ static int cprime_compile(CPRIMEState *s1, int filetype, const char *str, int fd
       file->fd = fd;
     }
 
+    profile_tu_switch(PROFILE_TU_PREPROCESS_START);
     preprocess_start(s1, filetype);
+    profile_tu_switch(PROFILE_TU_GEN_INIT);
     cprimegen_init(s1);
 
     if (s1->output_type == CPRIME_OUTPUT_PREPROCESS)
+    {
+      profile_tu_switch(PROFILE_TU_PREPROCESS);
       cprime_preprocess(s1);
+    }
     else
     {
+      profile_tu_switch(PROFILE_TU_ELF_BEGIN);
       cprimeelf_begin_file(s1);
       if (filetype & (AFF_TYPE_ASM | AFF_TYPE_ASMPP))
+      {
+        profile_tu_switch(PROFILE_TU_ASSEMBLE);
         cprime_assemble(s1, !!(filetype & AFF_TYPE_ASMPP));
+      }
       else
         cprimegen_compile(s1);
+      profile_tu_switch(PROFILE_TU_ELF_END);
       cprimeelf_end_file(s1);
     }
   }
+  profile_tu_switch(PROFILE_TU_GEN_FINISH);
   cprimegen_finish(s1);
+  profile_tu_switch(PROFILE_TU_PREPROCESS_END);
   preprocess_end(s1);
   s1->error_set_jmp_enabled = 0;
   cprime_exit_state(s1);
+  profile_tu_end();
   return s1->nb_errors != 0 ? -1 : 0;
 }
 
@@ -2700,8 +2714,8 @@ set_output_type:
         s->opt_level = optarg[0] - '0';
         s->optimize = s->opt_level != 0;
       } else if (optarg[0] == 's') {
-        /* Size over speed: keep the cheap transforms, skip the fast inliner's
-           own budget expansion. */
+        /* Size over speed: keep the cheap transforms, shorten encodings, and
+           spend at most the removed bytes on one inner-loop head pad. */
         s->opt_level = 3;
         s->optimize = 1;
       } else {

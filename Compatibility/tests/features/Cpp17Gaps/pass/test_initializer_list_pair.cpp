@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: initializer_list_pair. Naming
+// C++17 gap probe: initializer_list_pair. Naming
 // std::initializer_list<std::pair<int, int>> reports "initializer_list element
 // has incomplete type", which also stops std::vector<std::pair<...>> braced
 // construction.

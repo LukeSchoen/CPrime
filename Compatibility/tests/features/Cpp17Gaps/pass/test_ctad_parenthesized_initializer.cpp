@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: ctad_parenthesized. The retained CTAD case covers a braced
+// C++17 gap probe: ctad_parenthesized. The retained CTAD case covers a braced
 // initializer; deduction from a parenthesized one must work as well.
 template<class T> struct Box {
   T value;

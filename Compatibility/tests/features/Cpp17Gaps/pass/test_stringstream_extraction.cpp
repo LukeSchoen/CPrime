@@ -1,4 +1,4 @@
-// CL gap probe: lib_sstream. Extraction must round-trip what insertion wrote.
+// C++17 gap probe: lib_sstream. Extraction must round-trip what insertion wrote.
 #include <sstream>
 
 int main() {

@@ -2,13 +2,79 @@
 #define _CPC_IOS
 #include <iosfwd>
 #include <locale>
+#include <system_error>
+#include <string>
 #include <stdio.h>
 namespace std {
+enum class io_errc
+{
+  stream = 1
+};
+template<> struct is_error_code_enum<io_errc> : true_type {};
+const error_category &iostream_category() noexcept;
+int __cpc_ios_base_xalloc() noexcept;
+inline error_code make_error_code(io_errc value) noexcept
+{
+  return error_code(static_cast<int>(value), iostream_category());
+}
+
 class ios_base {
 public:
   typedef int iostate;
   typedef int seekdir;
   typedef int openmode;
+  enum event
+  {
+    erase_event,
+    imbue_event,
+    copyfmt_event
+  };
+  typedef void (*event_callback)(event, ios_base &, int);
+  static int xalloc() { return __cpc_ios_base_xalloc(); }
+  long &iword(int index)
+  {
+    if (index < 0 || index >= __word_capacity)
+    {
+      static long invalid_word;
+      return invalid_word;
+    }
+    return m_iwords[index];
+  }
+  void *&pword(int index)
+  {
+    if (index < 0 || index >= __word_capacity)
+    {
+      static void *invalid_word;
+      return invalid_word;
+    }
+    return m_pwords[index];
+  }
+  static bool sync_with_stdio(bool = true) { return true; }
+  void register_callback(event_callback callback, int index)
+  {
+    if (callback && m_callback_count < 8)
+    {
+      m_callbacks[m_callback_count].callback = callback;
+      m_callbacks[m_callback_count].index = index;
+      ++m_callback_count;
+    }
+  }
+  class Init {
+  public:
+    Init() {}
+    ~Init() {}
+    Init(const Init &) = delete;
+    Init &operator=(const Init &) = delete;
+  };
+  class failure : public system_error {
+  public:
+    explicit failure(const string &message,
+                     const error_code &code = make_error_code(io_errc::stream))
+      : system_error(code, message) {}
+    explicit failure(const char *message,
+                     const error_code &code = make_error_code(io_errc::stream))
+      : system_error(code, message) {}
+  };
   static const iostate goodbit = 0, eofbit = 1, failbit = 2, badbit = 4;
   static const seekdir beg = SEEK_SET, cur = SEEK_CUR, end = SEEK_END;
   static const openmode in = 1, out = 2, app = 4, ate = 8, trunc = 16, binary = 32;
@@ -17,6 +83,7 @@ public:
   static const fmtflags fixed=8, scientific=16, floatfield=24;
   static const fmtflags left=32, right=64, internal=128, adjustfield=224;
   static const fmtflags boolalpha=256, showbase=512, showpoint=1024, showpos=2048, skipws=4096, uppercase=8192;
+  static const fmtflags unitbuf=16384;
   fmtflags flags() const { return m_flags; }
   fmtflags flags(fmtflags f) { fmtflags old=m_flags; m_flags=f; return old; }
   fmtflags setf(fmtflags f) { fmtflags old=m_flags; m_flags|=f; return old; }
@@ -26,41 +93,87 @@ public:
   streamsize precision(streamsize n) { streamsize old=m_precision; m_precision=n; return old; }
   streamsize width() const { return m_width; }
   streamsize width(streamsize n) { streamsize old=m_width; m_width=n; return old; }
+  ~ios_base() { __run_event_callbacks(erase_event); }
 protected:
-  ios_base():m_flags(dec|skipws),m_precision(6),m_width(0){}
+  enum { __word_capacity = 32 };
+  ios_base():m_flags(dec|skipws),m_precision(6),m_width(0),m_callback_count(0)
+  {
+    for (int i = 0; i < __word_capacity; ++i)
+    {
+      m_iwords[i] = 0;
+      m_pwords[i] = 0;
+    }
+  }
+  struct __callback_entry
+  {
+    event_callback callback;
+    int index;
+  };
+  void __run_event_callbacks(event value)
+  {
+    for (int i = 0; i < m_callback_count; ++i)
+      m_callbacks[i].callback(value, *this, m_callbacks[i].index);
+  }
   fmtflags m_flags;
   streamsize m_precision,m_width;
+  __callback_entry m_callbacks[8];
+  int m_callback_count;
+  long m_iwords[__word_capacity];
+  void *m_pwords[__word_capacity];
 };
 template<class C, class Traits> class basic_ios : public ios_base {
 public:
   typedef C char_type;
   typedef Traits traits_type;
+  typedef typename Traits::int_type int_type;
   typedef streamoff pos_type;
   typedef streamoff off_type;
   bool good() const { return *m_state_ptr == goodbit; }
   bool eof() const { return (*m_state_ptr & eofbit) != 0; }
   bool fail() const { return (*m_state_ptr & (failbit | badbit)) != 0; }
   bool bad() const { return (*m_state_ptr & badbit) != 0; }
+  iostate exceptions() const { return m_exceptions; }
+  void exceptions(iostate state)
+  {
+    m_exceptions = state;
+    if (*m_state_ptr & m_exceptions) throw failure("basic_ios::exceptions");
+  }
   explicit operator bool() const { return !fail(); }
   bool operator!() const { return fail(); }
   iostate rdstate() const { return *m_state_ptr; }
-  void clear(iostate state = goodbit) { *m_state_ptr = state; if(m_stream) clearerr(m_stream); }
-  void setstate(iostate state) { *m_state_ptr |= state; }
+  void clear(iostate state = goodbit)
+  {
+    *m_state_ptr = state;
+    if(m_stream) clearerr(m_stream);
+    if(*m_state_ptr & m_exceptions) throw failure("basic_ios::clear");
+  }
+  void setstate(iostate state)
+  {
+    *m_state_ptr |= state;
+    if(*m_state_ptr & m_exceptions) throw failure("basic_ios::setstate");
+  }
   C fill() const { return m_fill; }
   C fill(C value) { C old=m_fill; m_fill=value; return old; }
   locale getloc() const { return m_locale; }
-  locale imbue(const locale& value) { locale old=m_locale; m_locale=value; return old; }
+  locale imbue(const locale& value)
+  {
+    locale old=m_locale;
+    m_locale=value;
+    this->__run_event_callbacks(imbue_event);
+    return old;
+  }
   basic_streambuf<C,Traits>* rdbuf() const { return m_buffer; }
   basic_streambuf<C,Traits>* rdbuf(basic_streambuf<C,Traits>* buffer) {
     basic_streambuf<C,Traits>* old=m_buffer; m_buffer=buffer; clear(buffer?goodbit:badbit); return old;
   }
 protected:
-  basic_ios(FILE* file = 0) : m_stream(file), m_state(file ? goodbit : badbit), m_state_ptr(&m_state),m_buffer(0),m_fill((C)' '),m_locale() {}
+  basic_ios(FILE* file = 0) : m_stream(file), m_state(file ? goodbit : badbit), m_state_ptr(&m_state),m_exceptions(goodbit),m_buffer(0),m_fill((C)' '),m_locale() {}
   void share_state(basic_ios& other) { m_state_ptr=other.m_state_ptr; }
   void init(basic_streambuf<C,Traits>* buffer) { m_stream=0; m_buffer=buffer; m_state=buffer?goodbit:badbit; }
   FILE* m_stream;
   iostate m_state;
   iostate* m_state_ptr;
+  iostate m_exceptions;
   basic_streambuf<C,Traits>* m_buffer;
   C m_fill;
   locale m_locale;
@@ -75,7 +188,20 @@ inline ios_base& scientific(ios_base& s){s.setf(ios_base::scientific,ios_base::f
 inline ios_base& defaultfloat(ios_base& s){s.unsetf(ios_base::floatfield);return s;}
 inline ios_base& left(ios_base& s){s.setf(ios_base::left,ios_base::adjustfield);return s;}
 inline ios_base& right(ios_base& s){s.setf(ios_base::right,ios_base::adjustfield);return s;}
+inline ios_base& internal(ios_base& s){s.setf(ios_base::internal,ios_base::adjustfield);return s;}
 inline ios_base& boolalpha(ios_base& s){s.setf(ios_base::boolalpha);return s;}
 inline ios_base& noboolalpha(ios_base& s){s.unsetf(ios_base::boolalpha);return s;}
+inline ios_base& showbase(ios_base& s){s.setf(ios_base::showbase);return s;}
+inline ios_base& noshowbase(ios_base& s){s.unsetf(ios_base::showbase);return s;}
+inline ios_base& showpoint(ios_base& s){s.setf(ios_base::showpoint);return s;}
+inline ios_base& noshowpoint(ios_base& s){s.unsetf(ios_base::showpoint);return s;}
+inline ios_base& showpos(ios_base& s){s.setf(ios_base::showpos);return s;}
+inline ios_base& noshowpos(ios_base& s){s.unsetf(ios_base::showpos);return s;}
+inline ios_base& skipws(ios_base& s){s.setf(ios_base::skipws);return s;}
+inline ios_base& noskipws(ios_base& s){s.unsetf(ios_base::skipws);return s;}
+inline ios_base& uppercase(ios_base& s){s.setf(ios_base::uppercase);return s;}
+inline ios_base& nouppercase(ios_base& s){s.unsetf(ios_base::uppercase);return s;}
+inline ios_base& unitbuf(ios_base& s){s.setf(ios_base::unitbuf);return s;}
+inline ios_base& nounitbuf(ios_base& s){s.unsetf(ios_base::unitbuf);return s;}
 }
 #endif

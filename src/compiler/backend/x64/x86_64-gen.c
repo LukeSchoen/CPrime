@@ -892,6 +892,14 @@ void store(int r, SValue *v)
   }
 }
 
+/* The fast frame reserves room for up to four nonvolatile saves.  The saves
+   are written as two-byte pushes, so eight bytes describe them all; the saved
+   slots still land at rbp-8..rbp-32 above the locals, and the frame size and
+   every local address are unchanged.  The fast-frame pass needs the same
+   number to align the body for the address it lands on once the unused gap is
+   reclaimed. */
+#define FUNC_FAST_GAP 8
+
 // 'is_jmp' is '1' if it is a jump
 #include "x86_64-fastopt.inc"
 
@@ -1502,7 +1510,8 @@ void gfunc_prolog(Sym *func_sym)
   func_ret_sub = 0;
   func_scratch = 32;
   func_alloca = 0;
-  x64_fast_frame = cprime_state->optimize && !is_cpp_translation_unit()
+  x64_fast_frame = cprime_state->optimize
+                   && (!is_cpp_translation_unit() || cprime_state->opt_level == 2)
                    && !cprime_state->do_debug && !x86_64_asm_enabled() && !cprime_state->do_bounds_check;
   x64_fast_saved = 0;
   x64_fast_compacted = 0;
@@ -1513,7 +1522,7 @@ void gfunc_prolog(Sym *func_sym)
 
   addr = PTR_SIZE * 2;
   ind += FUNC_PROLOG_SIZE;
-  if (x64_fast_frame) ind += 16;
+  if (x64_fast_frame) ind += FUNC_FAST_GAP;
   func_sub_sp_offset = ind;
   reg_param_index = 0;
 
@@ -1611,21 +1620,26 @@ void gfunc_prolog(Sym *func_sym)
 void gfunc_epilog(void)
 {
   int v, start, saved_reg;
+  unsigned long long profile_started = 0;
+  int profile_active;
 
+  profile_active = profile_fastopt_begin(&profile_started);
   if (cprime_state->optimize) x64_fast_optimize(func_sub_sp_offset, ind);
+  profile_fastopt_end(profile_active, profile_started);
   if (x64_fast_frame && x64_fast_compacted && !x64_fast_saved) {
     Section *rs = cur_text_section->reloc;
     /* No nonvolatile registers were needed. Remove their reserved prolog
        space as part of the already validated, non-debug C compaction. */
-    memmove(cur_text_section->data + func_sub_sp_offset - 16,
+    memmove(cur_text_section->data + func_sub_sp_offset - FUNC_FAST_GAP,
             cur_text_section->data + func_sub_sp_offset, ind - func_sub_sp_offset);
     if (rs) {
       ObjW_Rel *r, *end = (ObjW_Rel *)(rs->data + rs->data_offset);
       for (r = (ObjW_Rel *)(rs->data + x64_fast_reloc_start); r < end; ++r)
-        if (r->r_offset >= func_sub_sp_offset && r->r_offset < ind) r->r_offset -= 16;
+        if (r->r_offset >= func_sub_sp_offset && r->r_offset < ind)
+          r->r_offset -= FUNC_FAST_GAP;
     }
-    ind -= 16;
-    func_sub_sp_offset -= 16;
+    ind -= FUNC_FAST_GAP;
+    func_sub_sp_offset -= FUNC_FAST_GAP;
     x64_fast_frame = 0;
   }
 
@@ -1638,12 +1652,25 @@ void gfunc_epilog(void)
     gen_bounds_epilog();
 #endif
 
-  for (saved_reg = 0; saved_reg < 4; ++saved_reg)
-    if (x64_fast_saved & (1 << saved_reg)) {
-      o(0x8b4c); g(0x65 + saved_reg * 8); g(-8 * (saved_reg + 1));
-    }
-  o(0xc9); // Leave
-  x86_64_asm_body("leave");
+  if (x64_fast_saved) {
+    /* The nonvolatile saves are pushes, so the epilog drops the locals and
+       pops them in reverse instead of reloading each slot. */
+    int saves = 0;
+    for (saved_reg = 0; saved_reg < 4; ++saved_reg)
+      if (x64_fast_saved & (1 << saved_reg)) ++saves;
+    o(0x8d48); o(0x65); g(-8 * saves); // Lea -Saves(%Rbp), %Rsp
+    x86_64_asm_body("lea -%d(%%rbp), %%rsp", 8 * saves);
+    for (saved_reg = 3; saved_reg >= 0; --saved_reg)
+      if (x64_fast_saved & (1 << saved_reg)) {
+        o(0x41); o(0x5c + saved_reg); // Pop %R12..%R15
+        x86_64_asm_body("popq %%%s", x86_64_reg_name(12 + saved_reg, 1));
+      }
+    o(0x5d); // Pop %Rbp
+    x86_64_asm_body("popq %%rbp");
+  } else {
+    o(0xc9); // Leave
+    x86_64_asm_body("leave");
+  }
   if (func_ret_sub == 0)
   {
     o(0xc3); // Ret
@@ -1667,7 +1694,7 @@ void gfunc_epilog(void)
   }
 
   v = -loc;
-  start = func_sub_sp_offset - FUNC_PROLOG_SIZE - (x64_fast_frame ? 16 : 0);
+  start = func_sub_sp_offset - FUNC_PROLOG_SIZE - (x64_fast_frame ? FUNC_FAST_GAP : 0);
   cur_text_section->data_offset = ind;
   pe_add_unwind_data(start, ind, v, x64_fast_saved);
   x86_64_asm_func_finish(v);
@@ -1683,16 +1710,25 @@ void gfunc_epilog(void)
   }
   else
   {
+    int saves = 0;
     o(0xe5894855);  // Push %Rbp, Mov %Rsp, %Rbp
+    if (x64_fast_saved) {
+      /* Two-byte pushes describe the saves that the shared mov form needed
+         four bytes each for.  They sit on the same slots directly above the
+         locals, so the frame size only has to shrink by the bytes they
+         reserve themselves.  The bound above keeps every saved frame off the
+         stack-probe prolog, which has no room for them. */
+      for (saved_reg = 0; saved_reg < 4; ++saved_reg)
+        if (x64_fast_saved & (1 << saved_reg)) {
+          o(0x41); o(0x54 + saved_reg); // Push %R12..%R15
+          ++saves;
+        }
+    }
     o(0xec8148);  // Sub Rsp, Stacksize
-    gen_le32(v);
+    gen_le32(v - 8 * saves);
   }
   if (x64_fast_frame) {
     int remaining;
-    for (saved_reg = 0; saved_reg < 4; ++saved_reg)
-      if (x64_fast_saved & (1 << saved_reg)) {
-        o(0x894c); g(0x65 + saved_reg * 8); g(-8 * (saved_reg + 1));
-      }
     remaining = func_sub_sp_offset - ind;
     if (remaining >= 2) { g(0xeb); g(remaining - 2); remaining -= 2; }
     while (remaining--) g(0x90);

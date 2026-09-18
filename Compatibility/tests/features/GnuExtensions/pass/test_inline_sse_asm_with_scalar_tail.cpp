@@ -1,11 +1,10 @@
 /* Inline SSE asm next to generated float code in the same function.
 
-   This is the reduced GEMM from the Kinect consumer's SSE kernels: the
-   vector loop runs movups/mulps/addps on xmm0-xmm2 without a clobber list,
-   and the leftover columns run scalar float arithmetic afterwards.  The
-   shape crashed at N=25 (whose row stride is not a multiple of 16 bytes)
-   while N=24 and N=28 were fine, so all three are checked against a scalar
-   reference. */
+   This is a reduced GEMM whose vector loop runs movups/mulps/addps on
+   xmm0-xmm2 without a clobber list, and whose leftover columns run scalar
+   float arithmetic afterwards.  The shape crashed at N=25 (whose row stride
+   is not a multiple of 16 bytes) while N=24 and N=28 were fine, so all three
+   are checked against a scalar reference. */
 
 #include <stdlib.h>
 

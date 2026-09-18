@@ -2398,20 +2398,36 @@ ST_FUNC void pe_add_unwind_data(unsigned start, unsigned end, unsigned stack, un
   d = pe_add_uwwind_info(s1);
   if (saved) {
     unsigned char info[32];
-    int reg, count = 0, code = 4, off;
+    int reg, count = 0, code = 4;
+    unsigned locals = stack;
     for (reg = 0; reg < 4; ++reg) if (saved & (1 << reg)) ++count;
     memset(info, 0, sizeof(info));
-    info[0] = 1; info[1] = 11 + count * 4;
-    info[2] = count * 2 + 3;
-    off = info[1];
-    for (reg = 3; reg >= 0; --reg) if (saved & (1 << reg)) {
-      unsigned slot = (stack - 8 * (reg + 1)) / 8;
-      info[code++] = off; off -= 4;
-      info[code++] = 4 | ((reg + 12) << 4); /* UWOP_SAVE_NONVOL */
-      info[code++] = slot; info[code++] = slot >> 8;
+    /* The nonvolatile saves are two-byte pushes between mov rsp,rbp and the
+       stack allocation, so the allocation itself now only covers the bytes
+       below them and each push is one UWOP_PUSH_NONVOL slot at its own end
+       offset.  That is cheaper to describe than a UWOP_SAVE_NONVOL pair per
+       register and lets the unwinder apply a partially executed prolog. */
+    locals -= 8 * count;
+    info[0] = 1; info[1] = 11 + count * 2;
+    info[2] = count + 1 + (locals ? (locals <= 128 ? 1 : 2) : 0);
+    /* Unwind codes are listed in descending offset order.  The allocation is
+       the last prolog operation, so it comes first, then the pushes in
+       reverse and push rbp last. */
+    if (locals) {
+      info[code++] = 11 + count * 2;
+      if (locals <= 128) {
+        info[code++] = ((locals / 8 - 1) << 4) | 2; /* UWOP_ALLOC_SMALL */
+      } else {
+        info[code++] = 1; /* UWOP_ALLOC_LARGE */
+        info[code++] = locals / 8; info[code++] = (locals / 8) >> 8;
+      }
     }
-    info[code++] = 11; info[code++] = 1; /* UWOP_ALLOC_LARGE */
-    info[code++] = stack / 8; info[code++] = (stack / 8) >> 8;
+    for (reg = 3; reg >= 0; --reg) if (saved & (1 << reg)) {
+      int push = 0, r;
+      for (r = 0; r <= reg; ++r) if (saved & (1 << r)) ++push;
+      info[code++] = 4 + push * 2;
+      info[code++] = (reg + 12) << 4; /* UWOP_PUSH_NONVOL */
+    }
     info[code++] = 1; info[code++] = 0x50; /* UWOP_PUSH_NONVOL rbp */
     d = section_add(text_section, (code + 3) & ~3, 4);
     memcpy(text_section->data + d, info, (code + 3) & ~3);

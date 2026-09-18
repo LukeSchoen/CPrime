@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: type_traits_core. <type_traits> carries the traits the runtime
+// C++17 gap probe: type_traits_core. <type_traits> carries the traits the runtime
 // needs and little else: is_convertible, is_pointer, remove_pointer,
 // remove_cv_t, common_type and most _v variable templates are absent.
 

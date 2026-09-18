@@ -1,4 +1,4 @@
-/* Standalone build data support, following the native CL build-helper pattern. */
+/* Standalone build data support for the native project driver. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #include <stdio.h>

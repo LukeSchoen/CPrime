@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_make_unique. std::make_shared works; std::make_unique does
+// C++17 gap probe: lib_make_unique. std::make_shared works; std::make_unique does
 // not exist.
 #include <memory>
 

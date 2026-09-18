@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: std_optional_value_or. Basic optional use works; value_or()
+// C++17 gap probe: std_optional_value_or. Basic optional use works; value_or()
 // does not.
 #include <optional>
 

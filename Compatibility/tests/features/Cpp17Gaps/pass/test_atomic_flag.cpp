@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: std_atomic_flag. std::atomic_flag and ATOMIC_FLAG_INIT are
+// C++17 gap probe: std_atomic_flag. std::atomic_flag and ATOMIC_FLAG_INIT are
 // missing.
 #include <atomic>
 

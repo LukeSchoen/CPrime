@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: algorithm_cpp17. <numeric> lacks reduce and the parallel scan
+// C++17 gap probe: algorithm_cpp17. <numeric> lacks reduce and the parallel scan
 // family, <algorithm> lacks for_each_n, sample and the searcher overloads.
 
 #include <algorithm>

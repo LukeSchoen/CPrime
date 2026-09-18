@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_clamp. <algorithm> declares std::clamp but never defines
+// C++17 gap probe: lib_clamp. <algorithm> declares std::clamp but never defines
 // it, so the program links against an undefined symbol.
 #include <algorithm>
 

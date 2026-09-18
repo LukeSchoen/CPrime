@@ -1,4 +1,4 @@
-// CL gap probe: lib_random. <random> is missing from the runtime.
+// C++17 gap probe: lib_random. <random> is missing from the runtime.
 #include <random>
 
 int main() {

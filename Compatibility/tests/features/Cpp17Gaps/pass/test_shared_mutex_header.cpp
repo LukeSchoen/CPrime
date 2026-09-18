@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_shared_mutex. <shared_mutex> is missing from the runtime.
+// C++17 gap probe: lib_shared_mutex. <shared_mutex> is missing from the runtime.
 #include <shared_mutex>
 
 int main() {

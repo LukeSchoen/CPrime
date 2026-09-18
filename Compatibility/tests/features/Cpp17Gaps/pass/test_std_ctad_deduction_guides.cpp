@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: std_ctad. The standard deduction guides for std::array,
+// C++17 gap probe: std_ctad. The standard deduction guides for std::array,
 // std::pair and std::tuple are missing, so the class template argument
 // deduction they exist for does not reach the standard containers.
 

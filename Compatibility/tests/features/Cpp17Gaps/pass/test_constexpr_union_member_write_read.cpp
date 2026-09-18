@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: constexpr_union. A union member written and read back inside
+// C++17 gap probe: constexpr_union. A union member written and read back inside
 // one constant evaluation.
 union Value {
   int integer;

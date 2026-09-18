@@ -1,8 +1,8 @@
 // EXPECT_EXIT: 0
 // `object[{...}]` initializes the operator[] parameter from a braced-init-list.
 // The overload is selected by argument count and the list is materialized
-// against the chosen parameter type, as clMCBlockworldMeshing.cpp relies on
-// with `(*pChunk)[{ix, iy, iz}]`.
+// against the chosen parameter type, as a chunk grid relies on with
+// `(*pChunk)[{ix, iy, iz}]`.
 struct Position
 {
   int x, y, z;

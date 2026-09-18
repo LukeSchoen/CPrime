@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: constexpr_ctor. A user-provided constexpr constructor must be
+// C++17 gap probe: constexpr_ctor. A user-provided constexpr constructor must be
 // usable in a constant expression, not only member calls on the object.
 struct Point {
   int x;

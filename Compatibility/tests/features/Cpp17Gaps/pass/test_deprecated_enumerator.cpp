@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: deprecated_enumerator. [[deprecated]] on an enumerator is a
+// C++17 gap probe: deprecated_enumerator. [[deprecated]] on an enumerator is a
 // parse error; the attribute already works on functions and classes.
 
 enum class Mode {

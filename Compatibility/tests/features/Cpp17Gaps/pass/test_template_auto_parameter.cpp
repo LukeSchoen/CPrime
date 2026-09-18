@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: template_auto. `template<auto>` and `template<auto...>`
+// C++17 gap probe: template_auto. `template<auto>` and `template<auto...>`
 // accept value, character and boolean arguments, including an empty pack, with
 // no retained case before this one.
 

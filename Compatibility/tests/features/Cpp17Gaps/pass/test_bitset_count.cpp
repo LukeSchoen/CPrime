@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_bitset. set/test/[] work; count() does not.
+// C++17 gap probe: lib_bitset. set/test/[] work; count() does not.
 #include <bitset>
 
 int main() {

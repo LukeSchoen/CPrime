@@ -602,6 +602,65 @@ static void call_lifecycle_constructor_noargs(CType *type, int r, int addr, Sym 
   drop_leaked_call_target(ctor_func);
 }
 
+/* Default-initialization runs the selected no-argument constructor without
+   value-initializing omitted scalar members first.  The result is an
+   evaluation-owned object that the constant evaluator can inspect. */
+static void emit_lifecycle_constructor_selected(CType *type, int r, int addr,
+                                                  int addr_r2, Sym *sym,
+                                                  Sym *ctor_func,
+                                                  TokenString **call_args,
+                                                  int call_arg_count);
+
+static int materialize_default_temporary_mode(CType *type)
+{
+  CType constructing_type = *type;
+  Sym *saved_initialization_object = constant_initialization_object;
+  Sym *ctor_func;
+  ConstexprTemporaryObject *entry = NULL;
+  int size, align, addr, r2;
+  int storage = VT_LOCAL | VT_LVAL;
+  int direct;
+
+  constructing_type.t &= ~(VT_CONSTANT | VT_VOLATILE);
+  ctor_func = resolve_autoctor_func(&constructing_type);
+  if (!ctor_func) return 0;
+
+  materialize_incomplete_template_type(&constructing_type);
+  size = type_size(&constructing_type, &align);
+  if (size < 0)
+    cprime_error("initialization of incomplete temporary type");
+  direct = take_cpp_construction_destination(&constructing_type, &addr, &storage);
+  if (direct) r2 = VT_CONST;
+  else addr = get_temp_local_var(size, align, &r2);
+
+  if (!direct && constexpr_temporary_expression_depth
+      && (CONST_WANTED || integral_constant_expression_wanted
+          || static_initializer_constant_fold)
+      && (!NOEVAL_WANTED || (cpp_unused_body_validation && NOEVAL_WANTED == 1)
+          || NOEVAL_WANTED == constexpr_initializer_probe_noeval)
+      && constexpr_evaluated_object_type(&constructing_type)
+      && (!type_requires_class_destruction(&constructing_type)
+          || type_requires_class_construction(&constructing_type))) {
+    entry = cprime_mallocz(sizeof(*entry));
+    entry->object.type = constructing_type;
+    entry->object.r = storage;
+    entry->object.c = addr;
+    entry->next = constexpr_temporary_objects;
+    constexpr_temporary_objects = entry;
+    constant_initialization_object = &entry->object;
+  }
+
+  emit_lifecycle_constructor_selected(&constructing_type, storage, addr, r2,
+                                      entry ? &entry->object : NULL, ctor_func,
+                                      NULL, 0);
+  vset(&constructing_type, storage, addr);
+  vtop->r2 = r2;
+  if (entry) vtop->sym = &entry->object;
+  if (!direct) cpp_register_class_temporary(vtop);
+  constant_initialization_object = saved_initialization_object;
+  return 1;
+}
+
 static void call_lifecycle_constructor_members(CType *type, int r, int addr)
 {
   Sym *field, *ctor_func;
@@ -1712,7 +1771,34 @@ static int take_cpp_construction_destination(CType *type, int *address,
   *address = cpp_construction_destination->address;
   *storage = cpp_construction_destination->storage;
   cpp_construction_destination->available = 0;
+  if (getenv("CPC_TRACE_DEST")) {
+    int name = get_struct_type_name_tok(type);
+    fprintf(stderr, "[dest-take %s addr=%d probe=%d]\n",
+            name ? get_tok_str(name, NULL) : "-", *address,
+            cpp_template_probe_depth);
+  }
   return 1;
+}
+
+/* A constructor call that cannot use the pending destination is only part of
+   the initializer expression that owns it (`Str s = Path(Str()).Name();`).
+   Its arguments are separate objects, so the destination must not be visible
+   to them: a nested same-type temporary would otherwise claim the storage of
+   the object being initialized, lose its prvalue category, and fail to bind
+   the enclosing call's reference parameter. */
+static CppConstructionDestination *hide_cpp_construction_destination(void)
+{
+  CppConstructionDestination *saved = cpp_construction_destination;
+  if (!saved || !saved->available)
+    return NULL;
+  saved->available = 0;
+  return saved;
+}
+
+static void restore_cpp_construction_destination(CppConstructionDestination *saved)
+{
+  if (saved)
+    saved->available = 1;
 }
 
 static void push_cpp_construction_lvalue(CType *type, int storage, int address,
@@ -1743,6 +1829,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
   int size, align, addr, r2, call_arg_count;
   int direct_destination = 0, direct_address = 0;
   int storage = VT_LOCAL | VT_LVAL;
+  CppConstructionDestination *hidden_destination = NULL;
 
 
   struct_sym = sym_find(type_tok);
@@ -1782,6 +1869,8 @@ static int try_parse_cpp_functional_constructor(int type_tok)
        a nested same-type argument is a separate object. */
     direct_destination = 1;
   }
+  else
+    hidden_destination = hide_cpp_construction_destination();
   next();
   skip_line_markers();
   call_arg_count = count_saved_call_args(call_args, CPC_MAX_CALL_ARGUMENTS);
@@ -1816,6 +1905,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
       next();
     else
       skip(')');
+    restore_cpp_construction_destination(hidden_destination);
     return 1;
   }
   if (call_arg_count == 1)
@@ -1837,6 +1927,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
       if (tok == TOK_EOF) next();
       else skip(')');
       if (!direct_destination) cpp_register_class_temporary(vtop);
+      restore_cpp_construction_destination(hidden_destination);
       return 1;
     }
     if (is_reference_type(&source_type))
@@ -1870,6 +1961,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
       if (tok == TOK_EOF) next();
       else skip(')');
       if (!direct_destination) cpp_register_class_temporary(vtop);
+      restore_cpp_construction_destination(hidden_destination);
       return 1;
     }
   }
@@ -1933,6 +2025,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
     else
       skip(')');
     if (!direct_destination) cpp_register_class_temporary(vtop);
+    restore_cpp_construction_destination(hidden_destination);
     return 1;
   }
 
@@ -1954,6 +2047,7 @@ static int try_parse_cpp_functional_constructor(int type_tok)
     skip(')');
 
   if (!direct_destination) cpp_register_class_temporary(vtop);
+  restore_cpp_construction_destination(hidden_destination);
   return 1;
 }
 
@@ -3302,7 +3396,8 @@ check_constructors:
     if (!s)
       continue;
     use_overload_func_type(s, &o->func_type);
-    if (s->type.ref && s->type.ref->f.func_cpp_explicit)
+    if (s->type.ref && s->type.ref->f.func_cpp_explicit
+        && !cpp_default_argument_conversion)
       continue;
     param_type = s->type.ref ? s->type.ref->next : NULL;
     if (param_type)

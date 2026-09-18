@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: charconv_float. The floating-point overloads truncate at the
+// C++17 gap probe: charconv_float. The floating-point overloads truncate at the
 // decimal point: to_chars(1.5) writes "1" and from_chars("1.5") consumes one
 // character and answers 1.0.
 

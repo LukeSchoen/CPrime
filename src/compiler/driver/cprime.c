@@ -77,8 +77,8 @@ static const char help2[] =
   "  -pthread                      same as -D_REENTRANT and -lpthread\n"
   "  -O0                           no optimization\n"
   "  -O1                           cheap local transforms (the -O default)\n"
-  "  -O2                           -O1 plus a larger inline budget\n"
-  "  -Os                           -O1 with size over speed\n"
+  "  -O2                           top level; -O1 plus bounded value and branch rewrites\n"
+  "  -Os                           size-oriented; -O1 plus bounded short encodings\n"
   "  -Wp,-opt                      same as -opt\n"
   "  -include file                 include 'file' above each input file\n"
   "  -nostdlib                     do not link with standard crt/libs\n"
@@ -492,6 +492,7 @@ help2: fputs(help2, stdout);
     end_time = getclock_ms();
 
   profile_phase_switch(PROFILE_PHASE_WRITE);
+  profile_tu_switch(PROFILE_TU_OBJECT_WRITE);
   if (s->run_test)
     t = 0;
   else if (s->output_type == CPRIME_OUTPUT_PREPROCESS)
@@ -511,7 +512,10 @@ help2: fputs(help2, stdout);
       if (!s->just_deps)
         ret = cprime_output_file(s, s->outfile);
       if (!ret && s->gen_deps)
+      {
+        profile_tu_switch(PROFILE_TU_DEPS_WRITE);
         ret = gen_makedeps(s, s->outfile, s->deps_outfile);
+      }
     }
   }
 
@@ -598,6 +602,7 @@ int main(int argc, char **argv)
 {
   int ret;
 
+  profile_detail_init();
   profile_phases_init();
   if (argc == 2 && argv[1] && argv[1][0] == '@' && argv[1][1])
     ret = cprime_run_batch_file(argv[1] + 1, 0);
@@ -607,6 +612,7 @@ int main(int argc, char **argv)
     ret = cprime_run_batch_file(argv[2], 1);
   else
     ret = cprime_run_job(argc, argv);
+  profile_top_report();
   profile_phases_report();
   return ret;
 }

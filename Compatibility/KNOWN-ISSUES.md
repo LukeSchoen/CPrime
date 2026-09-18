@@ -1,148 +1,419 @@
 # Known CPC issues
 
 Open defects, each with its reduced shape and the work it needs. Completed work
-is code and retained cases; nothing here is a progress log.
+is code and retained cases; nothing here is a progress log, so a floor that is
+closed leaves this file and lives on as its retained case.
 
-Consumers named here are the user's own checkouts outside this repository. Their
-paths are per machine and are deliberately not written down: run the described
-probe from wherever that machine keeps the checkout.
+The defects here were found by compiling consumer projects that live outside
+this repository. Those checkouts are deliberately not named and their paths are
+not written down: reproduce the described shape as a local case in this
+repository, from whatever consumer tree a machine keeps.
 
-## boost/math/special_functions/sign.hpp: parenthesized template declarators
+## Conditional expression whose taken branch is a file-scope const
 
-Closed.  The declaration scan now recognizes `T (f)(args)` before registration
-and rewrites it to the ordinary `T f(args)` token shape, so the declared name
-and the signature helpers no longer key the template on its return type.
-Retained as
-`features/Templates/pass/test_parenthesized_template_definition_then_plain.cpp`;
-the failing and passing evidence is in
-`Compatibility\build\parenthesized-template-*.log`, and the consumer probe
-advanced to the next floor recorded below (`explorer-probe13.log`).
+Closed.  A conditional whose result is an lvalue joins its arms as addresses,
+and the join ran the ordinary value conversion on each arm first.  That
+conversion reads a named integral constant as its value
+(`constexpr_read_local_value`), so a file-scope `const` arm stopped being an
+object: the shared indirection under the join then loaded *through the
+constant* (`size <= limit ? page_size : size` dereferenced 32704) instead of
+through the arm's address.  `expr_cond` now marks each arm whose lvalue the
+join needs (`cpp_conditional_lvalue_arm`) while it applies the common type, and
+the value fold leaves such an arm alone.
 
-## boost/date_time/period_formatter: `std::ostreambuf_iterator`
-
-Closed.  The runtime `<iterator>` header now declares
-`std::ostreambuf_iterator<charT, traits>` with the standard member typedefs,
-the streambuf and stream constructors, `operator=`, `operator*`, `operator++`
-and `failed()`, so `period_formatter.hpp`'s dependent default argument
-resolves.  The definition only needs `<iosfwd>` forward declarations, so
-`<iterator>` does not drag in `<ostream>`.  Retained as
-`features/Includes/pass/test_ostreambuf_iterator_default.cpp`; the compiler was
-republished, and `Compatibility\build\ostreambuf-publish2.log`,
-`ostreambuf-includes-suite2.log`, `ostreambuf-fast2.log` and
-`ostreambuf-regression2.log` record the passing suite, fast tier and gate.
-
-## boost/date_time: `std::locale::facet`
-
-Closed.  `<locale>` now has `locale::facet` with the reference-counted
-`_Incref`/`_Decref` pair and `locale::id`, and `locale(const locale&, Facet*)`
-registers the new facet next to the inherited ones.  Each locale owns a small
-fixed registry that stores the facet's type name beside the pointer, so
-`has_facet`/`use_facet` find the registered object while the name (not a
-per-type static address, which this compiler does not merge across translation
-units) is the key.  `basic_ios` holds a `locale`, and `basic_istream`,
-`basic_ostream` and `basic_iostream` expose `getloc`/`imbue`.
-
-Retained as `features/Includes/pass/test_locale_facet.cpp`; it derives a facet,
-checks that an unrelated facet is absent, registers one with
-`std::locale(base, new facet)`, round-trips `imbue`/`getloc`, copies the locale
-and replaces a same-type facet.  The reduced probes
-`Compatibility\build\locale-probes\p1_facet_base.cpp` and
-`p2_facet_on_stream.cpp` both compile and run.  The fast tier and the
-regression gate were re-run and the compiler republished.
-
-### Constructing a facet with arguments
-
-Closed.  The reported shape was `new T(args...)` rejecting a class whose only
-constructor converts.  `new F(7)` on the facet-like class below, and every
-variant of it (a class with no default constructor, a deleted default
-constructor, a converting constructor reached through a conversion, an
-in-class or out-of-line definition, or a class-template specialization), now
-compiles and runs, so the default-constructor demand no longer reproduces.
+The defect was wider than the crash: the same shape silently answered with the
+wrong object when the conditional was bound to a reference
+(`&pick(true) != &page_size`,
+`Compatibility\build\cond-ternary\cases\reference_identity.cpp`).
 
 ```cpp
-struct F : std::locale::facet {
-  F() : std::locale::facet(0) {}
-  explicit F(int v) : std::locale::facet(0), m(v) {}
-  int m;
-};
-void f() { new F(7); }
+/* cpc.exe -o tx3.exe tx3.cpp  ->  runtime error: invalid memory access */
+#include <cstdio>
+#include <cstddef>
+static const size_t page_size = 32704;
+static size_t f(size_t size) { return size <= 8000 ? page_size : size; }
+int main() { printf("%llu\n", (unsigned long long)f(64)); return 0; }
 ```
 
-The defect that did reproduce in that area was the qualified spelling: the
-`::` after `new` was read as the qualifier of a namespace named `new`, so
-`new ::T(7)` became a call of an invented `new::T` function and the
-constructor arguments were never seen.  The `new` keyword is now recognised
-before the qualified-name path in the primary parser.  Retained as
-`features/Expressions/pass/test_new_global_scope_qualified_type.cpp`.
+Equivalent spellings that work, and did before: an `if` statement (`tx2.cpp`),
+a macro constant (`tu2.cpp`), a literal arm, or a non-`const` global (`tw1.cpp`,
+`tw2.cpp`).  The reduction is `Compatibility\build\top2\src\tx3.cpp`.
 
-## boost::type_traits: `is_base_and_derived_impl::type`
+Consumer impact: a consumer's server entry point crashed right after start,
+because pugixml's `allocate_memory_oob` uses exactly this shape
+(`size <= threshold ? xml_memory_page_size : size`); the first node allocation
+inside an XML parse faulted.  The consumer's temporary workaround for that call
+site (the ternary written as an `if`) is reverted: its `cpc.exe` copy was
+refreshed to this tree's published compiler (SHA-256 hashes match), the library
+was rebuilt, and the rebuilt program now loads its content and runs with an
+empty stderr (`Compatibility\build\cond-ternary\verify-revert.log`).
 
-Open, and the current consumer floor.  With the facet surface published the
-Explorer++ probe (`Compatibility\build\explorer-probe15.log`) advances past
-`gregorian_io.hpp` and stops inside
-`boost/date_time/gregorian/greg_weekday.hpp:215` with a very long
-`nested template type member '...is_base_and_derived_select...::type' must be a
-typedef` (`boost/type_traits/is_base_and_derived.hpp:205` and following).  The
-mangled name repeats `is_base_of_imp<std::exception, ...>` and
-`is_base_and_derived_impl<...>` several times, so it is the dependent
-`typedef typename ...::type` lookup through
-`boost::detail::is_base_and_derived_select`, not the earlier derived-to-`void*`
-ranking fix.
+Evidence: `Compatibility\build\cond-ternary\`.  `evidence-before.log` and
+`evidence-after.log` are one eight-case matrix run against the retained pre-fix
+compiler (`cpc-before.exe`, the published `cpc.exe` of cycle 21, SHA-256
+`FF8146DABCAAC728B2F436CDF5D42473AD8FA590311EE622C9F499172E1AA7F5`) and the
+published one (`B5212CB89826790E51C80EFC992A722AE2508FC2F147E72EDDF714942D6C8A53`):
+the `const`, `constexpr` and external-`const` arms crash with exit `-1073741819`
+and the reference case answers `named=0` before the fix, while the `if`
+statement, literal, non-`const` global, assignment and control cases are green
+in both.  The `-S` listing the first report read is itself defective (next
+entry), so the object code was read back with `...\pe_code.py`; the pugixml
+shape `Compatibility\build\top2\src\oob_ternary.cpp` now prints
+`wanted=32704`.  Retained as
+`features/Expressions/pass/test_conditional_lvalue_constant_arm.cpp`; the
+published checks were features/Expressions 231, features/Classes 248,
+features/Constructors 214, features/Templates 971, features/StdConcurrency 15,
+features/Includes 76, fast 29 and `-Regression` 66.
 
-Reduced so far: `Compatibility\build\date-time-probes\svp2.cpp` includes
-`boost/date_time/gregorian/gregorian.hpp` and names
-`special_values_parser<date, char>` and `<date, wchar_t>`; the streaming
-headers are not needed to reach the floor, but the surrounding include order
-is, which is why a smaller first reduction landed elsewhere.
+## `-S` drops instructions whose operand carries a symbol relocation
 
-Work required:
+Open, pre-existing, and found while reading the conditional-expression code.
+`cpc -S` prints the backend's instruction trace (`s1->asm_text`, copied out by
+`cprime_output_asm`), not the emitted section, and the emission path for a
+PC-relative symbol reference never appends its mnemonic to that trace, so the
+instruction vanishes from the listing together with its opcode bytes.
 
-- Reduce the `is_base_and_derived_select` chain to a local case.
-- Make the replayed class-template member typedef resolve through the
-  `typename ...::type` chain.
-- Retain the case in `features/Templates` and re-run the consumer probe.
+```c
+int x = 5;
+int main(void) { return x; }   /* runs to exit 5 */
+```
 
-## clCRC.cpp: a leading `::` in a replayed member function template
+```
+$ cpc.exe -S -o g.s g.c   main:  push rbp, mov rsp->rbp, sub rsp, leave, ret
+$ pe_code.py g.exe        main:  push rbp, mov rsp->rbp, sub rsp,
+                                 mov eax, [rip + 0x1fef], leave, ret
+```
 
-Closed.  An out-of-class member function template whose declaration and
-definition spell a parameter type with a leading `::` (`::G`) was replayed
-without its declarator, so the redefinition reported incompatible types
-(`... versus 'inline unsigned long long'`).
+The observation is `Compatibility\build\cond-ternary\findings.log`, the
+reductions are `...\cases\global_read.c` (the load is missing) and
+`...\cases\local_read.c` (a local keeps its load), and `...\pe_code.py` reads
+the object bytes.  This is why the first conditional-expression report read as
+loads of locals that were never stored.
 
-`token_can_start_parameter_declaration` classified `(::type name)` as a direct
-initializer expression, because `:` cannot begin a parameter declaration for
-it.  The classifier now looks past a leading `::`: when the qualified name
-that follows can itself start a parameter declaration the declaration reading
-is kept, and a plain object name still reads as an initializer.  That single
-misclassification was the whole family: a free function template, an in-class
-member template, a class-template member, and a plain function definition with
-a `::`-spelled parameter all failed before and compile and run now.  Retained
-as
-`features/Templates/pass/test_leading_global_scope_parameter_in_member_template.cpp`.
+Work: emit the relocating instructions into the trace as well, or print the
+section bytes through a disassembler, retain one minimal case in
+`features/Expressions`, and run the affected suite, `-All -Tier fast`,
+`-Regression` and `src\scripts\build.exe`.
 
-## faceDetectCNN.cpp: SSE and AVX vector types
+## A diagnostic raised while replaying another file's tokens
 
-Closed.  CPrime's `immintrin.h` was a stub, so `__m256` was undeclared and
-`faceDetectCNN.cpp`, which defines `_ENABLE_AVX2` and includes the umbrella
-header, could not compile at all.
+Open, pre-existing, and found while closing the 18 September priorities.  The
+compiler prints the file being compiled with whatever line number the innermost
+saved-token replay last set.  When that replay carries tokens from another file
+the pair disagrees: the pre-fix `std::thread` failure (see its closed entry
+below) reported line 17 of a three-line translation unit, and line 17 belonged
+to the runtime `<thread>` header; inside a large translation unit that looks
+like an unrelated line of the file being compiled.
 
-The runtime `<immintrin.h>` now defines `__m64`, `__m128`/`__m128d`/`__m128i`,
-`__m256`/`__m256d`/`__m256i` and `__m512`/`__m512d`/`__m512i` as GNU vector
-extensions, plus the SSE/AVX/AVX-512 float kernels the CNN kernels use
-(load/store, setzero/set1/set/setr, add/sub/mul/div, max/min, bitwise forms,
-comparisons, movemask, horizontal add, unpack/shuffle, the scalar `ss` forms,
-`_mm512_reduce_add_ps`), the 128/256-bit integer core, and the reinterpreting
-casts.  Comparison intrinsics return the all-ones mask: the compiler's element
-comparison yields `-1.0f`, so the sign bit is broadcast over each lane.  Thin
-`xmmintrin.h`/`emmintrin.h`/`pmmintrin.h`/`tmmintrin.h`/`smmintrin.h`/
-`nmmintrin.h`/`avxintrin.h`/`avx2intrin.h` wrappers include the umbrella
-header.  With the published runtime, `faceDetectCNN.cpp` compiles (its only
-remaining diagnostic is an unrelated `std::stable_sort` declaration warning).
-Retained as
-`features/Intrinsics/pass/test_sse_avx_intrinsics.cpp`, which checks every
-intrinsic added against scalar arithmetic.
+Reduction: `Compatibility\build\top2\cases\th1_voidptr.cpp` recorded the shape
+before the runtime repair, and `Compatibility\build\top2\cases\diag2.cpp` with
+`diag_h.h` still replays a header body today.  A repair needs a per-token-string
+origin file: `begin_macro`/`end_macro` keep only line numbers, while `file`
+always names the caller.
 
-## clProcessList.cpp: psapi.h
+## Member-pointer types nested in a function type used as a class template argument
+
+Open, pre-existing, and recorded here because the 18 September probe matrix
+covered member-pointer parameters.  A member-pointer or
+pointer-to-member-function type nested inside a function type that is itself a
+class template argument still stops with `native linkage type nesting too deep`
+or `static data member name`.
+
+Reductions: `Compatibility\build\top2\cases\mp4.cpp`
+(`std::function<bool(int methods::*, float)>` in a plain struct, no templates)
+and `Compatibility\build\top2\cases\mp3.cpp` (the same shape with
+`bool (methods::*)(int &, float)`).  The bare alias spellings of the same
+parameter types compile, as do `std::function` function types whose parameters
+are ints or pointers.
+
+## A class template's own member typedef used inside another member alias
+
+Open, pre-existing.  When a class template declares a typedef and uses it inside
+another member alias of the same class, the alias replay reports
+`using alias type expected`; a class-scope nested type in the same position
+behaves the same way, while a namespace-scope typedef in the same position
+works.
+
+Reductions: `Compatibility\build\top2\cases\k04_member_typedef.cpp`
+(`using H = std::function<bool(R, float)>` with `typedef int &R;` declared in
+the same class template) and
+`Compatibility\build\top2\cases\w13_qualified_member.cpp` (a nested typedef of
+another class as the first parameter).
+
+## A nested same-type temporary claimed the initializer's construction destination
+
+Closed.  A functional-constructor call that cannot use the pending construction
+destination (`Path(Str())` where the object being initialized is a `Str`) left
+that destination visible to its own arguments.  A nested same-type temporary
+then claimed the destination's storage, so it was built as a named object
+instead of a prvalue, and the enclosing call's reference parameter rejected it
+with `rvalue reference cannot bind to an lvalue`.  That is the shape a nested
+same-type temporary in a functional-constructor call hits, and it stopped a
+consumer's server build once the 18 September priorities were published.
+
+`try_parse_cpp_functional_constructor` now hides the pending destination while
+it evaluates a call that cannot use it and restores the destination afterwards,
+and a substitution probe hands the destination back with the availability it
+was given instead of leaving it consumed.
+
+Evidence: `Compatibility\build\top2\cases\` (`rva.cpp` and `rvl.cpp` are the
+reductions; `cp1.cpp` and `cp3.cpp` compile the same expression against the
+consumer's headers).  The pre-fix compiler reports the error and the published
+one compiles all of them.  Retained as
+`features/Constructors/pass/test_nested_temporary_argument_keeps_destination.cpp`.
+
+The consumer needed one source fix as well: a setter took `v2I &` while the
+call passes a prvalue, so the parameter is `const v2I &` now.  Both the pre-fix
+and the published compiler correctly reject the original call, and with the fix
+the consumer's full build completes.
+
+## Pack expansion into a function type: the parameter list starts at its first entry
+
+Closed.  A pack expansion inside a function type is a parameter list, so its
+expanded parameters may begin with any type; the "leading reference" in the
+report was the visible edge of two frontend defects, not the rule.  A leading
+pointer, `const`-qualified type or class-type argument failed the same way, and
+so did the bare `using Handler = bool(Args...);` spelling.
+
+- `template_paren_starts_parameter_list`, the lookahead that keeps
+  `std::function<bool(Args...)>` a function type instead of a functional cast,
+  accepted only builtin type keywords.  A pack element that is a reference,
+  pointer, `const`-qualified or class type arrives as a generated type name, so
+  `bool(first, rest)` read as `bool(expression)` and closed at the first
+  comma.  The helper now accepts every declaration-specifier start
+  (`token_can_start_parameter_declaration`) and resolves qualified names
+  (`ns::I`, `::I`) while still leaving `bool(std::trait<T>::value)` and
+  `bool(flag)` expressions.
+- the `using`-alias replay of a class template spelled the alias as
+  `typedef <type-id> Name;`, which is not a typedef of a function, array or
+  pointer-to-function type.  The declared name now lands in the declarator's
+  own name slot (`typedef bool Name(int);`) through
+  `template_abstract_declarator_name_index`, so `using F = bool(int);`,
+  `using A = int[4];` and `using P = bool (*)(int, int);` in a class template
+  all declare what they say.
+
+Evidence: `Compatibility\build\top2\evidence-after.log` (the whole probe
+matrix, the consumer-shaped repro and the `std::thread` matrix against the
+published compiler), with the reductions and probe cases in
+`Compatibility\build\top2\cases\`.  Retained as
+`features/Templates/pass/test_function_type_pack_expansion_parameter_list.cpp`
+and
+`features/Templates/pass/test_class_template_function_type_alias_declarator.cpp`.
+A consumer header's workaround (the function-typedef spelling) can revert: an
+event type whose expansion starts with a reference now compiles, and the
+typedef spelling keeps working.
+
+## std::thread with a bound pointer argument
+
+Closed.  The argument storage of `src/include/runtime/thread` passed each bound
+argument on as a forwarding reference (`Bound&&... bound`) before handing it to
+`std::invoke`.  When the stored member's type was a substituted pointer type
+(`void *`, `int *`) the frontend bound that forwarding reference to the
+enclosing class instance instead of the pointer, so the `std::invoke` call
+inside `__cpc_thread_arguments<>::invoke` found no candidate and reported
+`no matching function template '__cpc_ns_std_invoke'`.  The base case now takes
+its bound arguments by value and moves them into `std::invoke`, which is the
+same observable behaviour (`std::thread` passes its stored copies as rvalues)
+without the shape that misdeduced.  Both the reported shape and the
+pointer-to-member-function shape go through this one path.
+
+Evidence: `Compatibility\build\top2\evidence-after.log` and the
+`th1..th8` matrix in `Compatibility\build\top2\cases\`: with the published
+compiler before the fix `std::thread t(f, (void*)0)`,
+`std::thread t(g, (int*)0)`, `std::thread t(lambda, p)` and
+`std::thread t(f, 1, (void*)0)` were red while `int` arguments, lambdas without
+bound arguments and `std::invoke` written directly were green; all eight now
+pass.  Retained as
+`features/StdConcurrency/pass/test_thread_function_pointer_argument.cpp`,
+beside the pre-existing
+`features/StdConcurrency/pass/test_thread_deferred_member_address.cpp`, which
+this repair also turns green (it was the retained pointer-to-member case).
+Consumer: a consumer's server code that starts threads with a bound pointer
+argument now compiles unchanged.  The diagnostic and coverage limits this probe
+found are the open entries at the top of this file.
+
+## boost/math/special_functions/sign.hpp: parenthesized template declarators
+## Pack expansion into a function type whose first parameter is a reference
+
+Open, found while compiling a consumer tree. A pack expansion is accepted in a
+function type only while no expanded parameter is a leading reference:
+
+```cpp
+#include <functional>
+template<typename... Args>
+class Event { public: using Handler = std::function<bool(Args...)>; Handler h; };
+Event<int&, float> e;
+
+int main() { return 0; }
+```
+
+```
+$ cpc.exe -c event_pack.cpp -o ...
+.../event_pack.cpp:3: error: ')' expected (got ',')
+```
+
+The diagnostic is attached to the alias's own line. `Event<int, float>`,
+`Event<int, float&>` and `Event<int, float, double>` all compile, and a bare
+`using Handler = bool(Args...);` fails the same way, so the defect is the
+frontend's scan of a pack expansion into a function type's parameter list, not
+the runtime header. The equivalent function-typedef form is accepted
+(`typedef bool Signature(Args...); using Handler = std::function<Signature>;`),
+which is what the consumer now uses; the alias form and the direct form are
+what has to start working.
+
+Consumer: an events header, where a class template declares a member of the
+shape `Event<Observer &, T &&>` and explicit specializations at the end of the
+header instantiate it, so any translation unit that includes the header fails.
+
+Work: reproduce with root `cpc.exe`, retain a minimal case in
+`features/Templates/pass/` (a reference-first pack inside a function type),
+repair the shared pack-expansion/function-type scan, run the affected suite,
+`-All -Tier fast` and `-Regression`, publish with `src\scripts\build.exe`, and
+tell the consumer side that the header workaround can revert.
+
+## std::thread with a function pointer taking a pointer
+
+Open, found while compiling a consumer tree, and reached through the same
+runtime chain as the pointer-to-member case below.
+
+```cpp
+#include <thread>
+void f(void *p) {}
+int main(){ std::thread t(f, (void*)0); t.join(); return 0; }
+```
+
+```
+error: no matching function template '__cpc_ns_std_invoke'
+```
+
+`std::invoke(f, (void*)0)` written directly matches, a lambda target
+(`std::thread t([]{}, p)` with `void *p`) compiles, and `std::thread t(f, 1)`
+with an `int` parameter compiles, while `void *` and `int *` parameters both
+fail. The diagnostic's line number is stale (it named line 17 of a three-line
+file), so in a large translation unit it looks like an unrelated include line.
+
+Consumer: a consumer's server code that starts threads with a bound pointer
+argument, in several translation units.
+
+Work: reduce it next to the pointer-to-member case (both reach
+`__cpc_thread_arguments<>::invoke` -> `std::invoke` in
+`src/include/runtime/thread`), repair that path once for both shapes, retain one
+minimal case per shape, run the affected suite, `-All -Tier fast` and
+`-Regression`, then publish with `src\scripts\build.exe`.
+
+## boost/date_time/gregorian/gregorian_io.hpp: repeated Entry class definition
+
+Open, and the current consumer floor. The current probe now reaches
+`Compatibility\build\consumer-probe46.log` and stops in
+`boost/date_time/gregorian/gregorian_io.hpp:220` with `struct/union/enum
+'__cpc_ns_std_multimap__char____cpc_ns_boost_date_time_string_parse_tree__char____cpc_ns_std_less__char____cpc_ns_std_allocator____cpc_ns_std_pair____cpc_template_type_const_char____cpc_ns_boost_date_time_string_parse_tree__char_Entry'`
+already defined.
+
+Work: reduce it to a standalone case under `Compatibility\build`, repair the
+shared template/member-class mechanism, retain one minimal case, then run the
+affected suite, `-All -Tier fast`, `-Regression` and `src\scripts\build.exe`
+before probing the consumer again.
+
+## std::thread with a pointer-to-member function is rejected
+
+Open, pre-existing, and outside the fast list and the gate -- the same standing
+the two `<charconv>` `std::errc` probes have. The retained case
+`features/StdConcurrency/pass/test_thread_deferred_member_address.cpp` is red in
+the merged tree, and the same failure reproduces with the current tree's
+compiler changes reverted, so it came in with an earlier merge: the base copy's
+own `cpc.exe` (`C:\Luke\Src\PRIME\CPrime`, 17/09 21:45) still compiles the case,
+and the case file is byte-identical
+(sha256 `E39B856397B392C23457E936A91B43321A11791CFAF2535759666B6AE86FA247`).
+
+The reduction is `Compatibility\build\eval-if-floor\invoke\v1_thread_member_pointer.cpp`:
+
+```cpp
+struct Worker { void task(); };
+void Worker::task() {}
+int main()
+{
+  Worker w;
+  std::thread t(&Worker::task, &w);
+  t.join();
+  return 0;
+}
+```
+
+```
+$ cpc.exe -c Compatibility\build\eval-if-floor\invoke\v1_thread_member_pointer.cpp -o ...\v1.obj
+Compatibility/build/eval-if-floor/invoke/v1_thread_member_pointer.cpp:17: error: no matching function template '__cpc_ns_std_invoke'
+```
+
+`std::invoke(&Worker::task, &w)` written directly matched, so the gap was in the
+runtime's `std::thread` constructor path (`src/include/runtime/thread:16-26`,
+`__cpc_thread_arguments<>::invoke` -> `std::invoke` with a `std::move`d
+argument), not in `std::invoke` itself.  The four-probe matrix and the exact
+commands are in `Compatibility\build\eval-if-floor\invoke\invoke-floor.log`, and
+the repair's own evidence is `Compatibility\build\top2\evidence-after.log`.
+pointer-to-member), not in `std::invoke` itself. The four-probe matrix and the
+exact commands are in `Compatibility\build\eval-if-floor\invoke\invoke-floor.log`.
+
+## A parenthesized initializer from a functional cast over `new T()` / `new T`
+
+Open, found while reducing the `foreign_ptr.hpp` floor. `W w(W(new int()));`
+is an object definition: the parenthesized content cannot be a parameter
+declaration, because `new` cannot be a declarator-id, so the declaration
+heuristic has to fall back to the initializer. It instead takes `new` for the
+parameter name and reports `')' expected (got 'int')`
+(`Compatibility\build\foreign-ptr\declarator_functional_cast_new.cpp:13`).
+The same shape with a non-empty new-initializer (`W w(W(new int(3)));`,
+`Compatibility\build\foreign-ptr\q1.cpp`) is accepted, so the two paths
+disagree. Both results are in
+`Compatibility\build\foreign-ptr\discovered-gaps.log`.
+
+## An assignment operator reached through a conversion from a same-class temporary
+
+Open, found while reducing the `foreign_ptr.hpp` floor. A class that declares
+a copy assignment operator which cannot bind a temporary (`A& operator=(A&)`)
+and another assignment operator whose parameter needs a user-defined
+conversion (`A& operator=(Ref)`) has to convert the temporary for
+`a = A();`. Overload resolution drops the converted candidate because the
+operand's class matches the receiver, and reports `no matching user-declared
+copy assignment operator`. `std::auto_ptr`'s `operator=(auto_ptr_ref<T>)` is
+the standard-library instance of the shape. Reproducer:
+`Compatibility\build\foreign-ptr\assignment_from_converted_rvalue.cpp`; the
+exact result is `Compatibility\build\foreign-ptr\discovered-gaps.log`.
+
+## boost::mp11 member alias templates
+
+Open, but not the current consumer stop. A member alias template declared
+inside a class template is not registered -- `boost::mp11::mp_quote<P>::fn`
+reports `nested template type member '...::fn' must be a typedef`. Reductions:
+`Compatibility\build\mp11-floor\mp_quote_probe.cpp` and `member_alias.cpp`.
+A second shape fails even with that lookup present: when several
+specializations of one class template each declare the alias, the name is
+registered once per specialization and a later one rebinds the body
+(`ns_alias_tt3.cpp`, `tmpl_tmpl_alias3.cpp`). The member alias needs to be
+registered per class-template specialization, keyed by the instance token,
+before the consumer can proceed through the remaining Boost.Parameter/MPL
+headers.
+
+## boost::date_time: `date` through its base-class initializer
+
+Open. `boost::gregorian::date` alone reports `new requires a viable default
+constructor for '...date_time::date<...gregorian_date...>::type'` when a `date`
+is constructed; the diagnostic is misleading, since
+`boost::gregorian::date::duration_type` alone constructs. The `date` class
+template instantiated through `class date : public
+date_time::date<date, gregorian_calendar, date_duration>` does not build, and
+its constructor is the one whose base initializer names `date_time::date<...>`
+in the normal template-id spelling.
+
+Work: reduce it to a local case, then make the replayed base-class initializer
+resolve the class-template instantiation to the base subobject.
+
+A base-initializer name that is a class-scope typedef (`typedef Inner base_type;
+... : base_type(c)`) is already closed for the direct case: the class alias
+tables are consulted, so the typedef-named base initializer attaches to the
+base subobject. It needs no new retained case; its consumer spelling is still
+blocked behind this floor.
+
+## A process-list consumer: psapi.h
 
 `psapi.h` is absent from `third-party/win32-sdk/include`; the installed Windows
 SDK ships `um/Psapi.h`.
@@ -152,178 +423,16 @@ Work required:
 - Choose the packaging shape for the missing SDK header and add it.
 - Compile and run the uses the project makes of the process API.
 
-## RTMPose / Kpose kernels (Kinect tree, read only)
+## Recorded leads: inference kernels (a read-only consumer tree)
 
 Convolutions dominate inference at roughly 85% of the time, and a hand-written
-SSE GEMM measured about 5x faster than the C loop in isolation.  Both blocking
-defects are closed below: the atomic work counter returns its result, and the
-inline-SSE kernels build, verify and stay the fast path (`KPOSE_GEMM=sse` is
-175.8 ms against 326.3 ms for the scalar kernel on the verification model).
-`KPOSE_THREADS=1` forces single-threaded execution for A/B measurements. The
-external reproducer and notes are in the Kinect tree's `README.md`; fixtures and
-models are regenerated with `python tools\vendor_rtmpose.py --all`.
-
-### InterlockedIncrement ignores its result
-
-Closed.  The vendored `winnt.h` spelled both interlocked increments as an
-inline-asm template that inferred the new value from the condition flags of
-the `lock addl`/`subl`.  The template also names the operation's address
-operand directly, and the inline-asm register allocator can give a following
-flag output the same register, so the caller read a clobbered value: the
-counter advanced while the result never did.
-
-`_InterlockedIncrement` and `_InterlockedDecrement` are now runtime-library
-helpers (`src/runtime/windows/winintrin.S`) built on `lock xaddl`, exactly
-like the existing `_InterlockedExchangeAdd`, and `cprimedefs.h` marks the
-runtime as owning them so `winnt.h` does not emit its own inline bodies.
-Retained as `features/Abi/pass/test_msvc_interlocked_counter.cpp`, which
-compares the returned value with the value left in memory across increment,
-decrement and a mixed sequence.
-
-### Inline SSE asm corrupts surrounding float code
-
-Not reproducible with the published compiler; the reported shape is now
-retained as a passing case.  The reduction is
-`features/GnuExtensions/pass/test_inline_sse_asm_with_scalar_tail.cpp`: the
-vector loop runs `movups`/`mulps`/`addps` on `xmm0`-`xmm2` with a 4-float
-stride, and the leftover columns run scalar float arithmetic afterwards.  It
-produces the scalar reference for `N=24`, `N=25` and `N=28`, and the
-`N=25`-only failure does not appear.
-
-The three behaviours the report rested on were checked separately and all hold
-now:
-
-- `movups` accepts an unaligned operand: a load/store through pointers at
-  offsets 1, 2 and 3 floats all complete, so the `N=25`/`N=24` split (a row
-  stride of 100 bytes against 96 and 112) is not an alignment fault.
-- Floats live across the asm: ten locals read after an asm block that loads
-  `xmm0`-`xmm7` keep their values, at `-O0` and `-O2`.
-- The consumer's own kernels: `src\main.c` in the Kinect tree builds with root
-  `cpc.exe`, and `kpose.exe --smoke` (9 passed) and `--verify` report
-  `max abs error 2.289e-05` with `KPOSE_GEMM=sse` in 175.8 ms against
-  326.3 ms for the scalar kernel, i.e. the inline-asm path is both correct and
-  still the fast one.
-
-## The standard `std::atomic_*` typedefs crash the compiler
-
-Closed.  The standard typedefs are now in `src/include/runtime/atomic`.  The
-crash was a double free while parsing conversion operators:
-`make_type_from_saved_type_tokens` consumes its token string, but three
-callers released it again.  The pool corruption became fatal once the
-`<atomic>` typedef set enlarged the token stream.  Retained as
-`features/Atomics/pass/test_atomic_typedefs.cpp`.
-
-## Explorer++ probe: `std::string(begin, end)` from two pointers
-
-The probe is the Explorer++ checkout, a manifest build of 232 translation units
-driven by `src\scripts\project.exe`; entry point
-`build_cpc.cmd`, reduced cases and their probe in the consumer's
-`Scripts\cpc\gaps` and `Scripts\cpc\Test-CpcGaps.ps1`.  Compile it with root
-`cpc.exe`, reduce each failure to a minimal local case, and never edit the
-consumer.  All five reduced cases in `Scripts\cpc\gaps` compile now.
-
-Closed.  This section is the record of the floor it opened and of the floors
-behind it: the runtime `basic_string` gained the standard iterator-pair
-constructor, the consumer moved on to
-`boost/date_time/gregorian/greg_weekday.hpp`, and every floor it reported
-afterwards is closed below.  The retained case is
-`features/Cpp17Gaps/pass/test_string_iterator_pair_constructor.cpp`.
-
-### boost/date_time: an inherited member typedef of an instance
-
-Closed.  `class greg_weekday : public greg_weekday_rep` used `value_type`
-unqualified in its constructor declarator, and `value_type` came from
-`constrained_value<policy>`, a class-template instance.  The instance
-registers a nested typedef under the alias token its replayed body declares
-(`traits__int__value_type`), which an unqualified lookup inside a class
-derived from the instance never consulted.  Retained as
-`features/Classes/pass/test_inherited_typedef_from_template_base.cpp`.
-
-### boost/exception: derived-to-base versus `void*`
-
-Closed.  `copy_boost_exception(exception *, exception const *)` competed with
-`copy_boost_exception(void *, void const *)` for a `clone_impl<T> *`, and the
-pointer tie-break ranked both at the same rank.  [over.ics.rank]/4.4 and
-/4.5.1 are now implemented for pointer conversions.  Retained as
-`features/OperatorOverloads/pass/test_pointer_conversion_base_over_void.cpp`.
-
-### boost/operators: qualified lookup through a using-directive
-
-Closed.  `boost::less_than_comparable1` is declared in
-`boost::operators_impl` and imported into namespace `boost` with
-`using namespace operators_impl;`; qualified lookup of a type name never
-expanded the qualifier's using-directives, so `boost::date_time`'s base-clause
-and template arguments could not be parsed.  Retained as
-`features/Namespaces/pass/test_qualified_lookup_through_using_directive.cpp`.
-
-### boost::date_time's `bad_weekday`: exception messages
-
-Closed.  `std::out_of_range(std::string(...))` had no viable constructor and
-the runtime exception classes only took a `const char *` and stored it
-without owning it.  `<stdexcept>` now has the standard class set with both
-message constructors and an owned copy.  Retained as
-`features/Exceptions/pass/test_standard_exception_message_from_string.cpp`.
-
-### boost::predef: the missing `ntverp.h`
-
-Closed.  `boost/predef/platform/windows_uwp.h` includes `<ntverp.h>`
-unconditionally on Windows and the vendored SDK does not ship it.
-`src/include/runtime/ntverp.h` now reports the pre-UWP Windows 7 SDK build the
-vendored headers match, so UWP detection stays off.  Retained as
-`features/Includes/pass/test_include_ntverp.cpp`.
-
-### boost::numeric::conversion: `std::float_round_style`
-
-Closed.  `integral_c<std::float_round_style, std::round_toward_zero>` needs
-the floating-point style enumerations of [limits.numeric], which `<limits>`
-did not declare.  The enumerations and the `round_style` member were added.
-Retained as `features/Includes/pass/test_limits_float_round_style.cpp`.
-
-### boost::container's `ordered_range`: a constant class initializer
-
-Closed.  `static const ordered_range_t ordered_range = ordered_range_t();` is a
-constant initializer: the class has no user-provided constructor, so `T()` is a
-constant expression, while `can_lower_global_dynamic_init` refuses to lower a
-`const` class to a dynamic initializer.  The static initializer path now owns a
-class-typed value: a value-initialized trivially constructible temporary is
-recorded as zero bytes for its scalar subobjects during a constant evaluation,
-and `init_putv` writes the recorded bytes as static data.  Retained as
-`features/Cpp17Gaps/pass/test_const_class_functional_initializer.cpp`.
-
-### Explorer++ probe: a replayed constructor body under a static initializer
-
-Closed.  The probe log
-`Compatibility\build\explorer-probe9.log` reported
-`boost/container/container_fwd.hpp:46: error: constexpr increment requires an
-evaluation-owned object`.  That header was only where the parser happened to
-be: while folding a namespace-scope static initializer, resolving the
-initializer's constructor call flushed the queued member bodies, and each
-replayed body inherited the fold state, so the ordinary `++` in
-`std::basic_string`'s iterator constructor was read as constant evaluation.
-`compile_pending_member_funcs` now suspends the static-initializer fold and the
-evaluation-owned temporary depth while it compiles a member body for emission.
-The local reduction is
-`Compatibility\build\pending-flush-probes\h6_unused_make_box.cpp` (27 lines);
-retained as
-`features/Cpp17Gaps/pass/test_static_initializer_template_constructor_replay.cpp`.
-
-### The missing `<cfloat>` runtime header
-
-Closed.  With the replayed-body floor closed, the consumer probe moved to
-`boost/math/tools/config.hpp:21: error: include file 'cfloat' not found`
-(`Compatibility\build\explorer-stdafx.candidate.log`).  The runtime shipped
-`<climits>`, `<cmath>` and `<float.h>` but no `<cfloat>` wrapper.
-`src/include/runtime/cfloat` now includes `<float.h>`; retained as
-`features/Includes/pass/test_include_cfloat.cpp`.
-
-### boost::mpl's `vector0<>` argument list
-
-Closed.  The consumer probe stopped in
-`boost/mpl/vector/aux_/vector0.hpp:45`
-(`Compatibility\build\explorer-probe11.log`).  Inside `vector0<na>`,
-unqualified `vector0` resolved to its injected specialization token, but the
-template-argument parser only looked for a member template under that token
-and returned before consuming the following `<`.  It now uses the owning
-class-template lookup for an injected class-template name, so `vector0<>`
-closes its empty argument list and instantiates `vector0<na>`.  Retained as
-`features/Templates/pass/test_injected_class_template_empty_arguments.cpp`.
+SSE GEMM measured about 5x faster than the C loop in isolation
+(`KPOSE_GEMM=sse` 175.8 ms against 326.3 ms for the scalar kernel on the
+verification model; single-threaded A/B is forced by an environment switch).
+Both blocking defects are closed and retained: the atomic work counter returns
+its result
+(`features/Abi/pass/test_msvc_interlocked_counter.cpp`) and the inline-SSE
+kernels build and verify
+(`features/GnuExtensions/pass/test_inline_sse_asm_with_scalar_tail.cpp`). The
+external reproducer and its notes live in that checkout, which is read only and
+is not named here.

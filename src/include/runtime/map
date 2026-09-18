@@ -6,6 +6,7 @@
 #include <iterator>
 #include <initializer_list>
 #include <stdexcept>
+#include <vector>
 namespace std {
 template<class Key,class T,class Compare=less<Key>,class Alloc=allocator<pair<const Key,T>>>
 class map {
@@ -202,6 +203,118 @@ public:
   iterator erase(const_iterator p){Node* next=p.node_->next;erase(p->first);return iterator(next,this);}
   iterator erase(iterator p){Node* next=p.node_->next;erase(p->first);return iterator(next,this);}
   void clear()noexcept{Node* p=first_;while(p){Node* next=p->next;p->~Node();allocator_.deallocate(p,1);p=next;}root_=first_=last_=0;size_=0;}
+};
+/* multimap keeps every equivalent key in a sorted vector ordered by
+   (key, insertion sequence), so iteration walks the vector directly and equal
+   keys stay in insertion order.  The stored pair keeps a non-const key so the
+   vector can shift elements; the public value_type and the iterators expose
+   the key as const through a small proxy. */
+template<class Key,class T,class Compare=less<Key>,class Alloc=allocator<pair<const Key,T> > >
+class multimap {
+public:
+  typedef Key key_type;typedef T mapped_type;typedef pair<const Key,T> value_type;typedef size_t size_type;
+private:
+  typedef pair<Key,T> stored_type;
+  struct Entry { size_t seq;stored_type value;Entry(size_t s,const Key& k,const T& v):seq(s),value(k,v){} };
+  typedef vector<Entry> entry_vector;
+  entry_vector entries_;size_t next_seq_;Compare compare_;
+  bool key_less(const key_type& a,const key_type& b)const{return compare_(a,b);}
+  size_t lower_index(const key_type& key)const{
+    size_t lo=0,hi=entries_.size();
+    while(lo<hi){size_t mid=lo+(hi-lo)/2;if(key_less(entries_[mid].value.first,key))lo=mid+1;else hi=mid;}
+    return lo;
+  }
+  size_t upper_index(const key_type& key)const{
+    size_t lo=0,hi=entries_.size();
+    while(lo<hi){size_t mid=lo+(hi-lo)/2;if(key_less(key,entries_[mid].value.first))hi=mid;else lo=mid+1;}
+    return lo;
+  }
+  size_t find_index(const key_type& key)const{
+    size_t i=lower_index(key);
+    return i<entries_.size()&&!key_less(key,entries_[i].value.first)?i:entries_.size();
+  }
+  size_t erase_range(size_t first,size_t last){
+    size_t removed=last-first;
+    if(!removed)return 0;
+    for(size_t i=first;i+removed<entries_.size();++i)entries_[i]=entries_[i+removed];
+    for(size_t i=0;i<removed;++i)entries_.pop_back();
+    return removed;
+  }
+  template<class V>size_t insert_value(const key_type& key,V&& value){
+    size_t pos=upper_index(key);
+    Entry entry(next_seq_,key,static_cast<V&&>(value));
+    ++next_seq_;
+    entries_.insert(entries_.begin()+pos,entry);
+    return pos;
+  }
+public:
+  typedef size_t index_type;
+  class iterator {
+    index_type index_;multimap* owner_;friend class multimap;friend class const_iterator;
+    iterator(index_type i,multimap* owner):index_(i),owner_(owner){}
+  public:
+    typedef bidirectional_iterator_tag iterator_category;typedef stored_type value_type;typedef ptrdiff_t difference_type;
+    typedef stored_type& reference;typedef stored_type* pointer;
+    iterator():index_(0),owner_(0){}
+    reference operator*()const{return owner_->entries_[index_].value;}
+    pointer operator->()const{return &owner_->entries_[index_].value;}
+    iterator& operator++(){++index_;return *this;}iterator operator++(int){iterator old=*this;++*this;return old;}
+    iterator& operator--(){--index_;return *this;}iterator operator--(int){iterator old=*this;--*this;return old;}
+    bool operator==(const iterator& o)const{return index_==o.index_;}bool operator!=(const iterator& o)const{return index_!=o.index_;}
+  };
+  class const_iterator {
+    index_type index_;const multimap* owner_;friend class multimap;
+    const_iterator(index_type i,const multimap* owner):index_(i),owner_(owner){}
+  public:
+    typedef bidirectional_iterator_tag iterator_category;typedef stored_type value_type;typedef ptrdiff_t difference_type;
+    typedef const stored_type& reference;typedef const stored_type* pointer;
+    const_iterator():index_(0),owner_(0){}
+    const_iterator(const iterator& o):index_(o.index_),owner_(o.owner_){}
+    reference operator*()const{return owner_->entries_[index_].value;}
+    pointer operator->()const{return &owner_->entries_[index_].value;}
+    const_iterator& operator++(){++index_;return *this;}const_iterator operator++(int){const_iterator old=*this;++*this;return old;}
+    const_iterator& operator--(){--index_;return *this;}const_iterator operator--(int){const_iterator old=*this;--*this;return old;}
+    bool operator==(const const_iterator& o)const{return index_==o.index_;}bool operator!=(const const_iterator& o)const{return index_!=o.index_;}
+  };
+  multimap():next_seq_(0),compare_(){}
+  explicit multimap(const Compare& comp,const Alloc& alloc=Alloc()):next_seq_(0),compare_(comp){(void)alloc;}
+  multimap(initializer_list<value_type> values):next_seq_(0),compare_(){for(const auto& v:values)insert(v);}
+  multimap(const multimap& o):entries_(o.entries_),next_seq_(o.next_seq_),compare_(o.compare_){}
+  multimap(multimap&& o):entries_(static_cast<entry_vector&&>(o.entries_)),next_seq_(o.next_seq_),compare_(o.compare_){o.next_seq_=0;}
+  multimap& operator=(const multimap& o){if(this!=&o){entries_=o.entries_;next_seq_=o.next_seq_;compare_=o.compare_;}return *this;}
+  multimap& operator=(multimap&& o){if(this!=&o){entries_=static_cast<entry_vector&&>(o.entries_);next_seq_=o.next_seq_;compare_=o.compare_;o.next_seq_=0;}return *this;}
+  void swap(multimap& o){std::swap(entries_,o.entries_);std::swap(next_seq_,o.next_seq_);std::swap(compare_,o.compare_);}
+  iterator begin(){return iterator(0,this);}
+  const_iterator begin()const{return const_iterator(0,this);}
+  iterator end(){return iterator(entries_.size(),this);}
+  const_iterator end()const{return const_iterator(entries_.size(),this);}
+  const_iterator cbegin()const{return begin();}const_iterator cend()const{return end();}
+  size_t size()const{return entries_.size();}bool empty()const{return entries_.empty();}
+  iterator insert(const value_type& value){return iterator(insert_value(value.first,value.second),this);}
+  iterator insert(value_type&& value){return iterator(insert_value(value.first,static_cast<T&&>(value.second)),this);}
+  template<class P>iterator insert(P&& value){return iterator(insert_value(value.first,value.second),this);}
+  iterator insert(const_iterator hint,const value_type& value){(void)hint;return insert(value);}
+  iterator insert(const_iterator hint,value_type&& value){(void)hint;return insert(static_cast<value_type&&>(value));}
+  template<class... Args>iterator emplace(Args&&... args){value_type value(std::forward<Args>(args)...);return insert(value);}
+  template<class... Args>iterator emplace_hint(const_iterator hint,Args&&... args){(void)hint;return emplace(std::forward<Args>(args)...);}
+  iterator find(const key_type& key){return iterator(find_index(key),this);}
+  const_iterator find(const key_type& key)const{return const_iterator(find_index(key),this);}
+  size_t count(const key_type& key)const{return upper_index(key)-lower_index(key);}
+  iterator lower_bound(const key_type& key){return iterator(lower_index(key),this);}
+  const_iterator lower_bound(const key_type& key)const{return const_iterator(lower_index(key),this);}
+  iterator upper_bound(const key_type& key){return iterator(upper_index(key),this);}
+  const_iterator upper_bound(const key_type& key)const{return const_iterator(upper_index(key),this);}
+  pair<iterator,iterator> equal_range(const key_type& key){return pair<iterator,iterator>(lower_bound(key),upper_bound(key));}
+  pair<const_iterator,const_iterator> equal_range(const key_type& key)const{return pair<const_iterator,const_iterator>(lower_bound(key),upper_bound(key));}
+  size_t erase(const key_type& key){return erase_range(lower_index(key),upper_index(key));}
+  iterator erase(const_iterator position){
+    if(position.owner_!=this||position.index_>=entries_.size())return end();
+    size_t index=position.index_;
+    erase_range(index,index+1);
+    return iterator(index,this);
+  }
+  iterator erase(iterator position){return erase(const_iterator(position));}
+  void clear()noexcept{entries_.clear();next_seq_=0;}
 };
 }
 #endif

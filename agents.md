@@ -1,5 +1,8 @@
 # Agent Instructions
 
+- Never run git, and never fetch from, pull from or push to GitHub. Publishing
+  the base copy is a banned action reserved for the user, done by hand outside
+  the agent loop; do not trigger it, script it or ask for it.
 - Use the repository's `cpc.exe` for compilation, builds, and regression work.
   Do not invoke Clang, GCC, MSVC, or another compiler, including host rebuilds,
   reference comparisons, and benchmarks, unless the user explicitly requests it.
@@ -37,6 +40,13 @@
   (generated-program speed and quality) and `Compatibility/` (C++17
   correctness). An area holds `worker.cmd`, `task.md`, `tests/`, optional
   `tools/`, its retained baselines and its own generated `build/`.
+- Everything a cycle produces that is not toolchain work or retained area
+  work belongs in the area's `build/`, which is never published: probes,
+  one-off reproducers, scratch sources and every executable or object they
+  leave behind. A file left loose in the tree is held back from the cycle
+  commit and reported in `build\worker-state.txt` and the cycle row instead of
+  being published, so keep scratch under `build/` and reduced cases under
+  `tests/`.
 - Workflow tools must not assume their own directory: locate the tree root by
   walking up to `cpc.exe` (`nt_tree_root` in `src/scripts/common/native_tool.h`)
   and pass `-B<tree>/src` when the compiler's private `include/` and `lib/`
@@ -80,7 +90,9 @@ builds the compiler translation unit as C with TCC and proves the resulting CPC
 can compile and run C. TCC execution still requires explicit authorization.
 
 For solution builds, use an exported build manifest and
-`src/scripts/project.exe -ProjectRoot <root>`. The serial CPC driver is native C.
+`src/scripts/build-project.exe -ProjectRoot <root>`. The serial project driver is
+native C, and `src/scripts/build-project-clang.exe` is the same driver for the
+external Clang toolchain (it requires `-RunExternal -Toolchain Clang`).
 Rebuild workflow executables after tool-source changes with
 `src/scripts/tool-build.exe`. Paths are configurable; CPC remains the compiler.
 Build metrics and dependency caches live in the output directory.
@@ -117,8 +129,8 @@ What follows from that layout:
   copies, and their work arrives in yours, so leave the tree in a state that
   survives a merge and never rewrite another agent's work to make a merge easy.
 - Never run git. The worker commits, fetches, rebases and pushes at every cycle
-  boundary, and it hands you the rebase when a conflict cannot be settled
-  mechanically.
+  boundary against the local base copy only, never GitHub, and it hands you the
+  rebase when a conflict cannot be settled mechanically.
 - The three copies share one CPU. Timing evidence taken while the other workers
   are running is noisier than the same work alone on its own machine, so keep
   timing claims to repeated serial runs and medians, and record which workers

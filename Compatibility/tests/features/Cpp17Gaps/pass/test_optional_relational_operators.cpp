@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: optional_relational. Comparisons between two engaged optionals
+// C++17 gap probe: optional_relational. Comparisons between two engaged optionals
 // are wrong: `std::optional<int>{1} < std::optional<int>{2}` answers false.
 
 #include <optional>

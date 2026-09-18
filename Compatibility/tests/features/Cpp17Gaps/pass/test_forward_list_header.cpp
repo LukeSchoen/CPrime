@@ -1,4 +1,4 @@
-// CL gap probe: lib_forward_list. <forward_list> is missing from the runtime.
+// C++17 gap probe: lib_forward_list. <forward_list> is missing from the runtime.
 #include <forward_list>
 
 int main() {

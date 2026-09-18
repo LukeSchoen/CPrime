@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: constexpr_lambda. A lambda's call operator is implicitly
+// C++17 gap probe: constexpr_lambda. A lambda's call operator is implicitly
 // constexpr in C++17, but calling one in a constant expression is rejected
 // with "constexpr variable initializer is not a constant expression".
 

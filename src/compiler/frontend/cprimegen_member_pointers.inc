@@ -160,12 +160,13 @@ static int try_parse_cpp_member_pointer_owner(void)
 {
   TokenString *replay, *owner;
   CType owner_type;
-  int angle = 0, owner_tok = 0;
+  int angle = 0, owner_tok = 0, owner_first;
   int first = find_current_namespace_tok(tok);
   Sym *alias = sym_find(first);
+  owner_first = is_namespace_scope_tok(first) ? tok : first;
   if (!alias) alias = global_symbol_find(first);
   if (!struct_find(first) && !find_class_template_def(first)
-      && !is_namespace_tok(tok)
+      && !is_namespace_scope_tok(first)
       && !(alias && (alias->type.t & VT_TYPEDEF)
            && (alias->type.t & VT_BTYPE) == VT_STRUCT))
   {
@@ -179,6 +180,7 @@ static int try_parse_cpp_member_pointer_owner(void)
     if (scoped == tok)
       return 0;
     first = scoped;
+    owner_first = scoped;
   }
   replay = tok_str_alloc();
   owner = tok_str_alloc();
@@ -187,7 +189,7 @@ static int try_parse_cpp_member_pointer_owner(void)
     if (tok < TOK_UIDENT)
       break;
     tok_str_add_tok(replay);
-    if (owner->len == 0) tok_str_add(owner, first);
+    if (owner->len == 0) tok_str_add(owner, owner_first);
     else tok_str_add_tok(owner);
     next();
     if (tok == '<' || tok == TOK_LT)

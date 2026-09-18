@@ -4,15 +4,15 @@
 // constructor template for another argument used to recycle that node during
 // deduction and corrupt the live argument type.
 struct Text;
-Text clToString(bool value);
-Text clToString(int value);
-Text clToString(double value);
-Text clToString(const char *value);
-Text clToString(const Text &value);
+Text toStringValue(bool value);
+Text toStringValue(int value);
+Text toStringValue(double value);
+Text toStringValue(const char *value);
+Text toStringValue(const Text &value);
 
-template <typename T> T clTypeInstance();
+template <typename T> T typeInstance();
 
-#define RequiresToString(T) typename = decltype(clToString(clTypeInstance<T>()))
+#define RequiresToString(T) typename = decltype(toStringValue(typeInstance<T>()))
 
 struct Text
 {

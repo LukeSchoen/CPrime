@@ -3,34 +3,34 @@
 // argument types associate at the point of instantiation, so a concrete
 // overload declared after the template definition still owns the call and the
 // generic template's body is never instantiated for it.
-class clImage
+class Image
 {
 public:
-  clImage() : m_value(0) {}
+  Image() : m_value(0) {}
   int m_value;
 };
 
-class clImageStream
+class ImageStream
 {
 };
 
 template<typename T>
-long clStreamRead(T *pTarget, long count, clImageStream *pStream)
+long streamRead(T *pTarget, long count, ImageStream *pStream)
 {
-  static_assert(false, "clStreamRead is not defined for this type.");
+  static_assert(false, "streamRead is not defined for this type.");
 }
 
 template<typename T>
-T ReadValue(clImageStream *pStream)
+T ReadValue(ImageStream *pStream)
 {
   char buffer[sizeof(T)];
-  clStreamRead((T *)buffer, 1, pStream);
+  streamRead((T *)buffer, 1, pStream);
   return *(T *)buffer;
 }
 
-long clStreamRead(bool *pTarget, long count, clImageStream *pStream);
+long streamRead(bool *pTarget, long count, ImageStream *pStream);
 
-long clStreamRead(clImage *pTarget, long count, clImageStream *pStream)
+long streamRead(Image *pTarget, long count, ImageStream *pStream)
 {
   (void)count;
   (void)pStream;
@@ -40,7 +40,7 @@ long clStreamRead(clImage *pTarget, long count, clImageStream *pStream)
 
 int main()
 {
-  clImageStream stream;
-  clImage image = ReadValue<clImage>(&stream);
+  ImageStream stream;
+  Image image = ReadValue<Image>(&stream);
   return image.m_value == 7 ? 0 : 1;
 }

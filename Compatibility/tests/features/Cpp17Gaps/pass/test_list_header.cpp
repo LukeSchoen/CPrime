@@ -1,4 +1,4 @@
-// CL gap probe: lib_list. <list> is missing from the runtime.
+// C++17 gap probe: lib_list. <list> is missing from the runtime.
 #include <list>
 
 int main() {

@@ -2,14 +2,22 @@
 #define _CPC_STRING_VIEW
 
 #include <stddef.h>
+/* char_traits is complete here rather than merely declared: the traits type
+   of a string_view is usable (string_view::traits_type::length and friends),
+   and the parameter has to name a complete template for the default. */
+#include <string>
 
 namespace std
 {
-  template<class C>
+  /* The standard spells basic_string_view with a traits parameter; code that
+     names it (Boost.ContainerHash's hash_value overload, for one) writes both
+     arguments, so the default must be here rather than implicit. */
+  template<class C, class Traits = char_traits<C> >
   class basic_string_view
   {
   public:
     typedef C value_type;
+    typedef Traits traits_type;
     typedef size_t size_type;
     typedef const C *const_iterator;
     typedef const_iterator iterator;

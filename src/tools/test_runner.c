@@ -1002,7 +1002,14 @@ static int run_regressions(const char *compiler, const char *runtime, unsigned t
         {"features/Expressions", {"test_new_global_scope_qualified_type.cpp", NULL}},
         {"features/GnuExtensions", {"test_inline_sse_asm_with_scalar_tail.cpp", NULL}},
         {"features/Intrinsics", {"test_sse_avx_intrinsics.cpp", NULL}},
-        {"features/Destructors", {"test_deleted_destructor_unused.cpp", "test_deleted_destructor_object.cpp", NULL}}
+        {"features/Destructors", {"test_deleted_destructor_unused.cpp", "test_deleted_destructor_object.cpp", NULL}},
+        /* The runtime multimap container the C++17 standard library ships. */
+        {"features/Includes", {"test_multimap_operations.cpp", "test_include_cwctype.cpp", NULL}},
+        /* A null pointer constant converts to a pointer-to-member parameter, so
+           a member-pointer SFINAE probe classifies classes as classes. */
+        {"features/OperatorOverloads", {"test_null_pointer_constant_to_member_pointer.cpp", NULL}},
+        /* A default argument's conversion is direct-initialization. */
+        {"features/Constructors", {"test_default_argument_uses_explicit_constructor.cpp", NULL}}
     };
     RegressionCase *cases;
     NtBuffer batch = {0};

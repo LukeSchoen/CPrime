@@ -15,6 +15,7 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
     CppMemberDeclContext *member_declaration_context;
     LambdaExpression *lambda;
     CppConstructionDestination *construction;
+    int destination_available;
     ConstexprTemporaryObject *evaluation_temporaries;
     Sym *initialization_object;
     SValue initializer_receiver;
@@ -77,6 +78,8 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   saved->permit_deferred_bound = cpp_permit_deferred_array_bound;
   saved->lambda = lambda_probe;
   saved->construction = cpp_construction_destination;
+  saved->destination_available = cpp_construction_destination
+                                 ? cpp_construction_destination->available : 0;
   saved->evaluation_temporaries = constexpr_temporary_objects;
   saved->temporary_expression_depth = constexpr_temporary_expression_depth;
   saved->initializer_probe_noeval = constexpr_initializer_probe_noeval;
@@ -276,6 +279,11 @@ static int template_probe_type_ex(TokenString *tokens, int argument,
   cpp_permit_deferred_array_bound = saved->permit_deferred_bound;
   lambda_probe = saved->lambda;
   cpp_construction_destination = saved->construction;
+  /* A probe may consume the caller's pending construction destination.  The
+     probe owns no object, so hand the destination back to the caller exactly
+     as it was handed in. */
+  if (cpp_construction_destination)
+    cpp_construction_destination->available = saved->destination_available;
   while (macro_stack && macro_stack != saved->macro) end_macro();
   macro_ptr = saved->ptr; tok = saved->token; tokc = saved->value;
   /* A failed nested replay can abandon its own local stack. The caller's
@@ -397,7 +405,7 @@ static int template_trailing_return_type(TemplateDef *definition,
   /* A non-type pack (`size_t... Indices`) is spelled by name, so its elements
      in a parameter type and in the trailing return type are values rather
      than types, and the parameter list needs no per-element declarator. */
-  int pack_is_value = pack >= 0 && (definition->value_param_mask & (1u << pack));
+  int pack_is_value = pack >= 0 && mask_test(&definition->value_param_mask, pack);
   int pack_name = 0;
   for (i = name_index + 1; i < source->len; ++i) {
     int token = source->str[i];

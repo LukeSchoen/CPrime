@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_size_data_empty. <iterator> declares std::size but never
+// C++17 gap probe: lib_size_data_empty. <iterator> declares std::size but never
 // defines it, so the program links against an undefined symbol.
 #include <array>
 #include <iterator>

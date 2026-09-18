@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: make_from_tuple. <tuple> has std::apply but not
+// C++17 gap probe: make_from_tuple. <tuple> has std::apply but not
 // std::make_from_tuple.
 
 #include <tuple>

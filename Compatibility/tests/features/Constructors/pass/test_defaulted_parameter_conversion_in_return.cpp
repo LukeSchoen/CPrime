@@ -1,8 +1,8 @@
 // EXPECT_EXIT: 0
 // Returning a value that converts through a constructor with a defaulted
-// trailing parameter has to work.  clCoordinateConversion.cpp:28 returns a
-// clVec2D expression from a function declared to return clVec3D, which relies
-// on `clVector3(const clVector2<T> &xy, const T &z = clZero<T>())`.
+// trailing parameter has to work: a function declared to return the wider type
+// returns the narrower one, which converts through
+// `Vec3(const Vec2 &xy, const double &z = 0)`.
 struct Vec2
 {
   double x, y;

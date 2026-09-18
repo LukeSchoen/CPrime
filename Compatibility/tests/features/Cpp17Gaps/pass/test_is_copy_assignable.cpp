@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: std_is_copy_assignable.
+// C++17 gap probe: std_is_copy_assignable.
 #include <type_traits>
 
 struct Copyable {

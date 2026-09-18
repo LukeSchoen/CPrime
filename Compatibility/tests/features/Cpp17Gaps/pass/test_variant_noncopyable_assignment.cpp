@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_variant_noncopyable. A non-copyable alternative still has
+// C++17 gap probe: lib_variant_noncopyable. A non-copyable alternative still has
 // to support converting assignment and variant move assignment.
 #include <variant>
 

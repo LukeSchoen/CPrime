@@ -1,4 +1,4 @@
-// CL gap probe: std_set. <set> is missing from the runtime.
+// C++17 gap probe: std_set. <set> is missing from the runtime.
 #include <set>
 
 int main() {

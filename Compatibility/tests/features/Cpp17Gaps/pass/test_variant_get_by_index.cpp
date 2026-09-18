@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_variant_get_index. Only the by-type get is provided.
+// C++17 gap probe: lib_variant_get_index. Only the by-type get is provided.
 #include <variant>
 
 int main() {

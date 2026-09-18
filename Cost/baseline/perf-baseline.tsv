@@ -9,3 +9,7 @@ c.self.driver	322.493	0.0000	0.5822
 c.string.literals	10.387	1.4489	0.9858
 c.struct.fields	9.956	1.4923	0.9398
 c.switch.dense	10.722	1.5088	1.0303
+cpp.template.conversion.lookup	17.448	0.0000	0.0000
+cpp.template.member.list	12.622	0.0000	0.0000
+cpp.template.static.lookup	26.552	0.0000	0.0000
+cpp.xbrz	1404.546	0.0000	0.0000

@@ -70,7 +70,7 @@ static int cpp_ms_unqualified_tok(int name_tok, int namespace_tok)
 }
 
 static void cpp_ms_template_name(CppMsMangleContext *ctx, int source_tok,
-                                 TemplateArgList *args, unsigned value_mask,
+                                 TemplateArgList *args, ParameterMask value_mask,
                                  int is_class, int trailing_value_pack)
 {
   CppMsMangleContext nested;
@@ -89,7 +89,8 @@ static void cpp_ms_template_name(CppMsMangleContext *ctx, int source_tok,
     CType argument;
     int64_t value;
     int parameter_index = trailing_value_pack >= 0 && i >= trailing_value_pack ? trailing_value_pack : i;
-    if (parameter_index < 32 && (value_mask & (1u << parameter_index))) {
+    if (parameter_index < CPC_MAX_TEMPLATE_PARAMETERS
+        && mask_test(&value_mask, parameter_index)) {
       Sym *address = global_symbol_find(args->toks[i]);
       if (address && address->cpp_member_address_tok) {
         CppMemberPointerType *member = find_cpp_member_pointer_type(&address->type);

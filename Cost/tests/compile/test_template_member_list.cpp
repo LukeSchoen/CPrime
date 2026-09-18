@@ -9,6 +9,7 @@ class List
   int count;
   int capacity;
 
+public:
   List()
   {
     this->items = (T *)malloc(sizeof(T) * 8);

@@ -12,17 +12,142 @@ namespace std
   template<class T> class allocator {
   public:
     typedef T value_type;
+    typedef T *pointer;
+    typedef const T *const_pointer;
+    typedef T &reference;
+    typedef const T &const_reference;
+    typedef size_t size_type;
+    typedef ptrdiff_t difference_type;
+    template<class U> struct rebind { typedef allocator<U> other; };
+
     allocator() noexcept {}
     template<class U> allocator(const allocator<U>&) noexcept {}
-    T* allocate(size_t n) {
+    pointer address(reference value) const noexcept { return &value; }
+    const_pointer address(const_reference value) const noexcept { return &value; }
+    pointer allocate(size_type n, const void * = 0) {
       if (n > (size_t)-1 / sizeof(T)) throw bad_alloc();
       void* p = malloc(n * sizeof(T));
       if (!p && n) throw bad_alloc();
       return static_cast<T*>(p);
     }
-    void deallocate(T* p, size_t) { free(p); }
-    template<class U> struct rebind { typedef allocator<U> other; };
+    void deallocate(pointer p, size_type) { free(p); }
+    size_type max_size() const noexcept { return (size_type)-1 / sizeof(T); }
+    template<class U, class... Args>
+    void construct(U *p, Args &&...args)
+    {
+      ::new (static_cast<void *>(p)) U(static_cast<Args &&>(args)...);
+    }
+    template<class U>
+    void destroy(U *p)
+    {
+      p->~U();
+    }
   };
+  template<class T, class U>
+  bool operator==(const allocator<T> &, const allocator<U> &) noexcept
+  {
+    return true;
+  }
+  template<class T, class U>
+  bool operator!=(const allocator<T> &, const allocator<U> &) noexcept
+  {
+    return false;
+  }
+  /* C++98's auto_ptr, kept for the pre-C++17 libraries that still select it:
+     Boost's smart_ptr/scoped_ptr.hpp guards its auto_ptr constructor with
+     BOOST_NO_AUTO_PTR, and Boost.Config only defines that macro from a
+     standard-library identity this runtime does not advertise.  Copying an
+     auto_ptr transfers ownership, and the auto_ptr_ref proxy is what lets a
+     by-value parameter or a temporary take ownership even though the copy
+     constructor takes a non-const reference. */
+  template<class T>
+  struct auto_ptr_ref
+  {
+    explicit auto_ptr_ref(T *p) noexcept : m_ptr(p) {}
+    T *m_ptr;
+  };
+
+  template<class T>
+  class auto_ptr
+  {
+  public:
+    typedef T element_type;
+
+    explicit auto_ptr(T *p = 0) noexcept : m_ptr(p) {}
+    auto_ptr(auto_ptr<T> &other) noexcept : m_ptr(other.release()) {}
+    auto_ptr(auto_ptr_ref<T> other) noexcept : m_ptr(other.m_ptr)
+    {
+      other.m_ptr = 0;
+    }
+
+    template<class U>
+    auto_ptr(auto_ptr<U> &other) noexcept : m_ptr(other.release()) {}
+
+    template<class U>
+    operator auto_ptr_ref<U>() noexcept
+    {
+      U *converted = m_ptr;
+      auto_ptr_ref<U> result(converted);
+      m_ptr = 0;
+      return result;
+    }
+
+    template<class U>
+    operator auto_ptr<U>() noexcept
+    {
+      return auto_ptr<U>(*this);
+    }
+
+    auto_ptr &operator=(auto_ptr<T> &other) noexcept
+    {
+      reset(other.release());
+      return *this;
+    }
+
+    template<class U>
+    auto_ptr &operator=(auto_ptr<U> &other) noexcept
+    {
+      reset(other.release());
+      return *this;
+    }
+
+    auto_ptr &operator=(auto_ptr_ref<T> other) noexcept
+    {
+      if (other.m_ptr != m_ptr)
+      {
+        delete m_ptr;
+        m_ptr = other.m_ptr;
+      }
+      other.m_ptr = 0;
+      return *this;
+    }
+
+    ~auto_ptr() { delete m_ptr; }
+
+    T &operator*() const { return *m_ptr; }
+    T *operator->() const { return m_ptr; }
+    T *get() const noexcept { return m_ptr; }
+
+    T *release() noexcept
+    {
+      T *p = m_ptr;
+      m_ptr = 0;
+      return p;
+    }
+
+    void reset(T *p = 0)
+    {
+      if (p != m_ptr)
+      {
+        delete m_ptr;
+        m_ptr = p;
+      }
+    }
+
+  private:
+    T *m_ptr;
+  };
+
   template<class T>
   class unique_ptr
   {

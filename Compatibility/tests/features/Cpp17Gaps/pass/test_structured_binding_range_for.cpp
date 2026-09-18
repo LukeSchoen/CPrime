@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: range_for_structured. Structured bindings must work as the
+// C++17 gap probe: range_for_structured. Structured bindings must work as the
 // declaration of a range-based for loop.
 struct Point { int x, y; };
 

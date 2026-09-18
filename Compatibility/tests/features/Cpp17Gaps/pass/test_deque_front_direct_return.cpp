@@ -1,4 +1,4 @@
-// CL gap probe: std_deque_ops. A local deque must still hold its element when
+// C++17 gap probe: std_deque_ops. A local deque must still hold its element when
 // front()/back() is the returned expression; the direct-return form currently
 // reads freed storage, while a named local copy reads the correct value.
 #include <deque>

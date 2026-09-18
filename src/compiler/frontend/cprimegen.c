@@ -679,6 +679,7 @@ static void instantiate_template_member_body_for_func_tok(CType *type,
                                                           int func_tok);
 static int is_namespace_tok(int ns_tok);
 static void note_namespace_tok(int ns_tok);
+static int token_can_start_parameter_declaration(int t);
 static int current_namespace_scope_tok(void);
 static int symbol_namespace_scope_tok(int symbol_tok);
 static int symbol_has_internal_namespace_linkage(int symbol_tok);
@@ -701,7 +702,41 @@ static CType make_member_func_type_from_saved_params(CType *ret_type,
 
 typedef struct TemplateArgList TemplateArgList;
 
-#define CPC_MAX_TEMPLATE_PARAMETERS 32
+/* A template parameter list is not bounded by the standard; the large
+   library metaprogramming helpers (boost::mp11's append implementation, for
+   one) declare more than a hundred defaulted parameters.  The kind masks are
+   word arrays rather than a single unsigned so the capacity is not also the
+   machine word width. */
+#define CPC_MAX_TEMPLATE_PARAMETERS 128
+#define CPC_TEMPLATE_PARAM_MASK_WORDS \
+  ((CPC_MAX_TEMPLATE_PARAMETERS + 31) / 32)
+
+typedef struct ParameterMask
+{
+  unsigned words[CPC_TEMPLATE_PARAM_MASK_WORDS];
+} ParameterMask;
+
+static int mask_test(const ParameterMask *mask, int index)
+{
+  return (mask->words[index >> 5] >> (index & 31)) & 1u;
+}
+
+static int mask_test_value(ParameterMask mask, int index)
+{
+  return mask_test(&mask, index);
+}
+
+static void mask_set(ParameterMask *mask, int index)
+{
+  mask->words[index >> 5] |= 1u << (index & 31);
+}
+
+static void mask_clear(ParameterMask *mask)
+{
+  memset(mask, 0, sizeof(*mask));
+}
+
+static const ParameterMask empty_parameter_mask;
 
 typedef struct TemplateDef
 {
@@ -711,8 +746,8 @@ typedef struct TemplateDef
   int friend_class_tok;
   int member_class_tok;
   int *type_param_toks;
-  unsigned value_param_mask;
-  unsigned type_param_pointer_mask;
+  ParameterMask value_param_mask;
+  ParameterMask type_param_pointer_mask;
   TokenString *default_arg_strs[CPC_MAX_TEMPLATE_PARAMETERS];
   TokenString *value_type_strs[CPC_MAX_TEMPLATE_PARAMETERS];
   int nb_type_params;
@@ -814,7 +849,7 @@ struct TemplateArgList
 {
   int toks[CPC_MAX_TEMPLATE_ARGUMENTS];
   int nb;
-  unsigned value_mask;
+  ParameterMask value_mask;
 };
 
 static int infer_template_args_from_call(TemplateDef *td, CType *arg_types,
@@ -866,7 +901,7 @@ typedef struct TemplateMemberDef
   int nb_stripped_member_value_params;
   int stripped_member_param_toks[CPC_MAX_TEMPLATE_PARAMETERS];
   int nb_stripped_member_params;
-  unsigned stripped_member_value_mask;
+  ParameterMask stripped_member_value_mask;
   /* Namespace-scope declaration order visible when this member's definition
      was written (see TemplateDef.func_bound). */
   unsigned func_bound;
@@ -972,6 +1007,7 @@ static void template_arg_list_one(TemplateArgList *args, int type_tok);
 static int parse_template_type_arg(void);
 static Sym *parse_template_nested_typedef(Sym *class_sym);
 static Sym *parse_template_nested_typedef_ex(Sym *class_sym, int allow_template);
+static Sym *find_inherited_class_alias(int class_tok, int member_tok);
 static int cpp_qualified_enumerator(int enum_tok, int member_tok);
 static int resolve_qualified_static_template_call(int class_tok, int method_tok);
 static void parse_template_type_args(TemplateArgList *args);
@@ -1266,7 +1302,7 @@ typedef struct CppMemberDeclInfo {
   int cv_qualifiers, ref_qualifier;
   unsigned char access, access_known, is_static, is_virtual, kind;
   unsigned char is_template;
-  unsigned template_value_mask;
+  ParameterMask template_value_mask;
   TemplateArgList template_arguments;
   CType function_type;
   Sym function_prototype;
@@ -1353,6 +1389,10 @@ static int last_btype_was_typedef;
 static int last_btype_was_decltype;
 static int suppress_integral_constexpr_fold;
 static int static_initializer_constant_fold;
+/* Depth of conditional-expression arms that have to keep their lvalue while
+   the common type is applied.  The joined result is an address, so the
+   integral-constant read fold must not consume the arm. */
+static int cpp_conditional_lvalue_arm;
 static Sym *constant_initialization_object;
 static SValue cpp_default_initializer_receiver;
 static int cpp_default_initializer_receiver_offset;
@@ -1539,6 +1579,11 @@ static void unindex_pending_auto_member(PendingMemberFunc *pm)
 static int defer_pending_member_funcs;
 static int compiling_pending_member_funcs;
 static int cpp_standard_conversion_only;
+/* A default argument is copy-initialized from its expression, but the copy
+   itself is direct-initialization, so an explicit converting constructor is
+   valid there ([dcl.fct.default], [class.conv.ctor]).  Set while a default
+   argument is being converted to its parameter type. */
+static int cpp_default_argument_conversion;
 static int compile_local_member_funcs_now;
 typedef struct TokenSet { unsigned *words; unsigned capacity; } TokenSet;
 static int token_set_has(TokenSet *set, int token)
@@ -1620,6 +1665,11 @@ static TemplateMemberDef *template_member_owner_tails[MEMBER_CANDIDATE_BUCKETS];
 static unsigned long long profile_template_calls;
 static unsigned long long profile_template_def_scans;
 static unsigned long long profile_template_member_scans;
+static unsigned long long profile_template_member_scalar_scans;
+static unsigned long long profile_template_member_class_first_scans;
+static unsigned long long profile_template_member_general_scans;
+static unsigned long long profile_template_member_alt_walks;
+static unsigned long long profile_template_member_alt_scans;
 static unsigned long long profile_overload_scans;
 static unsigned long long profile_other_overload_scans[8];
 static unsigned long long profile_linkage_scans;
@@ -2246,6 +2296,14 @@ static void free_template_state(void)
             nb_template_defs, nb_template_member_defs);
   if (profile_scans_enabled)
     fprintf(stderr,
+            "CPC_PROFILE template_member_sites=scalar:%llu,class_first:%llu,general:%llu,alt_walks:%llu,alt:%llu\n",
+            profile_template_member_scalar_scans,
+            profile_template_member_class_first_scans,
+            profile_template_member_general_scans,
+            profile_template_member_alt_walks,
+            profile_template_member_alt_scans);
+  if (profile_scans_enabled)
+    fprintf(stderr,
             "CPC_PROFILE other_overloads=%llu,%llu,%llu,%llu,%llu,%llu,%llu,%llu\n",
             profile_other_overload_scans[0], profile_other_overload_scans[1],
             profile_other_overload_scans[2], profile_other_overload_scans[3],
@@ -2749,6 +2807,11 @@ static void ptype(const char *msg, CType *type, int v)
 
 // -------------------------------------------------------------------------
 // initialize vstack and types.  This must be done also for cpc -E
+/* Nesting depth of a type-alias or member-typedef parse.  A specialization
+   named there only needs its identity unless a member of it is named, so the
+   instantiation machinery defers the class body while the depth is set. */
+static int class_alias_layout_depth;
+
 ST_FUNC void cprimegen_init(CPRIMEState *s1)
 {
   free_constexpr_local_fields(NULL);
@@ -2786,12 +2849,18 @@ ST_FUNC void cprimegen_init(CPRIMEState *s1)
   cpp_operator_overload_seen = 0;
   cpp_using_binding_seen = 0;
   cpp_this_binding_seen = 0;
+  /* A diagnostic raised inside a member typedef or alias parse unwinds past
+     the decrement that would restore this depth.  It is parser-owned state,
+     like the class-scope state above, so a batch job must never inherit an
+     unfinished alias context from the job before it. */
+  class_alias_layout_depth = 0;
 
   /* An error can leave an initializer before its expression context is
      restored. Each batch translation unit starts with neutral folding state,
      including reference initializers that must retain object identity. */
   suppress_integral_constexpr_fold = 0;
   static_initializer_constant_fold = 0;
+  cpp_conditional_lvalue_arm = 0;
   constant_initialization_object = NULL;
   memset(&cpp_default_initializer_receiver, 0, sizeof(cpp_default_initializer_receiver));
   cpp_default_initializer_receiver_offset = 0;
@@ -2836,6 +2905,7 @@ ST_FUNC void cprimegen_init(CPRIMEState *s1)
 
 ST_FUNC int cprimegen_compile(CPRIMEState *s1)
 {
+  profile_tu_switch(PROFILE_TU_FRONTEND_SETUP);
   funcname = "";
   func_ind = -1;
   anon_sym = SYM_FIRST_ANOM;
@@ -2868,7 +2938,9 @@ ST_FUNC int cprimegen_compile(CPRIMEState *s1)
     sym_push(tok_alloc_const("char32_t"), &wide_character, 0, 0);
   }
   next();
+  profile_tu_switch(PROFILE_TU_TOP_DECL);
   decl(VT_CONST);
+  profile_tu_switch(PROFILE_TU_DEFERRED);
   finalizing_template_bodies = 1;
   for (;;)
   {
@@ -4201,6 +4273,16 @@ static void merge_attr(AttributeDef *ad, AttributeDef *ad1)
     ad->attr_mode = ad1->attr_mode;
 }
 
+static int member_name_owner_tok(int member_tok)
+{
+  int i;
+  for (i = 0; i < MEMBER_NAME_BUCKETS; ++i)
+    if (member_name_cache[i].generation == member_name_generation
+        && member_name_cache[i].result == member_tok)
+      return member_name_cache[i].owner;
+  return 0;
+}
+
 // Merge some type attributes.
 static void patch_type(Sym *sym, CType *type)
 {
@@ -4315,6 +4397,21 @@ static void patch_type(Sym *sym, CType *type)
         sym->type.ref = type->ref;
         return;
       }
+    }
+    if (is_cpp_translation_unit()
+        && sym->cpp_constexpr_object
+        && member_name_owner_tok(sym->v)
+        && (sym->type.t & VT_BTYPE) != VT_FUNC
+        && (type->t & VT_BTYPE) != VT_FUNC
+        && (sym->type.t & (VT_INLINE | VT_CONSTANT)) == (VT_INLINE | VT_CONSTANT)
+        && !(type->t & (VT_INLINE | VT_CONSTANT)))
+    {
+      CType previous_static = sym->type;
+      CType replacement_static = *type;
+      previous_static.t &= ~(VT_INLINE | VT_CONSTANT);
+      replacement_static.t &= ~(VT_INLINE | VT_CONSTANT);
+      if (is_compatible_types(&previous_static, &replacement_static))
+        return;
     }
     {
       char previous_type[512], replacement_type[512];
@@ -7352,7 +7449,17 @@ static void check_reference_binding_category(CType *target)
       && (vtop->r & VT_LVAL) && !(vtop->r & VT_CXX_PRVALUE)
       && !(vtop->type.t & VT_RVALUE_REFERENCE)
       && (vtop->type.t & VT_BTYPE) != VT_FUNC)
+  {
+    if (getenv("CPC_TRACE_REF")) {
+      int target_name = get_struct_type_name_tok(target);
+      int value_name = get_struct_type_name_tok(&vtop->type);
+      fprintf(stderr, "[ref-bind target=0x%x(%s) value=0x%x(%s) r=0x%x]\n",
+              target->t, target_name ? get_tok_str(target_name, NULL) : "-",
+              vtop->type.t, value_name ? get_tok_str(value_name, NULL) : "-",
+              vtop->r);
+    }
     cprime_error("rvalue reference cannot bind to an lvalue");
+  }
   if (!(target->t & VT_RVALUE_REFERENCE) && rvalue
       && (pointed_type(target)->t & (VT_CONSTANT | VT_VOLATILE)) != VT_CONSTANT)
     cprime_error("non-const or volatile lvalue reference cannot bind to an rvalue");
@@ -8818,6 +8925,26 @@ static int class_tok_matches_unqualified_name(int class_tok, int name_tok)
     if (definition)
       return definition->name_tok == name_tok;
   }
+  /* A class reached through a using-directive can carry the full
+     `__cpc_ns_<namespace>_<name>` spelling even though the namespace-scope
+     table has no entry for it (boost::date_time::date inside boost).  Compare
+     the trailing source name only when neither spelling carries an inner
+     underscore that would make the suffix an injected class name. */
+  if (!strncmp(class_name, "__cpc_ns_", 9)
+      && name_tok >= TOK_IDENT && name_tok < TOK_IDENT + class_source_name_capacity)
+  {
+    size_t name_len = strlen(name);
+    size_t class_len2 = strlen(class_name);
+    int i;
+    if (class_len2 > name_len && class_name[class_len2 - name_len - 1] == '_'
+        && !strcmp(class_name + class_len2 - name_len, name))
+    {
+      for (i = 0; i < (int)name_len; ++i)
+        if (name[i] == '_')
+          return 0;
+      return 1;
+    }
+  }
   /* Only compiler-created scope qualification can hide the source class
      spelling. An ordinary underscore in a class name is not a scope: e.g.
      Prefix_Mode must not turn an unrelated enum Mode into its own type. */
@@ -9820,6 +9947,18 @@ static TokenString *parse_explicit_constructor_member_initializers(
       Sym *base_alias = sym_find(find_current_namespace_tok(field_tok));
       int alias_base_tok = base_alias && (base_alias->type.t & VT_TYPEDEF)
                             ? get_struct_type_name_tok(&base_alias->type) : 0;
+      /* The base can be spelled with a typedef declared in this class
+         (`typedef Inner base_type; ... : base_type(c)`).  That alias lives in
+         the class scope rather than the namespace scope reached through the
+         qualifier, so consult the class alias tables as well. */
+      if (!alias_base_tok && class_tok)
+      {
+        int scoped = template_member_scoped_alias_tok(class_tok, field_tok);
+        if (!scoped) scoped = class_alias_storage_tok(class_tok, field_tok);
+        base_alias = scoped ? global_symbol_find(scoped) : NULL;
+        if (base_alias && (base_alias->type.t & VT_TYPEDEF))
+          alias_base_tok = get_struct_type_name_tok(&base_alias->type);
+      }
       for (base_info = class_base_candidates(class_tok); base_info; base_info = base_info->bucket_next)
         if (base_info->class_tok == class_tok
             && (base_info->base_tok == field_tok
@@ -9831,6 +9970,34 @@ static TokenString *parse_explicit_constructor_member_initializers(
       {
         field = base_info->field;
         storage_field_tok = field->v & ~SYM_FIELD;
+      }
+      /* The base can be spelled through a typedef of a nested class template,
+         which the unqualified-name comparison above does not see.  Resolve
+         the spelling as a type and compare the resulting class token. */
+      if (!base_info)
+      {
+        CType base_type;
+        int resolved_base_tok = 0;
+        Sym *resolved_alias = sym_find(find_current_namespace_tok(field_tok));
+        if (resolved_alias && (resolved_alias->type.t & VT_TYPEDEF))
+          resolved_base_tok = get_struct_type_name_tok(&resolved_alias->type);
+        else if (make_class_type_from_tok(&base_type, find_current_namespace_tok(field_tok)))
+          resolved_base_tok = get_struct_type_name_tok(&base_type);
+        if (!resolved_base_tok)
+          resolved_base_tok = field_tok;
+        if (class_has_base(class_tok, resolved_base_tok))
+        {
+          for (base_info = class_base_candidates(class_tok); base_info;
+               base_info = base_info->bucket_next)
+            if (base_info->class_tok == class_tok
+                && base_info->base_tok == resolved_base_tok)
+              break;
+          if (base_info && base_info->field)
+          {
+            field = base_info->field;
+            storage_field_tok = field->v & ~SYM_FIELD;
+          }
+        }
       }
     }
     if (field)
@@ -13713,6 +13880,8 @@ static void complete_deferred_nested_layouts(int owner_tok)
 {
   CppRecordDeclInfo *record;
   int bucket;
+  if (!is_cpp_translation_unit())
+    return;
   for (bucket = 0; owner_tok && bucket < (int)(sizeof(cpp_record_declarations)
                                                / sizeof(cpp_record_declarations[0])); ++bucket)
     for (record = cpp_record_declarations[bucket]; record; record = record->next)
@@ -13936,6 +14105,20 @@ static void parse_cpp_class_using_member(CType *derived, int first_name)
       && make_type_from_type_arg_tok(&base_type, owner)
       && (base_type.t & VT_BTYPE) == VT_STRUCT)
     owner = get_struct_type_name_tok(&base_type);
+  else if (tok != TOK_LT && tok != '<')
+  {
+    /* A base named through a class-scope alias (`using base_type = ...;`)
+       may not be visible in the local symbol stack while a template
+       specialization's body is parsed, but it is registered under the
+       enclosing class.  Fall back to that storage binding. */
+    Sym *inherited = find_inherited_class_alias(
+                       get_struct_type_name_tok(derived), owner);
+    if (inherited && (inherited->type.t & VT_TYPEDEF)) {
+      base_type = inherited->type;
+      base_type.t &= ~VT_TYPEDEF;
+      owner = get_struct_type_name_tok(&base_type);
+    }
+  }
   for (;;) {
     if (tok == TOK_LT || tok == '<') {
       TemplateArgList arguments;
@@ -14074,7 +14257,7 @@ static void parse_cpp_class_using_member(CType *derived, int first_name)
   if (conversion_tokens) tok_str_free(conversion_tokens);
 }
 
-static void struct_decl(CType *type, int u, int is_class_tag)
+static void struct_decl_impl(CType *type, int u, int is_class_tag)
 {
   int v, c, size, align, flexible;
   int has_base_classes = 0;
@@ -14089,6 +14272,7 @@ static void struct_decl(CType *type, int u, int is_class_tag)
   CppMemberDeclContext member_context;
 
   memset(&ad, 0, sizeof ad);
+  PROFILE_TAGDECL_PHASE(PROFILE_TAGDECL_HEADER);
   next();
   while (tok == TOK_ALIGNAS || tok == TOK_ALIGNAS2)
     parse_cpp_alignas(&ad);
@@ -14132,6 +14316,15 @@ static void struct_decl(CType *type, int u, int is_class_tag)
         next();
         if (tok != ':') { unget_tok(':'); break; }
         next();
+        if (tok == ':') {
+          /* A base-clause colon followed by a global qualifier
+             (`template<> struct X<A> : ::Base`) has three colons in a row.
+             The first is the base-clause marker, not a nested-name
+             qualifier. Leave the whole clause for the base-clause parser. */
+          unget_tok(':');
+          unget_tok(':');
+          break;
+        }
         if (tok < TOK_UIDENT) expect("qualified class name");
         qualified_parent = qualified_parent ? v : find_current_namespace_tok(v);
         if (!is_namespace_tok(qualified_parent)) {
@@ -14220,7 +14413,8 @@ static void struct_decl(CType *type, int u, int is_class_tag)
   {
     // Struct Already Defined ? Return It
     s = struct_find(v);
-    if (s && (cpp_new_type_context || s->sym_scope == local_scope || (tok != '{' && tok != ';')
+    if (s && (cpp_new_type_context || s->sym_scope == local_scope
+              || (tok != '{' && tok != ';')
               || (table_ident[v - TOK_IDENT]->sym_struct->a.local_tag_alias
                   && table_ident[v - TOK_IDENT]->sym_struct->sym_scope == local_scope)))
     {
@@ -14449,6 +14643,8 @@ do_decl:
 
   if (tok == '{')
   {
+    PROFILE_TAGDECL_PHASE(u == VT_ENUM ? PROFILE_TAGDECL_ENUM
+                                       : PROFILE_TAGDECL_MEMBERS);
     int saved_nb_pending_member_funcs = nb_pending_member_funcs;
     int defer_layout_until_outer = 0;
     next();
@@ -14576,7 +14772,10 @@ do_decl:
       }
       skip('}');
 
+      PROFILE_TAGDECL_PHASE(PROFILE_TAGDECL_TAIL);
+      PROFILE_TAGDECL_TAIL_BEGIN();
       parse_attribute(&ad);
+      PROFILE_TAGDECL_TAIL_PHASE(PROFILE_TAGDECL_TAIL_OTHER);
       if (bt)
       {
         t.t = bt;
@@ -14631,6 +14830,7 @@ do_decl:
       s->c = 1;
 enum_done:
       s->type.t = type->t = t.t | VT_ENUM;
+      PROFILE_TAGDECL_TAIL_END();
 
     }
     else
@@ -14656,6 +14856,7 @@ enum_done:
         TokenString *lifecycle_init_prefix = NULL;
 
         memset(&ad1, 0, sizeof ad1);
+        PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_PREFIX);
 
         while (tok == TOK_LINENUM)
           next();
@@ -14698,7 +14899,8 @@ enum_done:
             ;
           else if (member_str && class_tok)
             add_template_member_def(class_tok, 0, NULL, 0,
-                                    NULL, 0, NULL, 0, 0, member_str);
+                                    NULL, 0, NULL, 0, empty_parameter_mask,
+                                    member_str);
           else if (member_str)
             tok_str_free(member_str);
           continue;
@@ -14717,6 +14919,8 @@ enum_done:
               && tok != '~')
             cprime_error("explicit is only supported on constructors and conversion operators");
         }
+        PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_DECLARATOR);
+        PROFILE_TAGDECL_MEMBER_DECL_SEG(PROFILE_TAGDECL_MEMBER_DECL_PREFIX);
 
         {
         int extra_inline = 0, extra_constexpr = 0;
@@ -14908,6 +15112,7 @@ cpp_conversion_operator:
           }
           if (tok == '{')
           {
+            PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_INITIALIZER);
             skip_or_save_block(&body);
             add_pending_member_func(type, method_tok, &func_type, body, 0,
                                     lifecycle_constexpr || ad1.is_constexpr);
@@ -14923,6 +15128,7 @@ cpp_conversion_operator:
               note_defaulted_member_func(get_struct_type_name_tok(type),
                                          method_tok, &func_type);
           }
+          PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_NEXT);
           continue;
         }
 
@@ -15084,6 +15290,7 @@ cpp_conversion_operator:
             }
             if (tok == '{')
             {
+              PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_INITIALIZER);
               if (lifecycle_function_try) {
                 body = capture_cpp_function_try_body(lifecycle_init_prefix,
                                                      lifecycle_tok == TOK_CONSTRUCTOR1,
@@ -15131,11 +15338,13 @@ cpp_conversion_operator:
           {
             if (tok == ';')
               next();
+            PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_NEXT);
             continue;
           }
           if (tok == ';')
           {
             next();
+            PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_NEXT);
             continue;
           }
         }
@@ -15144,6 +15353,7 @@ cpp_conversion_operator:
         if (member_decl_is_mutable)
           next();
 
+        PROFILE_TAGDECL_MEMBER_DECL_PARSE_BTYPE_BEGIN();
         if (!parse_btype(&btype, &ad1, 0))
         {
           if (ad1.is_constexpr && tok == TOK_OPERATOR)
@@ -15164,6 +15374,7 @@ cpp_conversion_operator:
             continue;
           }
         }
+        PROFILE_TAGDECL_MEMBER_DECL_SEG(PROFILE_TAGDECL_MEMBER_DECL_TYPE_DECL);
         /* A leading class name may be a return type rather than a
            constructor. Preserve specifiers consumed by lifecycle lookahead. */
         ad1.is_constexpr |= lifecycle_constexpr;
@@ -15171,6 +15382,8 @@ cpp_conversion_operator:
         while (1)
         {
           TokenString *member_default_init = NULL;
+          PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_DECLARATOR);
+          PROFILE_TAGDECL_MEMBER_DECL_SEG(PROFILE_TAGDECL_MEMBER_DECL_TYPE_DECL);
           if (flexible)
             cprime_error("flexible array member '%s' not at the end of struct",
                       get_tok_str(v, NULL));
@@ -15238,6 +15451,7 @@ cpp_conversion_operator:
                 }
               }
             }
+            PROFILE_TAGDECL_MEMBER_DECL_SEG(PROFILE_TAGDECL_MEMBER_DECL_CPP_FUNCTION);
             if ((type1.t & VT_BTYPE) == VT_FUNC)
             {
               int default_suffix;
@@ -15276,6 +15490,7 @@ cpp_conversion_operator:
                 if (tok == '{')
                 {
                   Sym *member_sym;
+                  PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_INITIALIZER);
                   skip_or_save_block(&body);
                   member_sym = declare_static_member_func(type, v, &type1);
                   if (ad1.asm_label)
@@ -15300,6 +15515,7 @@ cpp_conversion_operator:
               }
               if (tok == '{')
               {
+                PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_INITIALIZER);
                 skip_or_save_block(&body);
                 add_pending_member_func(type, v, &type1, body, member_decl_is_auto,
                                         ad1.is_constexpr);
@@ -15332,6 +15548,7 @@ cpp_conversion_operator:
               cprime_error("invalid type for '%s'",
                         get_tok_str(v, NULL));
             }
+            PROFILE_TAGDECL_MEMBER_DECL_SEG(PROFILE_TAGDECL_MEMBER_DECL_CPP_STATIC);
             if (type1.t & VT_STATIC)
             {
               CType static_type = type1;
@@ -15416,9 +15633,11 @@ cpp_conversion_operator:
               skip(',');
               continue;
             }
+            PROFILE_TAGDECL_MEMBER_DECL_SEG(PROFILE_TAGDECL_MEMBER_DECL_SIZE);
             if (tok == '=' || tok == '{')
             {
               if (tok == '=') next();
+              PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_INITIALIZER);
               skip_or_save_member_initializer(&member_default_init);
             }
             if ((type1.t & VT_BTYPE) == VT_STRUCT && type1.ref
@@ -15429,7 +15648,8 @@ cpp_conversion_operator:
                 get_struct_type_name_tok(&type1));
               if (type1.ref->c < 0) materialize_incomplete_template_type(&type1);
             }
-            if (type_size(&type1, &align) < 0)
+            size = type_size(&type1, &align);
+            if (size < 0)
             {
               if ((type1.t & VT_ARRAY) && type1.ref
                   && type_size(pointed_type(&type1), &align) >= 0)
@@ -15451,6 +15671,7 @@ cpp_conversion_operator:
               cprime_error("invalid type for '%s'",
                         get_tok_str(v, NULL));
           }
+          PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_FIELD);
           if (tok == ':')
           {
             next();
@@ -15464,7 +15685,8 @@ cpp_conversion_operator:
                         get_tok_str(v, NULL));
             parse_attribute(&ad1);
           }
-          size = type_size(&type1, &align);
+          if (size < 0)
+            size = type_size(&type1, &align);
           if (bit_size >= 0)
           {
             bt = type1.t &VT_BTYPE;
@@ -15521,10 +15743,12 @@ cpp_conversion_operator:
           }
           if (member_default_init)
             tok_str_free(member_default_init);
+          PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_NEXT);
           if (tok == ';' || tok == TOK_EOF)
             break;
           skip(',');
         }
+        PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_NEXT);
         if (member_func_body)
         {
           if (tok == ';')
@@ -15533,7 +15757,11 @@ cpp_conversion_operator:
         }
         skip(';');
       }
+      PROFILE_TAGDECL_MEMBER_SEG(PROFILE_TAGDECL_MEMBER_NEXT);
       skip('}');
+      PROFILE_TAGDECL_MEMBER_END();
+      PROFILE_TAGDECL_PHASE(PROFILE_TAGDECL_TAIL);
+      PROFILE_TAGDECL_TAIL_BEGIN();
       parse_attribute(&ad);
       if (ad.cleanup_func)
         cprime_warning("attribute '__cleanup__' ignored on type");
@@ -15570,13 +15798,17 @@ cpp_conversion_operator:
         }
       }
       cpp_member_decl_context = member_context.previous;
+      PROFILE_TAGDECL_TAIL_PHASE(PROFILE_TAGDECL_TAIL_CHECK_FIELDS);
       if (!defer_layout_until_outer)
       {
         check_fields(type, 1);
         check_fields(type, 0);
+        PROFILE_TAGDECL_TAIL_PHASE(PROFILE_TAGDECL_TAIL_LAYOUT);
         struct_layout(type, &ad);
+        PROFILE_TAGDECL_TAIL_PHASE(PROFILE_TAGDECL_TAIL_DEFERRED);
         complete_deferred_nested_layouts(get_struct_type_name_tok(type));
       }
+      PROFILE_TAGDECL_TAIL_PHASE(PROFILE_TAGDECL_TAIL_LOCAL_CLASS);
       if (local_replay) local_replay->end_index = local_type_declaration_index;
       if (local_class_boundary)
       {
@@ -15597,12 +15829,18 @@ cpp_conversion_operator:
             link = &node->prev;
         }
       }
-      if (u == VT_STRUCT)
+      PROFILE_TAGDECL_TAIL_PHASE(PROFILE_TAGDECL_TAIL_EMIT);
+      if (is_cpp_translation_unit())
       {
-        emit_implicit_virtual_assignment_bodies(type);
-        emit_virtual_tables_for_class(get_struct_type_name_tok(type));
+        if (u == VT_STRUCT)
+        {
+          emit_implicit_virtual_assignment_bodies(type);
+          emit_virtual_tables_for_class(get_struct_type_name_tok(type));
+        }
+        emit_defaulted_member_bodies(type);
       }
-      emit_defaulted_member_bodies(type);
+      PROFILE_TAGDECL_TAIL_END();
+      PROFILE_TAGDECL_PHASE(PROFILE_TAGDECL_OTHER);
       if (saved_nb_pending_member_funcs != nb_pending_member_funcs
           && !defer_pending_member_funcs)
         compile_pending_member_funcs(saved_nb_pending_member_funcs);
@@ -15623,6 +15861,13 @@ cpp_conversion_operator:
     if (debug_modes)
       cprime_debug_fix_forw(cprime_state, type);
   }
+}
+
+static void struct_decl(CType *type, int u, int is_class_tag)
+{
+  PROFILE_TAGDECL_BEGIN();
+  struct_decl_impl(type, u, is_class_tag);
+  PROFILE_TAGDECL_END();
 }
 
 static void sym_to_attr(AttributeDef *ad, Sym *s)
@@ -16074,9 +16319,12 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
   int linkage_extern_only = 0;
   int complex_specifier = 0;
   int basic_specifier = 0;
+  int c_identifier_lookup = 0;
   Sym *s;
+  Sym *c_identifier = NULL;
   CType type1;
 
+  PROFILE_BTYPE_BEGIN();
   memset(ad, 0, sizeof(AttributeDef));
   last_decl_was_auto = 0;
   last_decl_had_trailing_return = 0;
@@ -16102,6 +16350,9 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
   while (1)
   {
 
+    PROFILE_BTYPE_PHASE(PROFILE_BTYPE_PREFIX);
+    PROFILE_TAGDECL_MEMBER_BTYPE_PREFIX_SEG(
+        PROFILE_TAGDECL_MEMBER_BTYPE_PREFIX_PROBE);
 
     if (is_cpp_translation_unit() && tok >= TOK_UIDENT
         && !strcmp(get_tok_str(tok, NULL), "virtual"))
@@ -16138,8 +16389,19 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
       next();
       explicit_global_scope = 1;
     }
-    if (!typespec_found && try_expand_cpp_alias_template(explicit_global_scope))
-      continue;
+    /* The alias-template probe answers 'no' for every token in a C
+       translation unit (its own first test), and it is reached once per
+       declaration-specifier iteration and once per primary expression.
+       Keep the C++-only call off the C path entirely. */
+    if (!typespec_found && is_cpp_translation_unit())
+    {
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TEMPLATE);
+      if (try_expand_cpp_alias_template(explicit_global_scope))
+        continue;
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_PREFIX);
+    }
+    PROFILE_TAGDECL_MEMBER_BTYPE_PREFIX_SEG(
+        PROFILE_TAGDECL_MEMBER_BTYPE_PREFIX_DISPATCH);
     switch (tok)
     {
     case TOK_EXTENSION:
@@ -16224,23 +16486,28 @@ tmbt: cprime_error("too many basic types");
       next();
       break;
     case TOK_ENUM:
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TAGDECL);
       struct_decl(&type1, VT_ENUM, 0);
 basic_type2:
       u = type1.t;
       type->ref = type1.ref;
       goto basic_type1;
     case TOK_STRUCT:
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TAGDECL);
       struct_decl(&type1, VT_STRUCT, 0);
       goto basic_type2;
     case TOK_CLASS:
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TAGDECL);
       struct_decl(&type1, VT_STRUCT, 1);
       goto basic_type2;
     case TOK_UNION:
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TAGDECL);
       struct_decl(&type1, VT_UNION, 0);
       goto basic_type2;
 
     // Type Modifiers
     case TOK__Atomic:
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TYPEID);
       next();
       type->t = t;
       parse_btype_qualify(type, VT_ATOMIC);
@@ -16371,11 +16638,13 @@ storage:
       continue;
     // GNUC typeof
     case TOK_UNDERLYING_TYPE:
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TYPEID);
       parse_underlying_type(&type1);
       goto basic_type2;
     case TOK_TYPEOF1:
     case TOK_TYPEOF2:
     case TOK_TYPEOF3:
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TYPEID);
       next();
       parse_expr_type(&type1);
       // Remove All Storage Modifiers Except Typedef
@@ -16389,6 +16658,7 @@ storage:
       goto basic_type2;
     case TOK_DECLTYPE:
   case TOK_DECLTYPE2:
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TYPEID);
       next();
       last_btype_was_decltype = 1;
       parse_decltype_type(&type1);
@@ -16400,7 +16670,7 @@ storage:
           /* Resume expression parsing for a qualified value or function. */
           if (!(nested_type_field->v & SYM_FIELD))
             unget_tok(nested_type_field->v);
-          return 0;
+          PROFILE_BTYPE_RETURN(0);
         }
         type1 = nested_type_field->type;
         type1.t &= ~VT_TYPEDEF;
@@ -16417,6 +16687,7 @@ storage:
     case TOK_THREAD_LOCAL:
       cprime_error("_Thread_local is not implemented");
     default:
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TAG);
       if (!typespec_found && active_member_class_tok && tok >= TOK_UIDENT)
       {
         CType owner_type;
@@ -16449,8 +16720,17 @@ storage:
           next();
           continue;
         }
+        if (!is_cpp_translation_unit() && tok >= TOK_UIDENT)
+        {
+          PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TAG);
+          n = tok;
+          c_identifier = visible;
+          c_identifier_lookup = 1;
+          goto btype_typedef_resolution;
+        }
         if (tok >= TOK_UIDENT)
         {
+          PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TEMPLATE);
           TemplateDef *class_td = find_class_template_def(explicit_global_scope ? tok : find_current_namespace_tok(tok));
           if (!class_td)
             class_td = find_class_template_def(tok);
@@ -16478,7 +16758,7 @@ storage:
                 /* Resume expression parsing for a qualified value or function. */
                 if (!(nested_type_field->v & SYM_FIELD))
                   unget_tok(nested_type_field->v);
-                return 0;
+                PROFILE_BTYPE_RETURN(0);
               }
               if (nested_type_field)
               {
@@ -16495,7 +16775,7 @@ storage:
                     /* Qualified value/function: resume expression parsing. */
                     if (!(nested->v & SYM_FIELD))
                       unget_tok(nested->v);
-                    return 0;
+                    PROFILE_BTYPE_RETURN(0);
                   }
                   type->t = (nested->type.t & ~VT_TYPEDEF) | u;
                   type->ref = nested->type.ref;
@@ -16517,9 +16797,11 @@ storage:
             tok = original_tok;
           }
         }
+        PROFILE_BTYPE_PHASE(PROFILE_BTYPE_BASE);
         if (tok >= TOK_UIDENT && is_cpp_translation_unit()
             && is_namespace_tok(tok))
         {
+          PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TEMPLATE);
           int first_tok = tok, qtok, parts[16], nb_parts = 0;
           TokenString *replay = tok_str_alloc();
           tok_str_add2(replay, tok, &tokc);
@@ -16574,7 +16856,7 @@ storage:
                 Sym *nested = parse_template_nested_typedef(type->ref);
                 if (!nested || !(nested->type.t & VT_TYPEDEF)) {
                   if (nested && !(nested->v & SYM_FIELD)) unget_tok(nested->v);
-                  return 0;
+                  PROFILE_BTYPE_RETURN(0);
                 }
                 type->t = (nested->type.t & ~VT_TYPEDEF) | u;
                 type->ref = nested->type.ref;
@@ -16609,7 +16891,7 @@ storage:
                   /* Resume expression parsing for a qualified value or function. */
                   if (!(nested_type_field->v & SYM_FIELD))
                     unget_tok(nested_type_field->v);
-                  return 0;
+                  PROFILE_BTYPE_RETURN(0);
                 }
                 if (nested_type_field)
                 {
@@ -16664,7 +16946,7 @@ storage:
                 Sym *nested = parse_template_nested_typedef(type->ref);
                 if (!nested || !(nested->type.t & VT_TYPEDEF)) {
                   if (nested && !(nested->v & SYM_FIELD)) unget_tok(nested->v);
-                  return 0;
+                  PROFILE_BTYPE_RETURN(0);
                 }
                 type->t = (nested->type.t & ~VT_TYPEDEF) | u;
                 type->ref = nested->type.ref;
@@ -16684,8 +16966,10 @@ storage:
           tok = first_tok;
         }
 
+        PROFILE_BTYPE_PHASE(PROFILE_BTYPE_BASE);
         n = explicit_global_scope ? tok : find_current_class_nested_type_tok(tok);
         if (n == tok && !explicit_global_scope) n = find_current_namespace_tok(tok);
+        PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TEMPLATE);
         TemplateDef *td = find_class_template_def(n);
         /* A block-scope tag hides an outer class template. Inspect the
            binding itself: struct_find returns the canonical global record. */
@@ -16735,7 +17019,7 @@ storage:
             /* Resume expression parsing for a qualified value or function. */
             if (!(nested_type_field->v & SYM_FIELD))
               unget_tok(nested_type_field->v);
-            return 0;
+            PROFILE_BTYPE_RETURN(0);
           }
           if (nested_type_field)
           {
@@ -16756,6 +17040,7 @@ storage:
           break;
         }
 
+        PROFILE_BTYPE_PHASE(PROFILE_BTYPE_BASE);
         /*
          * cprime class/struct names should be usable directly as type names
          * (C++-style), not only via explicit typedef aliases.
@@ -16773,6 +17058,7 @@ storage:
           s = NULL;
         if (!s)
         {
+          PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TEMPLATE);
           TemplateDef *class_td = find_class_template_def(n);
           if (!class_td)
             class_td = find_class_template_def(tok);
@@ -16801,6 +17087,7 @@ storage:
             }
           }
         }
+        PROFILE_BTYPE_PHASE(PROFILE_BTYPE_BASE);
         if (s
             && (((s->type.t & VT_BTYPE) == VT_STRUCT)
                   || ((s->type.t & VT_BTYPE) == VT_UNION)
@@ -16872,7 +17159,7 @@ storage:
                     {
                       if (!(nested_type_field->v & SYM_FIELD))
                         unget_tok(nested_type_field->v);
-                      return 0;
+                      PROFILE_BTYPE_RETURN(0);
                     }
                     t &= ~(VT_BTYPE | VT_LONG);
                     u = t & ~(VT_CONSTANT | VT_VOLATILE), t ^= u;
@@ -16925,7 +17212,7 @@ storage:
                         {
                           if (!(nested_alias->v & SYM_FIELD))
                             unget_tok(nested_alias->v);
-                          return 0;
+                          PROFILE_BTYPE_RETURN(0);
                         }
                         type->t = (nested_alias->type.t & ~VT_TYPEDEF) | u;
                         type->ref = nested_alias->type.ref;
@@ -16962,7 +17249,7 @@ storage:
                     {
                       if (!(nested_alias->v & SYM_FIELD))
                         unget_tok(nested_alias->v);
-                      return 0;
+                      PROFILE_BTYPE_RETURN(0);
                     }
                     type->t = (nested_alias->type.t & ~VT_TYPEDEF) | u;
                     type->ref = nested_alias->type.ref;
@@ -17003,6 +17290,7 @@ storage:
       if (n == tok && !explicit_global_scope)
         n = find_current_namespace_tok(tok);
       {
+        PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TEMPLATE);
         TemplateDef *class_td = find_class_template_def(n);
         if (!class_td)
           class_td = find_class_template_def(tok);
@@ -17030,7 +17318,7 @@ storage:
               /* Resume expression parsing for a qualified value or function. */
               if (!(nested_type_field->v & SYM_FIELD))
                 unget_tok(nested_type_field->v);
-              return 0;
+              PROFILE_BTYPE_RETURN(0);
             }
             if (nested_type_field)
             {
@@ -17054,20 +17342,55 @@ storage:
           tok = original_tok;
         }
       }
-      s = explicit_global_scope ? global_symbol_find(n) : sym_find(n);
+btype_typedef_resolution:
+      if (!c_identifier_lookup && n < TOK_IDENT)
+      {
+        /* `default:` can reach this label with a type keyword or another
+           non-identifier token.  Every symbol lookup below is keyed by an
+           identifier token, so such a token can only miss.  The C identifier
+           fast path sets c_identifier_lookup and keeps its existing work. */
+        goto the_end;
+      }
+      PROFILE_BTYPE_PHASE(PROFILE_BTYPE_TYPEDEF);
+      PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_SEG(
+          PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_ENTRY);
+      if (c_identifier_lookup)
+      {
+        s = c_identifier;
+        if (!s)
+          goto the_end;
+      }
+      else
+        s = explicit_global_scope ? global_symbol_find(n) : sym_find(n);
+      PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_SEG(
+          PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_LOOKUP);
       if (!s || !(s->type.t & VT_TYPEDEF))
       {
-        Sym *global_typedef = global_symbol_find(n);
+        Sym *global_typedef;
+        if (c_identifier_lookup && !sym_scope_ex(s))
+          global_typedef = s;
+        else
+          global_typedef = global_symbol_find(n);
         if ((!global_typedef || !(global_typedef->type.t & VT_TYPEDEF))
             && n != tok)
           global_typedef = global_symbol_find(tok);
         if (global_typedef && (global_typedef->type.t & VT_TYPEDEF))
           s = global_typedef;
       }
+      PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_SEG(
+          PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_ACCEPT);
       if (!s || !(s->type.t & VT_TYPEDEF))
+      {
         goto the_end;
+      }
 
+      PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_SEG(
+          PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_NEXT);
+      PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_SEG(
+          PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_ADVANCE);
       n = tok, next();
+      PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_SEG(
+          PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_LABEL);
       {
       int typedef_label = 0;
       if (tok == ':' && ignore_label && !(t & VT_TYPEDEF))
@@ -17086,6 +17409,8 @@ storage:
       }
       }
 
+      PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_SEG(
+          PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_LOOP);
       while (tok == ':' && (s->type.t & VT_BTYPE) == VT_STRUCT
           && s->type.ref)
       {
@@ -17094,11 +17419,13 @@ storage:
         {
           if (nested_sym && !(nested_sym->v & SYM_FIELD))
             unget_tok(nested_sym->v);
-          return 0;
+          PROFILE_BTYPE_RETURN(0);
         }
         s = nested_sym;
       }
 
+      PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_SEG(
+          PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_CONSTRUCT);
       t &= ~(VT_BTYPE | VT_LONG);
       u = t & ~(VT_CONSTANT | VT_VOLATILE), t ^= u;
       if (s->v & SYM_STRUCT)
@@ -17117,6 +17444,8 @@ storage:
       t = type->t;
       if (t & VT_ARRAY)
         t |= VT_BT_ARRAY;
+      PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_SEG(
+          PROFILE_TAGDECL_MEMBER_BTYPE_TYPEDEF_ATTR);
       // Get Attributes From Typedef
       sym_to_attr(ad, s);
       typespec_found = 1;
@@ -17127,6 +17456,7 @@ storage:
     type_found = 1;
   }
 the_end:
+  PROFILE_BTYPE_PHASE(PROFILE_BTYPE_FINISH);
   /* A failed tentative declaration parse must preserve the qualifier for
      expression parsing, where a local name may hide the global entity. */
   if (explicit_global_scope && !typespec_found)
@@ -17162,7 +17492,7 @@ the_end:
   }
   else if (type_found && ad->vector_size)
     make_vector_type(type, ad->vector_size);
-  return type_found;
+  PROFILE_BTYPE_RETURN(type_found);
 }
 
 /* convert a function parameter type (array to pointer and function to
@@ -17785,6 +18115,12 @@ static void constexpr_read_local_value(SValue *operand)
   Sym *relocation;
   CValue value;
   ConstexprPointerBounds bounds;
+  /* An arm of a conditional that yields an lvalue becomes an address, so the
+     arm has to reach the join as a named object: folding a file-scope
+     integral constant to its value here would leave the shared indirection
+     with a value where it expects an address (`size <= limit ? page_size :
+     size`, for example). */
+  if (cpp_conditional_lvalue_arm) return;
   /* A value-consuming operation can read a named integral constant even
      when an enclosing reference argument required preserving its lvalue. */
   if ((operand->r & (VT_VALMASK | VT_LVAL | VT_SYM | VT_NONCONST)) == (VT_CONST | VT_LVAL | VT_SYM)
@@ -21341,6 +21677,49 @@ static int cpp_raw_literal_parameter(Sym *parameter)
   element = pointed_type(&parameter->type);
   return (element->t & ~(VT_STORAGE | VT_DEFSIGN)) == (char_type.t | VT_CONSTANT);
 }
+
+/* In a C translation unit a type specifier never starts with a literal, an
+   operator or another parenthesis, so a '(' followed by one of those can only
+   be a grouped expression.  Every type keyword and every typedef name is an
+   identifier token, so real casts keep the tentative probe; a C++ unit always
+   keeps it because class and template names reach further than the C set. */
+static void profile_paren_probe_class(int token)
+{
+  Sym *binding;
+
+  if (!profile_detail_enabled || is_cpp_translation_unit())
+    return;
+  if (token >= TOK_UIDENT && token < SYM_FIRST_ANOM)
+  {
+    binding = sym_find(token);
+    if (!binding)
+      binding = global_symbol_find(token);
+    if (binding && !(binding->type.t & VT_TYPEDEF) && !struct_find(token))
+      ++profile_detail_paren_probe_ident_visible;
+    else
+      ++profile_detail_paren_probe_ident_absent;
+  }
+  else if (token >= TOK_IDENT && token < TOK_UIDENT)
+    ++profile_detail_paren_probe_keyword;
+  else
+    ++profile_detail_paren_probe_other;
+}
+
+static int paren_type_probe_possible(int token)
+{
+  if (!is_cpp_translation_unit())
+  {
+    if (token < TOK_IDENT)
+    {
+      PROFILE_PAREN_PROBE_SKIPPED();
+      return 0;
+    }
+    if (profile_detail_enabled)
+      profile_paren_probe_class(token);
+  }
+  return 1;
+}
+
 ST_FUNC void unary(void)
 {
   int n, t, align, size, r;
@@ -21354,6 +21733,9 @@ ST_FUNC void unary(void)
   Sym *s;
   AttributeDef ad;
 
+  PROFILE_UNARY_BEGIN();
+  PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_DISPATCH);
+
   // Generate Line Number Info
   if (debug_modes)
     cprime_debug_line(cprime_state), cprime_tcov_check_line (cprime_state, 1);
@@ -21362,6 +21744,7 @@ ST_FUNC void unary(void)
   /* XXX: GCC 2.95.3 does not generate a table although it should be
      better here */
 tok_next:
+  PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_DISPATCH);
   if (is_cpp_translation_unit() && tok >= TOK_UIDENT
       && !strcmp(get_tok_str(tok, NULL), "noexcept"))
   {
@@ -21396,7 +21779,9 @@ tok_next:
     next();
     goto tok_next;
   }
-  if (try_expand_cpp_alias_template(explicit_global_scope))
+  /* Alias templates are C++-only; skip the probe in a C translation unit. */
+  if (is_cpp_translation_unit()
+      && try_expand_cpp_alias_template(explicit_global_scope))
     goto tok_next;
   if (tok == CPP_TOK_TYPENAME) {
     memset(&ad, 0, sizeof(ad));
@@ -21562,9 +21947,12 @@ tok_next:
     cpp_delete_pointer(array_delete);
     goto unary_post;
   }
+  PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_LITERAL);
   switch (tok)
   {
   case TOK_PPNUM:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_LITERAL);
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_SPECIAL);
   {
     const char *source = tokc.str.data, *suffix = strchr(source, '_');
     CString name, argument;
@@ -21660,11 +22048,13 @@ tok_next:
     goto tok_next;
   }
   case TOK_UNDERLYING_TYPE:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_TYPE_QUERY);
     parse_underlying_type(&type);
     unget_tok(template_exact_ctype_typedef_tok(&type));
     goto tok_next;
   case TOK_DECLTYPE:
   case TOK_DECLTYPE2:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_TYPE_QUERY);
     next();
     parse_decltype_type(&type);
     unget_tok(template_exact_ctype_typedef_tok(&type));
@@ -21713,6 +22103,8 @@ tok_next:
   case TOK_U16CHAR:
   case TOK_U32CHAR:
   case TOK_LCHAR:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_LITERAL);
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_INTEGER);
     if (tok == TOK_U16CHAR || tok == TOK_U32CHAR) {
       t = tok == TOK_U16CHAR ? VT_CHAR16_T : VT_CHAR32_T; goto push_tokc;
     }
@@ -21725,9 +22117,11 @@ tok_next:
     goto push_tokc;
   case TOK_U8CHAR:
   case TOK_CCHAR:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_INTEGER);
     t = is_cpp_translation_unit() ? char_type.t : VT_INT;
     goto push_tokc;
   case TOK_CXX_INITIALIZER_OBJECT:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_OTHER);
     if (!cpp_default_initializer_receiver.sym)
       cprime_error("initializer object is unavailable");
     vsetc(&cpp_default_initializer_receiver.type, cpp_default_initializer_receiver.r,
@@ -21745,6 +22139,7 @@ tok_next:
     next();
     break;
   case TOK_CINT:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_INTEGER);
     t = VT_INT;
 push_tokc:
     type.t = t;
@@ -21765,6 +22160,7 @@ push_tokc:
   case TOK_SIGNED3:
   case TOK_UNSIGNED:
   {
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_CAST);
     CType cast_type;
     AttributeDef cast_ad;
     memset(&cast_ad, 0, sizeof(cast_ad));
@@ -21805,18 +22201,23 @@ push_tokc:
     cprime_error("expression expected before '%s'", get_tok_str(tok, &tokc));
   }
   case TOK_CUINT:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_INTEGER);
     t = VT_INT | VT_UNSIGNED;
     goto push_tokc;
   case TOK_CLLONG:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_INTEGER);
     t = VT_LLONG;
     goto push_tokc;
   case TOK_CULLONG:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_INTEGER);
     t = VT_LLONG | VT_UNSIGNED;
     goto push_tokc;
   case TOK_CFLOAT:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_FLOAT);
     t = VT_FLOAT;
     goto push_tokc;
   case TOK_CDOUBLE:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_FLOAT);
     t = VT_DOUBLE;
     goto push_tokc;
   case TOK_CIMAGI:
@@ -21827,6 +22228,7 @@ push_tokc:
   {
     /* An imaginary constant is a complex value with a zero real part. */
     CType elem;
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_FLOAT);
     elem.ref = NULL;
     switch (tok)
     {
@@ -21847,6 +22249,7 @@ push_tokc:
     break;
   }
   case TOK_CLDOUBLE:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_FLOAT);
 #ifdef CPRIME_USING_DOUBLE_FOR_LDOUBLE
     t = VT_DOUBLE | VT_LONG;
 #else
@@ -21854,15 +22257,18 @@ push_tokc:
 #endif
     goto push_tokc;
   case TOK_CLONG:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_INTEGER);
     t = (LONG_SIZE == 8 ? VT_LLONG : VT_INT) | VT_LONG;
     goto push_tokc;
   case TOK_CULONG:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_INTEGER);
     t = (LONG_SIZE == 8 ? VT_LLONG : VT_INT) | VT_LONG | VT_UNSIGNED;
     goto push_tokc;
   case TOK___HAS_ATTRIBUTE:
   case TOK___HAS_BUILTIN:
   case TOK___HAS_FEATURE:
   case TOK___HAS_EXTENSION:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_BUILTIN);
     {
       int available = cprime_capability_query(cprime_capability_kind(tok));
       next();
@@ -21870,11 +22276,14 @@ push_tokc:
     }
     break;
   case TOK_GNU_NULL:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_LITERAL);
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_SPECIAL);
     vpushi(0);
     vtop->type.t = PTR_SIZE == 8 ? VT_LLONG : VT_INT;
     next();
     break;
   case TOK_NULLPTR:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_OTHER);
     if (!is_cpp_translation_unit())
       cprime_error("nullptr requires C++");
     vpushi(0);
@@ -21883,11 +22292,13 @@ push_tokc:
     break;
   case TOK_TRUE:
   case TOK_FALSE:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_OTHER);
     vpushi(tok == TOK_TRUE ? 1 : 0);
     vtop->type.t = VT_BOOL;
     next();
     break;
   case TOK_builtin_LINE:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_BUILTIN);
   {
     int line = file->line_num;
     next(); skip('('); skip(')');
@@ -21911,6 +22322,8 @@ push_tokc:
     goto case_TOK_STR;
   }
   case TOK___FUNCTION__:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_LITERAL);
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_SPECIAL);
     if (!non_iso)
       goto tok_identifier;
   // Fall Thru
@@ -21928,6 +22341,8 @@ push_tokc:
   case TOK_U16STR:
   case TOK_U32STR:
   case TOK_LSTR:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_LITERAL);
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_STRING);
     if (tok == TOK_U16STR || tok == TOK_U32STR) {
       t = tok == TOK_U16STR ? VT_CHAR16_T : VT_CHAR32_T; goto str_init;
     }
@@ -21944,6 +22359,8 @@ case_TOK_STR:
     // String Parsing
     t = char_type.t;
 str_init:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_LITERAL);
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_STRING);
     if (is_cpp_translation_unit()
         || (cprime_state->warn_write_strings & WARN_ON))
       t |= VT_CONSTANT;
@@ -21974,16 +22391,19 @@ str_init:
     break;
   case TOK_SOTYPE:
   case '(':
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_PAREN);
+    PROFILE_PAREN_SEG(PROFILE_DETAIL_PAREN_PROBE);
     t = tok;
     next();
     /* Parse the base type before disambiguating C++ constructions below.
        A typedef followed by '(' may start an abstract declarator, as in
        (U (*)(void)), so the identifier and opening paren alone cannot decide. */
-    if (parse_btype(&type, &ad, 0))
+    if (paren_type_probe_possible(tok) && parse_btype(&type, &ad, 0))
     {
       int decltype_cast_type = last_btype_was_decltype;
       if (is_cpp_translation_unit() && (tok == '(' || tok == '{'))
       {
+        PROFILE_PAREN_SEG(PROFILE_DETAIL_PAREN_DISAMBIG);
         TokenString *suffix = tok_str_alloc();
         TokenString *probe = tok_str_alloc();
         CType probed;
@@ -22012,6 +22432,7 @@ str_init:
         tok_str_free(probe);
         if (!is_type)
         {
+          PROFILE_PAREN_SEG(PROFILE_DETAIL_PAREN_FALLBACK);
           TokenString *expression = tok_str_alloc();
           tok_str_add(expression, template_exact_type_tok_from_ctype(&type));
           tok_str_append(expression, suffix);
@@ -22023,6 +22444,7 @@ str_init:
         }
         restore_cpp_lifecycle_probe(suffix);
       }
+      PROFILE_PAREN_SEG(PROFILE_DETAIL_PAREN_TYPE_COMPLETE);
       if (tok == ':')
       {
         int value_expression = 0;
@@ -22050,6 +22472,7 @@ str_init:
       // check ISOC99 compound literal
       if (tok == '{')
       {
+        PROFILE_PAREN_SEG(PROFILE_DETAIL_PAREN_COMPOUND);
         // Data Is Allocated Locally By Default
         if (global_expr)
           r = VT_CONST;
@@ -22074,6 +22497,9 @@ str_init:
         if (active_type_query_alignment)
           *active_type_query_alignment = ad.a.aligned;
         vpush(&type);
+        PROFILE_PAREN_CLOSE();
+        PROFILE_PREFIX_CLOSE();
+        PROFILE_UNARY_END();
         return;
       }
       else
@@ -22125,6 +22551,7 @@ str_init:
     }
     else if (tok == '{')
     {
+      PROFILE_PAREN_SEG(PROFILE_DETAIL_PAREN_STMT_EXPR);
       int saved_nocode_wanted = nocode_wanted;
       if (CONST_WANTED && !NOEVAL_WANTED)
         expect("constant");
@@ -22160,11 +22587,13 @@ str_init:
     }
     else
     {
+      PROFILE_PAREN_SEG(PROFILE_DETAIL_PAREN_FALLBACK);
       gexpr();
       skip(')');
     }
     break;
   case '*':
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_OPERATOR);
     next();
     unary();
     if (try_call_cpp_unary_operator('*'))
@@ -22177,6 +22606,7 @@ str_init:
     int saved_forming_member_address = forming_cpp_member_address;
     int saved_direct_member_address = cpp_member_address_direct_operand;
     int member_address_formed;
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_OPERATOR);
     next();
     forming_cpp_member_address = 1;
     cpp_member_address_direct_operand = tok != '(';
@@ -22204,6 +22634,7 @@ str_init:
     break;
   }
   case '!':
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_OPERATOR);
     next();
     unary();
     if (try_call_cpp_unary_operator('!'))
@@ -22217,6 +22648,7 @@ str_init:
   case TOK_IMAGPART:
   {
     int imag = tok == TOK_IMAGPART;
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_OPERATOR);
     next();
     unary();
     if (is_complex_type(&vtop->type))
@@ -22251,6 +22683,7 @@ str_init:
   case TOK_builtin_conj:
   case TOK_builtin_conjf:
   case TOK_builtin_conjl:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_BUILTIN);
   {
     int name = tok;
     int imag = name == TOK_builtin_cimag || name == TOK_builtin_cimagf
@@ -22283,6 +22716,7 @@ str_init:
     break;
   }
   case '~':
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_OPERATOR);
     next();
     unary();
     if (try_call_cpp_unary_operator('~'))
@@ -22291,6 +22725,7 @@ str_init:
     gen_op('^');
     break;
   case '+':
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_OPERATOR);
     next();
     unary();
     if (try_call_cpp_unary_operator('+'))
@@ -22367,6 +22802,7 @@ str_init:
   case TOK_ALIGNOF3:
   case TOK_ALIGNOF4:
   {
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_SIZEOF);
     int explicit_alignment = 0;
     int *saved_query = active_type_query_alignment;
     active_type_query_alignment = &explicit_alignment;
@@ -22405,6 +22841,7 @@ str_init:
   }
 
   case TOK_builtin_expect:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_BUILTIN);
     // __Builtin_Expect Is A No-Op For Now
     parse_builtin_params(0, "ee");
     vpop();
@@ -22902,6 +23339,7 @@ str_init:
   // Pre Operations
   case TOK_INC:
   case TOK_DEC:
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_OPERATOR);
     t = tok;
     next();
     ++suppress_integral_constexpr_fold;
@@ -22912,6 +23350,7 @@ str_init:
     inc(0, t);
     break;
   case '-':
+    PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_OPERATOR);
     next();
     unary();
     if (try_call_cpp_unary_minus_operator())
@@ -23027,6 +23466,7 @@ str_init:
   }
   // Special Qnan , Snan And Infinity Values
   case TOK___NAN__:
+    PROFILE_LIT_SEG(PROFILE_DETAIL_LIT_FLOAT);
     n = 0x7fc00000;
 special_math_val:
     vpushi(n);
@@ -23043,6 +23483,7 @@ special_math_val:
   default:
 tok_identifier:
     {
+      PROFILE_PREFIX_SEG(PROFILE_DETAIL_PREFIX_IDENTIFIER);
       int template_direct_call;
       int qualified_instance_class_tok = 0;
       int qualified_instance_member_tok = 0;
@@ -24597,11 +25038,18 @@ ordinary_identifier:
   }
 
 unary_post:
+  PROFILE_PAREN_CLOSE();
+  PROFILE_PREFIX_CLOSE();
+  PROFILE_UNARY_ENTER_POST();
   // Post Operations
   while (1)
   {
+    if (profile_detail_enabled) profile_detail_member_close();
+    if (profile_detail_enabled) profile_detail_call_seg_close();
+    PROFILE_POST_CLOSE();
     if (tok == TOK_INC || tok == TOK_DEC)
     {
+      PROFILE_POST_BEGIN(PROFILE_DETAIL_POST_INC);
       if (!try_call_cpp_postfix_operator(tok))
         inc(1, tok);
       next();
@@ -24620,6 +25068,8 @@ unary_post:
       int ret_nregs, ret_align, regsize, variadic, has_sret_stack_arg, orig_ret_nregs;
       int direct_result = 0, result_address = 0;
       int result_storage = VT_LOCAL | VT_LVAL;
+      PROFILE_POST_BEGIN(PROFILE_DETAIL_POST_MEMBER);
+      PROFILE_MEMBER_SEG(PROFILE_DETAIL_MEMBER_DISPATCH);
       // Field
       is_arrow = tok == TOK_ARROW;
       next();
@@ -24755,6 +25205,7 @@ cpp_object_member_destructor:
       }
       field = NULL;
       static_data_member = NULL;
+      PROFILE_MEMBER_SEG(PROFILE_DETAIL_MEMBER_PROBE);
       if ((vtop->type.t & VT_BTYPE) == VT_STRUCT)
       {
         int owner_tok = 0;
@@ -24853,6 +25304,7 @@ cpp_object_member_destructor:
         int call_arg_count, ai, instantiated_member_tok;
         int implicit_assignment_call = 0;
 
+        PROFILE_MEMBER_SEG(PROFILE_DETAIL_MEMBER_CALL);
         next();
         call_arg_count = count_saved_call_args(call_args, CPC_MAX_CALL_ARGUMENTS);
         infer_saved_arg_types(call_args, call_arg_types, call_arg_count);
@@ -25221,6 +25673,7 @@ cpp_object_member_destructor:
         {
           CType object_size_container = vtop->type;
           ObjectSizeInfo object_size_base = vtop->object_size;
+          PROFILE_MEMBER_SEG(PROFILE_DETAIL_MEMBER_FIELD);
           if (field)
             s = field;
           else
@@ -25275,11 +25728,13 @@ cpp_object_member_destructor:
           /* A temporary's member is an xvalue subobject, not an independent
              prvalue whose storage can be adopted as a by-value parameter. */
           vtop->r &= ~VT_CXX_PRVALUE;
+          PROFILE_MEMBER_SEG(PROFILE_DETAIL_MEMBER_ADDRESS);
           // Add Field Offset To Pointer
           gaddrof();
           vtop->type = char_pointer_type; // Change Type To 'Char *'
           vpushi(cumofs);
           gen_op('+');
+          PROFILE_MEMBER_SEG(PROFILE_DETAIL_MEMBER_EMIT);
           // Change Type To Field Type, And Set To Lvalue
           vtop->type = s->type;
           if (receiver_rvalue && !is_reference_type(&s->type))
@@ -25311,6 +25766,7 @@ cpp_object_member_destructor:
       int object_size_element_struct = 0;
       int object_size_is_vector = 0;
 
+      PROFILE_POST_BEGIN(PROFILE_DETAIL_POST_SUBSCRIPT);
       next();
       /* A braced-init-list index initializes the operator[] parameter; the
          list is materialized before the ordinary subscript path runs. */
@@ -25408,6 +25864,8 @@ cpp_object_member_destructor:
     }
     else if (tok == '(')
     {
+      PROFILE_POST_BEGIN(PROFILE_DETAIL_POST_CALL);
+      PROFILE_CALL_SEG(PROFILE_DETAIL_CALL_PRELUDE);
       if (vtop->bound_member_name) {
         CType receiver_type = vtop->type.ref->next->type;
         int receiver_slot = vtop->bound_member_receiver;
@@ -25454,6 +25912,7 @@ cpp_object_member_destructor:
         continue;
       try_cpp_pointer_conversion(2);
 
+      PROFILE_CALL_SEG(PROFILE_DETAIL_CALL_RESOLVE);
       // Function Call
       saved_call_arg_count = -1;
       overload_name_tok = 0;
@@ -25584,6 +26043,7 @@ error_func:
         vtop->r &= ~VT_LVAL; // No Lvalue
       }
       // Get Return Type
+      PROFILE_CALL_SEG(PROFILE_DETAIL_CALL_ARGS);
       /* Validation's baseline no-evaluation depth is one.  A nested
          sizeof/decltype operand must not demand the callee's body. */
       if (cpp_unused_body_validation && NOEVAL_WANTED == 1 && vtop->sym)
@@ -25702,7 +26162,9 @@ error_func:
           }
           else
           {
+            PROFILE_CALL_SEG(PROFILE_DETAIL_CALL_ARGEXPR);
             parse_typed_function_argument(sa);
+            PROFILE_CALL_SEG(PROFILE_DETAIL_CALL_ARGCONV);
             gfunc_param_typed_with_conversions(s, sa);
           }
           nb_args++;
@@ -25739,6 +26201,7 @@ error_func:
         vrev(n);
       }
 
+      PROFILE_CALL_SEG(PROFILE_DETAIL_CALL_EMIT);
       next();
       vcheck_cmp(); // the generators don't like VT_CMP on vtop
       if (nb_args && vtop[-nb_args].sym) {
@@ -25859,6 +26322,10 @@ error_func:
     else
       break;
   }
+  if (profile_detail_enabled) profile_detail_member_close();
+  if (profile_detail_enabled) profile_detail_call_seg_close();
+  PROFILE_POST_CLOSE();
+  PROFILE_UNARY_END();
 }
 
 #ifndef precedence_parser // Original Top-Down Parser 
@@ -26172,6 +26639,8 @@ static void expr_cond(void)
   SValue sv;
   CType type;
 
+  PROFILE_EXTRA_SCOPE_BEGIN(PROFILE_DETAIL_EXTRA_EXPR_COND);
+
   /* A parenthesized left operand being replayed for an assignment has its
      right operand saved below: this conditional stores it in the arm it
      selects.  Consume the request here so nested conditionals in the
@@ -26181,7 +26650,11 @@ static void expr_cond(void)
   expr_lor();
   if (tok == '?' || cpp_is_conditional_marker(tok))
   {
-    if (cpp_try_conditional_prvalue()) return;
+    if (cpp_try_conditional_prvalue())
+    {
+      PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_COND);
+      return;
+    }
     next();
     c = condition_3way();
     g = (tok == ':' && non_iso);
@@ -26258,6 +26731,7 @@ static void expr_cond(void)
       if (vtop->r & VT_THROW) *vtop = sv;
       if (c == 1) --nocode_wanted;
       gsym(u);
+      PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_COND);
       return;
     }
 
@@ -26385,6 +26859,7 @@ static void expr_cond(void)
       gvtst_set(1, t2);
       gen_cast(&type);
       //  cprime_warning("two conditions expr_cond");
+      PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_COND);
       return;
     }
 
@@ -26398,7 +26873,9 @@ static void expr_cond(void)
       if (islv) cpp_conditional_adjust_class_lvalue(&type);
       if (is_cpp_translation_unit())
         try_call_cpp_conversion_operator(&type, 0);
+      if (islv) ++cpp_conditional_lvalue_arm;
       gen_cast(&type);
+      if (islv) --cpp_conditional_lvalue_arm;
       if (islv)
       {
         mk_pointer(&vtop->type);
@@ -26432,7 +26909,9 @@ static void expr_cond(void)
       if (islv) cpp_conditional_adjust_class_lvalue(&type);
       if (is_cpp_translation_unit())
         try_call_cpp_conversion_operator(&type, 0);
+      if (islv) ++cpp_conditional_lvalue_arm;
       gen_cast(&type);
+      if (islv) --cpp_conditional_lvalue_arm;
       if (islv)
       {
         mk_pointer(&vtop->type);
@@ -26459,6 +26938,7 @@ static void expr_cond(void)
       vtop->type.t |= VT_RVALUE_REFERENCE;
     }
   }
+  PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_COND);
 }
 
 typedef struct AssignmentLvalueGuard
@@ -26573,9 +27053,14 @@ static void expr_eq(void)
 {
   int t;
 
+  PROFILE_EXTRA_SCOPE_BEGIN(PROFILE_DETAIL_EXTRA_EXPR_EQ);
+
   if (is_cpp_translation_unit() && tok == '('
       && try_cpp_parenthesized_conditional_assignment())
+  {
+    PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_EQ);
     return;
+  }
   expr_cond();
   if ((t = tok) == '=' || t == TOK_INIT_MEMBER || TOK_ASSIGN(t))
   {
@@ -26607,6 +27092,7 @@ static void expr_eq(void)
       vtop[-1].type.t &= ~VT_CONSTANT;
       vstore();
       active_assignment_lvalues = assignment_guard.prev;
+      PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_EQ);
       return;
     }
     if (t == TOK_INIT_MEMBER && tok == ';'
@@ -26632,6 +27118,7 @@ static void expr_eq(void)
         argument.sym = object;
         if (evaluate_constexpr_function(constructor, &argument, 1, &result)) {
           active_assignment_lvalues = assignment_guard.prev;
+          PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_EQ);
           return;
         }
         cprime_error("constexpr member initialization requires an evaluated constructor");
@@ -26694,6 +27181,7 @@ static void expr_eq(void)
         cur_scope->cl.n = old_cleanup_depth;
       }
       active_assignment_lvalues = assignment_guard.prev;
+      PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_EQ);
       return;
     }
     if (t == TOK_INIT_MEMBER && is_reference_type(&vtop->type))
@@ -26724,10 +27212,12 @@ static void expr_eq(void)
         if (try_call_cpp_assignment_operator())
         {
           active_assignment_lvalues = assignment_guard.prev;
+          PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_EQ);
           return;
         }
         vstore();
         active_assignment_lvalues = assignment_guard.prev;
+        PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_EQ);
         return;
       }
       CType destination_type = vtop->type;
@@ -26745,6 +27235,7 @@ static void expr_eq(void)
       if (t == '=' && try_call_cpp_assignment_operator())
       {
         active_assignment_lvalues = assignment_guard.prev;
+        PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_EQ);
         return;
       }
       if (t == '=' && is_cpp_translation_unit()
@@ -26760,6 +27251,7 @@ static void expr_eq(void)
         vswap();
         vpop();
         active_assignment_lvalues = assignment_guard.prev;
+        PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_EQ);
         return;
       }
       if ((vtop[-1].type.t & VT_BTYPE) == VT_STRUCT)
@@ -26798,6 +27290,7 @@ static void expr_eq(void)
     }
     active_assignment_lvalues = assignment_guard.prev;
   }
+  PROFILE_EXTRA_SCOPE_END(PROFILE_DETAIL_EXTRA_EXPR_EQ);
 }
 
 ST_FUNC void gexpr(void)
@@ -28390,7 +28883,11 @@ static void gen_function(Sym *sym)
 {
   struct scope f = { 0 };
   int profile_outermost;
+  int profile_stage_active;
+  int profile_function_stage;
   unsigned long long profile_started = 0;
+  unsigned long long profile_stage_started = 0;
+  unsigned long long profile_function_stage_started = 0;
   int saved_local_type_owner = local_type_owner_tok;
   int saved_local_type_index = local_type_declaration_index;
   jmp_buf *saved_substitution_jump = cpp_substitution_jump;
@@ -28407,6 +28904,9 @@ static void gen_function(Sym *sym)
   cpp_substitution_jump = NULL;
   cpp_unevaluated_expression_depth = 0;
   profile_outermost = profile_function_begin(&profile_started);
+  profile_stage_active = profile_stage_begin(&profile_stage_started);
+  profile_function_stage =
+    profile_function_stage_begin(&profile_function_stage_started);
   memcpy(saved_namespace_stack, namespace_stack, sizeof(namespace_stack));
   enter_symbol_namespace(sym->v);
   active_member_class_tok = member_function_class_tok(sym->v);
@@ -28418,6 +28918,9 @@ static void gen_function(Sym *sym)
 
   cur_scope = root_scope = &f;
   nocode_wanted = 0;
+  profile_function_stage_end(profile_function_stage,
+                             profile_function_stage_started,
+                             &profile_detail_function_setup_ns);
 
   /* gen_function_body() scanned the body before it was parsed; the candidate
      it found belongs to this function and to no nested body. */
@@ -28460,16 +28963,34 @@ static void gen_function(Sym *sym)
   rsym = 0;
   nb_temp_local_vars = 0;
 
+  profile_stage_end(profile_stage_active, profile_stage_started,
+                    PROFILE_DETAIL_STAGE_ENTRY);
+  profile_stage_active = profile_stage_begin(&profile_stage_started);
+  profile_function_stage =
+    profile_function_stage_begin(&profile_function_stage_started);
   gfunc_prolog(sym);
   adjust_native_member_entry(sym);
   cprime_debug_prolog_epilog(cprime_state, 0);
   func_vla_arg(sym);
   emit_defaulted_copy_boundary_body(sym);
+  profile_stage_end(profile_stage_active, profile_stage_started,
+                    PROFILE_DETAIL_STAGE_PROLOG);
+  profile_stage_active = profile_stage_begin(&profile_stage_started);
+  profile_function_stage_end(profile_function_stage,
+                             profile_function_stage_started,
+                             &profile_detail_function_prolog_ns);
+  profile_function_stage =
+    profile_function_stage_begin(&profile_function_stage_started);
   block(0);
+  profile_function_stage_end(profile_function_stage,
+                             profile_function_stage_started,
+                             &profile_detail_function_body_ns);
   if (f.stack_min < loc)
     loc = f.stack_min;
   gsym(rsym);
   nocode_wanted = 0;
+  profile_function_stage =
+    profile_function_stage_begin(&profile_function_stage_started);
 #ifdef CPRIME_TARGET_PE
   {
     const CppMemberDeclInfo *member = lookup_cpp_member_decl(sym->v);
@@ -28484,11 +29005,17 @@ static void gen_function(Sym *sym)
     }
   }
 #endif
+  profile_stage_end(profile_stage_active, profile_stage_started,
+                    PROFILE_DETAIL_STAGE_BODY);
+  profile_stage_active = profile_stage_begin(&profile_stage_started);
   cprime_debug_end_scope(NULL, !func_var);
   cprime_debug_prolog_epilog(cprime_state, 1);
   gfunc_epilog();
   cpp_eh_function_end();
   cpp_temp_function_end();
+  profile_function_stage_end(profile_function_stage,
+                             profile_function_stage_started,
+                             &profile_detail_function_epilog_ns);
 
   // End Of Function
   cprime_debug_funcend(cprime_state, ind - func_ind);
@@ -28504,9 +29031,14 @@ static void gen_function(Sym *sym)
      stack. */
   if (nb_pending_member_funcs)
   {
+    profile_function_stage =
+      profile_function_stage_begin(&profile_function_stage_started);
     ++compile_local_member_funcs_now;
     compile_pending_member_funcs(0);
     --compile_local_member_funcs_now;
+    profile_function_stage_end(profile_function_stage,
+                               profile_function_stage_started,
+                               &profile_detail_function_pending_ns);
   }
 
   sym_pop(&local_stack, NULL, 0);
@@ -28537,6 +29069,8 @@ static void gen_function(Sym *sym)
   cpp_nrvo_candidate_scope = saved_nrvo_candidate_scope;
   cpp_nrvo_candidate_type = saved_nrvo_candidate_type;
   cpp_nrvo_result_object_declared = saved_nrvo_result_object_declared;
+  profile_stage_end(profile_stage_active, profile_stage_started,
+                    PROFILE_DETAIL_STAGE_EPILOG);
   profile_function_end(profile_outermost, profile_started);
 }
 
@@ -29332,7 +29866,7 @@ static int decl_context(int l, int condition)
 {
   int v, has_init, has_ctor_init, has_direct_init, has_paren_init;
   int local_static_dynamic_init, declared_initializer;
-  int r, oldint, btype_is_auto, btype_was_typedef;
+  int r, oldint, btype_is_auto, btype_was_typedef, parsed_btype;
   int scoped_static_data_definition;
   int flex_extent;
   int friend_declaration, hidden_friend, function_source_tok;
@@ -29349,6 +29883,8 @@ static int decl_context(int l, int condition)
     constant_object_fields = NULL;
     constant_object_pending = 0;
 
+    if (l == VT_CONST && profile_detail_function_depth == 0)
+      PROFILE_TOP_SEG_BEGIN(PROFILE_TOP_DISPATCH);
     oldint = 0;
     friend_declaration = 0;
     if (compiling_pending_template_specs && tok >= TOK_UIDENT
@@ -29386,6 +29922,8 @@ static int decl_context(int l, int condition)
                                 get_struct_type_name_tok(&friend_type));
         }
         skip(';');
+        if (l == VT_CONST && profile_detail_function_depth == 0)
+          PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
         continue;
       }
       while (tok != TOK_EOF && tok != '(' && tok != ';' && tok != '{') {
@@ -29418,6 +29956,8 @@ static int decl_context(int l, int condition)
         ++materializing_template_interface;
         parse_explicit_function_specialization(2);
         --materializing_template_interface;
+        if (l == VT_CONST && profile_detail_function_depth == 0)
+          PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
         continue;
       }
     }
@@ -29438,6 +29978,8 @@ static int decl_context(int l, int condition)
           && !compiling_non_lifecycle_template_member_body)
         cprime_error("static assertion failed in '%s'",
                      funcname ? funcname : "<global>");
+      if (l == VT_CONST && profile_detail_function_depth == 0)
+        PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
       continue;
     }
     if (tok == TOK_EXTERN)
@@ -29465,6 +30007,8 @@ static int decl_context(int l, int condition)
           }
           next();
           cpp_language_linkage = saved_linkage;
+          if (l == VT_CONST && profile_detail_function_depth == 0)
+            PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
           continue;
         }
         pending_cpp_extern_linkage = requested_linkage;
@@ -29475,6 +30019,8 @@ static int decl_context(int l, int condition)
         extern_template_explicit_declaration = 1;
         parse_template_decl();
         extern_template_explicit_declaration = saved_extern_template;
+        if (l == VT_CONST && profile_detail_function_depth == 0)
+          PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
         continue;
       }
       else
@@ -29486,17 +30032,29 @@ static int decl_context(int l, int condition)
       friend_template_declaration_owner = friend_declaration ? active_member_class_tok : 0;
       parse_template_decl();
       friend_template_declaration_owner = saved_friend_owner;
+      if (l == VT_CONST && profile_detail_function_depth == 0)
+        PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
       continue;
     }
     if (l == VT_CONST && try_parse_using_namespace_directive())
+    {
+      if (l == VT_CONST && profile_detail_function_depth == 0)
+        PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
       continue;
+    }
     if (try_parse_using_alias_declaration(l))
+    {
+      if (l == VT_CONST && profile_detail_function_depth == 0)
+        PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
       continue;
+    }
     if (l == VT_CONST && is_cpp_inline_function_specifier(tok)) {
       int inline_tok = tok;
       next();
       if (tok == TOK_NAMESPACE) {
         parse_namespace_decl(1);
+        if (l == VT_CONST && profile_detail_function_depth == 0)
+          PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
         continue;
       }
       unget_tok(inline_tok);
@@ -29504,11 +30062,24 @@ static int decl_context(int l, int condition)
     if (l == VT_CONST && tok == TOK_NAMESPACE)
     {
       parse_namespace_decl(0);
+      if (l == VT_CONST && profile_detail_function_depth == 0)
+        PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
       continue;
     }
     if (l == VT_CONST && try_parse_cpp_lifecycle_def())
+    {
+      if (l == VT_CONST && profile_detail_function_depth == 0)
+        PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
       continue;
-    if (!parse_btype(&btype, &adbase, l == VT_LOCAL))
+    }
+    if (l == VT_CONST && profile_detail_function_depth == 0)
+      PROFILE_TOP_SEG_END(PROFILE_TOP_DISPATCH);
+    if (l == VT_CONST && profile_detail_function_depth == 0)
+      PROFILE_TOP_SEG_BEGIN(PROFILE_TOP_PARSE_BTYPE);
+    parsed_btype = parse_btype(&btype, &adbase, l == VT_LOCAL);
+    if (l == VT_CONST && profile_detail_function_depth == 0)
+      PROFILE_TOP_SEG_END(PROFILE_TOP_PARSE_BTYPE);
+    if (!parsed_btype)
     {
       if (l == VT_JMP)
         return 0;
@@ -29832,11 +30403,15 @@ static int decl_context(int l, int condition)
       ad = adbase;
       scoped_static_data_definition = 0;
       last_btype_was_typedef = btype_was_typedef;
+      if (l == VT_CONST && profile_detail_function_depth == 0)
+        PROFILE_TOP_SEG_BEGIN(PROFILE_TOP_TYPE_DECL);
       type_decl(&type, &ad, &v,
                 l == VT_CMP ? TYPE_DIRECT | TYPE_PARAM
                             : TYPE_DIRECT | ((l == VT_LOCAL || l == VT_JMP
                                 || (l == VT_CONST && is_cpp_translation_unit()))
                                              ? TYPE_LOCAL_CTOR_INIT : 0));
+      if (l == VT_CONST && profile_detail_function_depth == 0)
+        PROFILE_TOP_SEG_END(PROFILE_TOP_TYPE_DECL);
       if (pending_braced_ctad_template)
       {
         TemplateDef *ctad = pending_braced_ctad_template;
@@ -29860,8 +30435,16 @@ static int decl_context(int l, int condition)
                     : split_saved_array_initializer(initializer, &elements);
         if (count > CPC_MAX_TEMPLATE_ARGUMENTS)
           cprime_error("too many initializer expressions for class template argument deduction");
-        if (ctad->value_param_mask)
         {
+          int ctad_parameter, ctad_has_value_parameter = 0;
+          for (ctad_parameter = 0; ctad_parameter < ctad->nb_type_params;
+               ++ctad_parameter)
+            if (mask_test(&ctad->value_param_mask, ctad_parameter)) {
+              ctad_has_value_parameter = 1;
+              break;
+            }
+          if (ctad_has_value_parameter)
+          {
           /* A class whose parameters are not one type per element deduces
              through its deduction guides: the initializer list is the
              argument list of the guide, and its result names the type. */
@@ -29884,31 +30467,32 @@ static int decl_context(int l, int condition)
             cprime_error("deduction guide result for '%s' is incomplete",
                          get_tok_str(ctad->name_tok, NULL));
           materialize_incomplete_template_type(&type);
-        }
-        else
-        {
-          if (count < ctad->nb_required_type_params)
-            cprime_error("not enough initializer expressions for class template argument deduction");
-          memset(&arguments, 0, sizeof(arguments));
-          arguments.nb = count;
-          for (i = 0; i < count; ++i)
-          {
-            infer_saved_arg_type(elements[i], &actual);
-            if (actual.t == VT_BRACED_LIST)
-              cprime_error("cannot deduce class template argument from nested braced initializer");
-            if (is_reference_type(&actual)) actual = *pointed_type(&actual);
-            actual.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE
-                          | VT_RVALUE_REFERENCE | VT_ARRAY | VT_NULLPTR_TYPE);
-            if ((actual.t & VT_BTYPE) == VT_FUNC) mk_pointer(&actual);
-            arguments.toks[i] = template_exact_type_tok_from_ctype(&actual);
           }
-          instance_tok = instantiate_template_declaration_type(ctad, &arguments, 0);
-          compile_pending_template_specs_without_member_flush();
-          instance = struct_find(instance_tok);
-          if (!instance)
-            cprime_error("class template argument deduction did not produce a specialization");
-          type.t = instance->type.t;
-          type.ref = instance;
+          else
+          {
+            if (count < ctad->nb_required_type_params)
+              cprime_error("not enough initializer expressions for class template argument deduction");
+            memset(&arguments, 0, sizeof(arguments));
+            arguments.nb = count;
+            for (i = 0; i < count; ++i)
+            {
+              infer_saved_arg_type(elements[i], &actual);
+              if (actual.t == VT_BRACED_LIST)
+                cprime_error("cannot deduce class template argument from nested braced initializer");
+              if (is_reference_type(&actual)) actual = *pointed_type(&actual);
+              actual.t &= ~(VT_STORAGE | VT_CONSTANT | VT_VOLATILE
+                            | VT_RVALUE_REFERENCE | VT_ARRAY | VT_NULLPTR_TYPE);
+              if ((actual.t & VT_BTYPE) == VT_FUNC) mk_pointer(&actual);
+              arguments.toks[i] = template_exact_type_tok_from_ctype(&actual);
+            }
+            instance_tok = instantiate_template_declaration_type(ctad, &arguments, 0);
+            compile_pending_template_specs_without_member_flush();
+            instance = struct_find(instance_tok);
+            if (!instance)
+              cprime_error("class template argument deduction did not produce a specialization");
+            type.t = instance->type.t;
+            type.ref = instance;
+          }
         }
         free_saved_array_elements(elements, count);
         /* Restore the initializer and its following delimiter as one parser
@@ -29936,7 +30520,9 @@ static int decl_context(int l, int condition)
       if (l == VT_CONST
           && try_parse_cpp_scoped_member_def_after_declarator(&type, v,
                                                               friend_declaration, adbase.is_constexpr))
+      {
         break;
+      }
       if (l == VT_CONST)
       {
         /* Replayed member definitions already have their canonical identity. */
@@ -30048,6 +30634,8 @@ static int decl_context(int l, int condition)
       if (tok == '{' && (type.t & VT_BTYPE) == VT_FUNC)
       {
         int repeated_inline_definition = 0;
+        if (l == VT_CONST && profile_detail_function_depth == 0)
+          PROFILE_TOP_SEG_BEGIN(PROFILE_TOP_FUNCTION_PREFIX);
         if (l != VT_CONST)
           cprime_error("cannot use local functions");
 
@@ -30128,6 +30716,8 @@ static int decl_context(int l, int condition)
           struct InlineFunc *fn;
           if (repeated_inline_definition)
           {
+            if (l == VT_CONST && profile_detail_function_depth == 0)
+              PROFILE_TOP_SEG_END(PROFILE_TOP_FUNCTION_PREFIX);
             skip_or_save_block(NULL);
             break;
           }
@@ -30157,7 +30747,11 @@ static int decl_context(int l, int condition)
           }
           dynarray_add(&cprime_state->inline_fns,
                        &cprime_state->nb_inline_fns, fn);
+          if (l == VT_CONST && profile_detail_function_depth == 0)
+            PROFILE_TOP_SEG_BEGIN(PROFILE_TOP_INLINE_CAPTURE);
           skip_or_save_block(&fn->func_str);
+          if (l == VT_CONST && profile_detail_function_depth == 0)
+            PROFILE_TOP_SEG_END(PROFILE_TOP_INLINE_CAPTURE);
           fn->expand_at_call = inline_body_uses_va_arg_pack(fn->func_str)
                             || sym->type.ref->f.func_gnu_inline;
           if (ad.is_constexpr)
@@ -30190,10 +30784,17 @@ static int decl_context(int l, int condition)
             cur_text_section->sh_flags = text_section->sh_flags;
           gen_function_body(sym);
         }
+        if (l == VT_CONST && profile_detail_function_depth == 0)
+          PROFILE_TOP_SEG_END(PROFILE_TOP_FUNCTION_PREFIX);
         break;
       }
       else
       {
+        if (l == VT_CONST && profile_detail_function_depth == 0)
+        {
+          PROFILE_TOP_SEG_BEGIN(PROFILE_TOP_DECL_TAIL);
+          PROFILE_TOP_DECL_TAIL_BEGIN();
+        }
         has_init = declared_initializer = 0;
         has_ctor_init = 0;
         has_direct_init = 0;
@@ -30204,6 +30805,7 @@ static int decl_context(int l, int condition)
         flex_extent = -1;
         if (l == VT_CMP)
         {
+          PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_PARAM);
           // Find Parameter In Function Parameter List
           for (sym = func_vt.ref->next; sym; sym = sym->next)
             if ((sym->v & ~SYM_FIELD) == v)
@@ -30222,6 +30824,7 @@ found:
         }
         else if (type.t & VT_TYPEDEF)
         {
+          PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_TYPEDEF);
           /* GNU headers historically define bool and wchar_t.  Ignore those
              typedefs in system headers instead of replacing the builtins. */
           if (file && file->sys_header
@@ -30257,6 +30860,7 @@ found:
         else if ((type.t & VT_BTYPE) == VT_VOID
                  && !(type.t & VT_EXTERN))
         {
+          PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_OTHER);
           if (getenv("CPC_TRACE_VOID_DECL"))
             fprintf(stderr, "[void-decl] name=%s next=%s type=%x storage=%x\n",
                     get_tok_str(v, NULL), get_tok_str(tok, NULL), type.t, l);
@@ -30264,6 +30868,7 @@ found:
         }
         else
         {
+          PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_INIT_PRE);
           int saved_initializer_owner = active_member_class_tok;
           ProbeTagBinding *probe_mark = probe_tag_bindings;
           if (l == VT_CONST && ad.static_member_owner)
@@ -30396,6 +31001,7 @@ found:
                 has_init = 0;
                 if (!ad.section) ad.section = bss_section;
                 flex_extent = flexible_array_element_count(&type, init_str, NULL);
+                PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_INIT_ALLOC);
                 decl_initializer_alloc(&type, &ad, r, 0, 0, NULL, v, l, 0,
                                        flex_extent);
                 goto after_decl_initializer_alloc;
@@ -30411,6 +31017,7 @@ found:
                   local_static_dynamic_init = 1;
                   if (!ad.section) ad.section = bss_section;
                   flex_extent = flexible_array_element_count(&type, init_str, NULL);
+                  PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_INIT_ALLOC);
                   decl_initializer_alloc(&type, &ad, r, 0, 0, NULL, v, l, 0,
                                          flex_extent);
                   goto after_decl_initializer_alloc;
@@ -30421,6 +31028,7 @@ found:
               begin_macro(auto_init_str, 1);
               auto_macro_stack = macro_stack;
               next();
+              PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_INIT_ALLOC);
               decl_initializer_alloc(&type, &ad, r, 1, 0, NULL, v, l, 0, -1);
               while (macro_stack && macro_stack != auto_macro_stack
                      && macro_stack != auto_macro_parent)
@@ -30602,12 +31210,15 @@ found:
             }
             if (init_str && !has_init && !has_ctor_init)
               flex_extent = flexible_array_element_count(&type, init_str, NULL);
+            PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_INIT_ALLOC);
             decl_initializer_alloc(&type, &ad, r, has_init, has_ctor_init,
                                    copy_ctor_init, v, l, has_direct_init,
                                    flex_extent);
+            PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_INIT_POST);
             if (has_paren_init)
               skip(')');
 after_decl_initializer_alloc:
+            PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_INIT_POST);
             if (copy_ctor_init)
             {
               tok_str_free(copy_ctor_init);
@@ -30618,8 +31229,14 @@ after_decl_initializer_alloc:
               if (local_static_dynamic_init)
                 emit_local_static_dynamic_init(v, &type, init_str);
               else if (ad.is_constexpr
-                       && constant_class_object_initializer(v, &type, init_str))
-                ; /* the constructor ran inside the evaluation */
+                       && constant_class_object_evaluate(&type, init_str,
+                                                         &constant_object_fields))
+              {
+                /* The declaration has storage now, but its section data may
+                   not exist until the symbol is finalized.  Keep the
+                   evaluated subobjects for the common emit step below. */
+                constant_object_pending = 1;
+              }
               else
               {
                 if (ad.is_constexpr)
@@ -30631,6 +31248,7 @@ after_decl_initializer_alloc:
             }
             if (constant_object_pending)
             {
+              PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_CONST_OBJECT);
               /* A constant construction collected before the object's storage
                  existed now supplies the object's bytes. */
               if (!emit_constant_object_fields(sym_find(v), constant_object_fields))
@@ -30639,6 +31257,7 @@ after_decl_initializer_alloc:
               constant_object_fields = NULL;
               constant_object_pending = 0;
             }
+            PROFILE_TOP_DECL_TAIL_SEG(PROFILE_DECL_TAIL_OTHER);
           }
 
           if (ad.alias_target && l == VT_CONST)
@@ -30659,6 +31278,11 @@ after_decl_initializer_alloc:
              (or deliberately kept) by now; its mark must not outlive it. */
           discard_probe_tag_bindings(probe_mark);
         }
+        if (l == VT_CONST && profile_detail_function_depth == 0)
+        {
+          PROFILE_TOP_DECL_TAIL_END();
+          PROFILE_TOP_SEG_END(PROFILE_TOP_DECL_TAIL);
+        }
         if (tok != ',')
         {
           if (l == VT_JMP)
@@ -30677,3 +31301,4 @@ after_decl_initializer_alloc:
 #undef gjmp_addr
 #undef gjmp
 // -------------------------------------------------------------------------
+

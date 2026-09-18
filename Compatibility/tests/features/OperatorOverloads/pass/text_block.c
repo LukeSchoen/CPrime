@@ -1,9 +1,9 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "clString.h"
+#include "text_block.h"
 
-static char *clStringAllocateCopy(const char *text, int size)
+static char *textBlockAllocateCopy(const char *text, int size)
 {
   char *data = (char *)malloc((size_t)size + 1u);
   if (!data)
@@ -14,42 +14,42 @@ static char *clStringAllocateCopy(const char *text, int size)
   return data;
 }
 
-clString::clString(const char *text)
+TextBlock::TextBlock(const char *text)
 {
   this->SetText(text);
 }
 
-void clString::SetText(const char *text)
+void TextBlock::SetText(const char *text)
 {
   char *copy = 0;
   int size = 0;
   if (text)
   {
     size = (int)strlen(text);
-    copy = clStringAllocateCopy(text, size);
+    copy = textBlockAllocateCopy(text, size);
   }
   this->m_data = copy;
   this->m_size = size;
 }
 
-int clString::Length()
+int TextBlock::Length()
 {
   return this->m_size;
 }
 
-char clString::at(int index)
+char TextBlock::at(int index)
 {
   return this->m_data[index];
 }
 
-clString clString::operator+(clString rhs)
+TextBlock TextBlock::operator+(TextBlock rhs)
 {
   int leftSize = this->m_size;
   int rightSize = rhs.m_size;
   int size = leftSize + rightSize;
   char *buffer = (char *)malloc((size_t)size + 1u);
   int i = 0;
-  clString out("");
+  TextBlock out("");
 
   while (i < leftSize)
   {

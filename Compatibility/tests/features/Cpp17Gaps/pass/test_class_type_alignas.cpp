@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: alignas. alignas is accepted on a local object already; the
+// C++17 gap probe: alignas. alignas is accepted on a local object already; the
 // class-specifier form must set the record alignment too.
 struct alignas(16) Aligned { int value; };
 

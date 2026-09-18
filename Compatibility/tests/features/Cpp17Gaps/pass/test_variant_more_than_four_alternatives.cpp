@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_variant_arity. The library variant is a four-parameter
+// C++17 gap probe: lib_variant_arity. The library variant is a four-parameter
 // template, so a fifth alternative has no parameter to bind to.
 #include <variant>
 

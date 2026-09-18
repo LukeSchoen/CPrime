@@ -35,6 +35,15 @@ template<class C,class Traits> class basic_ostream:public basic_ios<C,Traits> {
     return integer(magnitude,negative);
   }
 public:
+  class sentry
+  {
+  public:
+    explicit sentry(basic_ostream &stream) : m_ok(!stream.fail()) {}
+    explicit operator bool() const { return m_ok; }
+    bool operator!() const { return !m_ok; }
+  private:
+    bool m_ok;
+  };
   explicit basic_ostream(FILE* stream=stdout):basic_ios<C,Traits>(stream){}
   explicit basic_ostream(basic_streambuf<C,Traits>* buffer):basic_ios<C,Traits>(){this->init(buffer);}
   basic_ostream& put(C value) {
@@ -54,7 +63,13 @@ public:
   }
   basic_ostream& flush(){if(this->fail())return *this;if(this->m_buffer){if(this->m_buffer->pubsync()!=0)this->setstate(ios_base::badbit);}else if(!this->m_stream||fflush(this->m_stream)!=0)this->setstate(ios_base::badbit);return *this;}
   locale getloc() const { return this->m_locale; }
-  locale imbue(const locale& value) { locale old=this->m_locale; this->m_locale=value; return old; }
+  locale imbue(const locale& value)
+  {
+    locale old=this->m_locale;
+    this->m_locale=value;
+    this->__run_event_callbacks(imbue_event);
+    return old;
+  }
   streamoff tellp(){if(this->fail())return -1;return this->m_buffer?this->m_buffer->pubseekoff(0,ios_base::cur,ios_base::out):this->m_stream?_ftelli64(this->m_stream):-1;}
   basic_ostream& seekp(streamoff off,ios_base::seekdir dir){if(!this->fail()){if(this->m_buffer){if(this->m_buffer->pubseekoff(off,dir,ios_base::out)<0)this->setstate(ios_base::failbit);}else if(!this->m_stream||_fseeki64(this->m_stream,off,dir)!=0)this->setstate(ios_base::failbit);}return *this;}
   basic_ostream& seekp(streamoff pos){return seekp(pos,ios_base::beg);}

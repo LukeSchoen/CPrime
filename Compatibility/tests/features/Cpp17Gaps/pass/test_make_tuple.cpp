@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_apply_tuple. std::make_tuple is declared but never defined.
+// C++17 gap probe: lib_apply_tuple. std::make_tuple is declared but never defined.
 // The tuple constructor gap in test_tuple_construction_and_get.cpp has to close
 // before this test reaches that undefined symbol.
 #include <tuple>

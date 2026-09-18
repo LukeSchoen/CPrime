@@ -5,7 +5,7 @@ namespace cpc_case_0
 // EXPECT_EXIT: 0
 
 template<typename T>
-class clVector
+class Vector
 {
 public:
   T value;
@@ -15,7 +15,7 @@ template<typename T>
 class X
 {
 private:
-  clVector<T> m_data;
+  Vector<T> m_data;
 };
 
 int run(void)

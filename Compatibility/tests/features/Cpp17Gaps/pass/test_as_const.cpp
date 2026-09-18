@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_as_const. <utility> declares std::as_const but never
+// C++17 gap probe: lib_as_const. <utility> declares std::as_const but never
 // defines it, so the program links against an undefined symbol.
 #include <utility>
 

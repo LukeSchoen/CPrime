@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: pack_in_return_template_id. A pack expanded inside a
+// C++17 gap probe: pack_in_return_template_id. A pack expanded inside a
 // template-id in a function's return type. This is what keeps make_tuple, tie
 // and apply spelled out to six parameters.
 template<class T> struct decay {

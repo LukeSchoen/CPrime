@@ -1,5 +1,5 @@
 // EXPECT_COMPILE_ARGS: -std=c++17
-// CL gap probe: lib_launder. The __builtin_launder spelling works; std::launder
+// C++17 gap probe: lib_launder. The __builtin_launder spelling works; std::launder
 // does not resolve.
 #include <new>
 

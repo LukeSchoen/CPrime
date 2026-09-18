@@ -9,10 +9,10 @@ template<typename T> struct Vec2
   template<typename U> auto operator-(const Vec2<U> &o) const;
 };
 template<typename T> template<typename U>
-auto Vec2<T>::operator-(const U &val) const { return clCreateVector(x - val, y - val); }
+auto Vec2<T>::operator-(const U &val) const { return makeVector(x - val, y - val); }
 template<typename T> template<typename U>
-auto Vec2<T>::operator-(const Vec2<U> &o) const { return clCreateVector(x - o.x, y - o.y); }
-template<typename T> auto clCreateVector(const T &x, const T &y) { return Vec2<T>(x, y); }
+auto Vec2<T>::operator-(const Vec2<U> &o) const { return makeVector(x - o.x, y - o.y); }
+template<typename T> auto makeVector(const T &x, const T &y) { return Vec2<T>(x, y); }
 int main()
 {
   Vec2<int> a(1,2), b(0,0);
